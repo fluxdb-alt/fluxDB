@@ -1206,8 +1206,9 @@ impl Editor {
         self.fold_candidates_cache.borrow_mut().take();
     }
 
-    /// 由接入层/宿主在每帧前调用，把当前 provider 状态应用到视图尺寸。
-    pub(crate) fn apply_settings(&mut self, font_size: f32, soft_wrap: bool) {
+    /// 由接入层/宿主调用，把当前 settings 应用到编辑器。
+    /// `line_height` 为 0 时回退到 `font_size + 2.` 的默认行为。
+    pub(crate) fn apply_settings(&mut self, font_size: f32, line_height: f32, soft_wrap: bool) {
         if font_size > 0. {
             if (self.font_size - font_size).abs() > f32::EPSILON {
                 self.content_width_cache.borrow_mut().take();
@@ -1215,7 +1216,13 @@ impl Editor {
                 self.shaped_line_cache.borrow_mut().clear();
             }
             self.font_size = font_size;
-            self.line_height = font_size + 2.;
+            // 仅当调用方显式传入行高时才覆盖，避免字号调整吞掉用户自定义行高。
+            if line_height > 0. {
+                self.line_height = line_height;
+            } else if (self.line_height - (font_size + 2.)).abs() <= f32::EPSILON {
+                // 当前行高仍是默认派生值，随字号同步更新。
+                self.line_height = font_size + 2.;
+            }
         }
         if self.soft_wrap != soft_wrap {
             self.soft_wrap = soft_wrap;

@@ -2682,6 +2682,16 @@ fn save_settings_from_ui(
 ) {
     let _ = this.controller.dispatch(AppCommand::SaveSettings(settings));
     let _ = this.storage.save_settings(&this.controller.state().settings);
+    // 热更新：把新设置推送到所有已打开的编辑器，无需重启。
+    let new_settings = this.controller.state().settings.clone();
+    let font_size = new_settings.editor_font_size.clamp(10, 24) as f32;
+    let line_height = new_settings.editor_line_height.clamp(13, 28) as f32;
+    let soft_wrap = new_settings.editor_word_wrap;
+    for sql_editor in this.query_editors.values() {
+        sql_editor.update(cx, |editor, _cx| {
+            editor.apply_settings(font_size, line_height, soft_wrap);
+        });
+    }
     this.settings_editor_draft = this.controller.state().settings.clone();
     this.preview_settings(cx);
     this.sync_settings_tab_dirty();
@@ -7410,8 +7420,9 @@ fn query_toolbar(
                         let mut settings = this.controller.state().settings.clone();
                         settings.editor_word_wrap = !soft_wrap;
                         save_settings_from_ui(this, settings, "已更新自动换行", cx);
+                        let line_height = this.controller.state().settings.editor_line_height.clamp(13, 28) as f32;
                         sql_editor.update(cx, |editor, _editor_cx| {
-                            editor.apply_settings(editor.font_size, !soft_wrap);
+                            editor.apply_settings(editor.font_size, line_height, !soft_wrap);
                         });
                         cx.stop_propagation();
                     }

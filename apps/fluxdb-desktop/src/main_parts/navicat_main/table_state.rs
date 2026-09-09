@@ -420,6 +420,7 @@ impl NavicatMain {
             sql_editor.update(cx, |sql_editor, cx| {
                 sql_editor.apply_settings(
                     settings.editor_font_size.clamp(10, 24) as f32,
+                    settings.editor_line_height.clamp(13, 28) as f32,
                     settings.editor_word_wrap,
                 );
                 sql_editor.sync_text_silent(&editor.text, cx);
