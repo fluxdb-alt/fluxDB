@@ -3538,155 +3538,36 @@ fn data_editor_content(
     content
 }
 
-/// 把编辑器动作绑定到宿主元素：GPUI 键绑定只派发给在此 `.on_action` 注册的元素。
-/// 泛型 `A` 由 `_marker: fn() -> A` 标注具体动作类型，委托给编辑器内部动作分发。
-/// Div 的 `.on_action` 以 `&mut App` 为上下文，故此处通过 `Entity::update` 从 App 再进入编辑器上下文。
-fn bind_editor_action<A: gpui::Action>(
-    editor: gpui::Entity<editor_component::Editor>,
-    _marker: fn() -> A,
-) -> impl Fn(&A, &mut Window, &mut gpui::App) + Clone + 'static {
-    move |action: &A, _window: &mut Window, app: &mut gpui::App| {
-        editor.update(app, |editor, cx| editor.dispatch_action(action, cx));
-    }
-}
-
-/// 新编辑器承载面板：新编辑器自带输入/补全/查找渲染（Render trait -> EditorCanvas），
-/// 宿主只需提供滚动容器 + 键上下文，并把各类编辑动作绑定进来。
+/// 新编辑器承载面板：键鼠/滚动/滚动条/动作分发已全部下沉到 Editor 自身
+/// `Editor::render()` 根元素（参考 zed）。宿主这里只保留布局定位 + 配色，
+/// 以及 SQL 专属的 `ExecuteQueryShortcut` 绑定（按祖先链从内层 Editor 冒泡到此处）。
 fn sql_editor_panel(
     _tab_id: TabId,
     editor: gpui::Entity<editor_component::Editor>,
     colors: UiColors,
     window: &mut Window,
-    cx: &mut Context<NavicatMain>,
+    _cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
     let _ = window;
-    let scroll_handle = editor.read(cx).scroll_handle.clone();
-    let focus_handle = editor.read(cx).focus_handle.clone();
-    let scroll_delta = std::rc::Rc::new(std::cell::Cell::new(gpui::ScrollDelta::default()));
-    let scroll_content = div()
-        .relative()
-        .flex_shrink_0()
-        .child(editor.clone());
     div()
         .id(("sql-editor", editor.entity_id()))
         .flex_1()
         .min_h(px(0.))
         .relative()
         .bg(colors.input_bg)
-        .overflow_hidden()
+        // 键上下文仅供 SQL 执行快捷键（ExecuteQueryShortcut）在聚焦编辑器上派发。
         .key_context(editor_component::CONTEXT)
-        .track_focus(&focus_handle)
-        .tab_index(0)
-        .cursor(gpui::CursorStyle::IBeam)
-        .on_mouse_down(MouseButton::Left, {
-            let focus_handle = focus_handle.clone();
-            move |_, window, app| {
-                focus_handle.focus(window, app);
-            }
-        })
-        .on_mouse_down(MouseButton::Left, {
-            let editor = editor.clone();
-            move |event, window, app| {
-                editor.update(app, |editor, cx| editor.mouse_down(event, window, cx));
-            }
-        })
-        .on_mouse_up(MouseButton::Left, {
-            let editor = editor.clone();
-            move |event, window, app| {
-                editor.update(app, |editor, cx| editor.mouse_up(event, window, cx));
-            }
-        })
-        .on_mouse_move({
-            let editor = editor.clone();
-            move |event, window, app| {
-                editor.update(app, |editor, cx| editor.mouse_move(event, window, cx));
-            }
-        })
-        .on_scroll_wheel({
-            let editor = editor.clone();
-            let scroll_delta = scroll_delta.clone();
-            move |event, window, app| {
-                let delta = scroll_delta.get().coalesce(event.delta);
-                scroll_delta.set(delta);
-                editor.update(app, |editor, cx| {
-                    editor.scroll(event, delta, window, cx)
-                });
-            }
-        })
-        // 动作分发：GPUI 的键绑定只派发给在此注册 .on_action 的元素。
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Backspace))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Delete))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Enter { secondary: false }))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Escape))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveUp))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveDown))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveLeft))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveRight))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveHome))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveEnd))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveToStart))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveToEnd))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveToPreviousWord))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveToNextWord))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectAll))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectLeft))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectRight))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectUp))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectDown))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectHome))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectEnd))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectToStart))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectToEnd))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectToPreviousWord))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectToNextWord))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectLine))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Undo))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Redo))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Copy))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Cut))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Paste))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::IndentInline))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::OutdentInline))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::ToggleLineComment))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::ToggleFold))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::FoldAll))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::UnfoldAll))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::TriggerCompletion))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::OpenFind))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::CloseFind))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::FindNext))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::FindPrevious))
         // SQL 执行快捷键（Run/Select/Explain）分派：读取 `ExecuteQueryShortcut.mode`
         // 原样传给编辑器执行入口，避免被按文本探测的模式替换（整改 6.1/6.2）。
-        .on_action(
+        .on_action({
+            let editor = editor.clone();
             move |action: &sql_editor_adapter::ExecuteQueryShortcut,
                   _window: &mut Window,
                   app: &mut gpui::App| {
                 editor.update(app, |editor, cx| editor.request_execution(action.mode, cx));
-            },
-        )
-        .child(
-            div()
-                .absolute()
-                .id("sql-editor-scroll-area")
-                .inset_0()
-                .flex()
-                // 保留编辑器内容的实际高度；默认 stretch 会把直接子节点拉伸到视口高度，
-                // GPUI 因此无法从 tracked scroll 的直接子节点计算出可滚动范围。
-                .items_start()
-                .size_full()
-                .track_scroll(&scroll_handle)
-                // 滚轮由编辑器按 Zed 的行高/字宽换算；这里保留裁剪与 ScrollHandle 边界计算，
-                // 不再启用 GPUI 内建滚轮监听，避免同一事件被处理两次。
-                .overflow_hidden()
-                .child(scroll_content),
-        )
-        .child(
-            div()
-                .absolute()
-                .inset_0()
-                .child(Scrollbar::new(&scroll_handle)),
-        )
+            }
+        })
+        .child(editor)
 }
 
 fn query_editor_content(
@@ -4511,14 +4392,9 @@ fn redis_workbench_input_panel(
     height: f32,
     colors: UiColors,
     _window: &mut Window,
-    cx: &mut Context<NavicatMain>,
+    _cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
-    let _ = cx;
-    let focus_handle = editor.read(cx).focus_handle.clone();
-    // 与 sql_editor_panel 一致：必须将编辑器内容挂到一个 `track_scroll` 的滚动容器，
-    // 否则 `scroll_handle.bounds()` 保持零尺寸，EditorCanvas 以 0×0 视口裁剪文本，
-    // 导致输入有内容却渲染不可见。滚动容器 absolute+inset_0 铺满输入面板。
-    let scroll_handle = editor.read(cx).scroll_handle.clone();
+    // 键鼠/滚动/滚动条/动作分发已下沉到 Editor::render()；此处仅保留布局定位 + 配色。
     div()
         .flex_none()
         .h(px(height))
@@ -4526,144 +4402,7 @@ fn redis_workbench_input_panel(
         .border_b_1()
         .border_color(colors.border)
         .bg(colors.input_bg)
-        .overflow_hidden()
-        .key_context(editor_component::CONTEXT)
-        .track_focus(&focus_handle)
-        .tab_index(0)
-        .cursor(gpui::CursorStyle::IBeam)
-        .on_mouse_down(MouseButton::Left, {
-            let focus_handle = focus_handle.clone();
-            move |_, window, app| {
-                focus_handle.focus(window, app);
-            }
-        })
-        .on_mouse_down(MouseButton::Left, {
-            let editor = editor.clone();
-            move |event, window, app| {
-                editor.update(app, |editor, cx| editor.mouse_down(event, window, cx));
-            }
-        })
-        .on_mouse_up(MouseButton::Left, {
-            let editor = editor.clone();
-            move |event, window, app| {
-                editor.update(app, |editor, cx| editor.mouse_up(event, window, cx));
-            }
-        })
-        .on_mouse_move({
-            let editor = editor.clone();
-            move |event, window, app| {
-                editor.update(app, |editor, cx| editor.mouse_move(event, window, cx));
-            }
-        })
-        .on_scroll_wheel({
-            let editor = editor.clone();
-            move |event, window, app| {
-                editor.update(app, |editor, cx| {
-                    editor.scroll(event, event.delta, window, cx)
-                });
-            }
-        })
-        // 键绑定派发：GPUI 的键动作只派发给在此注册 .on_action 的元素。
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Backspace))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Delete))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::Enter { secondary: false },
-        ))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Escape))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveUp))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveDown))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveLeft))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveRight))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveHome))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveEnd))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveToStart))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::MoveToEnd))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::MoveToPreviousWord,
-        ))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::MoveToNextWord,
-        ))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectAll))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectLeft))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::SelectRight,
-        ))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectUp))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectDown))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectHome))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectEnd))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::SelectToStart,
-        ))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectToEnd))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::SelectToPreviousWord,
-        ))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::SelectToNextWord,
-        ))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::SelectLine))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Undo))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Redo))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Copy))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Cut))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::Paste))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::IndentInline,
-        ))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::OutdentInline,
-        ))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::ToggleLineComment,
-        ))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::TriggerCompletion,
-        ))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::OpenFind,
-        ))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::CloseFind,
-        ))
-        .on_action(bind_editor_action(editor.clone(), || editor_component::FindNext))
-        .on_action(bind_editor_action(
-            editor.clone(),
-            || editor_component::FindPrevious,
-        ))
-        .child(
-            // 滚动容器：absolute+inset_0 铺满输入面板，与 SQL 面板同构，
-            // 让 `scroll_handle.bounds()` 拿到真实视口尺寸用于渲染裁剪。
-            div()
-                .absolute()
-                .id("redis-wb-editor-scroll-area")
-                .inset_0()
-                .flex()
-                .items_start()
-                .size_full()
-                .track_scroll(&scroll_handle)
-                .overflow_hidden()
-                .child(
-                    div()
-                        .relative()
-                        .flex_shrink_0()
-                        .child(editor.clone()),
-                ),
-        )
+        .child(editor)
 }
 
 /// Redis Workbench 上下分栏拖动手柄：居中一排 3 个圆点（对齐 RedisInsight 的 grip 观感）。

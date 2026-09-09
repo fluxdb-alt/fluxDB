@@ -193,7 +193,6 @@ impl Editor {
     // ------------------------------------------------------------ 鼠标
     // 鼠标交互（点击选中 / 框选 / 滚动 / hover）由宿主编辑器面板转发到这里。
 
-    #[allow(dead_code)]
     pub(crate) fn mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -260,7 +259,6 @@ impl Editor {
         self.set_cursor_from_mouse(event.position, window, cx);
     }
 
-    #[allow(dead_code)]
     pub(crate) fn mouse_up(&mut self, _event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.selecting_with_mouse {
             self.selecting_with_mouse = false;
@@ -268,7 +266,6 @@ impl Editor {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn mouse_move(
         &mut self,
         event: &MouseMoveEvent,
@@ -301,7 +298,6 @@ impl Editor {
         cx.notify();
     }
 
-    #[allow(dead_code)]
     pub(crate) fn scroll(
         &mut self,
         _event: &ScrollWheelEvent,

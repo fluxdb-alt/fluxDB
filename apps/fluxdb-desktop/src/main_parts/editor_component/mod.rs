@@ -11,7 +11,7 @@
 //     不含任何业务类型。
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{BTreeSet, HashMap},
     ops::Range,
     sync::{atomic::{AtomicU64, Ordering}, Arc},
@@ -34,7 +34,7 @@ pub(crate) use fluxdb_editor_core::EditorEvent;
 use gpui::{
     actions, px, Action, App, Bounds, ContentMask, Context, Element, ElementId, ElementInputHandler, EventEmitter,
     AppContext, FocusHandle, GlobalElementId, IntoElement, InteractiveElement, KeyBinding, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollHandle, Div,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollHandle, ScrollDelta, Div,
     ScrollWheelEvent, SharedString, Size, Subscription, Task, TextAlign, TextRun, TruncateFrom,
     UTF16Selection,
     ParentElement, ShapedLine, Stateful, StatefulInteractiveElement, Styled, StyledText, Window, div, hsla,
@@ -42,7 +42,7 @@ use gpui::{
 };
 use gpui_component::{Sizable, box_shadow};
 use gpui_component::input::{InputEvent, InputState};
-use gpui_component::scroll::ScrollableElement;
+use gpui_component::scroll::{ScrollableElement, Scrollbar};
 
 /// GPUI 像素坐标点（与内核 `Point` 区分）。
 pub(crate) type GPoint = gpui::Point<Pixels>;
@@ -753,6 +753,11 @@ pub(crate) struct Editor {
     scroll_last_wheel_at: Option<Instant>,
     scroll_last_tick: Option<Instant>,
     scroll_animating: bool,
+    /// 滚轮位移累积（跨 render 闭包保留）：同向滚动手势逐帧 `coalesce` 累加、
+    /// 反向自动重置。由 render 根元素的 `on_scroll_wheel` 闭包更新，再交给
+    /// `scroll` 做平滑动画。下沉前 SQL 面板用宿主侧 `Rc<Cell<ScrollDelta>>`
+    /// 承担此职，现统一由编辑器自身持有（对齐 Zed 的增量滚动模型）。
+    wheel_gesture_delta: Cell<ScrollDelta>,
 
     // 任务
     _completion_task: Option<Task<()>>,
@@ -1036,6 +1041,7 @@ impl Editor {
             scroll_last_wheel_at: None,
             scroll_last_tick: None,
             scroll_animating: false,
+            wheel_gesture_delta: Cell::new(ScrollDelta::default()),
         };
         tool.buffer = EditorBuffer::new_from(&text);
         tool.rebuild_display();
