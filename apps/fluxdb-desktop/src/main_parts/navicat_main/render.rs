@@ -231,6 +231,7 @@ impl Render for NavicatMain {
                     menu,
                     &self.pinned_tables,
                     &self.table_folders,
+                    &self.table_folder_assignments,
                     colors,
                     cx,
                 ))

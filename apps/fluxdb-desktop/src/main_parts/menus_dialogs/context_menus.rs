@@ -288,6 +288,7 @@ fn table_context_menu(
     menu: TableContextMenu,
     pinned_tables: &BTreeSet<String>,
     table_folders: &BTreeMap<String, Vec<String>>,
+    table_folder_assignments: &BTreeMap<String, (String, String)>,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -431,7 +432,13 @@ fn table_context_menu(
             cx,
         ))
         .when(menu.submenu == Some(TableContextSubmenu::ManageGroup), |this| {
-            this.child(table_manage_group_submenu(&menu, table_folders, colors, cx))
+            this.child(table_manage_group_submenu(
+                &menu,
+                table_folders,
+                table_folder_assignments,
+                colors,
+                cx,
+            ))
         })
         .child(table_menu_submenu_item(
             "导出",
@@ -490,12 +497,26 @@ fn table_export_submenu(
 fn table_manage_group_submenu(
     menu: &TableContextMenu,
     table_folders: &BTreeMap<String, Vec<String>>,
+    table_folder_assignments: &BTreeMap<String, (String, String)>,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let parent_key = table_folder_parent_key_for_object(&menu.object_path);
     let folders = sorted_table_folders_for_parent(table_folders, &parent_key);
+    let table_key = table_tree_key(&menu.object_path);
+    let in_group = table_folder_assignments.contains_key(&table_key);
     let mut submenu = table_submenu_shell(px(248.), colors);
+    if in_group {
+        submenu = submenu.child(table_submenu_action_item(
+            "移出组",
+            AppIcon::FolderUp,
+            TableMenuAction::RemoveFromGroup,
+            menu,
+            colors,
+            cx,
+        ));
+        submenu = submenu.child(data_cell_menu_separator(colors));
+    }
     if folders.is_empty() {
         return submenu.child(table_inert_menu_item(
             "暂无分组",
