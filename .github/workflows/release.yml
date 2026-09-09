@@ -1,0 +1,53 @@
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-13        # Intel x64
+            target: x86_64-apple-darwin
+            arch: x64
+          - os: macos-14        # Apple Silicon
+            target: aarch64-apple-darwin
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --package fluxdb-desktop --target ${{ matrix.target }}
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --locked
+
+      - name: Bundle .app
+        run: cargo bundle --release --package fluxdb-desktop --target ${{ matrix.target }}
+
+      - name: Prepare archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="target/${{ matrix.target }}/release/bundle/osx/FluxDB.app"
+          STAGING="FluxDB-${{ matrix.arch }}"
+          cp -R "$APP" "$STAGING.app"
+          ditto -c -k --sequesterRsrc --keepParent "$STAGING.app" "$STAGING.zip"
+          echo "artifact=${{ github.workspace }}/$STAGING.zip" >> "$GITHUB_ENV"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.artifact }}
