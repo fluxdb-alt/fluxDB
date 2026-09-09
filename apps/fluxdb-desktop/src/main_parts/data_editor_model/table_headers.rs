@@ -21,6 +21,11 @@ fn data_table_header_tooltip(meta: DataTableColumnMeta, type_color: gpui::Rgba) 
                 data_table_column_attr_label(&meta),
                 cx.theme().popover_foreground,
             ))
+            .child(data_table_header_tooltip_row(
+                "注释",
+                data_table_column_comment_label(&meta),
+                cx.theme().popover_foreground,
+            ))
     })
 }
 
@@ -36,6 +41,15 @@ fn data_table_header_tooltip_row(
         .text_size(px(13.))
         .child(div().w(px(34.)).text_color(rgb(0x7b8190)).child(label))
         .child(div().flex_1().text_color(value_color).child(value))
+}
+
+fn data_table_column_comment_label(meta: &DataTableColumnMeta) -> String {
+    meta.comment
+        .as_deref()
+        .map(str::trim)
+        .filter(|comment| !comment.is_empty())
+        .unwrap_or("无")
+        .to_string()
 }
 
 fn data_table_column_attr_label(meta: &DataTableColumnMeta) -> String {

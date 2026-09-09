@@ -2572,6 +2572,21 @@ fn register_shortcuts(cx: &mut App, settings: &Settings) {
     // EditorComponent 快捷键绑定冲突。
     register_terminal_shortcuts(cx);
 
+    // 应用级退出快捷键绑定在无上下文层级，确保编辑器或表格聚焦时也能退出。
+    cx.on_action(|_: &Quit, cx| {
+        tracing::info!(target: "fluxdb_desktop", "收到退出快捷键，退出应用");
+        cx.quit();
+    });
+    cx.bind_keys([KeyBinding::new(
+        if cfg!(target_os = "macos") {
+            "cmd-q"
+        } else {
+            "ctrl-q"
+        },
+        Quit,
+        None,
+    )]);
+
     for definition in SHORTCUT_DEFINITIONS {
         bind_shortcut(
             cx,

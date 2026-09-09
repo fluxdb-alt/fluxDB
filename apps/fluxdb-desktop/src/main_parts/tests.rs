@@ -1204,6 +1204,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let int_meta = DataTableColumnMeta {
             name: "age".to_string(),
             type_name: "int".to_string(),
+            comment: None,
             nullable: false,
             primary_key: false,
             choices: Vec::new(),
@@ -1218,6 +1219,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let nullable_bool = DataTableColumnMeta {
             name: "enabled".to_string(),
             type_name: "tinyint(1)".to_string(),
+            comment: None,
             nullable: true,
             primary_key: false,
             choices: Vec::new(),
@@ -1234,6 +1236,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let enum_meta = DataTableColumnMeta {
             name: "status".to_string(),
             type_name: "enum('draft','published')".to_string(),
+            comment: None,
             nullable: false,
             primary_key: false,
             choices: Vec::new(),
@@ -1247,6 +1250,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let blob_meta = DataTableColumnMeta {
             name: "payload".to_string(),
             type_name: "LONGBLOB".to_string(),
+            comment: None,
             nullable: true,
             primary_key: false,
             choices: Vec::new(),

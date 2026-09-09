@@ -832,6 +832,7 @@ fn data_cell_context_menu(
                             let meta = DataTableColumnMeta {
                                 name: menu_for_paste.column_name.clone(),
                                 type_name: menu_for_paste.type_name.clone(),
+                                comment: None,
                                 nullable: menu_for_paste.nullable,
                                 primary_key: false,
                                 choices: Vec::new(),

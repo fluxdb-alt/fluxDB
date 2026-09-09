@@ -2101,6 +2101,7 @@ type DataTableSortHandler = Arc<dyn Fn(TabId, String, Option<DataTableSortDirect
 struct DataTableColumnMeta {
     name: String,
     type_name: String,
+    comment: Option<String>,
     nullable: bool,
     primary_key: bool,
     choices: Vec<ColumnChoice>,

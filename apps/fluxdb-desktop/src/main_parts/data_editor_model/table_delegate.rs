@@ -239,6 +239,7 @@ impl TableDelegate for DataPageTableDelegate {
             .unwrap_or_else(|| DataTableColumnMeta {
                 name: column.name.to_string(),
                 type_name: type_name.clone(),
+                comment: None,
                 nullable: false,
                 primary_key: false,
                 choices: Vec::new(),
@@ -474,6 +475,7 @@ impl TableDelegate for DataPageTableDelegate {
                 .unwrap_or_else(|| DataTableColumnMeta {
                     name: String::new(),
                     type_name: String::new(),
+                    comment: None,
                     nullable: false,
                     primary_key: false,
                     choices: Vec::new(),

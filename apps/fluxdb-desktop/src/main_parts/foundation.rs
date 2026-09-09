@@ -421,6 +421,7 @@ actions!(
     gdb,
     [
         NewQuery,
+        Quit,
         Refresh,
         SaveOrApply,
         CloseCurrentTab,
