@@ -1,0 +1,8 @@
+.superpowers/
+.DS_Store
+target/
+.superspec/
+.claude/
+docs/design
+apps/gdb-desktop/target/
+AGENTS.md

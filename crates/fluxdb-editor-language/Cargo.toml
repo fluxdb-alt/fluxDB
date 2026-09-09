@@ -1,0 +1,8 @@
+[package]
+name = "fluxdb-editor-language"
+version = "0.1.0"
+edition = "2024"
+description = "可复用编辑器的语言适配器协议"
+
+[dependencies]
+fluxdb-editor-core = { path = "../fluxdb-editor-core" }

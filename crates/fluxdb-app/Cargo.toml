@@ -1,0 +1,16 @@
+[package]
+name = "fluxdb-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+fluxdb-connectors = { path = "../fluxdb-connectors" }
+fluxdb-core = { path = "../fluxdb-core" }
+fluxdb-storage = { path = "../fluxdb-storage" }
+sqlformat = "0.5.0"
+sqlparser = { version = "0.62.0", features = ["visitor"] }
+tracing = "0.1"
+
+[dev-dependencies]
+sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio-rustls"] }
+tokio = { version = "1.47.1", features = ["rt-multi-thread"] }

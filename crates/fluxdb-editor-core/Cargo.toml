@@ -1,0 +1,9 @@
+[package]
+name = "fluxdb-editor-core"
+version = "0.1.0"
+edition = "2024"
+description = "独立、与业务解耦的通用编辑器内核"
+
+[dependencies]
+
+[dev-dependencies]

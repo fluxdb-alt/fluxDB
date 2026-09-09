@@ -1,0 +1,46 @@
+[package]
+name = "fluxdb-desktop"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0"
+
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+encoding_rs = "0.8"
+futures = "0.3"
+fluxdb-app = { path = "../../crates/fluxdb-app" }
+fluxdb-core = { path = "../../crates/fluxdb-core" }
+fluxdb-editor-core = { path = "../../crates/fluxdb-editor-core" }
+fluxdb-editor-language = { path = "../../crates/fluxdb-editor-language" }
+fluxdb-storage = { path = "../../crates/fluxdb-storage" }
+gpui = { package = "gpui-pre", version = "0.3.3" }
+gpui-platform = { package = "gpui-pre-platform", version = "0.3.3" }
+gpui-component = { version = "0.6.0", features = ["tree-sitter"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+lsp-types = "0.97"
+portable-pty = "0.9"
+regex = "1.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smol = "2"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tray-icon = { version = "0.23.1", default-features = false }
+tree-sitter = "=0.26.13"
+tree-sitter-json = "=0.24.8"
+tree-sitter-sequel = "=0.3.11"
+streaming-iterator = "0.1"
+gpui-fps = "0.6.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+
+[package.metadata.bundle]
+name = "FluxDB"
+identifier = "com.shining3d.fluxdb"
+icon = ["assets/app-icon.icns"]
+resources = ["assets"]
+category = "Developer Tool"
+short_description = "Desktop database client"

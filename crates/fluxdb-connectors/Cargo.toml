@@ -1,0 +1,15 @@
+[package]
+name = "fluxdb-connectors"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+fluxdb-core = { path = "../fluxdb-core" }
+sqlx = { version = "0.8.6", default-features = false, features = ["bigdecimal", "chrono", "mysql", "sqlite", "runtime-tokio-rustls"] }
+ssh2 = "0.9"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "time", "macros"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
+rustls-pki-types = "1"
+webpki-roots = "0.26"
+tracing = "0.1"
