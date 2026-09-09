@@ -134,15 +134,15 @@ impl Render for Editor {
                     editor.update(app, |editor, cx| editor.mouse_move(event, window, cx));
                 }
             })
-            // 滚轮：跨 render 闭包在编辑器内累积 `wheel_gesture_delta`（coalesce：
-            // 同向滚动手势逐帧累加、反向自动重置），再交给 scroll 做平滑动画。
+            // 滚轮：逐事件把原始 delta 交给 scroll（scroll 内部按「连续手势」在
+            // 动画目标上累加、「新手势」以当前 offset 为基准重算，并做主轴锁定）。
+            // 不做跨事件 coalesce：那会累积放大位移（滚动过快），且让滚到顶后残留的
+            // 纵向累积阻塞后续横向滚动（mac 触摸板小位移的方向切换）。
             .on_scroll_wheel({
                 let editor = editor.clone();
                 move |event, window, app| {
                     editor.update(app, |editor, cx| {
-                        let delta = editor.wheel_gesture_delta.get().coalesce(event.delta);
-                        editor.wheel_gesture_delta.set(delta);
-                        editor.scroll(event, delta, window, cx);
+                        editor.scroll(event, event.delta, window, cx);
                     });
                 }
             })
