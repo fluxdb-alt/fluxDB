@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-13        # Intel x64
+          - os: macos-15-intel  # Intel x64
             target: x86_64-apple-darwin
             arch: x64
           - os: macos-14        # Apple Silicon
@@ -31,26 +31,44 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build release
-        run: cargo build --release --package fluxdb-desktop --target ${{ matrix.target }}
-
-      - name: Install cargo-bundle
-        run: cargo install cargo-bundle --locked
-
-      - name: Bundle .app
-        run: cargo bundle --release --package fluxdb-desktop --target ${{ matrix.target }}
-
-      - name: Prepare archive
+      - name: Build and package DMG
         shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          APP="target/${{ matrix.target }}/release/bundle/osx/FluxDB.app"
-          STAGING="FluxDB-${{ matrix.arch }}"
-          cp -R "$APP" "$STAGING.app"
-          ditto -c -k --sequesterRsrc --keepParent "$STAGING.app" "$STAGING.zip"
-          echo "artifact=${{ github.workspace }}/$STAGING.zip" >> "$GITHUB_ENV"
+          export VERSION="${GITHUB_REF_NAME#v}"
+          bash scripts/package-macos.sh
+          DMG="target/macos-package/FluxDB-$VERSION-macos-${{ matrix.arch }}.dmg"
+          hdiutil verify "$DMG"
+          echo "artifact=$DMG" >> "$GITHUB_ENV"
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.artifact }}
+          fail_on_unmatched_files: true
+
+  # Windows EXE 安装包预留：完成 Windows 编译、运行时依赖和安装验证后再启用。
+  # build-windows:
+  #   runs-on: windows-2022
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         targets: x86_64-pc-windows-msvc
+  #     - uses: Swatinem/rust-cache@v2
+  #     - name: Build Windows
+  #       run: cargo build --locked --release -p fluxdb-desktop --target x86_64-pc-windows-msvc
+  #     - name: Install Inno Setup
+  #       run: choco install innosetup --yes --no-progress
+  #     - name: Build EXE installer
+  #       shell: pwsh
+  #       run: |
+  #         $version = $env:GITHUB_REF_NAME -replace '^v', ''
+  #         & "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe" "/DAppVersion=$version" scripts/windows-installer.iss
+  #         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  #     - uses: softprops/action-gh-release@v2
+  #       with:
+  #         files: target/windows-package/FluxDB-*-windows-x64-setup.exe
+  #         fail_on_unmatched_files: true
