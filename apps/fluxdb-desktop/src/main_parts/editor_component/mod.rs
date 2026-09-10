@@ -119,6 +119,8 @@ actions!(
     [
         Backspace,
         Delete,
+        DeleteToPreviousWord,
+        DeleteToNextWord,
         IndentInline,
         OutdentInline,
         MoveUp,
@@ -172,6 +174,14 @@ pub(crate) fn register_editor_shortcuts(cx: &mut App) {
     cx.bind_keys(vec![
         KeyBinding::new("backspace", Backspace, Some(CONTEXT)),
         KeyBinding::new("delete", Delete, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-backspace", DeleteToPreviousWord, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-delete", DeleteToNextWord, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-backspace", DeleteToPreviousWord, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-delete", DeleteToNextWord, Some(CONTEXT)),
         KeyBinding::new("enter", Enter { secondary: false }, Some(CONTEXT)),
         KeyBinding::new("secondary-enter", Enter { secondary: true }, Some(CONTEXT)),
         KeyBinding::new("escape", Escape, Some(CONTEXT)),
@@ -306,6 +316,19 @@ pub(crate) enum LineHitKind {
     Explain,
     Hover,
     CodeLens(usize),
+}
+
+/// 鼠标框选模式：决定鼠标按下后（含后续拖动）以何种编辑单元扩展选区。
+///
+/// - `Char`：普通点击/拖动按字符扩展（光标置于点击处）。
+/// - `Word`：双击选词后，拖动按词扩展。
+/// - `Line`：三击选行后，拖动按整行扩展。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) enum MouseSelectMode {
+    #[default]
+    Char,
+    Word,
+    Line,
 }
 
 #[derive(Clone, Debug)]
@@ -655,6 +678,12 @@ pub(crate) struct Editor {
     pub(crate) cursor_visible: bool,
     #[allow(dead_code)] // 鼠标框选交互在 input.rs 实现，尚未接入宿主渲染。
     pub(crate) selecting_with_mouse: bool,
+    /// 鼠标按下的框选单元（双击=词、三击=行、单击=字符）。
+    pub(crate) mouse_select_mode: MouseSelectMode,
+    /// 鼠标框选/点击时的固定锚点（拖拽时保持的一端，Shift+点击时保留旧锚点）。
+    pub(crate) mouse_anchor: usize,
+    /// 本次是否从行号区（gutter）发起选择，用于按行选择。
+    pub(crate) mouse_gutter_select: bool,
     pub(crate) ime_marked_range: Option<CoreRange>,
     pub(crate) soft_wrap: bool,
     /// 当前 viewport 对应的软换行宽度（UTF-16 列）。
@@ -962,6 +991,9 @@ impl Editor {
             scroll_handle: ScrollHandle::new(),
             cursor_visible: false,
             selecting_with_mouse: false,
+            mouse_select_mode: MouseSelectMode::Char,
+            mouse_anchor: 0,
+            mouse_gutter_select: false,
             ime_marked_range: None,
             soft_wrap,
             wrap_width_utf16: 120,
@@ -1856,6 +1888,36 @@ impl Editor {
         self.apply_edit("", start, start, true, cx);
     }
 
+    /// 整词删除（Alt/Ctrl+退格）：删除光标前的一个词。
+    fn delete_word_left(&mut self, cx: &mut Context<Self>) {
+        let (start, end) = self.selection_start_end();
+        if start != end {
+            self.apply_edit("", start, start, true, cx);
+            return;
+        }
+        if start == 0 {
+            return;
+        }
+        let prev = self.prev_word_at(start);
+        self.selection = Selection::new(prev, start);
+        self.apply_edit("", prev, prev, true, cx);
+    }
+
+    /// 整词删除（Alt/Ctrl+Delete）：删除光标后的一个词（到词尾）。
+    fn delete_word_right(&mut self, cx: &mut Context<Self>) {
+        let (start, end) = self.selection_start_end();
+        if start != end {
+            self.apply_edit("", start, start, true, cx);
+            return;
+        }
+        if start >= self.buffer.len() {
+            return;
+        }
+        let word_end = self.next_word_end_at(start);
+        self.selection = Selection::new(start, word_end);
+        self.apply_edit("", start, start, true, cx);
+    }
+
     fn newline(&mut self, secondary: bool, cx: &mut Context<Self>) {
         if !self.profile.multiline {
             return;
@@ -2060,6 +2122,8 @@ impl Editor {
             CursorMove::Right => self.buffer.next_char_boundary(cursor),
             CursorMove::Up => self.move_vertically(point, -1),
             CursorMove::Down => self.move_vertically(point, 1),
+            CursorMove::PageUp => self.move_page(point, -1),
+            CursorMove::PageDown => self.move_page(point, 1),
             CursorMove::Home => self.buffer.line_start(point.row),
             CursorMove::End => self.buffer.line_end_offset(point.row),
             CursorMove::Start => 0,
@@ -2104,6 +2168,28 @@ impl Editor {
         self.row_col_to_offset(target_row, current_col)
     }
 
+    /// 按一屏（可视行数）纵向翻页；`dir` 为 -1（上翻）/ +1（下翻）。
+    /// 保持当前 UTF-16 列（对齐 zed/vscode 的 viewport 翻页：只动行，不动列）。
+    fn move_page(&self, point: Point, dir: isize) -> usize {
+        let current_col = self.buffer.utf16_column_at(point);
+        let row_count = self.buffer.line_count();
+        if row_count == 0 {
+            return 0;
+        }
+        // 可视行数按视口高度 ÷ 行距向下取整，翻一屏约等于可视行数（留一行保持上下文）。
+        let line_height = self.line_height.max(self.font_size + 1.0);
+        let stride = line_height + EDITOR_LINE_GAP;
+        let view_height = f32::from(self.scroll_handle.bounds().size.height);
+        let page = (view_height / stride).floor().max(1.0) as isize;
+        let delta = page * dir;
+        let target_row = if delta < 0 {
+            point.row.saturating_sub((-delta) as usize)
+        } else {
+            ((point.row as isize) + delta).min(row_count as isize - 1) as usize
+        };
+        self.row_col_to_offset(target_row, current_col)
+    }
+
     fn row_col_to_offset(&self, row: usize, utf16_col: usize) -> usize {
         let row = row.min(self.buffer.line_count().saturating_sub(1));
         let line = self.buffer.line_text(row);
@@ -2131,6 +2217,31 @@ impl Editor {
     /// （整改设计 4.1）。
     fn next_word_at(&self, cursor: usize) -> usize {
         next_word_start_in_snap(&self.buffer.snapshot(), cursor)
+    }
+
+    /// 光标后下一个词的词尾（用于整词删除 Delete-to-next-word-end）。
+    /// 先定位下一个词首，再向前扫描该词的非空白字符直到词尾。
+    fn next_word_end_at(&self, cursor: usize) -> usize {
+        let snap = self.buffer.snapshot();
+        let mut pos = next_word_start_in_snap(&snap, cursor);
+        let mut row = snap.offset_to_point(pos).row;
+        loop {
+            let line_end = snap.line_end_offset(row);
+            let seg = snap.text_in_range(CoreRange::new(pos, line_end));
+            let b = seg.as_bytes();
+            let mut i = 0usize;
+            while i < b.len() && !b[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i > 0 {
+                return pos + i;
+            }
+            if row + 1 >= snap.line_count() {
+                return snap.len();
+            }
+            pos = pos + i; // == line_end
+            row += 1;
+        }
     }
 
     fn ensure_cursor_visible(&self) {
@@ -3575,6 +3686,8 @@ pub(crate) enum CursorMove {
     Right,
     Up,
     Down,
+    PageUp,
+    PageDown,
     Home,
     End,
     Start,
