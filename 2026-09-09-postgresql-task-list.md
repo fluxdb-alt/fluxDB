@@ -83,7 +83,47 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 - **工作**：记录当前 MySQL F01–F20 的实际入口与可运行状态；拆出 state 的建表/表操作/查询状态、真实 connector 路由、将扩展的 dispatch 分支、连接表单及后台文件执行职责。超 1200 行且需加功能的文件先拆对应职责，不整体迁移无关 Redis 功能。保持旧 include 边界可用，PG 新目录用真实 mod。
 - **交付位置**：设计 3.4 对应 app/core/UI 目录；mysql/shared 辅助的最小职责迁移；原入口只做模块声明和 glue。不添加 PostgreSQL 行为到纯移动提交。
 - **验收**：格式化和 workspace check；受影响已有测试通过，MySQL SQL 预览/路由/配置结构无行为变化；记录移动前后文件与符号对应关系。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：进行中（未勾选）；执行人 Claude Code。
+- **开始**：2026-09-10（Asia/Shanghai）。
+- **完成内容（已做）**：① 冻结 MySQL 基线——`cargo check --workspace` 干净；修复 1 处预置失效断言（`mock_objects` 现返回 4 张联合表，`tests.rs:list_objects_returns_mock_database_then_tables` 表断言 2→4）；全 workspace 1133 tests 通过。② 按职责拆 state——`state.rs` 5291 行先拆建表域，再细拆 6 职责文件（model/state/metadata/sql/actions/design_statements，均 <1200 行）；`state.rs` 降至 1921 行（含 AppCommand/AppEvent/AppController）。③ 将详细设计、任务清单、AGENTS.md 纳入版本控制（`docs/design` 被忽略）。
+- **改动位置（纯移动）**：`crates/fluxdb-connectors/src/parts/tests.rs`（断言 2→4，对齐 mock 数据）；`crates/fluxdb-app/src/parts/state.rs` → `create_table_model.rs`/`create_table_state.rs`/`create_table_metadata.rs`/`create_table_sql.rs`/`create_table_actions.rs`/`create_table_design_statements.rs`；lib.rs include 相应调整。
+- **必读确认**：已读 AGENTS.md、设计 1/3.1/3.4/1.3、R01–R09 对应本地文件（F01–F20 入口映射见下方）。
+- **验证**：`cargo fmt --all`、`cargo check --workspace`、`cargo test --workspace` 全绿（app 357 / connectors 93 等）；提交 `01ee37a`、`1c8f793`。
+- **MySQL 回归**：建表/设计表相关 357 app tests 通过；后续拆分每步后重跑证明行为不变。
+- **偏差/剩余**：验收不满足故不勾选——
+  - dispatch.rs（3724 行）巨型 match 未按域提取（open-create-table/table-action 块 65 arm，含跨行 struct 头与 34 处内部 `return`，纯手写路由 arm 风险高；选定延后到新增 PG 命令时一并路由，避免纯移动阶段引入行为风险）。
+  - shared.rs（1837 行）未拆：MySQL/SQLite 专属 helper 保留，真正可复用分页/校验/结果 helper 将迁 design 3.4 `relational/mod.rs`。
+  - desktop 大文件 connection_dialog.rs 3656 / tree_helpers.rs 2432 / app_boot.rs 2641 未拆；`AGENTS.md` 引用 `docs/2026-09-04-gpui-component-ui-migration.md` 当前缺失。
+  - 未做真实 MySQL 全量验收（仅冻结测试基线）。
+
+#### T01 附加：MySQL F01–F20 当前入口映射（`/crates` 路径）
+
+> 基线为设计 1.3 各行；“入口”为当前 MySQL 功能实际落点与关键符号（本次只做记录，未做真库验收）。
+
+| 编号 | MySQL 功能 | 当前入口（文件 + 关键符号） |
+| --- | --- | --- |
+| F01 | 建/编/复制连接、测试、保存、重启恢复 | `core/parts/connection.rs` ConnectionConfig/ConnectionDraft；`core/parts/mysql_profile.rs` MySqlConnectionProfile；`app/parts/mock_data.rs:101` test_connection、`app/parts/state.rs` AppCommand::CreateConnection/UpdateConnection/TestConnection；`storage/lib.rs:49` FileStorage |
+| F02 | TLS、SSH、代理、超时 | `connectors/parts/mysql/connector.rs`（dial）、`mysql/connection_url.rs`；`redis/ssh_tunnel.rs`（SSH 桥，R18）；配置见 mysql_profile.rs |
+| F03 | 分组/排序/显示库/展开/刷新/断开/删除 | `app/parts/state.rs` OpenConnection/DisconnectConnection/RefreshObject/OpenObjectList/DeleteConnection；`mysql/connector.rs:71` list_objects |
+| F04 | 建/删库 | `mysql/connector.rs:82,93` create_database/delete_database；`shared.rs:537,567` mysql_create/delete_database_sql；`app/mock_data.rs:132,155` *_for_connection |
+| F05 | 对象列表、表/视图、列、注释 | `mysql/connector.rs` list_objects/table_ddl；`mysql/metadata.rs`；`app/mock_data.rs:110,691` list_objects/load_table_info_for_connection |
+| F06 | 分页/多列排序/过滤/搜索/字段隐藏 | `mysql/connector.rs:104` load_data；`shared.rs` data_order_by_clause/push_data_filter_clause/data_export_preview_sql；`app/mock_data.rs:529` load_data_for_connection |
+| F07 | 增/复制/改/删行、批量提交、撤销 | `mysql/connector.rs:139` apply_changes；`mysql/apply_changes.rs`；`shared.rs` validate_data_changes/non_null_insert_values/push_mysql_bind/push_identity_where；`app/data_editor.rs` edit_data_cell/insert_data_row/apply_data_editor_edit |
+| F08 | 单元格详情、JSON、时间、二进制 | `mysql/connector.rs:150` load_cell_binary；`shared.rs` mysql_binary_summary/binary_summary；`app/data_editor.rs:98` binary_preview；UI main_parts/data_editor_model、json_editor |
+| F09 | 全部/当前/选区执行、结果标签、多语句、进度/停止 | `mysql/connector.rs:166,184` execute/_with_progress；`shared.rs` mysql_execute_query/_with_progress、split_sql_statements/query_statements_for_execution；`app/parts/controller/dispatch.rs` ExecuteQuery/ExecuteQueryText |
+| F10 | SQL 格式化、参数输入、补全、文档/语义提示 | `app/sql_format.rs`；editor-core SqlDialect::Postgres（R14 未接通宿主映射）；`app/completion_index.rs`、`app/query_completion.rs`、`app/parts/controller/query_completion.rs`、`mysql/completion.rs` |
+| F11 | 保存查询、历史、补偿、结果集编辑 | `app/query_history.rs`、`app/query_result_edit.rs`；`storage/lib.rs` QueryHistoryRecord、FileStorage::save/load_query_history |
+| F12 | 表信息：列、索引、FK、触发器、DDL | `mysql/connector.rs:341,349,369,376` list_indexes/list_foreign_keys/list_triggers/table_ddl；`mysql/metadata.rs`；`app/table_info.rs`、`app/mock_data.rs:691` |
+| F13 | 新建/设计表、字段/索引/FK/check/触发器/选项 | `app/parts/create_table_*.rs`（本次拆分）；`app/create_table_provider.rs`、`create_table_foreign_keys.rs`；dispatch.rs OpenCreateTable/OpenDesignTable/ApplyCreateTable 等 65 arm；UI main_parts/create_table |
+| F14 | 复制/重命名/删除/清空表 | `app/parts/create_table_actions.rs` MySqlTableActionSqlProvider/rename/copy/drop/truncate_table_sql_preview；dispatch.rs Rename/Copy/Drop/TruncateTable |
+| F15 | 导出 SQL/TXT/CSV/JSON/XML、行/选区 CSV/JSON/MD/INSERT | `app/mock_data.rs:614` preview_data_export_for_connection；UI main_parts/menus_dialogs/data_export.rs（含文件 I/O 与 SQL 生成，R15 需迁移） |
+| F16 | SQL 文件编码/目标库/拆分/继续错误/日志/取消 | `shared.rs` split_sql_statements/query_statements_for_execution；UI main_parts/menus_dialogs/sql_file_execution.rs |
+| F17 | 数据库备份、结构/数据、原生/逻辑、记录、取消 | UI main_parts/menus_dialogs/database_backup.rs、database_backup/ui.rs、backup_tab.rs |
+| F18 | 用户/角色、密码、授权撤销、成员、权限列表 | `core/parts/user_admin.rs`；`app/parts/user_admin.rs`（impl AppController）；dispatch.rs LoadUserAdmin* arm；UI main_parts/user_admin.rs |
+| F19 | 标签/脏状态/关闭保护、全局反馈、明暗主题 | `app/parts/state.rs` CloseTab/CloseTabs/ConfirmCloseDirtyTab、TaskState、AppEvent；UI main_parts/（gpui-component） |
+| F20 | 旧数据库路由及配置兼容 | `DatabaseKind` 枚举（core，暂无 Postgres）；`app/mock_data.rs` 真实路由集；`storage/lib.rs` strip_plaintext_secrets/profile_secret_slots |
+
+- **提交或差异**：`01ee37a`、`1c8f793`；分支 `pg`。未运行真实 MySQL 验收。
 
 ### T02 — 配置、核心类型与凭据
 
