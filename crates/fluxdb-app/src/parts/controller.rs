@@ -2,6 +2,7 @@
 
 include!("controller/api.rs");
 include!("controller/dispatch.rs");
+include!("controller/dispatch_table.rs");
 include!("controller/tabs.rs");
 include!("controller/data_loading.rs");
 include!("controller/query_completion.rs");
