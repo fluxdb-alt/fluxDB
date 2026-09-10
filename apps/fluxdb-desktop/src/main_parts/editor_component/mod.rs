@@ -1240,7 +1240,8 @@ impl Editor {
 
     /// 由接入层/宿主调用，把当前 settings 应用到编辑器。
     /// `line_height` 为 0 时回退到 `font_size + 2.` 的默认行为。
-    pub(crate) fn apply_settings(&mut self, font_size: f32, line_height: f32, soft_wrap: bool) {
+    /// `tab_size` 为 0 时保持当前制表宽不变（供未跟踪该 settings 的调用方使用）。
+    pub(crate) fn apply_settings(&mut self, font_size: f32, line_height: f32, soft_wrap: bool, tab_size: usize) {
         if font_size > 0. {
             if (self.font_size - font_size).abs() > f32::EPSILON {
                 self.content_width_cache.borrow_mut().take();
@@ -1255,6 +1256,14 @@ impl Editor {
                 // 当前行高仍是默认派生值，随字号同步更新。
                 self.line_height = font_size + 2.;
             }
+        }
+        // Tab 宽度影响制表符的展示列宽，变更需重建 DisplayMap 并清理按列计宽的缓存。
+        if tab_size > 0 && self.tab_width != tab_size {
+            self.tab_width = tab_size.max(1);
+            self.content_width_cache.borrow_mut().take();
+            self.line_width_hint.borrow_mut().take();
+            self.shaped_line_cache.borrow_mut().clear();
+            self.rebuild_display();
         }
         if self.soft_wrap != soft_wrap {
             self.soft_wrap = soft_wrap;

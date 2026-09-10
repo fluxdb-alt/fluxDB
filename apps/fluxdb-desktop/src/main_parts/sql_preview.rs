@@ -75,7 +75,8 @@ fn sql_preview_editor(
     editor.update(cx, |editor, cx| {
         // 外部模型变化才同步（长度不同立即判定变化），不会每帧重建 buffer。
         editor.sync_text_silent(text, cx);
-        editor.apply_settings(SQL_PREVIEW_FONT_SIZE, SQL_PREVIEW_LINE_HEIGHT, soft_wrap);
+        // 预览不跟踪多 Tab 宽度 settings，保持构造时的默认制表宽（4）。
+        editor.apply_settings(SQL_PREVIEW_FONT_SIZE, SQL_PREVIEW_LINE_HEIGHT, soft_wrap, 0);
         // 主题未变化时 `set_theme` 内部短路，逐帧调用无额外开销。
         editor.set_theme(editor_theme, cx);
     });
