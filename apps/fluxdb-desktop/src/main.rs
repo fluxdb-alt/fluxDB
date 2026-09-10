@@ -69,7 +69,7 @@ use gpui_component::{
     group_box::{GroupBox, GroupBoxVariant, GroupBoxVariants as _},
     h_flex,
     highlighter::{LanguageConfig, LanguageRegistry},
-    input::{Editor, EditorState, Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState},
     popover::{Popover, PopoverState},
     progress::Progress,
     scroll::{ScrollableElement, Scrollbar},
@@ -124,6 +124,7 @@ include!("main_parts/theme_registry.rs");
 include!("main_parts/shortcuts.rs");
 include!("main_parts/editor_component.rs");
 include!("main_parts/sql_editor_adapter.rs");
+include!("main_parts/sql_preview.rs");
 include!("main_parts/redis_editor_adapter.rs");
 include!("main_parts/terminal_component.rs");
 include!("main_parts/app_state.rs");

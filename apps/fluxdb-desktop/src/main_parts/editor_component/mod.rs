@@ -2266,9 +2266,8 @@ impl Editor {
         // 仅用于判断光标是否超出视口左右，无需逐字 shape。出界时把视口滚到光标处并留一个字符
         // 边距，避免光标跑出视口不可见（对齐 zed autoscroll_horizontally / vscode reveal position）。
         let char_width = self.font_size * 0.5;
-        let gutter_width = if self.gutter_line_numbers || self.profile.show_line_numbers {
-            (self.line_digits() as f32 * 8.0 + EDITOR_GUTTER_GAP + EDITOR_FOLD_GUTTER)
-                .max(EDITOR_MIN_GUTTER)
+        let gutter_width = if self.shows_line_numbers() {
+            self.gutter_width_value()
         } else {
             0.0
         };
@@ -3539,13 +3538,26 @@ impl Editor {
         }
     }
 
+    /// 是否绘制 gutter 行号列。
+    ///
+    /// 行号列的「宽度」与「绘制」必须同源：只关其一会让行号列宽算成 0、行号却照画，
+    /// 于是行号压在正文左缘（只读 DDL 预览这类关闭行号的宿主会直接看到重叠）。
+    pub(crate) fn shows_line_numbers(&self) -> bool {
+        self.gutter_line_numbers || self.profile.show_line_numbers
+    }
+
     /// 行号区宽度（像素），由渲染阶段采用。
     pub(crate) fn line_number_width(&self, _window: &Window) -> gpui::Pixels {
-        if !self.gutter_line_numbers && !self.profile.show_line_numbers {
+        if !self.shows_line_numbers() {
             return gpui::px(0.);
         }
-        gpui::px(self.line_digits() as f32 * 8.0 + EDITOR_GUTTER_GAP + EDITOR_FOLD_GUTTER)
-            .max(gpui::px(EDITOR_MIN_GUTTER))
+        gpui::px(self.gutter_width_value())
+    }
+
+    /// 行号区宽度（像素，未经 `Window` 包装的原始值），供不持有 `Window` 的布局路径复用。
+    fn gutter_width_value(&self) -> f32 {
+        (self.line_digits() as f32 * 8.0 + EDITOR_GUTTER_GAP + EDITOR_FOLD_GUTTER)
+            .max(EDITOR_MIN_GUTTER)
     }
 
     fn line_digits(&self) -> usize {
@@ -3560,9 +3572,16 @@ impl Editor {
             .block_total_rows()
             .saturating_sub(self.display.visual_row_count()) as f32;
         let line_height = f32::from(self.line_height(window));
-        // Zed 默认 scroll_beyond_last_line=one_page：最后一行可以滚到视口顶部。
+        // 内容末尾之外的滚动手感由 profile 决定（对齐 Zed 的 scroll_beyond_last_line）：
+        // 编辑场景默认 one_page，最后一行可以滚到视口顶部；只读预览用 None，
+        // 否则内容短于视口时会凭空多出一屏可滚空白。
         // 首帧视口尚未布局时退回一行，避免凭空产生大块可滚空白。
-        let overscroll = f32::from(self.scroll_handle.bounds().size.height).max(line_height);
+        let overscroll = match self.profile.scroll_beyond_last_line {
+            fluxdb_editor_core::ScrollBeyondLastLine::OnePage => {
+                f32::from(self.scroll_handle.bounds().size.height).max(line_height)
+            }
+            fluxdb_editor_core::ScrollBeyondLastLine::None => 0.,
+        };
         gpui::px(
             EDITOR_PADDING_Y * 2.
                 + line_count * line_height

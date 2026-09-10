@@ -3464,13 +3464,23 @@ fn data_editor_content(
         cx,
     );
     let content = content.child(if editor.table_info.open {
+        // DDL 页签用底层编辑器渲染，需要宿主当前主题派生的编辑器配色（见 table_info_ddl_text）。
+        let editor_theme = this.editor_theme_for(cx);
         div()
             .flex_1()
             .min_h(px(0.))
             .flex()
             .overflow_hidden()
             .child(table_area)
-            .child(table_info_panel(tab_id, editor, page, window, colors, cx))
+            .child(table_info_panel(
+                tab_id,
+                editor,
+                page,
+                editor_theme,
+                window,
+                colors,
+                cx,
+            ))
     } else {
         table_area
     });

@@ -547,6 +547,8 @@ impl Element for EditorCanvas {
         });
 
         let line_height = prepaint.line_height;
+        // gutter 行号列是否启用；与 `line_number_width` 同一判断，逐行绘制时复用。
+        let show_line_numbers = self.editor.read(cx).shows_line_numbers();
         for line in &prepaint.visible_lines {
             let visual_index = line.visual_row;
             let y = viewport.top()
@@ -608,8 +610,9 @@ impl Element for EditorCanvas {
                     .ok();
             }
 
-            // 行号
-            if line.first_fragment {
+            // 行号：必须与 `line_number_width` 同源判断。关闭行号时 gutter 宽为 0，
+            // 仍照画会让行号落在正文左缘上，视觉上就是行号与 SQL 重叠。
+            if line.first_fragment && show_line_numbers {
                 let number = SharedString::from((line.buffer_row + 1).to_string());
                 let number_run = TextRun {
                     len: number.len(),

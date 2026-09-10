@@ -2,6 +2,7 @@ fn table_info_panel(
     tab_id: TabId,
     editor: &DataEditorState,
     page: &DataPage,
+    editor_theme: editor_component::EditorTheme,
     window: &mut Window,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
@@ -31,7 +32,15 @@ fn table_info_panel(
             colors,
             cx,
         ))
-        .child(table_info_body(tab_id, editor, page, window, colors, cx))
+        .child(table_info_body(
+            tab_id,
+            editor,
+            page,
+            editor_theme,
+            window,
+            colors,
+            cx,
+        ))
 }
 
 fn table_info_resize_handle(
@@ -228,6 +237,7 @@ fn table_info_body(
     tab_id: TabId,
     editor: &DataEditorState,
     page: &DataPage,
+    editor_theme: editor_component::EditorTheme,
     window: &mut Window,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
@@ -258,7 +268,7 @@ fn table_info_body(
             window,
             cx,
         ),
-        TableInfoTab::Ddl => table_info_ddl(tab_id, editor, window, colors, cx),
+        TableInfoTab::Ddl => table_info_ddl(tab_id, editor, editor_theme, window, colors, cx),
     }
 }
 
@@ -456,7 +466,10 @@ fn table_info_table(
         .overflow_hidden()
         .child(
             DataTable::new(&table_state)
-                .stripe(true)
+                // 关掉斑马纹：gpui-component 在 `stripe(true)` 时会为填满剩余视口补渲染
+                // 「假行」（`rows_count + extra_rows_count`），每行都带下边框 —— 数据集
+                // 撑不满面板时下面就会多出一堆空行横线。真实行仍由组件画下边框分隔。
+                .stripe(false)
                 .bordered(false)
                 .small()
                 .scrollbar_visible(true, true),
@@ -582,6 +595,7 @@ fn table_info_triggers(
 fn table_info_ddl(
     tab_id: TabId,
     editor: &DataEditorState,
+    editor_theme: editor_component::EditorTheme,
     window: &mut Window,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
@@ -637,8 +651,8 @@ fn table_info_ddl(
                 .child(table_info_ddl_text(
                     tab_id,
                     ddl,
-                    &editor.table_info.search,
                     editor.table_info.ddl_wrap,
+                    editor_theme,
                     window,
                     colors,
                     cx,
@@ -690,46 +704,35 @@ fn table_info_empty(text: impl Into<String>, colors: UiColors) -> Div {
         .child(text.into())
 }
 
+/// DDL 只读预览：复用统一的 SQL / DDL 预览编辑器（见 `sql_preview.rs`），
+/// 与「设计表」的 SQL / DDL 预览、查询 / Redis 编辑器同一套高亮与配色来源。
 fn table_info_ddl_text(
     tab_id: TabId,
     ddl: &str,
-    _search: &str,
     wrap: bool,
+    editor_theme: editor_component::EditorTheme,
     window: &mut Window,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> gpui::AnyElement {
-    let editor_key = SharedString::from(format!("table-info-ddl-editor-{}-{wrap}", tab_id.0));
-    let editor = window.use_keyed_state(editor_key, cx, {
-        let ddl = ddl.to_string();
-        move |window, cx| {
-            EditorState::new(window, cx)
-                .language(MYSQL_DDL_HIGHLIGHT_LANGUAGE)
-                .line_number(false)
-                .soft_wrap(wrap)
-                .default_value(ddl)
-        }
-    });
-    editor.update(cx, |state, cx| {
-        if state.value().to_string() != ddl {
-            state.set_value(ddl.to_string(), window, cx);
-        }
-    });
+    // 仅按标签页缓存：换行开关走 apply_settings 就地生效，不必重建编辑器（重建会丢滚动位置）。
+    let editor = sql_preview_editor(
+        SharedString::from(format!("table-info-ddl-editor-{}", tab_id.0)),
+        ddl,
+        // 表结构 DDL 由服务端按该连接的方言生成；当前表属性面板不持有连接类型，
+        // 按绝大多数场景（MySQL 系）取方言。高亮查询与方言无关，仅折叠/注释标记随方言。
+        sql_editor_adapter::SqlDialect::Mysql,
+        wrap,
+        editor_theme,
+        window,
+        cx,
+    );
 
     div()
         .flex_1()
         .min_h(px(0.))
         .bg(colors.panel_bg)
         .overflow_hidden()
-        .child(
-            Editor::new(&editor)
-                .appearance(false)
-                .bordered(false)
-                .disabled(true)
-                .text_size(px(12.))
-                .font_family("Menlo")
-                .p_3()
-                .size_full(),
-        )
+        .child(editor)
         .into_any_element()
 }
