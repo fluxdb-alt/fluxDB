@@ -115,7 +115,7 @@ fn test_connection(config: &ConnectionConfig) -> fluxdb_core::Result<()> {
     match config.kind {
         DatabaseKind::MySql | DatabaseKind::TiDb => MySqlConnector::new().test_connection(config),
         DatabaseKind::Sqlite => SqliteConnector::new().test_connection(config),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => PostgresConnector::new().test_connection(config),
         DatabaseKind::MongoDb => MockConnector::new(config.kind).test_connection(config),
         DatabaseKind::Redis => RedisConnector::new().test_connection(config),
     }
@@ -212,7 +212,7 @@ fn execute_query_for_connection(
             MySqlConnector::with_config(config.clone()).execute(request)
         }
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).execute(request),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => PostgresConnector::with_config(config.clone()).execute(request),
         DatabaseKind::MongoDb | DatabaseKind::Redis => MockConnector::new(config.kind).execute(request),
     }
 }
@@ -248,7 +248,8 @@ fn execute_query_for_connection_with_progress(
             on_summary,
             should_cancel,
         ),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => PostgresConnector::with_config(config.clone())
+            .execute_with_progress(request, on_summary, should_cancel),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind).execute_with_progress(
                 request,

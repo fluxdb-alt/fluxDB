@@ -6,8 +6,8 @@ use fluxdb_core::{
     ConnectionOverview, Connector, CreateDatabaseRequest, DataChangeSet, DataExportPreview,
     DataPage, DatabaseKind, Endpoint, Error, ErrorKind, FilterOp, FilterSpec, ForeignKeyInfo,
     IndexInfo, ObjectKind, ObjectPath, ObjectSummary, Pagination, QueryExecutionResult,
-    QueryExecutionSummary, QueryRequest, QueryStatementKind, RedisHashFieldTtl, RedisServerVersion,
-    Row, RowUpdate, SortDirection, SortSpec, TriggerInfo, is_binary_type_name,
+    QueryExecutionSummary, QueryRequest, QuerySessionId, QueryStatementKind, RedisHashFieldTtl,
+    RedisServerVersion, Row, RowUpdate, SortDirection, SortSpec, TriggerInfo, is_binary_type_name,
     sqlite_attached_databases,
 };
 use sqlx::{
@@ -32,6 +32,7 @@ use std::{
 include!("parts/common.rs");
 include!("parts/mock.rs");
 include!("parts/mysql.rs");
+include!("parts/postgres.rs");
 include!("parts/redis.rs");
 include!("parts/sqlite.rs");
 include!("parts/shared_cells.rs");

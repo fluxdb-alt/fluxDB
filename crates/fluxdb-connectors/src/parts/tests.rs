@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fluxdb_core::{CellUpdate, Endpoint, Error, ErrorKind, QueryMode, RowIdentity};
+    use fluxdb_core::{
+        CellUpdate, Endpoint, Error, ErrorKind, QueryExecutionOptions, QueryMode, RowIdentity,
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -2964,5 +2966,197 @@ SELECT item_id, name FROM audit_log;"
             "gdb-sqlite-{label}-{}-{suffix}.db",
             std::process::id()
         ))
+    }
+
+    // —— PostgreSQL（T04）——
+
+    fn postgres_config() -> ConnectionConfig {
+        ConnectionConfig {
+            id: ConnectionId(4),
+            name: "PG Local".to_string(),
+            kind: DatabaseKind::Postgres,
+            endpoint: Endpoint::Tcp {
+                host: "127.0.0.1".to_string(),
+                port: 5432,
+                database: Some("postgres".to_string()),
+            },
+            credential_ref: None,
+            options: Default::default(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: Some(fluxdb_core::PostgresConnectionProfile {
+                basic: fluxdb_core::PostgresBasicOptions {
+                    host: "127.0.0.1".to_string(),
+                    port: 5432,
+                    maintenance_database: "postgres".to_string(),
+                    username: "postgres".to_string(),
+                    password: fluxdb_core::SecretRef::inline("secret"),
+                },
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn pg_query_request(config: &ConnectionConfig, session_id: Option<QuerySessionId>) -> QueryRequest {
+        QueryRequest {
+            connection_id: config.id,
+            database: None,
+            schema: None,
+            text: "SELECT 1".to_string(),
+            mode: QueryMode::All,
+            options: QueryExecutionOptions::default(),
+            session_id,
+        }
+    }
+
+    #[test]
+    fn pg_config_rejects_missing_profile() {
+        let config = sqlite_config(); // postgres_profile = None
+        let err = pg_config(&config, "postgres").unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Connection);
+    }
+
+    #[test]
+    fn pg_config_rejects_tls_for_t04() {
+        let mut config = postgres_config();
+        // 启用 TLS：T04 未接入，应显式报 Unsupported。
+        let profile = config.postgres_profile.as_mut().unwrap();
+        profile.tls.enabled = true;
+        profile.tls.ssl_mode = fluxdb_core::PostgresSslMode::Require;
+        let err = pg_config(&config, "postgres").unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn pg_session_keys_isolate_by_session_id_and_role() {
+        let config = postgres_config();
+        // 两个不同 session_id → 不同会话键（连接/事务互不串扰）。
+        let a = pg_session_key_for(&pg_query_request(&config, Some(QuerySessionId(1))), "postgres");
+        let b = pg_session_key_for(&pg_query_request(&config, Some(QuerySessionId(2))), "postgres");
+        assert_ne!(a, b);
+        // 同 session_id → 相同会话键（复用同一连接，事务跨查询保持）。
+        let a2 = pg_session_key_for(&pg_query_request(&config, Some(QuerySessionId(1))), "postgres");
+        assert_eq!(a, a2);
+        // 无 session_id → 隔离瞬态键，与显式会话键不同。
+        let transient = pg_session_key_for(&pg_query_request(&config, None), "postgres");
+        assert_ne!(transient, a);
+        assert!(matches!(transient.purpose, PgSessionPurpose::Transient));
+    }
+
+    #[test]
+    fn pg_execute_empty_query_is_guard_failure() {
+        let connector = PostgresConnector::with_config(postgres_config());
+        let mut request = pg_query_request(&postgres_config(), None);
+        request.text = "   \n  ".to_string(); // 空语句（无服务器也应在切分阶段失败）
+        let err = connector.execute(&request).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Query);
+    }
+
+    /// 真实 PG 冒烟（T04 验收）：需要外部 PostgreSQL。
+    ///
+    /// 通过 `FLUXDB_PG_SMOKE=host:port:user:password:db` 启用；未设置时直接跳过。
+    /// 覆盖：真实建连 + 认证 + 版本读取；SELECT 返回真实行；两个显式查询会话互不串事务。
+    #[test]
+    fn pg_live_smoke_connect_and_version() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG 冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::new();
+        // 真实建连 + 认证 + version() 读取（test_connection 内部执行 SELECT version()）。
+        assert!(
+            connector.test_connection(&config).is_ok(),
+            "真实 PG 建连/认证/版本读取失败"
+        );
+    }
+
+    #[test]
+    fn pg_live_smoke_select_rows() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let mut request = pg_query_request(&config, None);
+        request.text = "SELECT 1 AS one, 'x'::text AS t".to_string();
+        let result = connector.execute(&request).expect("SELECT 应成功");
+        let summary = &result.summaries[0];
+        assert!(summary.success, "SELECT 应报 success：{}", summary.message);
+        assert_eq!(summary.returned_rows, 1);
+        assert_eq!(result.results.len(), 1);
+        let page = &result.results[0];
+        assert_eq!(page.rows.len(), 1);
+    }
+
+    #[test]
+    fn pg_live_smoke_transient_sessions_do_not_leak_transactions() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        // 会话 A 开启事务写一行但未提交。
+        let mut setup = pg_query_request(&config, Some(QuerySessionId(100)));
+        setup.text = "DROP TABLE IF EXISTS t04_leak; CREATE TABLE t04_leak(id int); \
+                      BEGIN; INSERT INTO t04_leak VALUES (1)".to_string();
+        connector.execute(&setup).expect("A 建表并开启事务");
+
+        // 会话 B（不同 session_id = 不同连接）：不应看到 A 未提交的行。
+        let mut check = pg_query_request(&config, Some(QuerySessionId(200)));
+        check.text = "SELECT count(*) AS c FROM t04_leak".to_string();
+        let result = connector.execute(&check).expect("B 查询应成功");
+        let page = &result.results[0];
+        let first = &page.rows[0].values[0];
+        assert_eq!(
+            *first,
+            CellValue::I64(0),
+            "不同会话不应看到未提交事务的行（互不串事务）"
+        );
+
+        // 收尾：A 提交，确认 B 之后可见；并清理。
+        let mut commit = pg_query_request(&config, Some(QuerySessionId(100)));
+        commit.text = "COMMIT; DROP TABLE t04_leak".to_string();
+        connector.execute(&commit).expect("A 提交并清理");
+    }
+
+    /// 读 FLUXDB_PG_SMOKE 环境变量 → (host, port, user, password, db)。
+    fn pg_smoke_params() -> Option<(String, u16, String, String, String)> {
+        let value = std::env::var("FLUXDB_PG_SMOKE").ok()?;
+        let mut parts = value.split(':');
+        let host = parts.next()?.to_string();
+        let port: u16 = parts.next()?.parse().ok()?;
+        let user = parts.next()?.to_string();
+        let password = parts.next()?.to_string();
+        let db = parts.next()?.to_string();
+        Some((host, port, user, password, db))
+    }
+
+    fn pg_smoke_config((host, port, user, password, db): (String, u16, String, String, String)) -> ConnectionConfig {
+        ConnectionConfig {
+            id: ConnectionId(9),
+            name: "PG Smoke".to_string(),
+            kind: DatabaseKind::Postgres,
+            endpoint: Endpoint::Tcp {
+                host: host.clone(),
+                port,
+                database: Some(db.clone()),
+            },
+            credential_ref: None,
+            options: Default::default(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: Some(fluxdb_core::PostgresConnectionProfile {
+                basic: fluxdb_core::PostgresBasicOptions {
+                    host,
+                    port,
+                    maintenance_database: db,
+                    username: user,
+                    password: fluxdb_core::SecretRef::inline(&password),
+                },
+                ..Default::default()
+            }),
+        }
     }
 }

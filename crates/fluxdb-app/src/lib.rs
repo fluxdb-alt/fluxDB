@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fluxdb_connectors::{
-    MockConnector, MySqlConnector, RedisConnector, RedisStreamRange, SqliteConnector,
+    MockConnector, MySqlConnector, PostgresConnector, RedisConnector, RedisStreamRange,
+    SqliteConnector,
 };
 // 对外再导出建 Key 相关的连接器类型，供桌面端（fluxdb-desktop）匹配/构造 AppCommand 使用。
 pub use fluxdb_connectors::{
