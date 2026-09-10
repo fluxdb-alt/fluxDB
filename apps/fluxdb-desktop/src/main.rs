@@ -59,9 +59,11 @@ use gpui::{
     point, px, rgb, size, svg, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, IconName, IndexPath, Root, Sizable as _,
+    ActiveTheme as _, Colorize as _, Disableable as _, IconName, IndexPath, Root, Sizable as _,
     Theme as ComponentTheme, ThemeConfig, ThemeMode, ThemeRegistry, VirtualListScrollHandle,
-    WindowExt, box_shadow,
+    WindowExt,
+    alert::{Alert, AlertVariant},
+    box_shadow,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::Dialog,

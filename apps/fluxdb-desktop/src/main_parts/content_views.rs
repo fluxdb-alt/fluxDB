@@ -2689,7 +2689,7 @@ fn save_settings_from_ui(
     let soft_wrap = new_settings.editor_word_wrap;
     for sql_editor in this.query_editors.values() {
         sql_editor.update(cx, |editor, _cx| {
-            editor.apply_settings(font_size, line_height, soft_wrap);
+            editor.apply_settings(font_size, line_height, soft_wrap, new_settings.editor_tab_width as usize);
         });
     }
     this.settings_editor_draft = this.controller.state().settings.clone();
@@ -3187,10 +3187,34 @@ fn data_editor_content(
 
     let Some(page) = &editor.page else {
         if let Some(error) = &editor.error {
-            return content.child(center_message(
-                format!("{}：{}", error.title, error.message),
-                colors,
-            ));
+            // 加载失败：常驻 Alert + 重试。重试复用工具栏「刷新」的既有入口，
+            // 按当前筛选/排序在后台重新拉取，不会阻塞 UI；也不再是盖住整个表格区的居中文本。
+            let retry = Button::new(("retry-data-page", tab_id.0))
+                .label("重试")
+                .small()
+                .outline()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.request_data_editor_refresh(tab_id, cx);
+                }))
+                .into_any_element();
+            return content.child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scrollbar()
+                    .p_6()
+                    .child(page_error_alert(
+                        gpui::ElementId::Name(
+                            format!("data-editor-error-{}", tab_id.0).into(),
+                        ),
+                        &error.title,
+                        &error.message,
+                        error.detail.as_deref(),
+                        Some(retry),
+                        cx,
+                        colors,
+                    )),
+            );
         }
         return content.child(center_message("暂无数据", colors));
     };
@@ -4501,7 +4525,19 @@ fn redis_workbench_results(
         if workbench.running {
             redis_workbench_loading_state(colors).into_any_element()
         } else if let Some(error) = workbench.error.as_ref() {
-            query_output_error_state(error, colors).into_any_element()
+            // 重试与工具栏「运行」同路：含破坏性命令时先弹二次确认。
+            let pending_text = workbench.text.clone();
+            let retry = Button::new(("retry-redis-workbench", tab_id.0))
+                .label("重试")
+                .small()
+                .outline()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !this.request_redis_dangerous_confirmation(tab_id, &pending_text, cx) {
+                        this.dispatch(AppCommand::ExecuteRedisWorkbench(tab_id), cx);
+                    }
+                }))
+                .into_any_element();
+            query_output_error_state(tab_id, error, Some(retry), cx, colors).into_any_element()
         } else {
             redis_workbench_empty_state(colors).into_any_element()
         }
@@ -5336,7 +5372,15 @@ fn query_output_panel(
         QueryOutputPlacement::Right => query_output_width(tab_id, this, window),
     };
     let body = if let Some(error) = editor.error.as_ref() {
-        query_output_error_state(error, colors).into_any_element()
+        let retry = Button::new(("retry-query-output", tab_id.0))
+            .label("重试")
+            .small()
+            .outline()
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.start_query_execution(tab_id, window, cx);
+            }))
+            .into_any_element();
+        query_output_error_state(tab_id, error, Some(retry), cx, colors).into_any_element()
     } else if !has_output {
         query_output_empty_state(colors).into_any_element()
     } else {
@@ -5815,39 +5859,26 @@ fn query_output_empty_state(colors: UiColors) -> Div {
         .child("执行 SQL 后显示结果和摘要")
 }
 
-fn query_output_error_state(error: &fluxdb_core::UserFacingError, colors: UiColors) -> Div {
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .px_6()
-        .text_center()
-        .child(
-            div()
-                .text_size(px(14.))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(rgb(0xff5c5c))
-                .child(error.title.clone()),
-        )
-        .child(
-            div()
-                .max_w(px(720.))
-                .text_size(px(13.))
-                .text_color(colors.muted)
-                .child(error.message.clone()),
-        )
-        .when_some(error.detail.clone(), |this, detail| {
-            this.child(
-                div()
-                    .max_w(px(720.))
-                    .text_size(px(12.))
-                    .text_color(colors.muted)
-                    .child(detail),
-            )
-        })
+/// 查询 / Redis 输出面板的错误态：常驻 gpui-component `Alert`（不参与自动消失），
+/// 顶部对齐放在面板里；`retry` 由调用方自备（面板自带运行按钮时可以不传）。
+fn query_output_error_state(
+    tab_id: TabId,
+    error: &fluxdb_core::UserFacingError,
+    retry: Option<gpui::AnyElement>,
+    cx: &App,
+    colors: UiColors,
+) -> Div {
+    div().flex_1().min_h(px(0.)).child(
+        div().overflow_y_scrollbar().p_6().child(page_error_alert(
+            gpui::ElementId::Name(format!("query-output-error-{}", tab_id.0).into()),
+            &error.title,
+            &error.message,
+            error.detail.as_deref(),
+            retry,
+            cx,
+            colors,
+        )),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -6383,154 +6414,102 @@ fn query_result_error_state(
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let error_color = rgb(0xff5c5c);
-    let border_color = if colors.is_dark {
-        rgb(0xff4d5a)
-    } else {
-        rgb(0xdc2626)
-    };
-    let panel_bg = if colors.is_dark {
-        rgb(0x17181c)
-    } else {
-        rgb(0xfff7f7)
-    };
     let copy_text = query_result_error_copy_text(summary);
+    let sql_line = single_line_summary_text(summary.sql.clone());
 
-    div()
-        .size_full()
+    // 操作区：重试（复用工具栏「运行」入口重跑整条查询）+ 复制错误 + 用 AI 修复（暂未开放）。
+    let actions = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(
+            Button::new(("retry-query-result", tab_id.0))
+                .label("重试")
+                .small()
+                .outline()
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.start_query_execution(tab_id, window, cx);
+                })),
+        )
         .child(
             div()
-                .size_full()
-                .overflow_y_scrollbar()
+                .id(gpui::ElementId::Name(
+                    format!(
+                        "copy-query-result-error-{}-{}",
+                        tab_id.0, result_index
+                    )
+                    .into(),
+                ))
+                .h(px(30.))
+                .px_3()
+                .rounded(colors.radius_lg)
+                .border_1()
+                .border_color(colors.border)
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_color(colors.text)
+                .hover(move |style| style.bg(colors.hover))
+                .child(app_icon(AppIcon::Copy, 14., colors.muted))
                 .child(
                     div()
-                        .min_h(px(320.))
-                        .p_6()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            div()
-                                .w(px(860.))
-                                .min_h(px(220.))
-                                .rounded(colors.radius * 0.5)
-                                .border_2()
-                                .border_color(border_color)
-                                .bg(panel_bg)
-                                .px_6()
-                                .py_5()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .justify_center()
-                                .gap_3()
-                                .text_center()
-                                .child(app_icon(AppIcon::CircleSlash, 34., error_color))
-                                .child(
-                                    div()
-                                        .text_size(px(17.))
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(error_color)
-                                        .child("查询出错"),
-                                )
-                                .child(
-                                    div()
-                                        .max_w(px(720.))
-                                        .text_size(px(13.))
-                                        .line_height(px(20.))
-                                        .text_color(error_color)
-                                        .child(summary.message.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .max_w(px(720.))
-                                        .overflow_hidden()
-                                        .text_ellipsis()
-                                        .text_size(px(12.))
-                                        .text_color(colors.muted)
-                                        .child(single_line_summary_text(summary.sql.clone())),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .id(gpui::ElementId::Name(
-                                                    format!(
-                                                        "copy-query-result-error-{}-{}",
-                                                        tab_id.0, result_index
-                                                    )
-                                                    .into(),
-                                                ))
-                                                .h(px(30.))
-                                                .px_3()
-                                                .rounded(colors.radius_lg)
-                                                .border_1()
-                                                .border_color(colors.border)
-                                                .cursor_pointer()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .text_color(colors.text)
-                                                .hover(move |style| style.bg(colors.hover))
-                                                .child(app_icon(AppIcon::Copy, 14., colors.muted))
-                                                .child(
-                                                    div()
-                                                        .text_size(px(13.))
-                                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                        .child("复制错误"),
-                                                )
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(move |this, _, _, cx| {
-                                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                                            copy_text.clone(),
-                                                        ));
-                                                        this.show_message(
-                                                            "已复制错误信息",
-                                                            AppMessageKind::Success,
-                                                            cx,
-                                                        );
-                                                        cx.stop_propagation();
-                                                    }),
-                                                ),
-                                        )
-                                        .child(
-                                            div()
-                                                .id(gpui::ElementId::Name(
-                                                    format!(
-                                                        "ai-fix-query-result-error-{}-{}",
-                                                        tab_id.0, result_index
-                                                    )
-                                                    .into(),
-                                                ))
-                                                .h(px(30.))
-                                                .px_3()
-                                                .rounded(colors.radius_lg)
-                                                .border_1()
-                                                .border_color(colors.border)
-                                                .cursor_default()
-                                                .opacity(0.5)
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .text_color(error_color)
-                                                .child(app_icon(AppIcon::Bot, 14., error_color))
-                                                .child(
-                                                    div()
-                                                        .text_size(px(13.))
-                                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                        .child("用 AI 修复"),
-                                                )
-                                                .tooltip(|window, cx| {
-                                                    Tooltip::new("暂不支持 AI 修复").build(window, cx)
-                                                }),
-                                        ),
-                                ),
-                        ),
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child("复制错误"),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                        this.show_message("已复制错误信息", AppMessageKind::Success, cx);
+                        cx.stop_propagation();
+                    }),
                 ),
         )
+        .child(
+            div()
+                .id(gpui::ElementId::Name(
+                    format!(
+                        "ai-fix-query-result-error-{}-{}",
+                        tab_id.0, result_index
+                    )
+                    .into(),
+                ))
+                .h(px(30.))
+                .px_3()
+                .rounded(colors.radius_lg)
+                .border_1()
+                .border_color(colors.border)
+                .cursor_default()
+                .opacity(0.5)
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_color(error_color)
+                .child(app_icon(AppIcon::Bot, 14., error_color))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child("用 AI 修复"),
+                )
+                .tooltip(|window, cx| Tooltip::new("暂不支持 AI 修复").build(window, cx)),
+        );
+
+    div().flex_1().min_h(px(0.)).child(
+        div().overflow_y_scrollbar().p_6().child(page_error_alert(
+            gpui::ElementId::Name(
+                format!("query-result-error-{}-{}", tab_id.0, result_index).into(),
+            ),
+            "查询出错",
+            &summary.message,
+            Some(sql_line.as_str()),
+            Some(actions.into_any_element()),
+            cx,
+            colors,
+        )),
+    )
 }
 
 fn query_result_error_copy_text(summary: &QueryExecutionSummary) -> String {
@@ -7171,7 +7150,7 @@ fn query_toolbar(
                         save_settings_from_ui(this, settings, "已更新自动换行", cx);
                         let line_height = this.controller.state().settings.editor_line_height.clamp(13, 28) as f32;
                         sql_editor.update(cx, |editor, _editor_cx| {
-                            editor.apply_settings(editor.font_size, line_height, !soft_wrap);
+                            editor.apply_settings(editor.font_size, line_height, !soft_wrap, 0);
                         });
                         cx.stop_propagation();
                     }

@@ -38,7 +38,15 @@ const CELL_DETAIL_DRAWER_MAX_HEIGHT: f32 = 360.;
 const SQL_HIGHLIGHT_LANGUAGE: &str = "sql";
 const MYSQL_DDL_HIGHLIGHT_LANGUAGE: &str = "mysql-ddl";
 const JSON_HIGHLIGHT_LANGUAGE: &str = "json";
-const APP_MESSAGE_DURATION: Duration = Duration::from_millis(1500);
+/// 底部提示（`app_message_overlay`）的自动消失时长。
+const APP_MESSAGE_DURATION: Duration = Duration::from_millis(3000);
+/// 底部提示的行高。gpui-component 的默认行高对 14px 小字号偏松，提示条会显得很占地方。
+const APP_MESSAGE_LINE_HEIGHT: f32 = 18.;
+/// 页面级错误块（`page_error_alert`）的行高：要承载整段原始报文，比提示条略松一点。
+const PAGE_ERROR_LINE_HEIGHT: f32 = 20.;
+/// 告警淡色底的混色比例：变体色占多少，其余为面板底色。
+/// 太大文字会被底色吃掉，太小则看不出是一块提示，0.12~0.16 是常见区间。
+const ALERT_TINT: f32 = 0.14;
 const TREE_ARROW_COL_WIDTH: f32 = 18.;
 const TREE_ICON_COL_WIDTH: f32 = 22.;
 const CONNECTION_COLOR_PALETTE: &[(&str, u32)] = &[
