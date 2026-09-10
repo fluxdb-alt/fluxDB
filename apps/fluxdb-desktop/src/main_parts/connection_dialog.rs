@@ -507,6 +507,7 @@ fn database_kind_icon_path(kind: DatabaseKind) -> &'static str {
         DatabaseKind::Sqlite => "db/sqlite.svg",
         DatabaseKind::MongoDb => "db/mongodb.svg",
         DatabaseKind::Redis => "db/redis.svg",
+        DatabaseKind::Postgres => "db/postgres.svg",
     }
 }
 
@@ -1387,6 +1388,44 @@ fn connection_form(
 
     let form = match kind {
         DatabaseKind::MySql | DatabaseKind::TiDb => base
+            .child(host_port_row_light("主机", inputs, colors, window, cx))
+            .child(field_row_light(
+                "用户名",
+                ConnectionField::Username,
+                inputs,
+                false,
+                colors,
+                window,
+                cx,
+            ))
+            .child(field_row_light(
+                "密码",
+                ConnectionField::Password,
+                inputs,
+                true,
+                colors,
+                window,
+                cx,
+            ))
+            .child(field_row_light(
+                "数据库",
+                ConnectionField::Database,
+                inputs,
+                false,
+                colors,
+                window,
+                cx,
+            ))
+            .child(field_row_light(
+                "URL 参数",
+                ConnectionField::UrlParams,
+                inputs,
+                false,
+                colors,
+                window,
+                cx,
+            )),
+        DatabaseKind::Postgres => base
             .child(host_port_row_light("主机", inputs, colors, window, cx))
             .child(field_row_light(
                 "用户名",

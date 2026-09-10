@@ -410,7 +410,10 @@ pub fn database_user_admin_provider(kind: DatabaseKind) -> Option<DatabaseUserAd
             dialect: UserAdminDialect::MySql,
             default_scope: PrivilegeScope::MySql,
         }),
-        DatabaseKind::Sqlite | DatabaseKind::MongoDb | DatabaseKind::Redis => None,
+        DatabaseKind::Sqlite
+        | DatabaseKind::MongoDb
+        | DatabaseKind::Redis
+        | DatabaseKind::Postgres => None,
     }
 }
 

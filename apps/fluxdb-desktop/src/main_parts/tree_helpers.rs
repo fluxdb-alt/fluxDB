@@ -1281,6 +1281,7 @@ fn database_kind_name(kind: DatabaseKind) -> &'static str {
         DatabaseKind::Sqlite => "SQLite",
         DatabaseKind::MongoDb => "MongoDB",
         DatabaseKind::Redis => "Redis",
+        DatabaseKind::Postgres => "PostgreSQL",
     }
 }
 

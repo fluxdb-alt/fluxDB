@@ -533,6 +533,13 @@ impl NewConnectionForm {
                 form.username = "default".to_string();
                 form.database = "0".to_string();
             }
+            DatabaseKind::Postgres => {
+                form.name = format!("PostgreSQL Local {index}");
+                form.host = "127.0.0.1".to_string();
+                form.port = "5432".to_string();
+                form.username = "postgres".to_string();
+                form.database = "postgres".to_string();
+            }
         }
         form
     }

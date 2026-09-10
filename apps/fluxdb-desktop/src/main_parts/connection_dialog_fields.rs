@@ -339,6 +339,7 @@ fn database_default_port(kind: DatabaseKind) -> &'static str {
         DatabaseKind::TiDb => "4000",
         DatabaseKind::MongoDb => "27017",
         DatabaseKind::Redis => "6379",
+        DatabaseKind::Postgres => "5432",
         DatabaseKind::Sqlite => "",
     }
 }
@@ -392,6 +393,15 @@ fn connection_fields(kind: DatabaseKind) -> &'static [ConnectionField] {
             ConnectionField::Port,
             ConnectionField::Username,
             ConnectionField::Password,
+            ConnectionField::UrlParams,
+        ],
+        DatabaseKind::Postgres => &[
+            ConnectionField::Name,
+            ConnectionField::Host,
+            ConnectionField::Port,
+            ConnectionField::Username,
+            ConnectionField::Password,
+            ConnectionField::Database,
             ConnectionField::UrlParams,
         ],
     }

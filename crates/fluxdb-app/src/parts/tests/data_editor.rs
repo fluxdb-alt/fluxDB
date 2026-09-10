@@ -235,6 +235,7 @@
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let changes = DataChangeSet {
             object: ObjectPath {

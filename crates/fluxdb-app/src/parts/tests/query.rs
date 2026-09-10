@@ -1413,6 +1413,7 @@
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -1477,6 +1478,7 @@
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -1563,6 +1565,7 @@
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
 
         let runtime = tokio::runtime::Builder::new_multi_thread()

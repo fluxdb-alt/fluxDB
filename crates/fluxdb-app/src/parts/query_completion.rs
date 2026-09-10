@@ -1147,7 +1147,9 @@ fn sql_completion_dialect(dialect: DatabaseKind) -> &'static dyn SqlCompletionDi
     match dialect {
         DatabaseKind::MySql | DatabaseKind::TiDb => &MYSQL_COMPLETION_DIALECT,
         DatabaseKind::Sqlite => &SQLITE_COMPLETION_DIALECT,
-        DatabaseKind::MongoDb | DatabaseKind::Redis => &GENERIC_COMPLETION_DIALECT,
+        DatabaseKind::MongoDb | DatabaseKind::Redis | DatabaseKind::Postgres => {
+            &GENERIC_COMPLETION_DIALECT
+        }
     }
 }
 

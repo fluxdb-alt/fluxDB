@@ -811,6 +811,7 @@ mod sidebar_flatten_tests {
             options: BTreeMap::new(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let mut state = connection_state(&conn, false);
         state.objects.push(table_option(ConnectionId(1), "db1", "t1"));
@@ -849,6 +850,7 @@ mod sidebar_flatten_tests {
             options: BTreeMap::new(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let mut state = connection_state(&conn, true);
         state.objects.push(database_option(ObjectKind::Database, "db1"));
@@ -924,6 +926,7 @@ mod sidebar_flatten_tests {
             options: BTreeMap::new(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let mut state = connection_state(&conn, true);
         state
@@ -966,6 +969,7 @@ mod sidebar_flatten_tests {
             options: BTreeMap::new(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let mut state = connection_state(&conn, true);
         state

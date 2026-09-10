@@ -558,7 +558,7 @@ impl NavicatMain {
         }
 
         let endpoint = match kind {
-            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Redis => Endpoint::Tcp {
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Redis | DatabaseKind::Postgres => Endpoint::Tcp {
                 host: form.host.trim().to_string(),
                 port: form
                     .port
@@ -603,6 +603,7 @@ impl NavicatMain {
             options,
             redis_profile,
             mysql_profile,
+            postgres_profile: None,
         }
     }
 

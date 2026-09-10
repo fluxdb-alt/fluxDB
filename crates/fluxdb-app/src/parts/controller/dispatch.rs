@@ -233,6 +233,7 @@ impl AppController {
                             options: BTreeMap::new(),
                             redis_profile: Some(profile),
                             mysql_profile: None,
+                            postgres_profile: None,
                         };
                         AppEvent::RedisConnectionDiscovered(draft)
                     }

@@ -535,6 +535,9 @@ fn run_backup(
             DatabaseKind::MongoDb | DatabaseKind::Redis => {
                 anyhow::bail!("当前连接类型不支持原生备份")
             }
+            DatabaseKind::Postgres => {
+                anyhow::bail!("当前连接类型不支持原生备份")
+            }
         },
         BackupMode::Logic => run_logic_backup(
             &controller,

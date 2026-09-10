@@ -1517,6 +1517,7 @@ mod tests {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let request = CreateDatabaseRequest {
             connection_id: config.id,
@@ -1542,6 +1543,7 @@ mod tests {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         assert!(SqliteConnector::with_config(config)
             .create_database(&request)
@@ -1596,6 +1598,7 @@ mod tests {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         fluxdb_core::set_sqlite_attached_database(&mut config, "analytics", attached_path);
 
@@ -2818,6 +2821,7 @@ SELECT item_id, name FROM audit_log;"
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }
     }
 
@@ -2835,6 +2839,7 @@ SELECT item_id, name FROM audit_log;"
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }
     }
 
@@ -2861,6 +2866,7 @@ SELECT item_id, name FROM audit_log;"
                 ..Default::default()
             }),
             mysql_profile: None,
+            postgres_profile: None,
         }
     }
 

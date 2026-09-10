@@ -605,7 +605,8 @@ fn format_sql_with_options(sql: &str, dialect: DatabaseKind) -> String {
                 | DatabaseKind::TiDb
                 | DatabaseKind::Sqlite
                 | DatabaseKind::MongoDb
-                | DatabaseKind::Redis => Dialect::Generic,
+                | DatabaseKind::Redis
+                | DatabaseKind::Postgres => Dialect::Generic,
             },
             ..FormatOptions::default()
         },

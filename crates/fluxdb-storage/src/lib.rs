@@ -9,9 +9,9 @@ mod sqlite;
 
 use fluxdb_core::{
     ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot, ConnectionConfig, ConnectionId, Error,
-    ErrorKind, MysqlConnectionProfile, MysqlTransportLayer, QueryRollbackSnapshot,
-    RedisConnectionProfile, Result, RoutineRef, SavedQuery, SecretRef, Settings, SidebarLayout,
-    TableRef, TriggerRef,
+    ErrorKind, MysqlConnectionProfile, MysqlTransportLayer, PostgresConnectionProfile,
+    PostgresTransportLayer, QueryRollbackSnapshot, RedisConnectionProfile, Result, RoutineRef,
+    SavedQuery, SecretRef, Settings, SidebarLayout, TableRef, TriggerRef,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -198,8 +198,10 @@ impl FileStorage {
 
     pub fn load_saved_queries(&self) -> Result<Vec<SavedQuery>> {
         let conn = self.open_sqlite()?;
-        Ok(sqlite::get_json::<Vec<SavedQuery>>(&conn, sqlite::KEY_SAVED_QUERIES)?
-            .unwrap_or_default())
+        Ok(
+            sqlite::get_json::<Vec<SavedQuery>>(&conn, sqlite::KEY_SAVED_QUERIES)?
+                .unwrap_or_default(),
+        )
     }
 
     pub fn save_saved_queries(&self, queries: &[SavedQuery]) -> Result<()> {
@@ -209,11 +211,10 @@ impl FileStorage {
 
     pub fn load_query_history(&self) -> Result<Vec<QueryHistoryRecord>> {
         let conn = self.open_sqlite()?;
-        Ok(sqlite::get_json::<Vec<QueryHistoryRecord>>(
-            &conn,
-            sqlite::KEY_QUERY_HISTORY,
-        )?
-        .unwrap_or_default())
+        Ok(
+            sqlite::get_json::<Vec<QueryHistoryRecord>>(&conn, sqlite::KEY_QUERY_HISTORY)?
+                .unwrap_or_default(),
+        )
     }
 
     pub fn save_query_history(&self, entries: &[QueryHistoryRecord]) -> Result<()> {
@@ -296,11 +297,13 @@ impl Storage for FileStorage {
 
     fn load_connections(&self) -> Result<Vec<ConnectionConfig>> {
         let conn = self.open_sqlite()?;
-        Ok(sqlite::get_json::<Vec<ConnectionConfig>>(&conn, sqlite::KEY_CONNECTIONS)?
-            .unwrap_or_default()
-            .into_iter()
-            .map(|connection| self.load_connection_secret(connection))
-            .collect())
+        Ok(
+            sqlite::get_json::<Vec<ConnectionConfig>>(&conn, sqlite::KEY_CONNECTIONS)?
+                .unwrap_or_default()
+                .into_iter()
+                .map(|connection| self.load_connection_secret(connection))
+                .collect(),
+        )
     }
 
     fn save_connections(&self, connections: &[ConnectionConfig]) -> Result<()> {
@@ -309,18 +312,16 @@ impl Storage for FileStorage {
         }
         // 与历史行为一致：保存连接时若已有 layout 则保留并修复，否则按连接重建。
         let conn = self.open_sqlite()?;
-        let mut layout =
-            sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)?
-                .unwrap_or_else(|| SidebarLayout::for_connections(connections));
+        let mut layout = sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)?
+            .unwrap_or_else(|| SidebarLayout::for_connections(connections));
         layout.repair(connections);
         self.write_connections_and_layout(&conn, connections, &layout)
     }
 
     fn load_sidebar_layout(&self, connections: &[ConnectionConfig]) -> Result<SidebarLayout> {
         let conn = self.open_sqlite()?;
-        let mut layout =
-            sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)?
-                .unwrap_or_else(|| SidebarLayout::for_connections(connections));
+        let mut layout = sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)?
+            .unwrap_or_else(|| SidebarLayout::for_connections(connections));
         layout.repair(connections);
         Ok(layout)
     }
@@ -376,6 +377,18 @@ impl FileStorage {
             }
         }
 
+        // PostgreSQL 结构化档案：同理回填（与 MySQL/Redis 槽位后缀无冲突）。
+        if let Some(profile) = connection.postgres_profile.as_mut() {
+            for (suffix, slot) in postgres_profile_secret_slots_mut(profile) {
+                if slot.key.is_empty() {
+                    slot.key = format!("{credential_ref}{suffix}");
+                }
+                if slot.inline.is_none() {
+                    slot.inline = read_keychain_password(slot.key.clone());
+                }
+            }
+        }
+
         connection
     }
 
@@ -406,6 +419,20 @@ impl FileStorage {
         // MySQL 结构化档案：同理写 Keychain（MySQL/Redis 不同栈，槽位后缀无冲突）。
         if let Some(profile) = connection.mysql_profile.as_ref() {
             for (suffix, slot) in mysql_profile_secret_slots(profile) {
+                let account = if slot.key.is_empty() {
+                    format!("{credential_ref}{suffix}")
+                } else {
+                    slot.key.clone()
+                };
+                if let Some(value) = slot.inline.as_deref() {
+                    write_keychain_password(&account, value)?;
+                }
+            }
+        }
+
+        // PostgreSQL 结构化档案：同理写 Keychain（与 MySQL/Redis 槽位后缀无冲突）。
+        if let Some(profile) = connection.postgres_profile.as_ref() {
+            for (suffix, slot) in postgres_profile_secret_slots(profile) {
                 let account = if slot.key.is_empty() {
                     format!("{credential_ref}{suffix}")
                 } else {
@@ -455,10 +482,7 @@ impl FileStorage {
         sqlite::put_json(conn, sqlite::KEY_SIDEBAR_LAYOUT, layout)?;
         Ok(())
     }
-
 }
-
-
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QueryHistoryRecord {
@@ -621,6 +645,12 @@ fn strip_plaintext_secrets(connection: &ConnectionConfig) -> ConnectionConfig {
             slot.inline = None;
         }
     }
+    // PostgreSQL 档案同理：清空全部受控值，保证盘上副本零明文。
+    if let Some(profile) = connection.postgres_profile.as_mut() {
+        for (_, slot) in postgres_profile_secret_slots_mut(profile) {
+            slot.inline = None;
+        }
+    }
     connection
 }
 
@@ -688,6 +718,54 @@ fn mysql_profile_secret_slots_mut(
                 slots.push((".ssh_passphrase", &mut ssh.passphrase));
             }
             MysqlTransportLayer::Proxy(proxy) if proxy.enabled => {
+                slots.push((".proxy_password", &mut proxy.password));
+            }
+            _ => {}
+        }
+    }
+    slots
+}
+
+/// 遍历 PostgreSQL 档案中需要走 Keychain 的「密码类」槽位。
+/// 返回 `(Keychain 账号后缀, 该槽的 SecretRef)`。
+///
+/// 证书/私钥文件一律以文件路径引用（`key` 存路径，非密码语义），不在此列；
+/// 只有真正的密码（基础密码、SSH 密码、SSH 私钥口令、代理密码）才进 Keychain。
+fn postgres_profile_secret_slots(
+    profile: &PostgresConnectionProfile,
+) -> Vec<(&'static str, &SecretRef)> {
+    let mut slots: Vec<(&'static str, &SecretRef)> = vec![("", &profile.basic.password)];
+    for layer in &profile.transport {
+        match layer {
+            PostgresTransportLayer::Ssh(ssh) if ssh.enabled => {
+                slots.push((".ssh_password", &ssh.password));
+                slots.push((".ssh_passphrase", &ssh.passphrase));
+            }
+            PostgresTransportLayer::Proxy(proxy) if proxy.enabled => {
+                slots.push((".proxy_password", &proxy.password));
+            }
+            _ => {}
+        }
+    }
+    slots
+}
+
+/// PostgreSQL 档案槽位的可变版，供回填 / 剥离时原地改写槽位。
+fn postgres_profile_secret_slots_mut(
+    profile: &mut PostgresConnectionProfile,
+) -> Vec<(&'static str, &mut SecretRef)> {
+    // 解构以取得不重叠的借用（basic 与 transport 互不借用）。
+    let PostgresConnectionProfile {
+        basic, transport, ..
+    } = profile;
+    let mut slots: Vec<(&'static str, &mut SecretRef)> = vec![("", &mut basic.password)];
+    for layer in transport.iter_mut() {
+        match layer {
+            PostgresTransportLayer::Ssh(ssh) if ssh.enabled => {
+                slots.push((".ssh_password", &mut ssh.password));
+                slots.push((".ssh_passphrase", &mut ssh.passphrase));
+            }
+            PostgresTransportLayer::Proxy(proxy) if proxy.enabled => {
                 slots.push((".proxy_password", &mut proxy.password));
             }
             _ => {}
@@ -1002,7 +1080,9 @@ mod tests {
         let bytes = fs::read(sqlite::db_path(&storage.root)).unwrap();
         for forbidden in ["topsecret", "sshpass", "do-not-save-this"] {
             assert!(
-                !bytes.windows(forbidden.len()).any(|w| w == forbidden.as_bytes()),
+                !bytes
+                    .windows(forbidden.len())
+                    .any(|w| w == forbidden.as_bytes()),
                 "明文密钥不应落入 sqlite: {forbidden}"
             );
         }
@@ -1119,6 +1199,70 @@ mod tests {
     }
 
     #[test]
+    fn postgres_profile_strips_secret_inlines_and_enumerates_slots() {
+        use fluxdb_core::{
+            PostgresBasicOptions, PostgresConnectionProfile, PostgresProxy, PostgresProxyType,
+            PostgresSshOptions, PostgresTransportLayer,
+        };
+        let mut profile = PostgresConnectionProfile {
+            basic: PostgresBasicOptions {
+                host: "db".into(),
+                port: 5432,
+                username: "postgres".into(),
+                password: SecretRef::inline("pg-secret"),
+                ..Default::default()
+            },
+            transport: vec![
+                PostgresTransportLayer::Ssh(PostgresSshOptions {
+                    enabled: true,
+                    host: "jump".into(),
+                    port: 22,
+                    username: "bob".into(),
+                    password: SecretRef::inline("ssh-secret"),
+                    passphrase: SecretRef::inline("ssh-pass"),
+                    ..Default::default()
+                }),
+                PostgresTransportLayer::Proxy(PostgresProxy {
+                    enabled: true,
+                    proxy_type: PostgresProxyType::Socks5,
+                    host: "proxy".into(),
+                    port: 1080,
+                    password: SecretRef::inline("proxy-secret"),
+                    ..Default::default()
+                }),
+            ],
+            ..Default::default()
+        };
+
+        // 槽位枚举：基础密码 + SSH 密码 + SSH 口令 + 代理密码。
+        let suffixes: Vec<_> = postgres_profile_secret_slots(&profile)
+            .into_iter()
+            .map(|(s, _)| s)
+            .collect();
+        assert_eq!(
+            suffixes,
+            vec!["", ".ssh_password", ".ssh_passphrase", ".proxy_password"]
+        );
+
+        // 剥离后所有内联密钥清空。
+        for (_, slot) in postgres_profile_secret_slots_mut(&mut profile) {
+            slot.inline = None;
+        }
+        assert!(profile.basic.password.inline.is_none());
+        let ssh = &profile.transport[0];
+        let PostgresTransportLayer::Ssh(ssh) = ssh else {
+            panic!("expected ssh")
+        };
+        assert!(ssh.password.inline.is_none());
+        assert!(ssh.passphrase.inline.is_none());
+        let proxy = &profile.transport[1];
+        let PostgresTransportLayer::Proxy(proxy) = proxy else {
+            panic!("expected proxy")
+        };
+        assert!(proxy.password.inline.is_none());
+    }
+
+    #[test]
     fn saves_and_loads_sidebar_layout() {
         let storage = FileStorage::new(unique_temp_dir());
         let connections = sample_connections();
@@ -1223,6 +1367,7 @@ mod tests {
                 options: BTreeMap::new(),
                 redis_profile: None,
                 mysql_profile: None,
+                postgres_profile: None,
             },
             ConnectionConfig {
                 id: ConnectionId(2),
@@ -1236,6 +1381,7 @@ mod tests {
                 options: BTreeMap::new(),
                 redis_profile: None,
                 mysql_profile: None,
+                postgres_profile: None,
             },
             ConnectionConfig {
                 id: ConnectionId(3),
@@ -1248,6 +1394,7 @@ mod tests {
                 options: BTreeMap::new(),
                 redis_profile: None,
                 mysql_profile: None,
+                postgres_profile: None,
             },
             ConnectionConfig {
                 id: ConnectionId(4),
@@ -1279,6 +1426,7 @@ mod tests {
                     ..Default::default()
                 }),
                 mysql_profile: None,
+                postgres_profile: None,
             },
         ]
     }
@@ -1336,5 +1484,4 @@ mod tests {
         assert_eq!(loaded[0].id, 5, "最早的 5 条应被丢弃，保留从 id=5 起");
         assert_eq!(loaded[999].id, 1004, "最新一条应保留");
     }
-
 }

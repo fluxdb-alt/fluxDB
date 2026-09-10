@@ -141,6 +141,7 @@
             options, // 非 demo：携带明文字段走真实 MySqlConnector（与 app 一致）
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }
     }
 

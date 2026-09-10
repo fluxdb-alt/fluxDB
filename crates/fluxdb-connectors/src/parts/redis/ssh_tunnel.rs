@@ -281,6 +281,7 @@ mod ssh_tunnel_tests {
             options: options(&[("ssh_enabled", "true"), ("ssh_username", "u")]),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let result = redis_dial_endpoint(&config, "redis.internal", 6379);
         let Err(err) = result else {

@@ -1,3 +1,14 @@
+/// PostgreSQL 连接驱动尚未接入（T04）时的统一错误。
+///
+/// T02 仅落地连接档案/配置与凭据；真实拨号由后续任务实现。此错误保证
+/// 任何在 T04 之前的 PG 操作都显式失败，而不是被静默路由到 Mock 或假数据。
+fn pg_not_wired() -> fluxdb_core::Error {
+    fluxdb_core::Error::new(
+        fluxdb_core::ErrorKind::Connection,
+        "PostgreSQL 连接驱动尚未接入，暂不支持该操作",
+    )
+}
+
 fn mock_connections() -> Vec<ConnectionConfig> {
     vec![
         ConnectionConfig {
@@ -12,6 +23,7 @@ fn mock_connections() -> Vec<ConnectionConfig> {
             options: demo_connection_options(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         },
         ConnectionConfig {
             id: ConnectionId(2),
@@ -26,6 +38,7 @@ fn mock_connections() -> Vec<ConnectionConfig> {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         },
     ]
 }
@@ -102,6 +115,7 @@ fn test_connection(config: &ConnectionConfig) -> fluxdb_core::Result<()> {
     match config.kind {
         DatabaseKind::MySql | DatabaseKind::TiDb => MySqlConnector::new().test_connection(config),
         DatabaseKind::Sqlite => SqliteConnector::new().test_connection(config),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb => MockConnector::new(config.kind).test_connection(config),
         DatabaseKind::Redis => RedisConnector::new().test_connection(config),
     }
@@ -124,6 +138,7 @@ fn list_objects_for_connection(
             MySqlConnector::with_config(config.clone()).list_objects(path)
         }
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).list_objects(path),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb => MockConnector::new(config.kind).list_objects(path),
         DatabaseKind::Redis => RedisConnector::with_config(config.clone()).list_objects(path),
     }
@@ -146,6 +161,7 @@ fn create_database_for_connection(
             MySqlConnector::with_config(config.clone()).create_database(request)
         }
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).create_database(request),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind).create_database(request)
         }
@@ -172,6 +188,7 @@ fn delete_database_for_connection(
         DatabaseKind::Sqlite => {
             SqliteConnector::with_config(config.clone()).delete_database(connection_id, database)
         }
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind).delete_database(connection_id, database)
         }
@@ -195,6 +212,7 @@ fn execute_query_for_connection(
             MySqlConnector::with_config(config.clone()).execute(request)
         }
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).execute(request),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => MockConnector::new(config.kind).execute(request),
     }
 }
@@ -230,6 +248,7 @@ fn execute_query_for_connection_with_progress(
             on_summary,
             should_cancel,
         ),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind).execute_with_progress(
                 request,
@@ -277,6 +296,7 @@ fn list_completion_tables_for_connection_with_cancel(
             .list_completion_tables_with_cancel(database, schema, filter, limit, should_cancel),
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
             .list_completion_tables_with_cancel(database, schema, filter, limit, should_cancel),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind)
                 .list_completion_tables_with_cancel(database, schema, filter, limit, should_cancel)
@@ -394,6 +414,7 @@ fn list_completion_columns_for_connection_with_cancel(
             .list_completion_columns_with_cancel(database, schema, table, should_cancel),
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
             .list_completion_columns_with_cancel(database, schema, table, should_cancel),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind)
                 .list_completion_columns_with_cancel(database, schema, table, should_cancel)
@@ -422,6 +443,7 @@ fn list_completion_columns_for_tables_for_connection_with_cancel(
             .list_completion_columns_for_tables_with_cancel(database, schema, tables, should_cancel),
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
             .list_completion_columns_for_tables_with_cancel(database, schema, tables, should_cancel),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => MockConnector::new(config.kind)
             .list_completion_columns_for_tables_with_cancel(database, schema, tables, should_cancel),
     }
@@ -449,6 +471,7 @@ fn list_completion_routines_for_connection_with_cancel(
             .list_completion_routines_with_cancel(database, schema, filter, limit, should_cancel),
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
             .list_completion_routines_with_cancel(database, schema, filter, limit, should_cancel),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => MockConnector::new(config.kind)
             .list_completion_routines_with_cancel(database, schema, filter, limit, should_cancel),
     }
@@ -493,6 +516,7 @@ fn list_foreign_keys_for_connection_with_cancel(
         DatabaseKind::Sqlite => {
             SqliteConnector::with_config(config.clone()).list_foreign_keys_with_cancel(&path, should_cancel)
         }
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind).list_foreign_keys_with_cancel(&path, should_cancel)
         }
@@ -521,6 +545,7 @@ fn list_completion_triggers_for_connection_with_cancel(
             .list_completion_triggers_with_cancel(database, schema, filter, limit, should_cancel),
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
             .list_completion_triggers_with_cancel(database, schema, filter, limit, should_cancel),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => MockConnector::new(config.kind)
             .list_completion_triggers_with_cancel(database, schema, filter, limit, should_cancel),
     }
@@ -562,6 +587,7 @@ fn load_data_for_connection(
             sort,
             filters,
         ),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb => MockConnector::new(config.kind).load_data(
             object,
             pagination.offset,
@@ -633,6 +659,7 @@ fn preview_data_export_for_connection(
         DatabaseKind::Sqlite => {
             SqliteConnector::with_config(config.clone()).preview_data_export(object, fields, sort, filters)
         }
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind).preview_data_export(object, fields, sort, filters)
         }
@@ -656,6 +683,7 @@ fn apply_data_changes_for_connection(
             MySqlConnector::with_config(config.clone()).apply_changes(changes)
         }
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).apply_changes(changes),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb => MockConnector::new(config.kind).apply_changes(changes),
         DatabaseKind::Redis => RedisConnector::with_config(config.clone()).apply_changes(changes),
     }
@@ -682,6 +710,7 @@ fn load_cell_binary_for_connection(
         DatabaseKind::Sqlite => {
             SqliteConnector::with_config(config.clone()).load_cell_binary(object, identity, column)
         }
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind).load_cell_binary(object, identity, column)
         }
@@ -716,6 +745,7 @@ fn load_table_info_for_connection(
             object,
             tab,
         ),
+        DatabaseKind::Postgres => Err(pg_not_wired()),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             load_table_info_from_connector(&MockConnector::new(config.kind), object, tab)
         }

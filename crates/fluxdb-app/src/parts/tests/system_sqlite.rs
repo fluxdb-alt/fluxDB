@@ -25,6 +25,7 @@ fn real_sqlite_completion_env(
         options: Default::default(), // 非 demo：走真实 SqliteConnector
         redis_profile: None,
         mysql_profile: None,
+            postgres_profile: None,
     };
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

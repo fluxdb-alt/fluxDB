@@ -388,6 +388,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }]));
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
@@ -1260,6 +1261,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }]));
 
         let event = controller.dispatch(AppCommand::CreateConnection(ConnectionDraft {
@@ -1273,6 +1275,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }));
 
         assert!(matches!(
@@ -1317,6 +1320,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             options: std::collections::BTreeMap::from([("password".to_string(), password)]),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
 
         let first = controller.dispatch(AppCommand::CreateConnection(draft(
@@ -1354,6 +1358,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }));
 
         assert!(matches!(
@@ -1421,6 +1426,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }]));
 
         let event = controller.dispatch(AppCommand::CreateDatabase(CreateDatabaseRequest {

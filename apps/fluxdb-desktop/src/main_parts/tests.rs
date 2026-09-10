@@ -3196,6 +3196,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             options: BTreeMap::new(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }
     }
 

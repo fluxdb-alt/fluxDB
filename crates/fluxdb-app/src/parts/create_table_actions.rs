@@ -212,7 +212,9 @@ fn table_action_sql_provider(database_kind: DatabaseKind) -> &'static dyn TableA
     match database_kind {
         DatabaseKind::MySql | DatabaseKind::TiDb => &MYSQL_TABLE_ACTION_SQL_PROVIDER,
         DatabaseKind::Sqlite => &SQLITE_TABLE_ACTION_SQL_PROVIDER,
-        DatabaseKind::MongoDb | DatabaseKind::Redis => &UNSUPPORTED_TABLE_ACTION_SQL_PROVIDER,
+        DatabaseKind::MongoDb | DatabaseKind::Redis | DatabaseKind::Postgres => {
+            &UNSUPPORTED_TABLE_ACTION_SQL_PROVIDER
+        }
     }
 }
 
