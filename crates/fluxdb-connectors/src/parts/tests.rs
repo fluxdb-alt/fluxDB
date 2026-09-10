@@ -1736,7 +1736,8 @@ mod tests {
 
         let objects = connector.list_objects(Some(&databases[0].path)).unwrap();
 
-        assert_eq!(objects.len(), 2);
+        // mock 元数据集（T081）当前提供 4 张关联表
+        assert_eq!(objects.len(), 4);
         assert_eq!(objects[0].path.name, "Product");
     }
 
