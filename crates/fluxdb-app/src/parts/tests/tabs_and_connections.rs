@@ -26,6 +26,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         let event = controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
 
         assert_eq!(event, AppEvent::TabOpened(TabId(1)));
@@ -1546,10 +1547,12 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("other".to_string()),
+            schema: None
         });
 
         controller.dispatch(AppCommand::DisconnectDatabase {
@@ -1569,6 +1572,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             TabKind::QueryEditor(QueryEditorState {
                 connection_id: ConnectionId(1),
                 database: Some(database),
+                schema: None,
                 ..
             }) if database == "other"
         ));

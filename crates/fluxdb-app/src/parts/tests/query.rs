@@ -1348,6 +1348,7 @@
             .execute_query_text_for_scope_with_progress(
                 ConnectionId(1),
                 Some("main".to_string()),
+                None,
                 "select * from Product".to_string(),
                 QueryExecutionOptions::default(),
                 &mut |summary| summaries.push(summary),
@@ -1442,6 +1443,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(7),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -1597,6 +1599,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(7),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2062,6 +2065,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2090,6 +2094,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2117,6 +2122,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(2),
             database: None,
+            schema: None
         });
         let text = "CREATE TABLE test (id va";
         controller.dispatch(AppCommand::UpdateQueryText {
@@ -2195,6 +2201,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2224,6 +2231,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2257,6 +2265,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2286,6 +2295,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2313,6 +2323,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2366,6 +2377,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2400,6 +2412,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2432,6 +2445,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2461,6 +2475,7 @@
             .query_completions_for_text_with_cancel(
                 ConnectionId(1),
                 Some("main".to_string()),
+                None,
                 "select na".to_string(),
                 "select na".len(),
                 false,
@@ -2528,6 +2543,7 @@
         second.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         second.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2610,6 +2626,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2876,6 +2893,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
 
         // 模拟 DDL 后的 stale：直接标记库级 dirty。
@@ -2923,6 +2941,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -3172,6 +3191,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -3375,6 +3395,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -3470,6 +3491,8 @@
             "Product",
             vec![CompletionColumn {
                 table: "Product".to_string(),
+                database: None,
+                schema: None,
                 name: "customer_name".to_string(),
                 type_name: Some("TEXT".to_string()),
                 nullable: false,
@@ -3491,6 +3514,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -3517,6 +3541,8 @@
             vec![
                 CompletionColumn {
                     table: "Product".to_string(),
+                    database: None,
+                    schema: None,
                     name: "product_name".to_string(),
                     type_name: Some("TEXT".to_string()),
                     nullable: true,
@@ -3525,6 +3551,8 @@
                 },
                 CompletionColumn {
                     table: "Product".to_string(),
+                    database: None,
+                    schema: None,
                     name: "name".to_string(),
                     type_name: Some("TEXT".to_string()),
                     nullable: false,
@@ -3533,6 +3561,8 @@
                 },
                 CompletionColumn {
                     table: "Product".to_string(),
+                    database: None,
+                    schema: None,
                     name: "display_name".to_string(),
                     type_name: Some("TEXT".to_string()),
                     nullable: true,
@@ -3590,6 +3620,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -3755,6 +3786,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -4021,6 +4053,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),

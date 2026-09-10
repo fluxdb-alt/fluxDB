@@ -107,10 +107,19 @@ fn matches_completion_fuzzy_filter(value: &str, filter: &str) -> bool {
         .all(|filter_char| value_chars.any(|value_char| value_char == filter_char))
 }
 
-fn columns_to_completion(table: &str, columns: Vec<Column>) -> Vec<CompletionColumn> {
+fn columns_to_completion(
+    database: Option<&str>,
+    schema: Option<&str>,
+    table: &str,
+    columns: Vec<Column>,
+) -> Vec<CompletionColumn> {
+    let database = database.map(str::to_string);
+    let schema = schema.map(str::to_string);
     columns
         .into_iter()
         .map(|column| CompletionColumn {
+            database: database.clone(),
+            schema: schema.clone(),
             table: table.to_string(),
             name: column.name,
             type_name: column.type_name,

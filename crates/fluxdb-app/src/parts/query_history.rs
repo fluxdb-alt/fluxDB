@@ -10,6 +10,7 @@ impl AppController {
             self.state.query_history.push(QueryHistoryEntry {
                 connection_id: request.connection_id,
                 database: request.database.clone(),
+                schema: request.schema.clone(),
                 text: summary.sql.clone(),
                 tables: query_history_tables(&summary.sql),
                 kind: query_history_kind(&summary.sql),
@@ -51,6 +52,8 @@ impl AppController {
         let snapshot_request = QueryRequest {
             connection_id: request.connection_id,
             database: request.database.clone(),
+            session_id: None,
+            schema: request.schema.clone(),
             text: spec.snapshot_sql(),
             mode: fluxdb_core::QueryMode::Selection,
             options: QueryExecutionOptions::default(),
@@ -115,6 +118,7 @@ impl AppController {
         self.state.query_history.push(QueryHistoryEntry {
             connection_id: request.connection_id,
             database: request.database.clone(),
+            schema: request.schema.clone(),
             text: request.text.clone(),
             tables: query_history_tables(&request.text),
             kind: query_history_kind(&request.text),
@@ -556,6 +560,7 @@ fn data_change_history_entry(
     QueryHistoryEntry {
         connection_id: object.connection_id,
         database: object.database.clone(),
+        schema: object.schema.clone(),
         text: sql.clone(),
         tables: vec![object.name.clone()],
         kind: QueryHistoryKind::DataChange,

@@ -300,6 +300,7 @@ impl AppController {
         &self,
         connection_id: ConnectionId,
         database: Option<String>,
+        schema: Option<String>,
         text: String,
         cursor: usize,
         explicit: bool,
@@ -307,6 +308,7 @@ impl AppController {
         self.query_completions_for_text_with_cancel(
             connection_id,
             database,
+            schema,
             text,
             cursor,
             explicit,
@@ -319,6 +321,7 @@ impl AppController {
         &self,
         connection_id: ConnectionId,
         database: Option<String>,
+        schema: Option<String>,
         text: String,
         cursor: usize,
         explicit: bool,
@@ -328,6 +331,7 @@ impl AppController {
         let editor = QueryEditorState {
             connection_id,
             database,
+            schema,
             text,
             origin: None,
             saved_fingerprint: None,

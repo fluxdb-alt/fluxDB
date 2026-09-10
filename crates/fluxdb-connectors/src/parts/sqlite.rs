@@ -439,7 +439,7 @@ fn sqlite_completion_columns_with_cancel(
             return Ok(Vec::new());
         };
         connection.close().await.map_err(sqlite_error)?;
-        Ok(columns_to_completion(table, columns))
+        Ok(columns_to_completion(database, None, table, columns))
     })
 }
 
@@ -487,7 +487,7 @@ fn sqlite_completion_columns_for_tables_with_cancel(
                 drop(connection);
                 return Ok(Vec::new());
             };
-            result.extend(columns_to_completion(table, columns));
+            result.extend(columns_to_completion(Some(database), None, table, columns));
         }
         connection.close().await.map_err(sqlite_error)?;
         Ok(result)

@@ -168,6 +168,7 @@ impl NavicatMain {
                         AppCommand::OpenQueryEditorInDatabase {
                             connection_id: menu.connection_id,
                             database: Some(menu.database),
+                            schema: None
                         },
                         cx,
                     );

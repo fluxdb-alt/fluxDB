@@ -84,6 +84,8 @@ impl AppController {
                 let request = QueryRequest {
                     connection_id: object.connection_id,
                     database: object.database.clone(),
+                    session_id: None,
+                    schema: object.schema.clone(),
                     text: sql,
                     mode: fluxdb_core::QueryMode::All,
                     options: QueryExecutionOptions {
@@ -161,6 +163,8 @@ impl AppController {
                 let request = QueryRequest {
                     connection_id: object.connection_id,
                     database: object.database.clone(),
+                    session_id: None,
+                    schema: object.schema.clone(),
                     text: sql,
                     mode: fluxdb_core::QueryMode::All,
                     options: QueryExecutionOptions {
@@ -214,6 +218,8 @@ impl AppController {
                 let request = QueryRequest {
                     connection_id: object.connection_id,
                     database: object.database.clone(),
+                    session_id: None,
+                    schema: object.schema.clone(),
                     text: sql,
                     mode: fluxdb_core::QueryMode::All,
                     options: QueryExecutionOptions {
@@ -274,6 +280,8 @@ impl AppController {
                 let request = QueryRequest {
                     connection_id: object.connection_id,
                     database: object.database.clone(),
+                    session_id: None,
+                    schema: object.schema.clone(),
                     text: sql,
                     mode: fluxdb_core::QueryMode::All,
                     options: QueryExecutionOptions {

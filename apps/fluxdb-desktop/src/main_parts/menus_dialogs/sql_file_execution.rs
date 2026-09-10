@@ -368,6 +368,7 @@ impl NavicatMain {
                     .execute_query_text_for_scope_with_progress(
                         connection_id,
                         database,
+                        None,
                         text,
                         options,
                         &mut on_summary,

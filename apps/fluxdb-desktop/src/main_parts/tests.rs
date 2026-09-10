@@ -101,6 +101,7 @@ mod tests {
         let editor = QueryEditorState {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
             text: String::new(),
             origin: None,
             saved_fingerprint: None,
@@ -157,6 +158,7 @@ mod tests {
         let editor = QueryEditorState {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
             text: String::new(),
             origin: None,
             saved_fingerprint: None,
@@ -352,6 +354,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                     kind: TabKind::QueryEditor(QueryEditorState {
                         connection_id: ConnectionId(1),
                         database: Some("main".to_string()),
+                        schema: None,
                         text: "select 1".to_string(),
                         origin: None,
                         saved_fingerprint: None,
@@ -370,6 +373,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                     kind: TabKind::QueryEditor(QueryEditorState {
                         connection_id: ConnectionId(1),
                         database: Some("main".to_string()),
+                        schema: None,
                         text: "select * from users".to_string(),
                         origin: Some(QueryOrigin::Connection { query_id: 7 }),
                         saved_fingerprint: None,
@@ -399,6 +403,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             kind: TabKind::QueryEditor(QueryEditorState {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
                 text: String::new(),
                 origin: None,
                 saved_fingerprint: None,
@@ -483,6 +488,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                     kind: TabKind::QueryEditor(QueryEditorState {
                         connection_id: ConnectionId(1),
                         database: Some("main".to_string()),
+                        schema: None,
                         text: "select * from users".to_string(),
                         origin: None,
                         saved_fingerprint: None,
@@ -501,6 +507,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         state.query_history.push(fluxdb_app::QueryHistoryEntry {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
             text: "select * from users".to_string(),
             tables: vec!["users".to_string()],
             kind: fluxdb_app::QueryHistoryKind::Query,
@@ -2262,6 +2269,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                 kind: TabKind::QueryEditor(QueryEditorState {
                     connection_id: ConnectionId(1),
                     database: Some("data_centre_cloud".to_string()),
+                    schema: None,
                     text: String::new(),
                     origin: None,
                     saved_fingerprint: None,
@@ -2280,6 +2288,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                 kind: TabKind::QueryEditor(QueryEditorState {
                     connection_id: ConnectionId(1),
                     database: Some("data_centre_cloud".to_string()),
+                    schema: None,
                     text: String::new(),
                     origin: None,
                     saved_fingerprint: None,

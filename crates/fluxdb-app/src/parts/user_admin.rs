@@ -35,6 +35,8 @@ impl AppController {
         let request = QueryRequest {
             connection_id: admin.connection_id,
             database: None,
+            session_id: None,
+            schema: None,
             text: provider.list_users_sql().to_string(),
             mode: fluxdb_core::QueryMode::All,
             options: QueryExecutionOptions::default(),
@@ -111,6 +113,8 @@ impl AppController {
         let request = QueryRequest {
             connection_id: admin.connection_id,
             database: None,
+            session_id: None,
+            schema: None,
             text: provider.show_grants_sql(user),
             mode: fluxdb_core::QueryMode::All,
             options: QueryExecutionOptions::default(),
@@ -150,6 +154,8 @@ impl AppController {
         let request = QueryRequest {
             connection_id: admin.connection_id,
             database: None,
+            session_id: None,
+            schema: None,
             text: sql.to_string(),
             mode: fluxdb_core::QueryMode::All,
             options: QueryExecutionOptions::default(),

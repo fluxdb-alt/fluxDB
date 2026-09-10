@@ -351,6 +351,8 @@
             DatabaseKind::MySql,
             vec![CompletionColumn {
                 table: "users".to_string(),
+                database: None,
+                schema: None,
                 name: "email".to_string(),
                 type_name: Some("varchar(255)".to_string()),
                 nullable: false,
@@ -358,6 +360,8 @@
                 comment: Some("邮箱".to_string()),
             }, CompletionColumn {
                 table: "users".to_string(),
+                database: None,
+                schema: None,
                 name: "team_id".to_string(),
                 type_name: Some("int".to_string()),
                 nullable: true,
@@ -416,6 +420,8 @@
             vec![
                 CompletionColumn {
                     table: "users".to_string(),
+                    database: None,
+                    schema: None,
                     name: "id".to_string(),
                     type_name: Some("integer".to_string()),
                     nullable: false,
@@ -424,6 +430,8 @@
                 },
                 CompletionColumn {
                     table: "users".to_string(),
+                    database: None,
+                    schema: None,
                     name: "name".to_string(),
                     type_name: Some("text".to_string()),
                     nullable: true,

@@ -488,6 +488,9 @@ impl FileStorage {
 pub struct QueryHistoryRecord {
     pub connection_id: ConnectionId,
     pub database: Option<String>,
+    /// 历史记录所属 schema（PG）；旧记录缺省为 None，`#[serde(default)]` 兼容加载。
+    #[serde(default)]
+    pub schema: Option<String>,
     pub text: String,
     #[serde(default)]
     pub tables: Vec<String>,
@@ -902,6 +905,7 @@ mod tests {
             id: 1,
             connection_id: ConnectionId(7),
             database: Some("shop".to_string()),
+            schema: None,
             name: "orders.sql".to_string(),
             text: "select * from orders".to_string(),
         }];
@@ -918,6 +922,7 @@ mod tests {
             .map(|index| QueryHistoryRecord {
                 connection_id: ConnectionId(7),
                 database: Some("shop".to_string()),
+                schema: None,
                 text: format!("select {index}"),
                 tables: vec!["orders".to_string()],
                 kind: "query".to_string(),

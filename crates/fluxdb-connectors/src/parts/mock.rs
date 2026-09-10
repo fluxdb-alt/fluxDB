@@ -177,6 +177,8 @@ impl Connector for MockConnector {
         Ok(mock_completion_columns(table)
             .into_iter()
             .map(|column| CompletionColumn {
+                database: _database.map(str::to_string),
+                schema: _schema.map(str::to_string),
                 table: table.to_string(),
                 name: column.name,
                 type_name: column.type_name,

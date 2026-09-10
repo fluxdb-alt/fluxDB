@@ -26,6 +26,7 @@ fn query_history_record_to_entry(record: QueryHistoryRecord) -> QueryHistoryEntr
     QueryHistoryEntry {
         connection_id: record.connection_id,
         database: record.database,
+        schema: record.schema,
         text: text.clone(),
         tables: record.tables,
         kind,
@@ -51,6 +52,7 @@ fn query_history_entry_to_record(entry: &QueryHistoryEntry) -> QueryHistoryRecor
     QueryHistoryRecord {
         connection_id: entry.connection_id,
         database: entry.database.clone(),
+        schema: entry.schema.clone(),
         text: entry.text.clone(),
         tables: entry.tables.clone(),
         kind: query_history_kind_to_storage(entry.kind).to_string(),

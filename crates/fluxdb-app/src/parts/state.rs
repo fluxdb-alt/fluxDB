@@ -615,6 +615,8 @@ pub enum CellDetailMode {
 pub struct QueryEditorState {
     pub connection_id: ConnectionId,
     pub database: Option<String>,
+    /// 编辑器当前 schema 作用域（PG）；MySQL/TiDB/Redis 恒为 None。
+    pub schema: Option<String>,
     pub text: String,
     pub origin: Option<QueryOrigin>,
     pub saved_fingerprint: Option<QueryFingerprint>,
@@ -740,6 +742,8 @@ impl QueryFingerprint {
 pub struct QueryHistoryEntry {
     pub connection_id: ConnectionId,
     pub database: Option<String>,
+    /// 历史记录所属 schema 作用域（PG）；MySQL/TiDB/Redis 恒为 None。
+    pub schema: Option<String>,
     pub text: String,
     pub tables: Vec<String>,
     pub kind: QueryHistoryKind,
@@ -1166,6 +1170,8 @@ pub enum AppCommand {
     OpenQueryEditorInDatabase {
         connection_id: ConnectionId,
         database: Option<String>,
+        /// 编辑器初始 schema 作用域（PG）；MySQL/TiDB 恒为 None。
+        schema: Option<String>,
     },
     OpenRedisWorkbench {
         connection_id: ConnectionId,

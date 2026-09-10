@@ -177,6 +177,7 @@ impl NavicatMain {
             AppCommand::OpenQueryEditorInDatabase {
                 connection_id,
                 database,
+                schema: None,
             },
             cx,
         );
@@ -409,10 +410,16 @@ impl NavicatMain {
                 .connections
                 .iter()
                 .any(|connection| connection.config.id == entry.connection_id)
-                .then_some((entry.connection_id, entry.database.clone()))
-                .or_else(|| self.current_query_scope())
-                .or_else(|| self.first_connection_id().map(|connection_id| (connection_id, None)));
-            let Some((connection_id, database)) = target else {
+                .then_some((entry.connection_id, entry.database.clone(), entry.schema.clone()))
+                .or_else(|| {
+                    self.current_query_scope()
+                        .map(|(connection_id, database)| (connection_id, database, None))
+                })
+                .or_else(|| {
+                    self.first_connection_id()
+                        .map(|connection_id| (connection_id, None, None))
+                });
+            let Some((connection_id, database, schema)) = target else {
                 self.show_message("请先创建连接", AppMessageKind::Warning, cx);
                 return;
             };
@@ -420,6 +427,7 @@ impl NavicatMain {
                 AppCommand::OpenQueryEditorInDatabase {
                     connection_id,
                     database,
+                    schema,
                 },
                 cx,
             );
@@ -529,6 +537,7 @@ impl NavicatMain {
             AppCommand::OpenQueryEditorInDatabase {
                 connection_id,
                 database,
+                schema: None,
             },
             cx,
         );

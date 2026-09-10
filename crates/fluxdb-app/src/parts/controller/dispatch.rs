@@ -1231,14 +1231,15 @@ impl AppController {
                 filters,
             } => self.apply_data_changes_command(tab_id, sort, filters),
             AppCommand::OpenQueryEditor(connection_id) => {
-                self.open_query_editor(connection_id, None)
+                self.open_query_editor(connection_id, None, None)
             }
             AppCommand::OpenUserAdmin(connection_id) => self.open_user_admin(connection_id),
             AppCommand::OpenSettings => self.open_settings(),
             AppCommand::OpenQueryEditorInDatabase {
                 connection_id,
                 database,
-            } => self.open_query_editor(connection_id, database),
+                schema,
+            } => self.open_query_editor(connection_id, database, schema),
             AppCommand::OpenRedisWorkbench {
                 connection_id,
                 database,
@@ -1563,6 +1564,8 @@ impl AppController {
                     TabKind::QueryEditor(editor) => Some(QueryRequest {
                         connection_id: editor.connection_id,
                         database: editor.database.clone(),
+                        session_id: None,
+                        schema: editor.schema.clone(),
                         text: sql_text_for_execution(&editor.text),
                         mode: fluxdb_core::QueryMode::All,
                         options: self.default_query_execution_options(),
@@ -1626,6 +1629,8 @@ impl AppController {
                     TabKind::QueryEditor(editor) => Some(QueryRequest {
                         connection_id: editor.connection_id,
                         database: editor.database.clone(),
+                        session_id: None,
+                        schema: editor.schema.clone(),
                         text: sql_text_for_execution(&text),
                         mode: fluxdb_core::QueryMode::Selection,
                         options,
@@ -1681,6 +1686,8 @@ impl AppController {
                         Some(QueryRequest {
                             connection_id: editor.connection_id,
                             database: editor.database.clone(),
+                            session_id: None,
+                            schema: editor.schema.clone(),
                             text: editor.text.clone(),
                             mode: fluxdb_core::QueryMode::All,
                             options: QueryExecutionOptions::default(),
@@ -1720,6 +1727,8 @@ impl AppController {
                         Some(QueryRequest {
                             connection_id: editor.connection_id,
                             database: editor.database.clone(),
+                            session_id: None,
+                            schema: editor.schema.clone(),
                             text: sql_text_for_execution(&editor.text),
                             mode: fluxdb_core::QueryMode::All,
                             options: QueryExecutionOptions::default(),
@@ -1754,11 +1763,13 @@ impl AppController {
                     let Some(summary) = first_successful_result_summary(&execution).cloned() else {
                         return self.fail(Error::new(ErrorKind::Internal, "刷新结果页没有返回结果摘要"));
                     };
-                    let Some((connection_id, database)) =
+                    let Some((connection_id, database, schema)) =
                         self.find_tab(tab_id).and_then(|tab| match &tab.kind {
-                            TabKind::QueryEditor(editor) => {
-                                Some((editor.connection_id, editor.database.clone()))
-                            }
+                            TabKind::QueryEditor(editor) => Some((
+                                editor.connection_id,
+                                editor.database.clone(),
+                                editor.schema.clone(),
+                            )),
                             _ => None,
                         })
                     else {
@@ -1770,6 +1781,8 @@ impl AppController {
                     let request = QueryRequest {
                         connection_id,
                         database,
+                        schema,
+                        session_id: None,
                         text: summary.sql.clone(),
                         mode: fluxdb_core::QueryMode::Selection,
                         options: QueryExecutionOptions::default(),
@@ -2594,6 +2607,9 @@ impl AppController {
             let request = QueryRequest {
                 connection_id: create.connection_id,
                 database: create.database.clone(),
+                session_id: None,
+                // 建表向导暂未携带 schema 作用域；PG 建表请走编辑器 SQL 文本（editor.schema 贯穿）。
+                schema: None,
                 text: sql,
                 mode: fluxdb_core::QueryMode::All,
                 options: QueryExecutionOptions {
@@ -2626,6 +2642,9 @@ impl AppController {
             let request = QueryRequest {
                 connection_id: create.connection_id,
                 database: create.database.clone(),
+                session_id: None,
+                // 建表向导暂未携带 schema 作用域；PG 建表请走编辑器 SQL 文本（editor.schema 贯穿）。
+                schema: None,
                 text: sql,
                 mode: fluxdb_core::QueryMode::All,
                 options: QueryExecutionOptions {

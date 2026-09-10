@@ -640,6 +640,7 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
         TabKind::QueryEditor(editor) => TabKind::QueryEditor(QueryEditorState {
             connection_id: editor.connection_id,
             database: editor.database.clone(),
+            schema: editor.schema.clone(),
             text: String::new(),
             origin: None,
             saved_fingerprint: None,

@@ -42,6 +42,8 @@ fn query_result_editors(
         let statement_request = QueryRequest {
             connection_id: request.connection_id,
             database: request.database.clone(),
+            session_id: None,
+            schema: request.schema.clone(),
             text: summary.sql.clone(),
             mode: request.mode,
             options: request.options,

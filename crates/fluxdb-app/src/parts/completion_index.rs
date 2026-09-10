@@ -696,6 +696,8 @@ fn token_prefixes(token: &str) -> Vec<String> {
 fn indexed_column_to_completion(column: &IndexedColumnRef) -> CompletionColumn {
     CompletionColumn {
         table: column.source.table.clone(),
+        database: None,
+        schema: None,
         name: column.source.column.clone(),
         type_name: column.source.type_name.clone(),
         nullable: column.source.nullable,

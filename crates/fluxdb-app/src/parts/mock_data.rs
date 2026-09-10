@@ -373,6 +373,8 @@ fn loaded_completion_columns(
         })
         .flat_map(|(editor, page)| {
             page.columns.iter().map(|column| CompletionColumn {
+                database: editor.object.database.clone(),
+                schema: editor.object.schema.clone(),
                 table: editor.object.name.clone(),
                 name: column.name.clone(),
                 type_name: column.type_name.clone(),

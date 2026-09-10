@@ -183,6 +183,8 @@ impl AppController {
             TabKind::QueryEditor(editor) => Some(QueryRequest {
                 connection_id: editor.connection_id,
                 database: editor.database.clone(),
+                session_id: None,
+                schema: editor.schema.clone(),
                 text: sql_text_for_execution(&text),
                 mode: fluxdb_core::QueryMode::Selection,
                 options,
@@ -207,6 +209,7 @@ impl AppController {
         &self,
         connection_id: ConnectionId,
         database: Option<String>,
+        schema: Option<String>,
         text: String,
         options: QueryExecutionOptions,
         on_summary: &mut dyn FnMut(QueryExecutionSummary),
@@ -215,6 +218,8 @@ impl AppController {
         let request = QueryRequest {
             connection_id,
             database,
+            schema,
+            session_id: None,
             text: sql_text_for_execution(&text),
             mode: fluxdb_core::QueryMode::Selection,
             options,

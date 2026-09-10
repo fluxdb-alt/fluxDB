@@ -2467,6 +2467,8 @@ mod tests {
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "select * from Product".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions::default(),
@@ -2486,6 +2488,8 @@ mod tests {
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "select * from Product；\nselect * from Product".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions::default(),
@@ -2504,6 +2508,8 @@ mod tests {
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "select error; select * from Product".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions::default(),
@@ -2524,6 +2530,8 @@ mod tests {
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "select error; select * from Product".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions {
@@ -2547,6 +2555,8 @@ mod tests {
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "select * from Product; select * from Product".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions {
@@ -2589,6 +2599,8 @@ SELECT 1;",
                 &QueryRequest {
                     connection_id: ConnectionId(1),
                     database: Some("main".to_string()),
+                    schema: None,
+                    session_id: None,
                     text: "select * from Product; select * from Product".to_string(),
                     mode: QueryMode::All,
                     options: fluxdb_core::QueryExecutionOptions::default(),
@@ -2642,6 +2654,8 @@ SELECT 1;",
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "SELECT id, name FROM items; UPDATE items SET name = 'new' WHERE id = 1"
                     .to_string(),
                 mode: QueryMode::All,
@@ -2674,6 +2688,8 @@ SELECT 1;",
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
 CREATE TABLE audit_log (item_id INTEGER, name TEXT);
 CREATE TRIGGER items_ai AFTER INSERT ON items
@@ -2734,6 +2750,8 @@ SELECT item_id, name FROM audit_log;"
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "SELECT * FROM missing_table; SELECT id, name FROM items".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions::default(),
@@ -2750,6 +2768,8 @@ SELECT item_id, name FROM audit_log;"
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "SELECT * FROM missing_table; SELECT id, name FROM items".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions {

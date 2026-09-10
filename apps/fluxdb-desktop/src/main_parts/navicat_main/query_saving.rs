@@ -1,6 +1,6 @@
 impl NavicatMain {
     fn save_active_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((tab_id, _, _, text)) = self.active_query_snapshot(cx) else {
+        let Some((tab_id, _, _, _, text)) = self.active_query_snapshot(cx) else {
             return;
         };
         if text.trim().is_empty() {
@@ -30,7 +30,7 @@ impl NavicatMain {
 
     fn choose_query_save_local(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
         self.pending_query_save = None;
-        let Some((_, _, _, text)) = self.active_query_snapshot(cx) else {
+        let Some((_, _, _, _, text)) = self.active_query_snapshot(cx) else {
             return;
         };
         let suggested = default_sql_file_name(&text);
@@ -106,7 +106,7 @@ impl NavicatMain {
     fn choose_query_save_connection(&mut self, tab_id: TabId, window: &mut Window, cx: &mut Context<Self>) {
         self.pending_query_save = None;
         self.pending_connection_query_save = Some(tab_id);
-        if let Some((_, _, _, text)) = self.active_query_snapshot(cx) {
+        if let Some((_, _, _, _, text)) = self.active_query_snapshot(cx) {
             self.query_save_name_input.update(cx, |input, cx| {
                 input.set_value(default_saved_query_name(&text), window, cx);
                 input.focus(window, cx);
@@ -121,7 +121,7 @@ impl NavicatMain {
             self.show_message("请输入查询名称", AppMessageKind::Warning, cx);
             return;
         }
-        let Some((_, connection_id, database, text)) = self.active_query_snapshot(cx) else {
+        let Some((_, connection_id, database, schema, text)) = self.active_query_snapshot(cx) else {
             return;
         };
 
@@ -138,6 +138,7 @@ impl NavicatMain {
                     .find(|query| {
                         query.connection_id == connection_id
                             && query.database == database
+                            && query.schema == schema
                             && query.name == name
                     })
                     .map(|query| query.id)
@@ -148,12 +149,14 @@ impl NavicatMain {
             query.name = name.clone();
             query.text = text;
             query.database = database;
+            query.schema = schema;
             query.connection_id = connection_id;
         } else {
             self.saved_queries.push(SavedQuery {
                 id,
                 connection_id,
                 database,
+                schema,
                 name: name.clone(),
                 text,
             });
@@ -198,6 +201,7 @@ impl NavicatMain {
         let event = self.controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: query.connection_id,
             database: query.database.clone(),
+            schema: None
         });
         self.apply_app_event(&event, cx);
         if let AppEvent::TabOpened(tab_id) = event {
@@ -228,7 +232,7 @@ impl NavicatMain {
     ) {
         match target {
             QuerySaveTarget::Local(path) => {
-                let Some((_, _, _, text)) = self.active_query_snapshot(cx) else {
+                let Some((_, _, _, _, text)) = self.active_query_snapshot(cx) else {
                     return;
                 };
                 self._file_picker_task = Some(cx.spawn(async move |view, cx| {
@@ -259,12 +263,13 @@ impl NavicatMain {
                 }));
             }
             QuerySaveTarget::Connection(id) => {
-                let Some((_, connection_id, database, text)) = self.active_query_snapshot(cx) else {
+                let Some((_, connection_id, database, schema, text)) = self.active_query_snapshot(cx) else {
                     return;
                 };
                 if let Some(query) = self.saved_queries.iter_mut().find(|query| query.id == id) {
                     query.connection_id = connection_id;
                     query.database = database;
+                    query.schema = schema;
                     query.text = text;
                     let title = query.name.clone();
                     match self.storage.save_saved_queries(&self.saved_queries) {
@@ -296,7 +301,7 @@ impl NavicatMain {
     fn active_query_snapshot(
         &mut self,
         cx: &mut Context<Self>,
-    ) -> Option<(TabId, ConnectionId, Option<String>, String)> {
+    ) -> Option<(TabId, ConnectionId, Option<String>, Option<String>, String)> {
         let tab_id = self.controller.state().active_tab?;
         if let Some(sql_editor) = self.query_editors.get(&tab_id).cloned() {
             let text = sql_editor.read(cx).text();
@@ -325,6 +330,7 @@ impl NavicatMain {
                     tab_id,
                     editor.connection_id,
                     editor.database.clone(),
+                    editor.schema.clone(),
                     editor.text.clone(),
                 )),
                 _ => None,

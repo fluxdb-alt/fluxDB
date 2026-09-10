@@ -25,6 +25,7 @@ impl AppController {
         &mut self,
         connection_id: ConnectionId,
         database: Option<String>,
+        schema: Option<String>,
     ) -> AppEvent {
         let tab_id = self.next_tab_id();
         self.push_tab(TabState {
@@ -33,6 +34,7 @@ impl AppController {
             kind: TabKind::QueryEditor(QueryEditorState {
                 connection_id,
                 database,
+                schema,
                 text: String::new(),
                 origin: None,
                 saved_fingerprint: None,

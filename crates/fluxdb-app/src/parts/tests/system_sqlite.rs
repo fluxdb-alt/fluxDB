@@ -91,6 +91,7 @@ fn real_sqlite_completion_items(config: &ConnectionConfig, sql: &str, cursor: us
     controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
         connection_id: config.id,
         database: Some("main".to_string()),
+        schema: None
     });
     controller.dispatch(AppCommand::UpdateQueryText {
         tab_id: TabId(1),
@@ -278,6 +279,7 @@ fn real_dev_mysql_completion_items(
     controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
         connection_id: config.id,
         database: Some(database.to_string()),
+        schema: None
     });
     controller.dispatch(AppCommand::UpdateQueryText {
         tab_id: TabId(1),
