@@ -8,6 +8,12 @@ PROFILE="${PROFILE:-release}"
 DIST_DIR="${DIST_DIR:-target/macos-package}"
 CREATE_DMG="${CREATE_DMG:-1}"
 AD_HOC_SIGN="${AD_HOC_SIGN:-1}"
+TARGET="${TARGET:-$(rustc -vV | awk '/^host:/ { print $2 }')}"
+case "$TARGET" in
+    aarch64-apple-darwin) ARCH=arm64 ;;
+    x86_64-apple-darwin) ARCH=x64 ;;
+    *) echo "Unsupported macOS target: $TARGET" >&2; exit 1 ;;
+esac
 
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DESKTOP_CRATE="$WORKSPACE_ROOT/apps/fluxdb-desktop"
@@ -17,12 +23,12 @@ VERSION="${VERSION:-$(awk -F '"' '/^version = / { print $2; exit }' "$DESKTOP_CR
 cd "$WORKSPACE_ROOT"
 
 if [[ "$PROFILE" == "release" ]]; then
-    cargo build --release -p fluxdb-desktop
+    cargo build --locked --release -p fluxdb-desktop --target "$TARGET"
 else
-    cargo build -p fluxdb-desktop
+    cargo build --locked -p fluxdb-desktop --target "$TARGET"
 fi
 
-BINARY_PATH="$TARGET_DIR/$PROFILE/fluxdb-desktop"
+BINARY_PATH="$TARGET_DIR/$TARGET/$PROFILE/fluxdb-desktop"
 if [[ ! -x "$BINARY_PATH" ]]; then
     echo "Missing built binary: $BINARY_PATH" >&2
     exit 1
@@ -34,20 +40,16 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 INFO_PLIST="$CONTENTS_DIR/Info.plist"
-ICON_TIFF_PATH="$PACKAGE_ROOT/AppIcon.tiff"
 ICON_PATH="$RESOURCES_DIR/AppIcon.icns"
-DMG_PATH="$PACKAGE_ROOT/$APP_NAME-$VERSION.dmg"
-ZIP_PATH="$PACKAGE_ROOT/$APP_NAME-$VERSION.zip"
+DMG_PATH="$PACKAGE_ROOT/$APP_NAME-$VERSION-macos-$ARCH.dmg"
 
-rm -rf "$APP_DIR" "$ICON_TIFF_PATH" "$DMG_PATH" "$ZIP_PATH"
+rm -rf "$APP_DIR" "$DMG_PATH"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 install -m 755 "$BINARY_PATH" "$MACOS_DIR/fluxdb-desktop"
 cp -R "$DESKTOP_CRATE/assets" "$RESOURCES_DIR/assets"
 
-sips -s format tiff "$DESKTOP_CRATE/assets/app-icon.png" --out "$ICON_TIFF_PATH" >/dev/null
-tiff2icns "$ICON_TIFF_PATH" "$ICON_PATH"
-rm -f "$ICON_TIFF_PATH"
+cp "$DESKTOP_CRATE/assets/app-icon.icns" "$ICON_PATH"
 
 # ---- 内嵌非系统动态库（如 Homebrew openssl@3）----
 # 构建产物可能以绝对路径（/opt/homebrew、/usr/local）链接第三方 dylib，
@@ -133,6 +135,10 @@ if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
 elif [[ "$AD_HOC_SIGN" == "1" ]]; then
     codesign --force --sign - "$APP_DIR"
 fi
+if [[ -n "${CODESIGN_IDENTITY:-}" || "$AD_HOC_SIGN" == "1" ]]; then
+    codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+fi
+plutil -lint "$INFO_PLIST"
 
 if [[ "$CREATE_DMG" == "1" ]]; then
     # 标准 DMG 布局：卷内包含 app 本体 + 指向 /Applications 的软链（Finder 识别为 alias），
@@ -146,9 +152,8 @@ if [[ "$CREATE_DMG" == "1" ]]; then
     if hdiutil create -volname "$APP_NAME" -srcfolder "$STAGING_DIR" -ov -format UDZO "$DMG_PATH" >/dev/null; then
         echo "Created $DMG_PATH"
     else
-        echo "hdiutil failed; creating zip package instead." >&2
-        ditto -c -k --keepParent "$APP_DIR" "$ZIP_PATH"
-        echo "Created $ZIP_PATH"
+        echo "hdiutil failed; DMG packaging failed." >&2
+        exit 1
     fi
     rm -rf "$STAGING_DIR"
 fi
