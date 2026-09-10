@@ -31,6 +31,7 @@ use std::{
 // First-pass source split: included files remain in crate-root scope while connector modules are refined.
 include!("parts/common.rs");
 include!("parts/mock.rs");
+include!("parts/transport.rs");
 include!("parts/mysql.rs");
 include!("parts/postgres.rs");
 include!("parts/redis.rs");
