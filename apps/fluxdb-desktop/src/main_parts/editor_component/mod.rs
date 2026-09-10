@@ -3477,8 +3477,8 @@ impl Editor {
         {
             return gpui::px(cache.width);
         }
+        let longest = self.longest_line_width(window);
         let char_width = measure_character_width(window, self.font_size);
-        let longest = self.longest_line_width(window, char_width);
         let width = gpui::px(EDITOR_PADDING_X * 2.)
             + self.line_number_width(window)
             + gpui::px(EDITOR_CONTENT_GAP)
@@ -3516,9 +3516,9 @@ impl Editor {
             .sum()
     }
 
-    fn longest_line_width(&self, window: &Window, char_width: f32) -> gpui::Pixels {
-        if let Some((columns, measured_width)) = *self.line_width_hint.borrow() {
-            return gpui::px(measured_width.max(columns as f32 * char_width));
+    fn longest_line_width(&self, window: &Window) -> gpui::Pixels {
+        if let Some((_, measured_width)) = *self.line_width_hint.borrow() {
+            return gpui::px(measured_width);
         }
         let mut longest_columns = 0usize;
         let mut longest_text = String::new();
@@ -3547,11 +3547,12 @@ impl Editor {
             &[run],
             None,
         );
-        // ponytail: 只 shape 列数最长的一行；混合宽字符且列数较短的行可能被低估，
-        // 若需要精确支持这类文本，再升级为按行增量宽度缓存。
+        // 与 zed 一致：只 shape 列数最长的一行取真实像素宽，不再用
+        // `列数 × 字宽` 作上限（那会对比例字体/混合宽度大幅高估，导致横向
+        // 超滚）。content_width_cache 已按 buffer version 门控，编辑即重算。
         let measured_width = f32::from(shaped.width);
         *self.line_width_hint.borrow_mut() = Some((longest_columns, measured_width));
-        gpui::px(measured_width.max(longest_columns as f32 * char_width))
+        gpui::px(measured_width)
     }
 }
 
