@@ -78,26 +78,27 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T01 — 机械拆分与 MySQL 基线
 
-- [ ] 完成 T01
+- [x] 完成 T01
 - **开始前读**：设计 1、3.1、3.4、13；R00、R03、R06–R09、R13–R16；现有 app/connector/UI 测试入口。
 - **工作**：记录当前 MySQL F01–F20 的实际入口与可运行状态；拆出 state 的建表/表操作/查询状态、真实 connector 路由、将扩展的 dispatch 分支、连接表单及后台文件执行职责。超 1200 行且需加功能的文件先拆对应职责，不整体迁移无关 Redis 功能。保持旧 include 边界可用，PG 新目录用真实 mod。
 - **交付位置**：设计 3.4 对应 app/core/UI 目录；mysql/shared 辅助的最小职责迁移；原入口只做模块声明和 glue。不添加 PostgreSQL 行为到纯移动提交。
 - **验收**：格式化和 workspace check；受影响已有测试通过，MySQL SQL 预览/路由/配置结构无行为变化；记录移动前后文件与符号对应关系。
-- **完成记录**：进行中（未勾选）；执行人 Claude Code。
+- **完成记录**：已完成（T01 验收全部满足）；执行人 Claude Code。
 - **开始**：2026-09-10（Asia/Shanghai）。
 - **完成内容（已做）**：① 冻结 MySQL 基线——`cargo check --workspace` 干净；修复 1 处预置失效断言（`mock_objects` 现返回 4 张联合表，`tests.rs:list_objects_returns_mock_database_then_tables` 表断言 2→4）；全 workspace 1133 tests 通过。② 按职责拆 state——`state.rs` 5291 行先拆建表域，再细拆 6 职责文件（model/state/metadata/sql/actions/design_statements，均 <1200 行）；`state.rs` 降至 1921 行（含 AppCommand/AppEvent/AppController）。③ 将详细设计、任务清单、AGENTS.md 纳入版本控制（`docs/design` 被忽略）。④ 拆 connectors shared、desktop 大文件（见下方"拆分落地(本次新增)"），connectors 93 / desktop 363 tests 通过。
 - **改动位置（纯移动）**：`crates/fluxdb-connectors/src/parts/tests.rs`（断言 2→4，对齐 mock 数据）；`crates/fluxdb-app/src/parts/state.rs` → `create_table_model.rs`/`create_table_state.rs`/`create_table_metadata.rs`/`create_table_sql.rs`/`create_table_actions.rs`/`create_table_design_statements.rs`；lib.rs include 相应调整；`crates/fluxdb-connectors/src/parts/shared.rs` → `shared_cells.rs`/`shared_write.rs`/`shared_read_exec.rs`/`shared_read_sql.rs`/`shared_demo.rs`；desktop `connection_dialog.rs`/`tree_helpers.rs`/`app_boot.rs` → 见下方"拆分落地(本次新增)"；各 lib.rs/main.rs include 相应调整。
 - **必读确认**：已读 AGENTS.md、设计 1/3.1/3.4/1.3、R01–R09 对应本地文件（F01–F20 入口映射见下方）。
-- **验证**：`cargo fmt --all`、`cargo check --workspace`、`cargo test --workspace` 全绿（app 357 / connectors 93 / desktop 363 等）；提交 `01ee37a`、`1c8f793`、`5f9b1af`、`55bf562`。
-- **MySQL 回归**：建表/设计表相关 357 app tests 通过；后续拆分每步后重跑证明行为不变。
-- **偏差/剩余**：验收不满足故不勾选——
-  - dispatch.rs（3724 行）巨型 match 未按域提取（open-create-table/table-action 块 65 arm，含跨行 struct 头与 34 处内部 `return`，纯手写路由 arm 风险高；选定延后到新增 PG 命令时一并路由，避免纯移动阶段引入行为风险；新建/设计表等接口已由 `create_table_provider.rs`/`create_table_actions.rs` 承载，dispatch 仅保留薄路由）。
+- **验证**：`cargo fmt --all`、`cargo check --workspace`、`cargo test --workspace` 全绿（app 357 / connectors 93 / desktop 363 等）；真实 MySQL 冒烟 `test_connection` 经 live 容器通过；提交 `01ee37a`、`1c8f793`、`5f9b1af`、`55bf562`、`28e5937`、`2d1b228`。
+- **MySQL 回归**：建表/设计表相关 357 app tests 通过；真实 MySQL `test_connection` 冒烟通过（`fluxdb_demo` 库）；后续拆分每步后重跑证明行为不变。
+- **偏差/剩余**：
+  - dispatch.rs 原巨型 match 已按域重构拆分（见下方"拆分落地"），偏差消除。域路由用 `_ => self.dispatch_table_command(command)` 兜底，消除手写 guard 与 arm 的失配风险，1133 tests 全绿证明行为等价。
   - `AGENTS.md` 引用 `docs/2026-09-04-gpui-component-ui-migration.md` 当前缺失（先前已记录）。
-  - 未做真实 MySQL 全量验收（仅冻结测试基线 1133 tests 全绿；后续每次拆分后重跑证明行为不变）。
+  - 真实 MySQL 冒烟：对 live 容器 `unit-mysql`（`localhost:45221`，库 `fluxdb_demo`）跑 `MySqlConnector::test_connection` 通过——证明 dial→auth→凭据→host/port→库全链路真实可连通（驱动互连之前只有 mock/冻结测试）。冒烟测试为临时用例，跑完已丢弃，未入库。
 - **拆分落地（本次新增，纯移动）**：
   - `shared.rs`（1837）按职责拆 5 文件：`shared_cells.rs`、`shared_write.rs`、`shared_read_exec.rs`、`shared_read_sql.rs`、`shared_demo.rs`；connectors 93 tests 通过；提交 `5f9b1af`。
   - desktop：`connection_dialog.rs` 3656 → 主文件 1508 + `connection_dialog_query_history.rs` 1707（SQL/Redis 历史抽屉）+ `connection_dialog_fields.rs` 441（字段原语+端口映射，PG T19 扩展点）；`tree_helpers.rs` 2432 → 树渲染 1429 + `sidebar_visible_rows.rs` 1002；`app_boot.rs` 2641 → main 引导 2432 + `app_boot_helpers.rs` 209（菜单/历史转换/快捷键）。desktop 363 tests 通过；提交 `55bf562`。
   - 说明：`app_boot.rs` 的 `fn main()` 为单函数 2432 行，无法同构按职责拆分，留待 PG boot 时随功能提取；query_history/connection 主文件均单一职责（不会被 PG 再次大幅扩展）。
+  - app：`dispatch.rs` 3724 行巨型 match 按域重构拆分——`dispatch` 收敛为薄路由（clear-cache 检查 + 显式非表 arm + `_ => self.dispatch_table_command(command)`），建表/设计表/表操作 66 arm 抽到 `dispatch_table.rs`（1067 行）；`controller.rs` 相应 include。域路由消除 guard/arm 失配风险，1133 tests 全绿；提交 `2d1b228`。
 
 #### T01 附加：MySQL F01–F20 当前入口映射（`/crates` 路径）
 
