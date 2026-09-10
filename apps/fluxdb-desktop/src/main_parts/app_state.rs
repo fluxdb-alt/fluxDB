@@ -912,6 +912,9 @@ struct NavicatMain {
     query_save_name_input: Entity<InputState>,
     _file_picker_task: Option<Task<()>>,
     _connection_tasks: BTreeMap<u64, Task<()>>,
+    /// 侧边栏「刷新连接树」的后台任务。只保留最近一次：连点刷新时旧任务被丢弃即取消，
+    /// 避免多轮刷新结果交错回写。
+    _tree_refresh_task: Option<Task<()>>,
     _database_tasks: BTreeMap<String, Task<()>>,
     _data_load_tasks: BTreeMap<u64, Task<()>>,
     _query_execute_tasks: BTreeMap<u64, Task<()>>,

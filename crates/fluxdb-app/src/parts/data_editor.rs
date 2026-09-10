@@ -16,6 +16,7 @@ fn should_clear_completion_cache(command: &AppCommand) -> bool {
             | AppCommand::DeleteConnection(_)
             | AppCommand::LoadObjectChildren(_)
             | AppCommand::RefreshObject(_)
+            | AppCommand::RefreshConnectionTree
             | AppCommand::ApplyCreateTable(_)
             | AppCommand::RenameTable { .. }
             | AppCommand::CopyTable { .. }

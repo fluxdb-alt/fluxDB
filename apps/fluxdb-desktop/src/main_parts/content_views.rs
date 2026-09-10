@@ -2941,8 +2941,8 @@ fn common_actions_panel(
             ))
             .child(home_action_row("刷新连接树", "⟳", colors).on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, window, cx| {
-                    this.refresh_active(window, cx);
+                cx.listener(move |this, _, _, cx| {
+                    this.refresh_connection_tree(cx);
                     cx.stop_propagation();
                 }),
             ))

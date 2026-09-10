@@ -2222,6 +2222,7 @@ fn main() {
                             query_save_name_input,
                             _file_picker_task: None,
                             _connection_tasks: BTreeMap::new(),
+                            _tree_refresh_task: None,
                             _database_tasks: BTreeMap::new(),
                             _data_load_tasks: BTreeMap::new(),
                             _redis_key_value_apply_tasks: BTreeMap::new(),

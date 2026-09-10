@@ -554,6 +554,32 @@ impl AppController {
                 }
                 AppEvent::ObjectsLoaded(path.clone(), objects)
             }
+            // 侧边栏「刷新连接树」：只重拉树上可见（已展开）连接的第一层对象。
+            // 与 `RefreshObject(None)` 的两点区别：
+            //  1. 折叠连接不发请求（`RefreshObject` 用的是 `connected || expanded`）；
+            //  2. 只换第一层，保留已加载的表 / 视图行，不打断已展开的数据库子树。
+            // 刷新不负责建立连接，也不改变用户的折叠态，因此不写 `connected` / `expanded`。
+            AppCommand::RefreshConnectionTree => {
+                let mut first_error: Option<Error> = None;
+                for connection in &mut self.state.connections {
+                    if !connection.expanded {
+                        continue;
+                    }
+                    let config = connection.config.clone();
+                    match list_objects_for_connection(&config, None) {
+                        Ok(level0) => replace_connection_level0(connection, level0),
+                        // 单个连接失败不中断整轮刷新：保留该连接原有对象，记下首个错误继续。
+                        Err(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                    }
+                }
+
+                match first_error {
+                    None => AppEvent::ObjectsLoaded(None, Vec::new()),
+                    Some(error) => self.fail(error),
+                }
+            }
             AppCommand::OpenObjectList(parent) => {
                 let tab_id = self.next_tab_id();
                 let objects = mock_child_objects(parent.as_ref());
