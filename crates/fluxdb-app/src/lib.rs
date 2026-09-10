@@ -46,7 +46,12 @@ use sqlparser::{
 
 // First-pass source split: included files remain in crate-root scope while module boundaries are refined.
 include!("parts/state.rs");
-include!("parts/create_table_design.rs");
+include!("parts/create_table_model.rs");
+include!("parts/create_table_state.rs");
+include!("parts/create_table_metadata.rs");
+include!("parts/create_table_sql.rs");
+include!("parts/create_table_actions.rs");
+include!("parts/create_table_design_statements.rs");
 include!("parts/create_table_foreign_keys.rs");
 include!("parts/create_table_provider.rs");
 include!("parts/controller.rs");
