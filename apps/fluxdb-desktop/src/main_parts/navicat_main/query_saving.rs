@@ -201,7 +201,9 @@ impl NavicatMain {
         let event = self.controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: query.connection_id,
             database: query.database.clone(),
-            schema: None
+            // 保存时记录的 schema 作用域必须随查询一起恢复（§8.4 保存后 schema 保持），
+            // 否则 PG 下同名跨 schema 的查询会落到错误的 search_path。
+            schema: query.schema.clone(),
         });
         self.apply_app_event(&event, cx);
         if let AppEvent::TabOpened(tab_id) = event {

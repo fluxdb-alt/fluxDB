@@ -1918,6 +1918,22 @@
         assert!(editor.changes.is_none());
     }
 
+    /// §8.4 保存查询的 scope：带 schema 打开的查询编辑器必须保留该 schema，
+    /// 保存/重启恢复才能落到同一 search_path（PG 同名跨 schema 场景）。
+    #[test]
+    fn query_editor_keeps_schema_scope_on_open() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
+            connection_id: ConnectionId(1),
+            database: Some("main".to_string()),
+            schema: Some("sales".to_string()),
+        });
+
+        let editor = active_query_editor(&controller);
+        assert_eq!(editor.database.as_deref(), Some("main"));
+        assert_eq!(editor.schema.as_deref(), Some("sales"));
+    }
+
     /// §8.4/R11：显式事务的历史状态——未 COMMIT 的写入不显示为已提交，
     /// ROLLBACK 的写入标已回滚且不提供补偿 SQL。
     #[test]
