@@ -63,7 +63,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T16 | DDL 读取和 PostgreSQL 新建表 provider | T08、T12、T13 | 已完成 / FluxDB |
 | T17 | 设计表差异计划和结构修改执行 | T16 | 已完成 / FluxDB |
 | T18 | 复制/重命名/清空/删除表 | T11、T16、T17 | 已完成 / FluxDB |
-| T19 | PostgreSQL 连接对话框 | T02、T05 | 未开始 / — |
+| T19 | PostgreSQL 连接对话框 | T02、T05 | 进行中 / FluxDB |
 | T20 | schema 树、数据库对话框和能力路由 | T06、T07、T19 | 未开始 / — |
 | T21 | 数据/查询/详情与历史 UI 接入 | T10–T16、T20 | 未开始 / — |
 | T22 | 新建/设计表及危险操作 UI | T17、T18、T21 | 未开始 / — |
@@ -349,7 +349,12 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 - **工作**：数据库选择列表加入 PostgreSQL；复用连接 Dialog/Input/Select/Tabs，PG 字段和验证；测试/保存 loading；证书/SSH 指纹/URI 错误反馈；编辑/复制/清空密码与持久化命令。
 - **交付位置**：connection_dialog/postgres.rs、navicat_main/connection_forms、连接类型图标/选择。
 - **验收**：gpui-component 0.6.0、AppIcon；明暗主题、输入 focus/hover、Esc/关闭/外点/内点防穿透；测试配置就是业务有效配置；重启恢复可用；MySQL/TiDB 原表单默认值/保存不变；桌面可启动。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：进行中；执行人 FluxDB（T19 增量一～三）；内容 —
+  (一) `e499f65`：连接类型选择加入 PostgreSQL 卡片；表单新增 PG 专用字段（TLS 模式 disable/prefer/require/verify-ca/verify-full、默认 schema、应用名、建连/查询超时、TCP 保活）并接 toggle/占位绑定；新增 `build_postgres_profile` 组装结构化档案（主机/端口/维护库/账号密码 + PG TLS 模式 + SSH/代理传输 + scope/advanced）——此前新建 PG 连接 draft 恒为 `postgres_profile: None` 无法拨号；新增 `apply_postgres_profile` 编辑/重启按档案回填，缺档案用历史扁平参数迁移；TLS/SSH/高级页签对 PG 开放。
+  (二) `47d6485`：`postgres_connection_form_roundtrips_into_profile`、`mysql_connection_form_defaults_unchanged_by_postgres_fields`（MySQL 默认值锁定）；补齐 apply_postgres_profile 的 TLS 证书路径回填。
+  (三) `b852413`：`validate_new_connection` 增加 Postgres 分支走 `build_postgres_profile().validate()`（此前落入 `_` 兜底只查主机+端口，verify-full 未启 TLS/纯 IP 无 server_name/SSH 缺主机等无效配置默认放行）；新增 `postgres_form_validation_uses_profile_rules` 测试。
+  验证 — `postgres_form_validation_uses_profile_rules`、`postgres_connection_form_roundtrips_into_profile`、`mysql_connection_form_defaults_unchanged_by_postgres_fields` 通过；desktop 369、app 390、connectors 133 工作区全量通过；`cargo build -p fluxdb-desktop` 通过。
+  未完成项：测试/保存 loading、证书/SSH 指纹/URI 错误反馈细化、编辑/复制/清空密码与持久化命令验收、真实重启恢复验证、桌面交互启动验证（明暗主题/Esc/外点/内点防穿透）。
 
 ### T20 — schema 树与数据库 UI
 
