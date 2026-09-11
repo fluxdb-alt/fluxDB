@@ -411,6 +411,97 @@ fn database_context_menu(
         })
 }
 
+/// PostgreSQL schema 节点右键菜单：与数据库菜单隔离，动作均为 schema 作用域。
+fn schema_context_menu(
+    menu: SchemaContextMenu,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    div()
+        .absolute()
+        .top(menu.position.y)
+        .left(menu.position.x)
+        .w(px(204.))
+        .rounded(colors.radius_lg)
+        .border_1()
+        .border_color(colors.border)
+        .bg(menu_surface_bg(colors))
+        .occlude()
+        .shadow(vec![box_shadow(
+            px(0.),
+            px(14.),
+            px(30.),
+            px(0.),
+            hsla(0., 0., 0., 0.16),
+        )])
+        .p_2()
+        .text_size(px(14.))
+        .text_color(colors.text)
+        .key_context("SchemaContextMenu")
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+        .child(schema_menu_item("新建查询", "query", SchemaMenuAction::NewQuery, &menu, colors, cx))
+        .child(schema_menu_item("新建表", "table", SchemaMenuAction::NewTable, &menu, colors, cx))
+        .child(connection_menu_separator(colors))
+        .child(schema_menu_item("设置默认 schema", "default", SchemaMenuAction::SetDefault, &menu, colors, cx))
+        .child(schema_menu_item("刷新", "refresh", SchemaMenuAction::Refresh, &menu, colors, cx))
+}
+
+fn schema_menu_item(
+    label: &str,
+    icon: &'static str,
+    action: SchemaMenuAction,
+    menu: &SchemaContextMenu,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> impl IntoElement {
+    let label = label.to_string();
+    let menu = menu.clone();
+    div()
+        .id(("schema-menu-item", schema_menu_item_hash(menu.connection_id, &label)))
+        .h(px(32.))
+        .rounded(colors.radius_lg)
+        .px_2()
+        .flex()
+        .items_center()
+        .gap_3()
+        .cursor_pointer()
+        .text_color(colors.text)
+        .hover(move |style| style.bg(colors.hover))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, window, cx| {
+                this.handle_schema_menu_action(action, menu.clone(), window, cx);
+                cx.stop_propagation();
+            }),
+        )
+        .child(
+            div()
+                .w(px(22.))
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(menu_icon(icon, false, colors)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(label),
+        )
+}
+
+fn schema_menu_item_hash(connection_id: ConnectionId, label: &str) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    connection_id.hash(&mut hasher);
+    label.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn connection_group_submenu(
     menu: ConnectionContextMenu,
     state: &AppState,

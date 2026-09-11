@@ -230,6 +230,60 @@ impl NavicatMain {
         cx.notify();
     }
 
+    fn handle_schema_menu_action(
+        &mut self,
+        action: SchemaMenuAction,
+        mut menu: SchemaContextMenu,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.schema_context_menu = None;
+        // schema 路径：供懒加载/刷新复用。
+        let schema_path = ObjectPath {
+            connection_id: menu.connection_id,
+            database: Some(menu.database.clone()),
+            schema: Some(menu.schema.clone()),
+            name: menu.schema.clone(),
+            kind: ObjectKind::Schema,
+        };
+        match action {
+            SchemaMenuAction::NewQuery => {
+                self.dispatch(
+                    AppCommand::OpenQueryEditorInDatabase {
+                        connection_id: menu.connection_id,
+                        database: Some(menu.database.clone()),
+                        schema: Some(menu.schema.clone()),
+                    },
+                    cx,
+                );
+            }
+            SchemaMenuAction::NewTable => {
+                self.dispatch(
+                    AppCommand::OpenCreateTable {
+                        connection_id: menu.connection_id,
+                        database: Some(menu.database.clone()),
+                        schema: Some(menu.schema.clone()),
+                    },
+                    cx,
+                );
+            }
+            SchemaMenuAction::SetDefault => {
+                self.show_message("设置默认 schema 入口已就绪", AppMessageKind::Info, cx);
+            }
+            SchemaMenuAction::Refresh => {
+                let schema_key = schema_tree_key(
+                    menu.connection_id,
+                    &menu.database,
+                    &menu.schema,
+                );
+                self.loaded_database_children.remove(&schema_key);
+                // 按 schema 路径重载关系（load_database_children 内部按 key 去重并置 loading）。
+                self.load_database_children(schema_path, schema_key, cx);
+            }
+        }
+        cx.notify();
+    }
+
     fn start_rename_group(
         &mut self,
         group_id: ConnectionGroupId,

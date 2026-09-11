@@ -349,6 +349,8 @@ fn schema_tree(
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let schema_for_click = database_path.clone();
+    let database_for_menu = database_path.clone();
+    let schema_name_for_menu = schema.clone();
     let arrow: gpui::AnyElement = if loading {
         loading_spinner(13.).into_any_element()
     } else {
@@ -374,6 +376,26 @@ fn schema_tree(
                 connection_id,
                 schema_for_click.clone(),
                 has_loaded_children,
+                cx,
+            );
+            cx.stop_propagation();
+        }),
+    )
+    .on_mouse_down(
+        MouseButton::Right,
+        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+            let database = database_for_menu
+                .database
+                .clone()
+                .unwrap_or_else(|| database_for_menu.name.clone());
+            this.show_schema_context_menu(
+                SchemaContextMenu {
+                    connection_id,
+                    database,
+                    schema: schema_name_for_menu.clone(),
+                    position: event.position,
+                },
+                window,
                 cx,
             );
             cx.stop_propagation();

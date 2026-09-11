@@ -198,6 +198,7 @@ impl Render for NavicatMain {
             .when(
                 self.connection_context_menu.is_some()
                     || self.database_context_menu.is_some()
+                    || self.schema_context_menu.is_some()
                     || self.table_context_menu.is_some()
                     || self.table_group_context_menu.is_some()
                     || self.table_folder_context_menu.is_some()
@@ -207,6 +208,9 @@ impl Render for NavicatMain {
                     || self.group_context_menu.is_some(),
                 |this| this.child(context_menu_backdrop(cx)),
             )
+            .when_some(self.schema_context_menu.clone(), |this, menu| {
+                this.child(schema_context_menu(menu, colors, cx))
+            })
             .when_some(self.connection_context_menu, |this, menu| {
                 this.child(connection_context_menu(menu, &state, colors, cx))
             })

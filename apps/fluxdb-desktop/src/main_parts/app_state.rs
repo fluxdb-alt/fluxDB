@@ -949,6 +949,7 @@ struct NavicatMain {
     redis_discovery_pending_sync: bool,
     connection_context_menu: Option<ConnectionContextMenu>,
     database_context_menu: Option<DatabaseContextMenu>,
+    schema_context_menu: Option<SchemaContextMenu>,
     table_context_menu: Option<TableContextMenu>,
     table_group_context_menu: Option<TableGroupContextMenu>,
     table_folder_context_menu: Option<TableFolderContextMenu>,
@@ -1570,6 +1571,15 @@ struct DatabaseContextMenu {
     expanded: bool,
     /// 备份节点右键专用：仅渲染「新建备份」一个菜单项。
     backup_only: bool,
+}
+
+/// PostgreSQL schema 节点右键菜单：与数据库菜单隔离，避免把 schema 当作数据库操作。
+#[derive(Clone, Debug)]
+struct SchemaContextMenu {
+    connection_id: ConnectionId,
+    database: String,
+    schema: String,
+    position: Point<Pixels>,
 }
 
 #[derive(Clone, Debug)]

@@ -124,6 +124,15 @@ enum DatabaseMenuAction {
     PubSub,
 }
 
+/// PostgreSQL schema 右键菜单动作：全部 schema 作用域，不与数据库/表动作混淆。
+#[derive(Clone, Copy, Debug)]
+enum SchemaMenuAction {
+    NewQuery,
+    NewTable,
+    Refresh,
+    SetDefault,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum TableMenuAction {
     TogglePin,

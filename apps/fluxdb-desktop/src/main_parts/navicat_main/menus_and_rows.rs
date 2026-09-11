@@ -41,7 +41,33 @@ impl NavicatMain {
         }
         menu.position = clamp_context_menu_position(menu.position, 238., 314., window);
         self.database_context_menu = Some(menu);
+        self.schema_context_menu = None;
         self.connection_context_menu = None;
+        self.table_context_menu = None;
+        self.table_group_context_menu = None;
+        self.table_folder_context_menu = None;
+        self.tab_context_menu = None;
+        self.data_cell_context_menu = None;
+        self.data_row_context_menu = None;
+        self.tab_switcher = None;
+        self.group_context_menu = None;
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    fn show_schema_context_menu(
+        &mut self,
+        mut menu: SchemaContextMenu,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pending_rename_table_folder.is_some() {
+            self.confirm_rename_table_folder(cx);
+        }
+        menu.position = clamp_context_menu_position(menu.position, 214., 164., window);
+        self.schema_context_menu = Some(menu);
+        self.connection_context_menu = None;
+        self.database_context_menu = None;
         self.table_context_menu = None;
         self.table_group_context_menu = None;
         self.table_folder_context_menu = None;
@@ -67,6 +93,7 @@ impl NavicatMain {
         self.table_context_menu = Some(menu);
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_group_context_menu = None;
         self.table_folder_context_menu = None;
         self.tab_context_menu = None;
@@ -91,6 +118,7 @@ impl NavicatMain {
         self.table_group_context_menu = Some(menu);
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_context_menu = None;
         self.table_folder_context_menu = None;
         self.tab_context_menu = None;
@@ -115,6 +143,7 @@ impl NavicatMain {
         self.table_folder_context_menu = Some(menu);
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_context_menu = None;
         self.table_group_context_menu = None;
         self.tab_context_menu = None;
@@ -139,6 +168,7 @@ impl NavicatMain {
         self.tab_context_menu = Some(TabContextMenu { tab_id, position });
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_context_menu = None;
         self.table_group_context_menu = None;
         self.table_folder_context_menu = None;
@@ -166,6 +196,7 @@ impl NavicatMain {
         self.group_context_menu = Some(GroupContextMenu { group_id, position });
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_context_menu = None;
         self.table_group_context_menu = None;
         self.table_folder_context_menu = None;
@@ -190,6 +221,7 @@ impl NavicatMain {
         self.data_cell_context_menu = Some(menu);
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_context_menu = None;
         self.table_group_context_menu = None;
         self.table_folder_context_menu = None;
@@ -213,6 +245,7 @@ impl NavicatMain {
         self.data_row_context_menu = Some(menu);
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_context_menu = None;
         self.table_group_context_menu = None;
         self.table_folder_context_menu = None;

@@ -2256,6 +2256,7 @@ fn main() {
                             redis_discovery_pending_sync: false,
                             connection_context_menu: None,
                             database_context_menu: None,
+                            schema_context_menu: None,
                             table_context_menu: None,
                             table_group_context_menu: None,
                             table_folder_context_menu: None,
