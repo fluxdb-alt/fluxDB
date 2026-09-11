@@ -38,6 +38,19 @@ fn create_database_charset_options() -> Vec<String> {
         .collect()
 }
 
+/// PostgreSQL server 可用的 ENCODING 名。
+fn pg_create_database_encoding_options() -> Vec<String> {
+    ["UTF8", "SQL_ASCII", "LATIN1", "LATIN2", "LATIN5", "LATIN9", "EUC_JP", "EUC_KR", "GB18030", "GBK", "WIN1251", "WIN1252", "WIN1256"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// PostgreSQL locale（LC_COLLATE/LC_CTYPE）候选。
+fn pg_locale_options() -> &'static [&'static str] {
+    &["C", "POSIX", "en_US.UTF-8", "zh_CN.UTF-8", "zh_CN.GB18030", "de_DE.UTF-8", "ja_JP.UTF-8", "ko_KR.UTF-8"]
+}
+
 fn create_database_collation_options(charset: &str) -> Vec<String> {
     collations_for_charset(charset)
         .iter()
@@ -50,12 +63,18 @@ fn create_database_modal(
     name_input: Entity<InputState>,
     charset_select: Entity<SelectState<SearchableVec<String>>>,
     collation_select: Entity<SelectState<SearchableVec<String>>>,
+    owner_input: Entity<InputState>,
+    template_input: Entity<InputState>,
     running: bool,
     focus_handle: FocusHandle,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
-    let needs_charset = matches!(form.database_kind, DatabaseKind::MySql | DatabaseKind::TiDb);
+    let needs_charset = matches!(
+        form.database_kind,
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Postgres
+    );
+    let is_postgres = form.database_kind == DatabaseKind::Postgres;
     let can_submit = !running
         && !form.database_name.trim().is_empty()
         && (!needs_charset
@@ -120,19 +139,23 @@ fn create_database_modal(
                         ))
                         .when(needs_charset, |this| {
                             this.child(create_database_select_field(
-                                "字符集",
+                                if is_postgres { "编码" } else { "字符集" },
                                 charset_select,
-                                "utf8mb4",
+                                if is_postgres { "UTF8" } else { "utf8mb4" },
                                 running,
                                 colors,
                             ))
                             .child(create_database_select_field(
-                                "排序规则",
+                                if is_postgres { "Locale" } else { "排序规则" },
                                 collation_select,
-                                "utf8mb4_unicode_ci",
+                                if is_postgres { "C" } else { "utf8mb4_unicode_ci" },
                                 running,
                                 colors,
                             ))
+                        })
+                        .when(is_postgres, |this| {
+                            this.child(create_database_text_field("Owner（可选）", owner_input, running, colors))
+                                .child(create_database_text_field("模板（可选）", template_input, running, colors))
                         }),
                 )
                 .child(div().h(px(1.)).bg(colors.border_soft))

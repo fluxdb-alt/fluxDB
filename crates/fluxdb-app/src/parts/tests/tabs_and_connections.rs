@@ -1472,6 +1472,8 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             name: "new_db".to_string(),
             charset: "utf8mb4".to_string(),
             collation: "utf8mb4_unicode_ci".to_string(),
+            owner: String::new(),
+            template: String::new(),
             path: None,
         }));
 
@@ -1530,6 +1532,8 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             name: "analytics".to_string(),
             charset: String::new(),
             collation: String::new(),
+            owner: String::new(),
+            template: String::new(),
             path: Some(attached_path.clone()),
         }));
 

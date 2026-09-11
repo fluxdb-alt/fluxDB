@@ -2,8 +2,14 @@
 pub struct CreateDatabaseRequest {
     pub connection_id: ConnectionId,
     pub name: String,
+    /// MySQL 字符集；PostgreSQL 作 ENCODING。
     pub charset: String,
+    /// MySQL 排序规则；PostgreSQL 作 LC_COLLATE/LC_CTYPE。
     pub collation: String,
+    /// PostgreSQL OWNER（可选，空则不指定）。
+    pub owner: String,
+    /// PostgreSQL TEMPLATE（可选，空则不指定）。
+    pub template: String,
     pub path: Option<PathBuf>,
 }
 

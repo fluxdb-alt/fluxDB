@@ -511,6 +511,8 @@ impl Render for NavicatMain {
                     self.create_database_name_input.clone(),
                     self.create_database_charset_select.clone(),
                     self.create_database_collation_select.clone(),
+                    self.create_database_owner_input.clone(),
+                    self.create_database_template_input.clone(),
                     running,
                     self.focus_handle.clone(),
                     colors,

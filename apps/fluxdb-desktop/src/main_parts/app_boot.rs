@@ -142,6 +142,40 @@ fn main() {
                                 cx,
                             )
                         });
+                        let create_database_owner_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("Owner，如 report_reader"));
+                        let create_database_owner_subscription = cx.subscribe_in(
+                            &create_database_owner_input,
+                            window,
+                            |this: &mut NavicatMain, input, event: &InputEvent, window, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(form) = &mut this.pending_create_database
+                                {
+                                    form.owner = input.read(cx).value().to_string();
+                                    cx.notify();
+                                }
+                                if matches!(event, InputEvent::PressEnter { .. }) {
+                                    this.confirm_create_database(window, cx);
+                                }
+                            },
+                        );
+                        let create_database_template_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("模板库，如 template0"));
+                        let create_database_template_subscription = cx.subscribe_in(
+                            &create_database_template_input,
+                            window,
+                            |this: &mut NavicatMain, input, event: &InputEvent, window, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(form) = &mut this.pending_create_database
+                                {
+                                    form.template = input.read(cx).value().to_string();
+                                    cx.notify();
+                                }
+                                if matches!(event, InputEvent::PressEnter { .. }) {
+                                    this.confirm_create_database(window, cx);
+                                }
+                            },
+                        );
                         let danger_table_foreign_key_check_select = cx.new(|cx| {
                             SelectState::new(
                                 SearchableVec::new(danger_table_foreign_key_check_options()),
@@ -2210,6 +2244,11 @@ fn main() {
                             create_database_collation_select,
                             _create_database_collation_select_subscription:
                                 create_database_collation_select_subscription,
+                            create_database_owner_input,
+                            _create_database_owner_subscription: create_database_owner_subscription,
+                            create_database_template_input,
+                            _create_database_template_subscription:
+                                create_database_template_subscription,
                             danger_table_foreign_key_check_select,
                             _danger_table_foreign_key_check_select_subscription:
                                 danger_table_foreign_key_check_select_subscription,

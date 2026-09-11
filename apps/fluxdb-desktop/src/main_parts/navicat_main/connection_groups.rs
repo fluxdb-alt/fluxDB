@@ -233,7 +233,7 @@ impl NavicatMain {
     fn handle_schema_menu_action(
         &mut self,
         action: SchemaMenuAction,
-        mut menu: SchemaContextMenu,
+        menu: SchemaContextMenu,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -732,7 +732,7 @@ impl NavicatMain {
         };
         if !matches!(
             connection.config.kind,
-            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Sqlite
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Sqlite | DatabaseKind::Postgres
         ) {
             self.show_message(
                 "当前连接类型暂不支持新建数据库",
@@ -744,27 +744,37 @@ impl NavicatMain {
 
         self.connection_context_menu = None;
         self.group_context_menu = None;
+        let is_postgres = connection.config.kind == DatabaseKind::Postgres;
         self.pending_create_database = Some(CreateDatabaseForm {
             connection_id,
             database_kind: connection.config.kind,
             database_name: String::new(),
-            charset: "utf8mb4".to_string(),
-            collation: "utf8mb4_unicode_ci".to_string(),
+            // PG：charset 即 ENCODING、collation 即 LC_COLLATE/LC_CTYPE(locale)。
+            charset: if is_postgres { "UTF8".to_string() } else { "utf8mb4".to_string() },
+            collation: if is_postgres { "C".to_string() } else { "utf8mb4_unicode_ci".to_string() },
+            owner: String::new(),
+            template: String::new(),
         });
         self.create_database_name_input.update(cx, |input, cx| {
             input.set_value(String::new(), window, cx);
             input.focus(window, cx);
         });
+        let charset_options = if is_postgres {
+            pg_create_database_encoding_options()
+        } else {
+            create_database_charset_options()
+        };
+        let collation_options = if is_postgres {
+            pg_locale_options().iter().map(|s| s.to_string()).collect()
+        } else {
+            create_database_collation_options("utf8mb4")
+        };
         self.create_database_charset_select.update(cx, |select, cx| {
-            select.set_items(SearchableVec::new(create_database_charset_options()), window, cx);
+            select.set_items(SearchableVec::new(charset_options), window, cx);
             select.set_selected_index(Some(IndexPath::new(0)), window, cx);
         });
         self.create_database_collation_select.update(cx, |select, cx| {
-            select.set_items(
-                SearchableVec::new(create_database_collation_options("utf8mb4")),
-                window,
-                cx,
-            );
+            select.set_items(SearchableVec::new(collation_options), window, cx);
             select.set_selected_index(Some(IndexPath::new(0)), window, cx);
         });
         cx.notify();
@@ -781,22 +791,32 @@ impl NavicatMain {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let collation = default_collation_for_charset(charset);
+        // PG：charset 即 ENCODING，collation 保持 PG locale 选项，不套用 MySQL 排序规则。
+        let is_postgres = self
+            .pending_create_database
+            .as_ref()
+            .is_some_and(|form| form.database_kind == DatabaseKind::Postgres);
+        let collation = if is_postgres {
+            "C".to_string()
+        } else {
+            default_collation_for_charset(charset).to_string()
+        };
         if let Some(form) = &mut self.pending_create_database {
             form.charset = charset.to_string();
-            form.collation = collation.to_string();
+            form.collation = collation.clone();
         }
         let charset_value = charset.to_string();
         self.create_database_charset_select.update(cx, |select, cx| {
             select.set_selected_value(&charset_value, window, cx);
         });
+        let collation_options = if is_postgres {
+            pg_locale_options().iter().map(|s| s.to_string()).collect()
+        } else {
+            create_database_collation_options(charset)
+        };
         self.create_database_collation_select.update(cx, |select, cx| {
-            select.set_items(
-                SearchableVec::new(create_database_collation_options(charset)),
-                window,
-                cx,
-            );
-            select.set_selected_value(&collation.to_string(), window, cx);
+            select.set_items(SearchableVec::new(collation_options), window, cx);
+            select.set_selected_value(&collation, window, cx);
         });
         cx.notify();
     }
@@ -841,24 +861,25 @@ impl NavicatMain {
             self.show_message("连接不存在", AppMessageKind::Error, cx);
             return;
         };
-        let needs_charset = matches!(
+        // MySQL/TiDB 需要 charset+collation；PG 需要 ENCODING+locale（复用 charset/collation 字段）。
+        let requires_charset = matches!(
             connection_config.kind,
-            DatabaseKind::MySql | DatabaseKind::TiDb
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Postgres
         );
-        let charset = if needs_charset {
+        let charset = if requires_charset {
             let charset = form.charset.trim().to_string();
             if charset.is_empty() {
-                self.show_message("请输入字符集", AppMessageKind::Warning, cx);
+                self.show_message("请输入编码/字符集", AppMessageKind::Warning, cx);
                 return;
             }
             charset
         } else {
             String::new()
         };
-        let collation = if needs_charset {
+        let collation = if requires_charset {
             let collation = form.collation.trim().to_string();
             if collation.is_empty() {
-                self.show_message("请输入排序规则", AppMessageKind::Warning, cx);
+                self.show_message("请输入排序规则/locale", AppMessageKind::Warning, cx);
                 return;
             }
             collation
@@ -885,6 +906,8 @@ impl NavicatMain {
                 .unwrap_or_else(|| database_name.clone()),
             charset,
             collation,
+            owner: form.owner.trim().to_string(),
+            template: form.template.trim().to_string(),
             path: sqlite_target.as_ref().map(|(_, path)| path.clone()),
         };
         self.create_database_running.insert(form.connection_id);

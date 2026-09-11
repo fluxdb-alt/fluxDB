@@ -901,6 +901,10 @@ struct NavicatMain {
     _create_database_charset_select_subscription: Subscription,
     create_database_collation_select: Entity<SelectState<SearchableVec<String>>>,
     _create_database_collation_select_subscription: Subscription,
+    create_database_owner_input: Entity<InputState>,
+    _create_database_owner_subscription: Subscription,
+    create_database_template_input: Entity<InputState>,
+    _create_database_template_subscription: Subscription,
     danger_table_foreign_key_check_select: Entity<SelectState<SearchableVec<String>>>,
     _danger_table_foreign_key_check_select_subscription: Subscription,
     rename_table_input: Entity<InputState>,
@@ -1821,6 +1825,10 @@ struct CreateDatabaseForm {
     charset: String,
     database_kind: DatabaseKind,
     collation: String,
+    /// PostgreSQL OWNER（可选）。
+    owner: String,
+    /// PostgreSQL TEMPLATE（可选）。
+    template: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

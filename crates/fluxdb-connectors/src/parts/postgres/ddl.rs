@@ -54,7 +54,33 @@ fn pg_create_database_sql(request: &CreateDatabaseRequest) -> fluxdb_core::Resul
         statement.push_str(&format!(" LC_COLLATE '{collation}' LC_CTYPE '{collation}'"));
     }
 
+    // OWNER：角色名按标识符引用（非 schema 限定；空不指定）。
+    let owner = request.owner.trim();
+    if !owner.is_empty() {
+        if !is_pg_identifier_name(owner) {
+            return Err(Error::new(ErrorKind::Query, "数据库 owner 名称不合法"));
+        }
+        statement.push_str(&format!(" OWNER {}", pg_quote_identifier(owner)));
+    }
+
+    // TEMPLATE：模板库名按标识符引用（空不指定）。
+    let template = request.template.trim();
+    if !template.is_empty() {
+        if !is_pg_identifier_name(template) {
+            return Err(Error::new(ErrorKind::Query, "数据库模板名称不合法"));
+        }
+        statement.push_str(&format!(" TEMPLATE {}", pg_quote_identifier(template)));
+    }
+
     Ok(statement)
+}
+
+/// 角色/模板库名校验：纯标识符（字母/数字/下划线/`$`），阻止注入空格/引号/分号。
+fn is_pg_identifier_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
 }
 
 /// 编码名校验：字母/数字/下划线（UTF8、SQL_ASCII、LATIN1 等）。

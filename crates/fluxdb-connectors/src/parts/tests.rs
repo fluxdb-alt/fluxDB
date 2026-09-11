@@ -1475,6 +1475,8 @@ mod tests {
             name: "app-db".to_string(),
             charset: "utf8mb4".to_string(),
             collation: "utf8mb4_unicode_ci".to_string(),
+            owner: String::new(),
+            template: String::new(),
             path: None,
         })
         .unwrap();
@@ -1489,6 +1491,8 @@ mod tests {
             name: "app".to_string(),
             charset: "utf8mb4;drop".to_string(),
             collation: "utf8mb4_unicode_ci".to_string(),
+            owner: String::new(),
+            template: String::new(),
             path: None,
         });
         assert!(result.is_err());
@@ -1532,6 +1536,8 @@ mod tests {
             name: "created".to_string(),
             charset: String::new(),
             collation: String::new(),
+            owner: String::new(),
+            template: String::new(),
             path: Some(path.clone()),
         };
 
@@ -3361,6 +3367,8 @@ SELECT item_id, name FROM audit_log;"
             name: "app-db".to_string(),
             charset: "UTF8".to_string(),
             collation: "zh_CN.UTF-8".to_string(),
+            owner: String::new(),
+            template: String::new(),
             path: None,
         };
         assert_eq!(
@@ -3371,8 +3379,23 @@ SELECT item_id, name FROM audit_log;"
         // 空名称拒绝；含引号/分号的 locale 拒绝（防注入）。
         let bad_name = CreateDatabaseRequest { name: "  ".into(), ..request.clone() };
         assert!(pg_create_database_sql(&bad_name).is_err());
-        let bad_col = CreateDatabaseRequest { collation: "zh_CN'; DROP SCHEMA public; --".into(), ..request };
+        let bad_col = CreateDatabaseRequest { collation: "zh_CN'; DROP SCHEMA public; --".into(), ..request.clone() };
         assert!(pg_create_database_sql(&bad_col).is_err());
+
+        // OWNER / TEMPLATE 按标识符引用生成；name 里带引号/分号、owner 带空格均拒绝。
+        let with_owner_template = CreateDatabaseRequest {
+            owner: "report_reader".into(),
+            template: "template0".into(),
+            ..request.clone()
+        };
+        assert_eq!(
+            pg_create_database_sql(&with_owner_template).unwrap(),
+            "CREATE DATABASE \"app-db\" ENCODING 'UTF8' LC_COLLATE 'zh_CN.UTF-8' LC_CTYPE 'zh_CN.UTF-8' OWNER \"report_reader\" TEMPLATE \"template0\""
+        );
+        let bad_owner = CreateDatabaseRequest { owner: "r; DROP".into(), ..request.clone() };
+        assert!(pg_create_database_sql(&bad_owner).is_err());
+        let bad_template = CreateDatabaseRequest { template: "t x".into(), ..request };
+        assert!(pg_create_database_sql(&bad_template).is_err());
     }
 
     #[test]
@@ -3404,6 +3427,8 @@ SELECT item_id, name FROM audit_log;"
             name: "t07_db".to_string(),
             charset: "UTF8".to_string(),
             collation: String::new(),
+            owner: String::new(),
+            template: String::new(),
             path: None,
         };
         connector.create_database(&create).expect("建库应成功");
