@@ -429,3 +429,46 @@ fn postgres_design_drops_index_with_schema_qualification() {
         "{statements:#?}"
     );
 }
+
+/// §9.2：约束/触发器的删除走 PG 的 DROP CONSTRAINT / DROP TRIGGER ON。
+#[test]
+fn postgres_design_drops_constraints_and_triggers() {
+    let mut create = postgres_design_state();
+    if let CreateTableMode::Design { original, .. } = &mut create.mode {
+        original.foreign_keys = vec![CreateTableForeignKey {
+            id: 1,
+            name: "fk_orders_customer".to_string(),
+            columns: vec!["note".to_string()],
+            referenced_database: "sales".to_string(),
+            referenced_table: "customers".to_string(),
+            referenced_columns: vec!["id".to_string()],
+            referenced_column_options: LoadState::Loaded(vec!["id".to_string()]),
+            on_delete: String::new(),
+            on_update: String::new(),
+        }];
+        original.checks = vec![CreateTableCheck {
+            id: 1,
+            name: "ck_orders_note".to_string(),
+            expression: "note <> ''".to_string(),
+            not_enforced: false,
+        }];
+        original.triggers = vec![CreateTableTrigger {
+            id: 1,
+            name: "trg_orders".to_string(),
+            timing: "BEFORE".to_string(),
+            event: "INSERT".to_string(),
+            body: "audit_row".to_string(),
+        }];
+    }
+
+    let statements = postgres_design_statements(&create).expect("删除约束应成功");
+    assert_eq!(
+        statements,
+        vec![
+            "ALTER TABLE \"sales\".\"orders\" DROP CONSTRAINT \"fk_orders_customer\";".to_string(),
+            "ALTER TABLE \"sales\".\"orders\" DROP CONSTRAINT \"ck_orders_note\";".to_string(),
+            "DROP TRIGGER \"trg_orders\" ON \"sales\".\"orders\";".to_string(),
+        ],
+        "约束与触发器删除应按 PG 语法生成：{statements:#?}"
+    );
+}
