@@ -249,6 +249,9 @@ pub struct CompletionRoutine {
     pub schema: Option<String>,
     pub name: String,
     pub kind: CompletionRoutineKind,
+    /// 签名 / identity arguments（PG `pg_get_function_identity_arguments`）。
+    /// 用于区分同 schema 同名重载：同名不同签名是不同候选，不能合并（§8.4）；MySQL 为 None。
+    pub signature: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

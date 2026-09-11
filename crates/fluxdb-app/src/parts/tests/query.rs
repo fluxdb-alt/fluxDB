@@ -299,17 +299,63 @@
     }
 
     #[test]
+    fn table_completion_items_qualifies_cross_schema_duplicates() {
+        let tables = vec![
+            CompletionTable {
+                database: Some("db".into()),
+                schema: Some("t14_a".into()),
+                name: "orders".into(),
+                kind: ObjectKind::Table,
+            },
+            CompletionTable {
+                database: Some("db".into()),
+                schema: Some("t14_b".into()),
+                name: "orders".into(),
+                kind: ObjectKind::Table,
+            },
+            CompletionTable {
+                database: Some("db".into()),
+                schema: Some("t14_a".into()),
+                name: "users".into(),
+                kind: ObjectKind::View,
+            },
+        ];
+        let items = table_completion_items(tables, "");
+        // 同名跨 schema：label 与 apply 文本都带 schema 前缀，避免插错对象。
+        let dup: Vec<_> = items
+            .iter()
+            .filter(|item| item.label.ends_with(".orders"))
+            .collect();
+        assert_eq!(dup.len(), 2, "两个同名表应分别成条：{items:#?}");
+        assert!(
+            dup.iter().any(|item| item.insert_text == "t14_a.orders")
+                && dup.iter().any(|item| item.insert_text == "t14_b.orders"),
+            "同名表 apply 文本应带 schema：{dup:#?}"
+        );
+        // 唯一表名保持裸名，detail 仍显示所属 schema，便于确认来源。
+        let users = items
+            .iter()
+            .find(|item| item.label == "users")
+            .expect("唯一表名应保持裸名");
+        assert_eq!(users.insert_text, "users");
+        assert_eq!(users.detail.as_deref(), Some("db.t14_a"));
+        assert_eq!(users.kind, QueryCompletionKind::View);
+    }
+
+    #[test]
     fn routine_completion_items_function_and_procedure() {
         let routines = vec![
             CompletionRoutine {
                 schema: None,
                 name: "calc_total".into(),
                 kind: CompletionRoutineKind::Function,
+                signature: None,
             },
             CompletionRoutine {
                 schema: None,
                 name: "do_thing".into(),
                 kind: CompletionRoutineKind::Procedure,
+                signature: None,
             },
         ];
         // 函数无参数 metadata 时插入 name()，kind 为 Function。

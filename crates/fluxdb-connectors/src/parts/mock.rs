@@ -214,11 +214,13 @@ impl Connector for MockConnector {
                 schema: None,
                 name: "refresh_product".to_string(),
                 kind: CompletionRoutineKind::Procedure,
+                signature: None,
             },
             CompletionRoutine {
                 schema: None,
                 name: "normalize_price".to_string(),
                 kind: CompletionRoutineKind::Function,
+                signature: None,
             },
         ]
         .into_iter()

@@ -2465,6 +2465,10 @@ fn function_completion_items_for(
     items
 }
 
+/// 表候选（P1.5 + §8.4 跨 schema 消歧）。
+///
+/// 同表名出现在多个 schema（PG search_path 多段）时，label 与 apply 文本加 `schema.` 前缀区分，
+/// 唯一表名保持裸名；`detail` 始终展示所属 schema/库，便于用户确认来源。
 fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<QueryCompletionItem> {
     let mut tables = tables
         .into_iter()
@@ -2478,7 +2482,22 @@ fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<Que
                     .to_ascii_lowercase()
                     .cmp(&right.name.to_ascii_lowercase())
             })
+            .then_with(|| {
+                left.schema
+                    .as_deref()
+                    .unwrap_or_default()
+                    .cmp(right.schema.as_deref().unwrap_or_default())
+            })
     });
+
+    // 同表名跨 schema 计数：仅当同名出现在多个不同 schema/库时才加限定前缀。
+    let mut owners: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for table in &tables {
+        owners
+            .entry(table.name.clone())
+            .or_default()
+            .insert(table.schema.clone().or_else(|| table.database.clone()).unwrap_or_default());
+    }
 
     tables
         .into_iter()
@@ -2488,18 +2507,43 @@ fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<Que
             } else {
                 QueryCompletionKind::Table
             };
-            QueryCompletionItem {
-                label: table.name.clone(),
-                insert_text: table.name,
-                kind,
-                detail: table
+            let namespace = table
+                .schema
+                .clone()
+                .or_else(|| table.database.clone())
+                .unwrap_or_default();
+            let ambiguous = owners
+                .get(&table.name)
+                .is_some_and(|set| set.len() > 1)
+                && !namespace.is_empty();
+            let detail = match table.schema.clone() {
+                Some(schema) => Some(match table.database.clone() {
+                    Some(database) => format!("{database}.{schema}"),
+                    None => schema,
+                }),
+                None => table
                     .database
+                    .clone()
                     .or_else(|| Some(completion_kind_label(kind).to_string())),
+            };
+            let (label, insert_text) = if ambiguous {
+                (
+                    format!("{namespace}.{}", table.name),
+                    format!("{namespace}.{}", table.name),
+                )
+            } else {
+                (table.name.clone(), table.name)
+            };
+            QueryCompletionItem {
+                label,
+                insert_text,
+                kind,
+                detail,
                 documentation: None,
                 filter_text: None,
                 sort_text: None,
-                            ..Default::default()
-}
+                ..Default::default()
+            }
         })
         .collect()
 }

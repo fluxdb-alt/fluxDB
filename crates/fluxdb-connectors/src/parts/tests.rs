@@ -4633,4 +4633,136 @@ SELECT item_id, name FROM audit_log;"
             .to_string();
         connector.execute(&cleanup).expect("清理临时结构应成功");
     }
+
+    /// T14 验收：search_path 跟随服务器有效顺序，不硬编码 public；显式 schema 可跨 schema；
+    /// 同表名跨 schema 时列按 search_path 首个可见 schema 解析，不串列。
+    #[test]
+    fn pg_live_smoke_completion_search_path_and_cross_schema() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T14 冒烟");
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP SCHEMA IF EXISTS t14_sa CASCADE; \
+            DROP SCHEMA IF EXISTS t14_sb CASCADE; \
+            CREATE SCHEMA t14_sa; \
+            CREATE SCHEMA t14_sb; \
+            CREATE TABLE t14_sa.t14_dup(a_id int); \
+            CREATE TABLE t14_sb.t14_dup(b_id int, b_note text); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建 schema/表应成功");
+
+        // 1) 无显式 schema：范围来自服务器 search_path。默认 search_path 不含 t14_sa/t14_sb，
+        //    故这两个 schema 的对象不应出现（证明未硬编码 public 之外的假设，也不扫全库）。
+        let default_scope = connector
+            .list_completion_tables(Some(&db_name), None, "t14_", 50)
+            .expect("默认 search_path 表补全应成功");
+        assert!(
+            !default_scope
+                .iter()
+                .any(|t| t.schema.as_deref() == Some("t14_sa")),
+            "默认 search_path 不含 t14_sa，不应返回其对象：{:#?}",
+            default_scope
+        );
+
+        // 2) 档案默认 schema = t14_sb：会话 search_path 生效后，该 schema 对象可见。
+        let mut sb_config = config.clone();
+        if let Some(profile) = sb_config.postgres_profile.as_mut() {
+            profile.scope.default_schema = "t14_sb".to_string();
+        }
+        let sb_connector = PostgresConnector::with_config(sb_config);
+        let sb_tables = sb_connector
+            .list_completion_tables(Some(&db_name), None, "t14_dup", 50)
+            .expect("按档案默认 schema 的表补全应成功");
+        assert!(
+            sb_tables
+                .iter()
+                .any(|t| t.name == "t14_dup" && t.schema.as_deref() == Some("t14_sb")),
+            "search_path=t14_sb 应命中 t14_sb.t14_dup：{:#?}",
+            sb_tables
+        );
+
+        // 3) 同表名跨 schema：列按 search_path 首个可见 schema 解析（t14_sb 的 b_* 列）。
+        let sb_columns = sb_connector
+            .list_completion_columns(Some(&db_name), None, "t14_dup")
+            .expect("按 search_path 的列补全应成功");
+        let sb_names: Vec<&str> = sb_columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            sb_names,
+            vec!["b_id", "b_note"],
+            "列应取 search_path 首个可见 schema：{sb_names:?}"
+        );
+        assert!(
+            sb_columns
+                .iter()
+                .all(|c| c.schema.as_deref() == Some("t14_sb")),
+            "列必须带真实 schema，不串列：{:#?}",
+            sb_columns
+        );
+
+        // 4) 显式跨 schema：显式指定 t14_sa 时返回该 schema 的对象与列。
+        let sa_tables = connector
+            .list_completion_tables(Some(&db_name), Some("t14_sa"), "t14_dup", 50)
+            .expect("显式 schema 的表补全应成功");
+        assert!(
+            sa_tables
+                .iter()
+                .any(|t| t.name == "t14_dup" && t.schema.as_deref() == Some("t14_sa")),
+            "显式 schema 应返回 t14_sa.t14_dup：{:#?}",
+            sa_tables
+        );
+        let sa_columns = connector
+            .list_completion_columns(Some(&db_name), Some("t14_sa"), "t14_dup")
+            .expect("显式 schema 的列补全应成功");
+        assert_eq!(
+            sa_columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a_id"],
+            "显式 schema 应返回该 schema 的列：{:#?}",
+            sa_columns
+        );
+
+        // 5) 多段 search_path 顺序：`t14_sa, t14_sb` 时同名表两 schema 都可见，
+        //    但顺序由 search_path 决定（sa 在前），列则只取首个可见 schema。
+        let mut ordered_config = config.clone();
+        if let Some(profile) = ordered_config.postgres_profile.as_mut() {
+            profile.scope.default_schema = "t14_sa, t14_sb".to_string();
+        }
+        let ordered_connector = PostgresConnector::with_config(ordered_config);
+        let ordered = ordered_connector
+            .list_completion_tables(Some(&db_name), None, "t14_dup", 50)
+            .expect("多段 search_path 表补全应成功");
+        let ordered_schemas: Vec<&str> = ordered
+            .iter()
+            .map(|t| t.schema.as_deref().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            ordered_schemas,
+            vec!["t14_sa", "t14_sb"],
+            "schema 顺序应跟随 search_path：{ordered_schemas:?}"
+        );
+        let ordered_columns = ordered_connector
+            .list_completion_columns(Some(&db_name), None, "t14_dup")
+            .expect("多段 search_path 列补全应成功");
+        assert!(
+            ordered_columns
+                .iter()
+                .all(|c| c.schema.as_deref() == Some("t14_sa")),
+            "同名表列应只取首个可见 schema(t14_sa)：{:#?}",
+            ordered_columns
+        );
+
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP SCHEMA IF EXISTS t14_sa CASCADE; DROP SCHEMA IF EXISTS t14_sb CASCADE;"
+            .to_string();
+        connector.execute(&cleanup).expect("清理临时 schema 应成功");
+    }
 }

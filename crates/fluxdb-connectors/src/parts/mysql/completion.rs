@@ -281,6 +281,8 @@ fn mysql_completion_routines_with_cancel(
                     } else {
                         CompletionRoutineKind::Function
                     },
+                    // MySQL information_schema.routines 无参数签名，按设计保持可空。
+                    signature: None,
                 })
             })
             .collect()

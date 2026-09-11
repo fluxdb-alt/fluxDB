@@ -150,10 +150,22 @@ async fn pg_connect(config: &ConnectionConfig, database: &str) -> fluxdb_core::R
         })??;
 
     if !default_schema.is_empty() {
-        client
-            .execute("SET search_path TO $1", &[&default_schema])
-            .await
-            .map_err(pg_error)?;
+        // SET 是 utility 语句，不接受 $n 参数（服务端会报 syntax error at or near "$1"），
+        // 故按标识符转义后拼装；schema 名一律经 pg_quote_identifier 处理，不裸拼用户输入。
+        // 支持逗号分隔的 schema 顺序（如 `a,public`），逐段转义后按序设置。
+        let path = default_schema
+            .split(',')
+            .map(str::trim)
+            .filter(|schema| !schema.is_empty())
+            .map(pg_quote_identifier)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !path.is_empty() {
+            client
+                .batch_execute(&format!("SET search_path TO {path}"))
+                .await
+                .map_err(pg_error)?;
+        }
     }
 
     Ok(PgSession {
