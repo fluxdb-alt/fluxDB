@@ -189,7 +189,7 @@ fn table_group_menu_item(
     menu: TableGroupContextMenu,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> Div {
+) -> Stateful<Div> {
     table_inert_menu_item(label, icon, false, colors).on_mouse_down(
         MouseButton::Left,
         cx.listener(move |this, _, window, cx| {
@@ -274,7 +274,7 @@ fn table_folder_menu_item(
     menu: TableFolderContextMenu,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> Div {
+) -> Stateful<Div> {
     table_inert_menu_item(label, icon, destructive, colors).on_mouse_down(
         MouseButton::Left,
         cx.listener(move |this, _, window, cx| {
@@ -543,17 +543,19 @@ fn table_folder_assignment_item(
     menu: &TableContextMenu,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> Div {
+) -> impl IntoElement {
     let folder = folder.to_string();
     let parent_key = parent_key.to_string();
     let object_path = menu.object_path.clone();
-    table_inert_menu_item(&folder, AppIcon::Folder, false, colors).on_mouse_down(
-        MouseButton::Left,
-        cx.listener(move |this, _, _, cx| {
-            this.assign_table_to_folder(object_path.clone(), parent_key.clone(), folder.clone(), cx);
-            cx.stop_propagation();
-        }),
-    )
+    table_inert_menu_item(&folder, AppIcon::Folder, false, colors)
+        .id(SharedString::from(format!("table-folder-assignment:{folder}")))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                this.assign_table_to_folder(object_path.clone(), parent_key.clone(), folder.clone(), cx);
+                cx.stop_propagation();
+            }),
+        )
 }
 
 fn table_submenu_shell(top: Pixels, colors: UiColors) -> Div {
@@ -590,7 +592,7 @@ fn table_menu_item(
     menu: &TableContextMenu,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> Div {
+) -> Stateful<Div> {
     let object_path = menu.object_path.clone();
     let action_path = menu.object_path.clone();
     table_inert_menu_item(label, icon, destructive, colors)
@@ -616,7 +618,7 @@ fn table_menu_submenu_item(
     menu: &TableContextMenu,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> Div {
+) -> Stateful<Div> {
     let object_path = menu.object_path.clone();
     table_inert_menu_item(label, icon, false, colors)
         .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -633,7 +635,7 @@ fn table_submenu_action_item(
     menu: &TableContextMenu,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> Div {
+) -> Stateful<Div> {
     let action_path = menu.object_path.clone();
     table_inert_menu_item(label, icon, false, colors).on_mouse_down(
         MouseButton::Left,
@@ -649,9 +651,13 @@ fn table_inert_menu_item(
     icon: AppIcon,
     destructive: bool,
     colors: UiColors,
-) -> Div {
+) -> Stateful<Div> {
     let label = label.into();
+    // 现有菜单由主窗口管理焦点和子菜单；PopupMenu 迁移需整体切换该生命周期，
+    // ListItem 又内置 hover 样式，无法直接保留 UiColors。此次仅修复已有元素身份。
+    // 稳定 ID 使框架按 hover 进出更新，子菜单的 bubble 拦截不影响 Capture。
     div()
+        .id(SharedString::from(format!("table-menu-item:{label}")))
         .h(px(26.))
         .rounded(colors.radius)
         .px_2()
