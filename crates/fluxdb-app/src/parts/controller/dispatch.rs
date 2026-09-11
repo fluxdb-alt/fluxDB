@@ -2638,13 +2638,14 @@ impl AppController {
                 }
             }
             AppCommand::ExecuteQuery(tab_id) => {
+                let options = self.default_query_execution_options();
                 let request = self.find_tab(tab_id).and_then(|tab| match &tab.kind {
                     TabKind::QueryEditor(editor) => Some(QueryRequest {
                         connection_id: editor.connection_id,
                         database: editor.database.clone(),
-                        text: sql_text_for_execution(&editor.text),
+                        text: sql_text_for_execution(&editor.text, options.page_size),
                         mode: fluxdb_core::QueryMode::All,
-                        options: self.default_query_execution_options(),
+                        options,
                     }),
                     _ => None,
                 });
@@ -2705,7 +2706,7 @@ impl AppController {
                     TabKind::QueryEditor(editor) => Some(QueryRequest {
                         connection_id: editor.connection_id,
                         database: editor.database.clone(),
-                        text: sql_text_for_execution(&text),
+                        text: sql_text_for_execution(&text, options.page_size),
                         mode: fluxdb_core::QueryMode::Selection,
                         options,
                     }),
@@ -2799,7 +2800,7 @@ impl AppController {
                         Some(QueryRequest {
                             connection_id: editor.connection_id,
                             database: editor.database.clone(),
-                            text: sql_text_for_execution(&editor.text),
+                            text: sql_text_for_execution(&editor.text, Pagination::DEFAULT_LIMIT),
                             mode: fluxdb_core::QueryMode::All,
                             options: QueryExecutionOptions::default(),
                         })
@@ -3556,7 +3557,9 @@ impl AppController {
 impl AppController {
     fn default_query_execution_options(&self) -> QueryExecutionOptions {
         QueryExecutionOptions {
-            page_size: Pagination::new(0, self.state.settings.page_size).limit,
+            // 直接透传 page_size：0 表示「不限制」，不能经 Pagination::new 的
+            // clamp(1, MAX) 被改成 1。
+            page_size: self.state.settings.page_size,
             ..QueryExecutionOptions::default()
         }
     }
