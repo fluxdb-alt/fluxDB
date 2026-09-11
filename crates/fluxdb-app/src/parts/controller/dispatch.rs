@@ -425,6 +425,27 @@ impl AppController {
                     Err(error) => self.fail(error),
                 }
             }
+            AppCommand::CreateSchema {
+                connection_id,
+                schema,
+            } => {
+                let Some(connection) = self
+                    .state
+                    .connections
+                    .iter_mut()
+                    .find(|connection| connection.config.id == connection_id)
+                else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                let config = connection.config.clone();
+                if let Err(error) =
+                    create_schema_for_connection(&config, connection_id, schema.as_str())
+                {
+                    return self.fail(error);
+                }
+                // 建 schema 成功后通知 UI 失效该库 schema 缓存并重取（见 SchemaCreated 消费点）。
+                AppEvent::SchemaCreated { connection_id, schema }
+            }
             AppCommand::DeleteDatabase {
                 connection_id,
                 database,

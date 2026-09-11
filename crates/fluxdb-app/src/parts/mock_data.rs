@@ -159,6 +159,27 @@ fn create_database_for_connection(
     }
 }
 
+fn create_schema_for_connection(
+    config: &ConnectionConfig,
+    connection_id: ConnectionId,
+    schema: &str,
+) -> fluxdb_core::Result<()> {
+    if config
+        .options
+        .get("demo")
+        .is_some_and(|value| value == "true")
+    {
+        return MockConnector::new(config.kind).create_schema(connection_id, schema);
+    }
+
+    match config.kind {
+        DatabaseKind::Postgres => {
+            PostgresConnector::with_config(config.clone()).create_schema(connection_id, schema)
+        }
+        _ => MockConnector::new(config.kind).create_schema(connection_id, schema),
+    }
+}
+
 fn delete_database_for_connection(
     config: &ConnectionConfig,
     connection_id: ConnectionId,

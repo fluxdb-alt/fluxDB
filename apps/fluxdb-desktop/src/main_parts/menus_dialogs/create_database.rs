@@ -233,6 +233,149 @@ fn create_database_header(colors: UiColors, cx: &mut Context<NavicatMain>) -> im
         )
 }
 
+/// 新建 PostgreSQL schema 弹框：仅一个名称输入 + 执行/取消。
+fn create_schema_modal(
+    database_name: String,
+    name_input: Entity<InputState>,
+    running: bool,
+    focus_handle: FocusHandle,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> impl IntoElement {
+    let can_submit = !running;
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .occlude()
+        .bg(if colors.is_dark {
+            hsla(220. / 360., 0.12, 0.08, 0.54)
+        } else {
+            hsla(210. / 360., 0.20, 0.20, 0.16)
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.cancel_create_schema_modal(cx);
+                cx.stop_propagation();
+            }),
+        )
+        .child(
+            div()
+                .w(px(420.))
+                .rounded(colors.radius_lg)
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.panel_bg)
+                .shadow(vec![box_shadow(
+                    px(0.),
+                    px(18.),
+                    px(42.),
+                    px(0.),
+                    hsla(0., 0., 0., if colors.is_dark { 0.42 } else { 0.18 }),
+                )])
+                .text_color(colors.text)
+                .track_focus(&focus_handle)
+                .key_context("CreateSchemaModal")
+                .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
+                    this.cancel_create_schema_modal(cx);
+                    cx.stop_propagation();
+                }))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(create_schema_header(database_name, colors, cx))
+                .child(
+                    div()
+                        .px_5()
+                        .pb_5()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(create_database_text_field(
+                            "schema 名称",
+                            name_input,
+                            running,
+                            colors,
+                        )),
+                )
+                .child(div().h(px(1.)).bg(colors.border_soft))
+                .child(
+                    div()
+                        .h(px(58.))
+                        .px_5()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("create-schema-cancel")
+                                .label("取消")
+                                .w(px(78.))
+                                .disabled(running)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.cancel_create_schema_modal(cx);
+                                    cx.stop_propagation();
+                                })),
+                        )
+                        .child(
+                            Button::new("create-schema-confirm")
+                                .label(if running { "执行中" } else { "执行" })
+                                .primary()
+                                .w(px(78.))
+                                .disabled(!can_submit)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.confirm_create_schema(window, cx);
+                                    cx.stop_propagation();
+                                })),
+                        ),
+                ),
+        )
+}
+
+fn create_schema_header(database_name: String, colors: UiColors, cx: &mut Context<NavicatMain>) -> impl IntoElement {
+    div()
+        .px_5()
+        .pt_4()
+        .pb_4()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(app_icon(AppIcon::Database, 16., colors.text))
+                .child(
+                    div()
+                        .text_size(px(17.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(format!("新建 schema · {database_name}")),
+                ),
+        )
+        .child(
+            div()
+                .size(px(28.))
+                .rounded(colors.radius)
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .justify_center()
+                .hover(move |style| style.bg(colors.hover))
+                .child(app_icon(AppIcon::Close, 15., colors.muted))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.cancel_create_schema_modal(cx);
+                        cx.stop_propagation();
+                    }),
+                ),
+        )
+}
+
 fn create_database_text_field(
     label: &'static str,
     input: Entity<InputState>,

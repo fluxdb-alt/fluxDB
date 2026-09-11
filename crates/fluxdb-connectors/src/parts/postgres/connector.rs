@@ -62,6 +62,16 @@ impl Connector for PostgresConnector {
         pg_delete_database(config, connection_id, database)
     }
 
+    fn create_schema(&self, connection_id: ConnectionId, schema: &str) -> fluxdb_core::Result<()> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 新建 schema 需要连接配置上下文",
+            ));
+        };
+        pg_create_schema(config, connection_id, schema)
+    }
+
     fn list_indexes(&self, path: &ObjectPath) -> fluxdb_core::Result<Vec<IndexInfo>> {
         let Some(config) = self.config.as_ref() else {
             return Err(Error::new(

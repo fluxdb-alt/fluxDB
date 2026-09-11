@@ -859,6 +859,10 @@ pub enum AppCommand {
     },
     DeleteConnection(ConnectionId),
     CreateDatabase(CreateDatabaseRequest),
+    CreateSchema {
+        connection_id: ConnectionId,
+        schema: String,
+    },
     DeleteDatabase {
         connection_id: ConnectionId,
         database: String,
@@ -1755,6 +1759,11 @@ pub enum AppEvent {
     /// 自动发现 / 连接串导入成功，弹框可据此预填一条 Redis 连接草稿。
     RedisConnectionDiscovered(ConnectionDraft),
     ObjectsLoaded(Option<ObjectPath>, Vec<ObjectSummary>),
+    /// schema 新建成功；UI 据此失效该库 schema 缓存并重取，使新 schema 出现在树。
+    SchemaCreated {
+        connection_id: ConnectionId,
+        schema: String,
+    },
     DataLoaded(TabId, DataPage),
     /// 惰性补齐无用的事件：元信息已由控制器合并进 `editor.page`，只用于通知 UI 续补下一批可见行。
     RedisKeyMetadataLoaded {

@@ -20,6 +20,9 @@ pub trait Connector {
     fn create_database(&self, _: &CreateDatabaseRequest) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持新建数据库"))
     }
+    fn create_schema(&self, _: ConnectionId, _: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持新建 schema"))
+    }
     fn delete_database(&self, _: ConnectionId, _: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持删除数据库"))
     }

@@ -122,6 +122,8 @@ enum DatabaseMenuAction {
     RedisCli,
     /// 打开 Redis Pub/Sub 会话（仅 Redis 数据库显示）。
     PubSub,
+    /// 新建 PostgreSQL schema（仅 PG 数据库显示）。
+    NewSchema,
 }
 
 /// PostgreSQL schema 右键菜单动作：全部 schema 作用域，不与数据库/表动作混淆。

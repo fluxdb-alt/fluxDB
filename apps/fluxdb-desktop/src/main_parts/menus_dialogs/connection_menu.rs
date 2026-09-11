@@ -196,6 +196,7 @@ fn database_context_menu(
     menu: DatabaseContextMenu,
     pinned_databases: &BTreeSet<String>,
     is_redis: bool,
+    is_postgres: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -321,6 +322,17 @@ fn database_context_menu(
                 colors,
                 cx,
             ))
+            .when(is_postgres, |this| {
+                this.child(database_menu_item(
+                    "新建 schema",
+                    "folder-open",
+                    false,
+                    DatabaseMenuAction::NewSchema,
+                    menu.clone(),
+                    colors,
+                    cx,
+                ))
+            })
             .child(database_menu_item(
                 "执行 SQL 文件",
                 "file-sql",

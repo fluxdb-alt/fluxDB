@@ -215,17 +215,24 @@ impl Render for NavicatMain {
                 this.child(connection_context_menu(menu, &state, colors, cx))
             })
             .when_some(self.database_context_menu.clone(), |this, menu| {
-                // Redis CLI 只对 Redis 连接下的数据库显示。
+                // Redis CLI 只对 Redis 连接下的数据库显示；新建 schema 只对 PostgreSQL 显示。
                 let is_redis = self
                     .controller
                     .state()
                     .connections
                     .iter()
                     .any(|c| c.config.id == menu.connection_id && c.config.kind == DatabaseKind::Redis);
+                let is_postgres = self
+                    .controller
+                    .state()
+                    .connections
+                    .iter()
+                    .any(|c| c.config.id == menu.connection_id && c.config.kind == DatabaseKind::Postgres);
                 this.child(database_context_menu(
                     menu,
                     &self.pinned_databases,
                     is_redis,
+                    is_postgres,
                     colors,
                     cx,
                 ))
@@ -519,6 +526,23 @@ impl Render for NavicatMain {
                     cx,
                 ))
             })
+            .when_some(
+                self.pending_create_schema.clone(),
+                |this, (_, database_path, _)| {
+                    let database_name = database_path
+                        .database
+                        .clone()
+                        .unwrap_or_else(|| database_path.name.clone());
+                    this.child(create_schema_modal(
+                        database_name,
+                        self.create_schema_name_input.clone(),
+                        self.create_schema_running,
+                        self.focus_handle.clone(),
+                        colors,
+                        cx,
+                    ))
+                },
+            )
             .when_some(self.pending_query_save, |this, tab_id| {
                 this.child(query_save_choice_modal(
                     tab_id,

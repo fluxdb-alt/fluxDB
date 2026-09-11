@@ -254,6 +254,21 @@ impl NavicatMain {
         })
     }
 
+    /// 新建 schema 成功后失效该库对象缓存并重取 schema 清单，使新 schema 出现在对象树。
+    fn invalidate_database_schema_cache(
+        &mut self,
+        database_path: &ObjectPath,
+        cx: &mut Context<Self>,
+    ) {
+        let database = database_path
+            .database
+            .clone()
+            .unwrap_or_else(|| database_path.name.clone());
+        let key = database_tree_key(database_path.connection_id, &database);
+        self.loaded_database_children.remove(&key);
+        self.load_database_children(database_path.clone(), key, cx);
+    }
+
     fn toggle_database_tree(
         &mut self,
         connection_id: ConnectionId,

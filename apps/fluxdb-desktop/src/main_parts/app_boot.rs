@@ -142,6 +142,23 @@ fn main() {
                                 cx,
                             )
                         });
+                        let create_schema_name_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("schema 名称"));
+                        let create_schema_name_subscription = cx.subscribe_in(
+                            &create_schema_name_input,
+                            window,
+                            |this: &mut NavicatMain, input, event: &InputEvent, window, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(pending) = &mut this.pending_create_schema
+                                {
+                                    pending.2 = input.read(cx).value().to_string();
+                                    cx.notify();
+                                }
+                                if matches!(event, InputEvent::PressEnter { .. }) {
+                                    this.confirm_create_schema(window, cx);
+                                }
+                            },
+                        );
                         let create_database_owner_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("Owner，如 report_reader"));
                         let create_database_owner_subscription = cx.subscribe_in(
@@ -2290,6 +2307,7 @@ fn main() {
                             _danger_table_task: None,
                             data_export_task_seq: 0,
                             _test_connection_task: None,
+                            _create_schema_task: None,
                             saving_connection: false,
                             _redis_discover_task: None,
                             redis_discovery_pending_sync: false,
@@ -2346,6 +2364,10 @@ fn main() {
                             display_database_show_system: false,
                             pending_create_database: None,
                             create_database_running: BTreeSet::new(),
+                            pending_create_schema: None,
+                            create_schema_running: false,
+                            create_schema_name_input,
+                            _create_schema_name_subscription: create_schema_name_subscription,
                             new_connection_target_group: None,
                             connecting_connections: BTreeSet::new(),
                             loading_databases: BTreeSet::new(),

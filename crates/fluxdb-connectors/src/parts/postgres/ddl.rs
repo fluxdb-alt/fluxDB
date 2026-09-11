@@ -100,6 +100,33 @@ fn is_pg_locale_name(value: &str) -> bool {
 
 /// 删库：连接维护库执行。PG 天然拒绝删“当前打开的库”；这里额外保护维护库，
 /// 且不追加 `WITH (FORCE)` —— 有活动连接的删库按 PG 默认 RESTRICT 语义失败。
+/// 建 schema：在维护数据库的独立 autocommit 连接执行 `CREATE SCHEMA "name"`。
+/// schema 名按标识符引用（允许带引号内外层），默认不带 AUTHORIZATION，owner 为当前连接用户。
+fn pg_create_schema(
+    config: &ConnectionConfig,
+    _connection_id: ConnectionId,
+    schema: &str,
+) -> fluxdb_core::Result<()> {
+    let schema = schema.trim();
+    if schema.is_empty() {
+        return Err(Error::new(ErrorKind::Query, "schema 名称不能为空"));
+    }
+    if !is_pg_identifier_name(schema) {
+        return Err(Error::new(ErrorKind::Query, "schema 名称不合法"));
+    }
+    let database = pg_request_database(config, None);
+    pg_runtime().block_on(async {
+        let session = pg_connect(config, &database).await?;
+        let sql = format!("CREATE SCHEMA {}", pg_quote_identifier(schema));
+        tracing::debug!(target: "fluxdb_connectors", "CREATE SCHEMA 执行");
+        session
+            .client
+            .batch_execute(&sql)
+            .await
+            .map_err(|error| pg_error(error))
+    })
+}
+
 fn pg_delete_database(
     config: &ConnectionConfig,
     connection_id: ConnectionId,

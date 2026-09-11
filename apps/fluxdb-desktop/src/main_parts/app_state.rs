@@ -944,6 +944,7 @@ struct NavicatMain {
     _danger_table_task: Option<Task<()>>,
     data_export_task_seq: u64,
     _test_connection_task: Option<Task<()>>,
+    _create_schema_task: Option<Task<()>>,
     /// 连接保存/测试期间为 `true`，用于绑定“测试”“保存并连接”按钮 loading/禁用。
     saving_connection: bool,
     /// Redis 连接串导入 / 云自动发现的异步任务。
@@ -1006,6 +1007,11 @@ struct NavicatMain {
     display_database_show_system: bool,
     pending_create_database: Option<CreateDatabaseForm>,
     create_database_running: BTreeSet<ConnectionId>,
+    /// 新建 schema 弹框：连接 id + 所属库 ObjectPath + schema 名。
+    pending_create_schema: Option<(ConnectionId, ObjectPath, String)>,
+    create_schema_running: bool,
+    create_schema_name_input: Entity<InputState>,
+    _create_schema_name_subscription: Subscription,
     new_connection_target_group: Option<ConnectionGroupId>,
     connecting_connections: BTreeSet<ConnectionId>,
     loading_databases: BTreeSet<String>,

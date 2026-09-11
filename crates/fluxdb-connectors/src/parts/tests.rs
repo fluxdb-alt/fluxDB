@@ -3405,6 +3405,37 @@ SELECT item_id, name FROM audit_log;"
     }
 
     /// 真实建/删库（T07 验收）：建库（charset/collation）→ 对象树可见 → 删库；维护库保护。
+    /// T20 建 schema：name 非法字符在连接前即拒绝（标识符白名单），合法名交由真实 PG 冒烟验证。
+    #[test]
+    fn pg_create_schema_rejects_untrusted_names_before_connect() {
+        let config = postgres_config();
+        for bad in ["  ", "a b", "a;DROP", "a'b"] {
+            assert!(
+                pg_create_schema(&config, ConnectionId(9), bad).is_err(),
+                "{bad:?} 应被拒绝"
+            );
+        }
+    }
+
+    /// 真实 PG：建 schema → 对象树 schema 清单可见 → 删除。
+    #[test]
+    fn pg_live_smoke_create_schema() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let name = format!("t20_smoke_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+        connector
+            .create_schema(config.id, &name)
+            .expect("建 schema 应成功");
+        // 删除该 schema（隔离测试环境清理）。
+        let remove = format!("DROP SCHEMA IF EXISTS \"{name}\"");
+        let mut req = pg_query_request(&config, None);
+        req.text = remove;
+        connector.execute(&req).expect("清理 schema 应成功");
+    }
+
     #[test]
     fn pg_live_smoke_create_delete_database() {
         let Some(params) = pg_smoke_params() else {

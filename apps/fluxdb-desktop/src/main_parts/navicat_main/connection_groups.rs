@@ -220,6 +220,9 @@ impl NavicatMain {
                     cx,
                 );
             }
+            DatabaseMenuAction::NewSchema => {
+                self.show_create_schema_modal(menu.database_path.clone(), window, cx);
+            }
             DatabaseMenuAction::FindInDatabase => {
                 self.show_message("在数据库中查找入口已就绪", AppMessageKind::Info, cx);
             }
@@ -782,6 +785,90 @@ impl NavicatMain {
 
     fn cancel_create_database_modal(&mut self, cx: &mut Context<Self>) {
         self.pending_create_database = None;
+        cx.notify();
+    }
+
+    fn show_create_schema_modal(
+        &mut self,
+        database_path: ObjectPath,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let connection_id = database_path.connection_id;
+        self.database_context_menu = None;
+        self.pending_create_schema = Some((connection_id, database_path, String::new()));
+        self.create_schema_name_input.update(cx, |input, cx| {
+            input.set_value(String::new(), window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn cancel_create_schema_modal(&mut self, cx: &mut Context<Self>) {
+        self.pending_create_schema = None;
+        cx.notify();
+    }
+
+    fn confirm_create_schema(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some((connection_id, database_path, schema)) = self.pending_create_schema.clone() else {
+            return;
+        };
+        let schema = schema.trim().to_string();
+        if schema.is_empty() {
+            self.show_message("请输入 schema 名称", AppMessageKind::Warning, cx);
+            return;
+        }
+        if self.create_schema_running {
+            self.show_message("正在新建 schema", AppMessageKind::Warning, cx);
+            return;
+        }
+        self.create_schema_running = true;
+        let schema_display = schema.clone();
+        let database_path_display = database_path.clone();
+        let mut controller = self.controller.clone();
+        let task = cx.spawn(async move |view, cx| {
+            let (_, event) = cx
+                .background_spawn(async move {
+                    let event = controller.dispatch(AppCommand::CreateSchema {
+                        connection_id,
+                        schema: schema.clone(),
+                    });
+                    (controller, event)
+                })
+                .await;
+            let _ = cx.update(|cx| {
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| {
+                    this.create_schema_running = false;
+                    match &event {
+                        AppEvent::SchemaCreated { connection_id: _, schema: _ } => {
+                            // 成功后失效该库 schema 缓存并重取：清 loaded 标记，触发重载。
+                            this.invalidate_database_schema_cache(&database_path_display, cx);
+                            this.show_message(
+                                format!("schema `{schema_display}` 创建成功"),
+                                AppMessageKind::Success,
+                                cx,
+                            );
+                            this.pending_create_schema = None;
+                        }
+                        AppEvent::Failed(error) => {
+                            this.show_message(
+                                format!("新建 schema 失败：{}", error.message),
+                                AppMessageKind::Error,
+                                cx,
+                            );
+                        }
+                        _ => {
+                            this.show_message("新建 schema 失败", AppMessageKind::Error, cx);
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+        });
+        self._create_schema_task = Some(task);
         cx.notify();
     }
 
