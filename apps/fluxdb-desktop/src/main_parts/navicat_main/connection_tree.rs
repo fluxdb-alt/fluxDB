@@ -305,6 +305,16 @@ impl NavicatMain {
         self.loading_databases.insert(database_key.clone());
         let mut controller = self.controller.clone();
         let task_key = database_key.clone();
+        // 生命周期防旧响应写回：记录发起时的连接 id 与 config，完成时若连接已不存在/已断开/
+        // 配置已变更（断开、重连、改配置），则丢弃迟到响应，不 merge 覆盖新状态。
+        let connection_id_for_stale = database_path.connection_id;
+        let stale_guard_config = self
+            .controller
+            .state()
+            .connections
+            .iter()
+            .find(|c| c.config.id == connection_id_for_stale)
+            .map(|c| c.config.clone());
         let task = cx.spawn(async move |view, cx| {
             let (controller, event) = cx
                 .background_spawn(async move {
@@ -319,9 +329,19 @@ impl NavicatMain {
                 };
                 view.update(cx, |this, cx| {
                     let loaded = if let AppEvent::ObjectsLoaded(Some(parent), objects) = &event {
-                        this.controller
-                            .merge_loaded_children(parent, objects.clone());
-                        true
+                        // 旧响应防覆盖：连接仍存在、仍连接、config 未变时才允许合并。
+                        let still_valid = this.controller.is_connection_load_current(
+                            connection_id_for_stale,
+                            stale_guard_config.as_ref(),
+                        );
+                        if still_valid {
+                            this.controller
+                                .merge_loaded_children(parent, objects.clone());
+                            true
+                        } else {
+                            // 连接已断开/删除/配置变更：丢弃迟到响应，不写回。
+                            false
+                        }
                     } else {
                         this.controller.merge_last_error_from(&controller);
                         false

@@ -1721,6 +1721,60 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         assert_eq!(controller.state().active_tab, Some(TabId(2)));
     }
 
+    /// 生命周期旧响应防覆盖：断开、重连、改配置、删对象后的迟到加载不得写回。
+    /// 单飞只防同 key 并发；这些场景由 connection_load_is_current 的「存在+连接+config 一致」判定兜底。
+    #[test]
+    fn stale_object_load_dropped_after_disconnect_reconnect_or_config_change() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenConnection(ConnectionId(1))); // connected = true
+        let expected = controller.state().connections[0].config.clone();
+
+        // 加载发起时连接存在、连接中、config 未变 → 有效，可合并。
+        assert!(AppController::connection_load_is_current(
+            &controller.state,
+            expected.id,
+            Some(&expected)
+        ));
+
+        // 断开连接：connected=false → 迟到的对象加载应被丢弃。
+        controller.dispatch(AppCommand::DisconnectConnection(expected.id));
+        assert!(!AppController::connection_load_is_current(
+            &controller.state,
+            expected.id,
+            Some(&expected)
+        ));
+
+        // 重连（回到 connected=true、同 config）→ 再次有效。
+        controller.dispatch(AppCommand::OpenConnection(expected.id));
+        assert!(AppController::connection_load_is_current(
+            &controller.state,
+            expected.id,
+            Some(&expected)
+        ));
+
+        // 改配置：config 与发起时不同 → 丢弃。
+        let mut changed = expected.clone();
+        changed.endpoint = Endpoint::Tcp {
+            host: "changed-host".into(),
+            port: 3306,
+            database: None,
+        };
+        controller.dispatch(AppCommand::UpdateConnection(changed));
+        assert!(!AppController::connection_load_is_current(
+            &controller.state,
+            expected.id,
+            Some(&expected)
+        ));
+
+        // 删除连接：连接不存在 → 丢弃。
+        controller.dispatch(AppCommand::DeleteConnection(expected.id));
+        assert!(!AppController::connection_load_is_current(
+            &controller.state,
+            expected.id,
+            Some(&expected)
+        ));
+    }
+
     #[test]
     fn query_saved_fingerprint_tracks_unsaved_changes() {
         let mut controller = AppController::with_mock_data();

@@ -158,6 +158,33 @@ impl AppController {
         }
     }
 
+    /// 生命周期旧响应防覆盖判定：该连接当前仍存在、仍连接、且 config 与发起加载时一致。
+    ///
+    /// 单飞只保证同 key 无并行；断开、重连、改配置后迟到的旧响应不得写回新状态。
+    /// 这里是纯函数，便于单元测试覆盖各生命周期场景。
+    pub fn connection_load_is_current(
+        state: &AppState,
+        connection_id: ConnectionId,
+        expected_config: Option<&ConnectionConfig>,
+    ) -> bool {
+        state
+            .connections
+            .iter()
+            .find(|c| c.config.id == connection_id)
+            .is_some_and(|c| {
+                c.connected && expected_config.map(|expected| expected == &c.config).unwrap_or(false)
+            })
+    }
+
+    /// 实例包装：树加载完成时用当前 state 判断连接加载是否仍有效。
+    pub fn is_connection_load_current(
+        &self,
+        connection_id: ConnectionId,
+        expected_config: Option<&ConnectionConfig>,
+    ) -> bool {
+        Self::connection_load_is_current(&self.state, connection_id, expected_config)
+    }
+
     pub fn merge_loaded_children(&mut self, parent: &ObjectPath, children: Vec<ObjectSummary>) {
         let Some(connection) = self
             .state
