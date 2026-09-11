@@ -3,7 +3,8 @@ fn query_result_editor(
     request: &QueryRequest,
     page: &DataPage,
 ) -> Option<DataEditorState> {
-    let object = editable_query_object(request)?;
+    let kind = controller.connection_config(request.connection_id)?.kind;
+    let object = editable_query_object(request, kind)?;
     let mut page = page.clone();
     apply_query_result_column_metadata(controller, &object, &mut page)?;
     let limit = page.limit;
@@ -56,7 +57,7 @@ fn query_result_editors(
     editors
 }
 
-fn editable_query_object(request: &QueryRequest) -> Option<ObjectPath> {
+fn editable_query_object(request: &QueryRequest, kind: DatabaseKind) -> Option<ObjectPath> {
     let mut statements = sql_statement_ranges(&request.text)
         .into_iter()
         .scan(0, |start, (end, separator_len)| {
@@ -82,16 +83,31 @@ fn editable_query_object(request: &QueryRequest) -> Option<ObjectPath> {
 
     let from = find_top_level_sql_keyword(&statement, "from")?;
     let from_tail = statement[from + "from".len()..].trim_start();
-    let (parts, rest) = parse_sql_object_name(from_tail)?;
+    let (parts, rest) = parse_sql_object_name(from_tail, kind)?;
     let rest = rest.trim_start();
     if rest.starts_with(',') || rest.starts_with('(') {
         return None;
     }
 
-    let (database, schema, name) = match parts.as_slice() {
-        [name] => (request.database.clone(), None, name.clone()),
-        [database, name] => (Some(database.clone()), None, name.clone()),
-        [database, schema, name] => (Some(database.clone()), Some(schema.clone()), name.clone()),
+    // 二段名的含义随方言不同（§8.4/R30）：PG 是 schema.table，MySQL/TiDB/SQLite 是
+    // database.table。PG 三段视为 database.schema.table，取后两段定位（库由连接决定）。
+    let (database, schema, name) = match (kind, parts.as_slice()) {
+        (DatabaseKind::Postgres, [name]) => (request.database.clone(), None, name.clone()),
+        (DatabaseKind::Postgres, [schema, name]) => {
+            (request.database.clone(), Some(schema.clone()), name.clone())
+        }
+        (DatabaseKind::Postgres, [database, schema, name]) => (
+            Some(database.clone()),
+            Some(schema.clone()),
+            name.clone(),
+        ),
+        (_, [name]) => (request.database.clone(), None, name.clone()),
+        (_, [database, name]) => (Some(database.clone()), None, name.clone()),
+        (_, [database, schema, name]) => (
+            Some(database.clone()),
+            Some(schema.clone()),
+            name.clone(),
+        ),
         _ => return None,
     };
 
@@ -104,11 +120,12 @@ fn editable_query_object(request: &QueryRequest) -> Option<ObjectPath> {
     })
 }
 
-fn parse_sql_object_name(input: &str) -> Option<(Vec<String>, &str)> {
+/// 解析点分对象名，返回各段名称与剩余文本（名称已按方言折叠/解转义）。
+fn parse_sql_object_name(input: &str, kind: DatabaseKind) -> Option<(Vec<String>, &str)> {
     let mut rest = input;
     let mut parts = Vec::new();
     loop {
-        let (part, next) = parse_sql_identifier(rest)?;
+        let (part, next) = parse_sql_identifier(rest, kind)?;
         parts.push(part);
         rest = next.trim_start();
         if !rest.starts_with('.') {
@@ -119,11 +136,31 @@ fn parse_sql_object_name(input: &str) -> Option<(Vec<String>, &str)> {
     Some((parts, rest))
 }
 
-fn parse_sql_identifier(input: &str) -> Option<(String, &str)> {
+/// 解析单个标识符，按方言识别引号字符并解开内部转义。
+///
+/// MySQL/TiDB 用反引号，其余方言（PostgreSQL/SQLite）用双引号；未加引号的名字在 PG 下
+/// 折叠为小写（未加引号的 `FROM Sales` 指的是 `sales`），带引号则按原样保留大小写。
+fn parse_sql_identifier(input: &str, kind: DatabaseKind) -> Option<(String, &str)> {
     let input = input.trim_start();
-    if let Some(rest) = input.strip_prefix('`') {
-        let end = rest.find('`')?;
-        return Some((rest[..end].to_string(), &rest[end + 1..]));
+    let quote = match kind {
+        DatabaseKind::MySql | DatabaseKind::TiDb => '`',
+        _ => '"',
+    };
+    if let Some(rest) = input.strip_prefix(quote) {
+        let mut name = String::new();
+        let mut rest = rest;
+        loop {
+            let end = rest.find(quote)?;
+            name.push_str(&rest[..end]);
+            rest = &rest[end + quote.len_utf8()..];
+            if rest.starts_with(quote) {
+                // 连续两个引号是转义后的字面引号。
+                name.push(quote);
+                rest = &rest[quote.len_utf8()..];
+                continue;
+            }
+            return Some((name, rest));
+        }
     }
     let end = input
         .char_indices()
@@ -133,7 +170,13 @@ fn parse_sql_identifier(input: &str) -> Option<(String, &str)> {
     if end == 0 {
         return None;
     }
-    Some((input[..end].to_string(), &input[end..]))
+    let raw = &input[..end];
+    let name = if kind == DatabaseKind::Postgres {
+        raw.to_ascii_lowercase()
+    } else {
+        raw.to_string()
+    };
+    Some((name, &input[end..]))
 }
 
 fn apply_query_result_column_metadata(
@@ -141,10 +184,11 @@ fn apply_query_result_column_metadata(
     object: &ObjectPath,
     page: &mut DataPage,
 ) -> Option<()> {
-    let mut columns = loaded_completion_columns(
+    let mut columns = loaded_completion_columns_in_schema(
         controller.state(),
         object.connection_id,
         object.database.as_deref(),
+        object.schema.as_deref(),
         &object.name,
     );
     if columns.is_empty() {

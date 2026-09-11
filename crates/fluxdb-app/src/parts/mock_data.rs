@@ -346,40 +346,72 @@ fn loaded_completion_columns(
     database: Option<&str>,
     table: &str,
 ) -> Vec<CompletionColumn> {
-    state
-        .tabs
-        .iter()
-        .filter_map(|tab| match &tab.kind {
-            TabKind::DataEditor(editor)
-                if editor.object.connection_id == connection_id
-                    && editor.object.name.eq_ignore_ascii_case(table)
-                    && database.is_none_or(|database| {
-                        editor
-                            .object
-                            .database
-                            .as_deref()
-                            .is_some_and(|object_database| {
-                                object_database.eq_ignore_ascii_case(database)
-                            })
-                    }) =>
-            {
-                editor.page.as_ref().map(|page| (editor, page))
+    loaded_completion_columns_in_schema(state, connection_id, database, None, table)
+}
+
+/// 从已打开的数据编辑 tab 复用列元数据（避免重复拉 catalog）。
+///
+/// 匹配优先级：**名称精确**（PG 允许 `"Foo"` 与 `"foo"` 并存，先精确才能取到正确对象）
+/// → 退回忽略大小写（MySQL/SQLite 常见的大小写差异输入）。给了 schema 时必须 schema 一致，
+/// 否则跨 schema 同名表会互相取到对方的列元数据（§8.4）。
+fn loaded_completion_columns_in_schema(
+    state: &AppState,
+    connection_id: ConnectionId,
+    database: Option<&str>,
+    schema: Option<&str>,
+    table: &str,
+) -> Vec<CompletionColumn> {
+    let matches = |editor: &DataEditorState, exact: bool| {
+        editor.object.connection_id == connection_id
+            && if exact {
+                editor.object.name == table
+            } else {
+                editor.object.name.eq_ignore_ascii_case(table)
             }
-            _ => None,
-        })
-        .flat_map(|(editor, page)| {
-            page.columns.iter().map(|column| CompletionColumn {
-                database: editor.object.database.clone(),
-                schema: editor.object.schema.clone(),
-                table: editor.object.name.clone(),
-                name: column.name.clone(),
-                type_name: column.type_name.clone(),
-                nullable: column.nullable,
-                primary_key: column.primary_key,
-                comment: column.comment.clone(),
+            && database.is_none_or(|database| {
+                editor
+                    .object
+                    .database
+                    .as_deref()
+                    .is_some_and(|object_database| object_database.eq_ignore_ascii_case(database))
             })
-        })
-        .collect()
+            && schema.is_none_or(|schema| {
+                editor
+                    .object
+                    .schema
+                    .as_deref()
+                    .is_some_and(|object_schema| object_schema == schema)
+            })
+    };
+    let collect = |state: &AppState, exact: bool| -> Vec<CompletionColumn> {
+        state
+            .tabs
+            .iter()
+            .filter_map(|tab| match &tab.kind {
+                TabKind::DataEditor(editor) if matches(editor, exact) => {
+                    editor.page.as_ref().map(|page| (editor, page))
+                }
+                _ => None,
+            })
+            .flat_map(|(editor, page)| {
+                page.columns.iter().map(|column| CompletionColumn {
+                    database: editor.object.database.clone(),
+                    schema: editor.object.schema.clone(),
+                    table: editor.object.name.clone(),
+                    name: column.name.clone(),
+                    type_name: column.type_name.clone(),
+                    nullable: column.nullable,
+                    primary_key: column.primary_key,
+                    comment: column.comment.clone(),
+                })
+            })
+            .collect()
+    };
+    let exact = collect(state, true);
+    if !exact.is_empty() {
+        return exact;
+    }
+    collect(state, false)
 }
 
 fn list_completion_columns_for_connection(

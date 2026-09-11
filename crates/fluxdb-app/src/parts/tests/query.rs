@@ -1918,6 +1918,87 @@
         assert!(editor.changes.is_none());
     }
 
+    /// §8.4/R30：二段名按方言解释——PG 是 schema.table（不能写进 public），
+    /// MySQL 仍是 database.table；引用名按方言引号解析并保留大小写，未加引号在 PG 折小写。
+    #[test]
+    fn pg_query_result_object_name_uses_schema_and_quoted_identifiers() {
+        let postgres = |text: &str| QueryRequest {
+            connection_id: ConnectionId(1),
+            database: Some("appdb".to_string()),
+            session_id: None,
+            schema: None,
+            text: text.to_string(),
+            mode: fluxdb_core::QueryMode::All,
+            options: QueryExecutionOptions::default(),
+        };
+
+        // 二段名 → schema.table，不是 database.table。
+        let object = editable_query_object(
+            &postgres("select * from sales.orders"),
+            DatabaseKind::Postgres,
+        )
+        .expect("PG 二段名应可编辑");
+        assert_eq!(object.database.as_deref(), Some("appdb"));
+        assert_eq!(object.schema.as_deref(), Some("sales"));
+        assert_eq!(object.name, "orders");
+
+        // 三段名 → database.schema.table。
+        let object = editable_query_object(
+            &postgres("select * from appdb.sales.orders"),
+            DatabaseKind::Postgres,
+        )
+        .expect("PG 三段名应可编辑");
+        assert_eq!(object.database.as_deref(), Some("appdb"));
+        assert_eq!(object.schema.as_deref(), Some("sales"));
+        assert_eq!(object.name, "orders");
+
+        // 未加引号在 PG 折叠为小写（`FROM Orders` 指 sales.orders）。
+        let object = editable_query_object(
+            &postgres("select * from sales.Orders"),
+            DatabaseKind::Postgres,
+        )
+        .expect("PG 未加引号名应可编辑");
+        assert_eq!(object.schema.as_deref(), Some("sales"));
+        assert_eq!(object.name, "orders");
+
+        // 双引号保留大小写与转义。
+        let object = editable_query_object(
+            &postgres("select * from sales.\"Orders\""),
+            DatabaseKind::Postgres,
+        )
+        .expect("PG 引用名应可编辑");
+        assert_eq!(object.name, "Orders");
+        let object = editable_query_object(
+            &postgres("select * from \"sales\".\"my\"\"table\""),
+            DatabaseKind::Postgres,
+        )
+        .expect("PG 转义引用名应可编辑");
+        assert_eq!(object.schema.as_deref(), Some("sales"));
+        assert_eq!(object.name, "my\"table");
+
+        // MySQL 二段名仍是 database.table（回归：语义不变）。
+        let object = editable_query_object(
+            &postgres("select * from main.products"),
+            DatabaseKind::MySql,
+        )
+        .expect("MySQL 二段名应可编辑");
+        assert_eq!(object.database.as_deref(), Some("main"));
+        assert_eq!(object.schema, None);
+        assert_eq!(object.name, "products");
+
+        // 复杂来源仍只读。
+        assert!(editable_query_object(
+            &postgres("select * from sales.orders o join sales.items i on i.id = o.id"),
+            DatabaseKind::Postgres
+        )
+        .is_none());
+        assert!(editable_query_object(
+            &postgres("select * from (select 1) t"),
+            DatabaseKind::Postgres
+        )
+        .is_none());
+    }
+
     #[test]
     fn complex_query_result_stays_readonly() {
         let mut controller = AppController::with_mock_data();
