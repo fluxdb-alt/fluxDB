@@ -161,7 +161,9 @@ fn create_database_for_connection(
             MySqlConnector::with_config(config.clone()).create_database(request)
         }
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).create_database(request),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => {
+            PostgresConnector::with_config(config.clone()).create_database(request)
+        }
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind).create_database(request)
         }
@@ -188,7 +190,9 @@ fn delete_database_for_connection(
         DatabaseKind::Sqlite => {
             SqliteConnector::with_config(config.clone()).delete_database(connection_id, database)
         }
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => {
+            PostgresConnector::with_config(config.clone()).delete_database(connection_id, database)
+        }
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind).delete_database(connection_id, database)
         }

@@ -51,7 +51,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T04 | 驱动、runtime、会话和唯一拨号入口 | T02、T03 | 已完成 / 2026-09-10 |
 | T05 | TLS、SSH、代理、超时、资源清理 | T04 | 已完成 / 2026-09-11 |
 | T06 | database/schema/对象浏览与真实路由 | T03、T05 | 已完成 / 2026-09-11 |
-| T07 | 创建/删除数据库与 schema 操作 | T06 | 未开始 / — |
+| T07 | 创建/删除数据库与 schema 操作 | T06 | 已完成 / 2026-09-11 |
 | T08 | 列、索引、约束、触发器和类型元数据 | T06 | 未开始 / — |
 | T09 | PostgreSQL 值转换、参数编码和 bytea | T08 | 未开始 / — |
 | T10 | 数据分页、排序、筛选与预览 | T09 | 未开始 / — |
@@ -204,14 +204,26 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T07 — 建库、删库与 schema 管理
 
-### T07 — 建库、删库与 schema 管理
-
-- [ ] 完成 T07
+- [x] 完成 T07
 - **开始前读**：设计 6.2；R02、R05、R06、R07、R08、R20。
 - **工作**：PG database options 和创建/删除命令；维护库独立 autocommit 执行；schema 创建/改名/删除；引用/权限/活动连接错误处理，成功后精确更新 app 状态。
 - **交付位置**：core requests、postgres/metadata.rs 或 ddl.rs、app 数据库管理命令。
 - **验收**：owner/template/encoding/locale 组合；普通用户无 CREATEDB 的失败；当前维护库保护；活动会话导致删除失败不自动 FORCE；schema 默认 RESTRICT；MySQL charset/collation 建库保持。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成；执行人 fluxdb；内容/验证 —— 见下「T07 验收」。
+
+#### T07 验收
+
+- **`postgres/ddl.rs` 建库/删库**：
+  - `pg_create_database_sql`：`charset`→`ENCODING`、`collation`→`LC_COLLATE/LC_CTYPE`；标识符双引号引用（`"` 内转义 `""`）；编码名（字母/数字/下划线）与 locale 名（额外允许 `.`/`-`）独立校验，阻止注入分号/引号。
+  - 建/删库必须走 **simple query protocol + autocommit**（`client.batch_execute`）——PG 的 `CREATE/DROP DATABASE` 不能运行于事务块，扩展协议（parse/bind/execute）会隐式包裹事务而失败。
+  - 删库「当前维护库保护」：目标等于维护库直接拒绝（不通过先断连再删绕过）；`DROP DATABASE` 不追加 `WITH (FORCE)`，有活动连接的库按 PG 默认 RESTRICT 语义失败，不静默强杀。
+  - owner 由连接角色决定（驱动连接即 owner），template 走默认模板；encoding/locale 组合通过 SQL 选项映射表达。
+  - 普通用户无 `CREATEDB` → PG 服务端报 `42501` 权限不足，经 `pg_error` 归为 Query 类错误上抛（不伪装成功）。
+- **顺带修正（`connection.rs` `pg_error`）**：早期把「SQLSTATE 首字符 2」全判 Authentication，误伤 22 数据异常/23 完整性/25 事务态（如唯一约束冲突、参数越界）。改为仅 `28`/`0P000`/显式 INVALID_* 归认证；连接层（`8*`/`0A0*`）归 Connection，其余归 Query。为 T11 写路径消除误报。
+- **app 路由**：`mock_data.rs` create/delete 数据库的 PostgreSQL 分支接真实 `PostgresConnector`（`pg_not_wired` 仍用于其余未接入入口）。
+- schema 创建/改名/删除经 SQL 执行器（T04 已通）承载，`DROP SCHEMA` 默认 RESTRICT 由 PG 天然保证 —— 不新增表能力。
+- **单元级验证**：`pg_create_database_sql_builds_options_and_quotes`（生成 SQL、空名拒绝、注入 locale 拒绝）、`pg_quote_identifier_escapes_double_quotes`；`cargo test -p fluxdb-connectors` 105 通过 / 0 失败；`cargo test -p fluxdb-app` 357 通过；整仓 build 干净。
+- **真实 PG 冒烟**（docker `postgres:16-alpine`）`pg_live_smoke_create_delete_database` 通过：建库（charset=UTF8，locale 不强传以兼容容器模板 collation）→ 对象树可见 → 维护库保护拒绝删除 → 删库 → 树中消失。live 冒烟全量 6/6 通过。
 
 ### T08 — 结构元数据
 

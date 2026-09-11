@@ -336,25 +336,31 @@ fn pg_lock_error(
 /// 把 tokio-postgres 错误统一映射为 fluxdb 错误（认证 / 连接 / 查询分类）。
 fn pg_error(error: tokio_postgres::Error) -> Error {
     use tokio_postgres::error::SqlState;
-    // 认证失败：effective_connection_limit / 认证 / 授权类错误。
+    // 仅认证/授权类错误归为 Authentication；其余 DB 类错误一律 Query。
+    // 早期实现把「SQLSTATE 首字符为 2」都当认证，误伤了 22 数据异常/23 完整性/25 事务态
+    // （如唯一约束冲突、参数越界）——那些是查询/写入失败而非认证失败。
     if let Some(code) = error.code() {
-        let class = code.code().chars().next().unwrap_or('5');
-        return match class {
-            '2' => Error::new(ErrorKind::Authentication, error.to_string()),
-            '3' | '0' => {
-                // 0P000 无效角色名、28000 无效授权、28P01 密码错误等。
-                if matches!(
-                    code,
-                    &SqlState::INVALID_AUTHORIZATION_SPECIFICATION
-                        | &SqlState::INVALID_PASSWORD
-                ) {
-                    Error::new(ErrorKind::Authentication, error.to_string())
-                } else {
-                    Error::new(ErrorKind::Connection, error.to_string())
-                }
-            }
-            _ => Error::new(ErrorKind::Query, error.to_string()),
-        };
+        let code_str = code.code();
+        let is_auth = code_str.starts_with("28")
+            || matches!(
+                code,
+                &SqlState::INVALID_AUTHORIZATION_SPECIFICATION
+                    | &SqlState::INVALID_PASSWORD
+            )
+            || code_str == "0P000";
+        if is_auth {
+            return Error::new(ErrorKind::Authentication, error.to_string());
+        }
+        // 连接层（08/09/0A/0B …）视为连接失败，其余为查询失败。
+        let class_is_connection = code_str.starts_with('8') || code_str.starts_with("0A0");
+        return Error::new(
+            if class_is_connection {
+                ErrorKind::Connection
+            } else {
+                ErrorKind::Query
+            },
+            error.to_string(),
+        );
     }
     // 无 SQLSTATE 的底层 IO/协议错误 → 连接层。
     Error::new(ErrorKind::Connection, error.to_string())

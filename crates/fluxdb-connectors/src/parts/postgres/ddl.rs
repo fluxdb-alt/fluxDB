@@ -1,0 +1,116 @@
+// PostgreSQL 建库/删库（T07）。
+//
+// PostgreSQL 的 `CREATE DATABASE` / `DROP DATABASE` 不能运行于事务块内，且不能使用
+// 扩展查询协议（parse/bind/execute 会隐式包裹事务）。因此这里用 `batch_execute`
+// （simple query protocol，autocommit）执行。字符集/排序映射到 ENCODING / LC_COLLATE /
+// LC_CTYPE；标识符按 PG 规则双引号引用（内部 `"` 转义为 `""`）。
+
+/// 建库：ENCODING 取 charset，LC_COLLATE/LC_CTYPE 取 collation。
+fn pg_create_database(
+    config: &ConnectionConfig,
+    request: &CreateDatabaseRequest,
+) -> fluxdb_core::Result<()> {
+    if config.kind != DatabaseKind::Postgres {
+        return Err(Error::new(ErrorKind::Connection, "连接类型不支持新建数据库"));
+    }
+    if config.id != request.connection_id {
+        return Err(Error::new(ErrorKind::Connection, "连接不匹配"));
+    }
+    let sql = pg_create_database_sql(request)?;
+    let database = pg_request_database(config, None);
+    pg_runtime().block_on(async {
+        let session = pg_connect(config, &database).await?;
+        // simple query protocol + autocommit：CREATE DATABASE 合法。
+        session
+            .client
+            .batch_execute(&sql)
+            .await
+            .map_err(pg_error)?;
+        Ok(())
+    })
+}
+
+fn pg_create_database_sql(request: &CreateDatabaseRequest) -> fluxdb_core::Result<String> {
+    let database = request.name.trim();
+    if database.is_empty() {
+        return Err(Error::new(ErrorKind::Query, "数据库名称不能为空"));
+    }
+    let mut statement = format!("CREATE DATABASE {}", pg_quote_identifier(database));
+
+    let charset = request.charset.trim();
+    if !charset.is_empty() {
+        if !is_pg_encoding_name(charset) {
+            return Err(Error::new(ErrorKind::Query, "编码(字符集)名称不合法"));
+        }
+        statement.push_str(&format!(" ENCODING '{charset}'"));
+    }
+
+    let collation = request.collation.trim();
+    if !collation.is_empty() {
+        if !is_pg_locale_name(collation) {
+            return Err(Error::new(ErrorKind::Query, "排序规则名称不合法"));
+        }
+        // LC_COLLATE 与 LC_CTYPE 同为排序规则；locale 形如 `zh_CN.UTF-8`、`C`、`POSIX`。
+        statement.push_str(&format!(" LC_COLLATE '{collation}' LC_CTYPE '{collation}'"));
+    }
+
+    Ok(statement)
+}
+
+/// 编码名校验：字母/数字/下划线（UTF8、SQL_ASCII、LATIN1 等）。
+fn is_pg_encoding_name(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// locale/排序规则名校验：允许字母/数字/下划线/点(TC)/连字符，阻止注入分号/引号。
+fn is_pg_locale_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+}
+
+/// 删库：连接维护库执行。PG 天然拒绝删“当前打开的库”；这里额外保护维护库，
+/// 且不追加 `WITH (FORCE)` —— 有活动连接的删库按 PG 默认 RESTRICT 语义失败。
+fn pg_delete_database(
+    config: &ConnectionConfig,
+    connection_id: ConnectionId,
+    database: &str,
+) -> fluxdb_core::Result<()> {
+    if config.kind != DatabaseKind::Postgres {
+        return Err(Error::new(ErrorKind::Connection, "连接类型不支持删除数据库"));
+    }
+    if config.id != connection_id {
+        return Err(Error::new(ErrorKind::Connection, "连接不匹配"));
+    }
+    let database = database.trim();
+    if database.is_empty() {
+        return Err(Error::new(ErrorKind::Query, "数据库名称不能为空"));
+    }
+    let maintenance = pg_request_database(config, None);
+    if database == maintenance {
+        // 当前维护库保护：不通过“先断连再删”绕过，直接拒绝，避免误删正在使用的库。
+        return Err(Error::new(
+            ErrorKind::Query,
+            format!("不能删除当前维护库 {database}"),
+        ));
+    }
+    let sql = format!("DROP DATABASE {}", pg_quote_identifier(database));
+    pg_runtime().block_on(async {
+        let session = pg_connect(config, &maintenance).await?;
+        // simple query protocol + autocommit：DROP DATABASE 合法。
+        session
+            .client
+            .batch_execute(&sql)
+            .await
+            .map_err(pg_error)?;
+        Ok(())
+    })
+}
+
+/// PostgreSQL 标识符引用：双引号包裹，内部 `"` 转义为 `""`。
+fn pg_quote_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}

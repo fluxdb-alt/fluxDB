@@ -3329,6 +3329,80 @@ SELECT item_id, name FROM audit_log;"
         connector.execute(&cleanup).expect("清理临时对象应成功");
     }
 
+    // ===== T07 建库/删库（单元 + 真实冒烟）=====
+
+    #[test]
+    fn pg_create_database_sql_builds_options_and_quotes() {
+        let request = CreateDatabaseRequest {
+            connection_id: ConnectionId(9),
+            name: "app-db".to_string(),
+            charset: "UTF8".to_string(),
+            collation: "zh_CN.UTF-8".to_string(),
+            path: None,
+        };
+        assert_eq!(
+            pg_create_database_sql(&request).unwrap(),
+            "CREATE DATABASE \"app-db\" ENCODING 'UTF8' LC_COLLATE 'zh_CN.UTF-8' LC_CTYPE 'zh_CN.UTF-8'"
+        );
+
+        // 空名称拒绝；含引号/分号的 locale 拒绝（防注入）。
+        let bad_name = CreateDatabaseRequest { name: "  ".into(), ..request.clone() };
+        assert!(pg_create_database_sql(&bad_name).is_err());
+        let bad_col = CreateDatabaseRequest { collation: "zh_CN'; DROP SCHEMA public; --".into(), ..request };
+        assert!(pg_create_database_sql(&bad_col).is_err());
+    }
+
+    #[test]
+    fn pg_quote_identifier_escapes_double_quotes() {
+        assert_eq!(pg_quote_identifier("plain"), "\"plain\"");
+        assert_eq!(pg_quote_identifier("a\"b"), "\"a\"\"b\"");
+    }
+
+    /// 真实建/删库（T07 验收）：建库（charset/collation）→ 对象树可见 → 删库；维护库保护。
+    #[test]
+    fn pg_live_smoke_create_delete_database() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let db_name = config
+            .postgres_profile
+            .as_ref()
+            .unwrap()
+            .basic
+            .maintenance_database
+            .clone();
+
+        // 建库：UTF8 编码（不强制 locale —— 测试容器模板库 collation 固定 en_US.utf8，
+        // 传不匹配的 locale 会报 collation 不兼容；locale 映射已由单元测试覆盖）。
+        let create = CreateDatabaseRequest {
+            connection_id: config.id,
+            name: "t07_db".to_string(),
+            charset: "UTF8".to_string(),
+            collation: String::new(),
+            path: None,
+        };
+        connector.create_database(&create).expect("建库应成功");
+        let databases = connector.list_objects(None).expect("列库应成功");
+        assert!(
+            databases.iter().any(|o| o.path.name == "t07_db"),
+            "新建的 t07_db 应出现在对象树"
+        );
+
+        // 维护库保护：删除当前维护库应被拒绝。
+        let guard = connector.delete_database(config.id, &db_name);
+        assert!(guard.is_err(), "删除当前维护库应被拒绝");
+
+        // 删库：对象树不再包含。
+        connector.delete_database(config.id, "t07_db").expect("删库应成功");
+        let after = connector.list_objects(None).expect("列库应成功");
+        assert!(
+            !after.iter().any(|o| o.path.name == "t07_db"),
+            "删除后 t07_db 不应再出现"
+        );
+    }
+
     fn env(key: &str) -> Option<String> {
         std::env::var(key).ok().filter(|v| !v.is_empty())
     }

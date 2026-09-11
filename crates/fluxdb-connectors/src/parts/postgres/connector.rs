@@ -35,6 +35,26 @@ impl Connector for PostgresConnector {
         pg_list_objects(config, path)
     }
 
+    fn create_database(&self, request: &CreateDatabaseRequest) -> fluxdb_core::Result<()> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 新建数据库需要连接配置上下文",
+            ));
+        };
+        pg_create_database(config, request)
+    }
+
+    fn delete_database(&self, connection_id: ConnectionId, database: &str) -> fluxdb_core::Result<()> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 删除数据库需要连接配置上下文",
+            ));
+        };
+        pg_delete_database(config, connection_id, database)
+    }
+
     fn load_data(
         &self,
         _path: &ObjectPath,
