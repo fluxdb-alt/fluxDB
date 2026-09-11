@@ -148,6 +148,8 @@ impl AppController {
                         tab.dirty = false;
                     }
                 }
+                // 表操作成功后失效该 scope 的补全缓存：旧名不再被建议、新名能尽快出现。
+                self.mark_table_action_completion_dirty(&object);
                 self.state.last_error = None;
                 AppEvent::TableRenamed { object, new_name }
             }
@@ -219,6 +221,8 @@ impl AppController {
                         comment: None,
                     });
                 }
+                // 新表的列/索引需要进入补全缓存：标记 scope 失效，后台刷新时重取表清单。
+                self.mark_table_action_completion_dirty(&object);
                 self.state.last_error = None;
                 AppEvent::TableCopied { object, new_name }
             }
@@ -285,6 +289,8 @@ impl AppController {
                 {
                     self.state.active_tab = self.state.tabs.last().map(|tab| tab.id);
                 }
+                // 删除后必须让索引知道：表名先按 scope 级失效，后台刷新重取表清单时移除。
+                self.mark_table_action_completion_dirty(&object);
                 self.state.last_error = None;
                 AppEvent::TableDropped(object)
             }

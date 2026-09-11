@@ -579,3 +579,37 @@ fn mysql_table_actions_unchanged_by_postgres_provider() {
         "SET FOREIGN_KEY_CHECKS = 0;\nDROP TABLE `orders`;"
     );
 }
+
+/// §9.3：表操作成功后补全缓存失效（旧名/已删表不再被建议）。
+#[test]
+fn table_actions_invalidate_completion_index() {
+    let mut controller = AppController::with_mock_data();
+    controller.dispatch(AppCommand::WarmCompletionIndex {
+        connection_id: ConnectionId(1),
+        database: Some("main".to_string()),
+    });
+    {
+        let index = controller.completion_index.lock().unwrap();
+        assert!(
+            !index.is_database_dirty(ConnectionId(1), Some("main"), None),
+            "预热后不应是 dirty"
+        );
+    }
+
+    controller.dispatch(AppCommand::RenameTable {
+        object: ObjectPath {
+            connection_id: ConnectionId(1),
+            database: Some("main".to_string()),
+            schema: None,
+            name: "Product".to_string(),
+            kind: ObjectKind::Table,
+        },
+        new_name: "Product2026".to_string(),
+    });
+
+    let index = controller.completion_index.lock().unwrap();
+    assert!(
+        index.is_database_dirty(ConnectionId(1), Some("main"), None),
+        "重命名后应失效补全缓存，避免继续建议旧表名"
+    );
+}

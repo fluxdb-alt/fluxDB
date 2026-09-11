@@ -20,7 +20,7 @@ fn refresh_index_columns_in_background(
 ) -> fluxdb_core::Result<(usize, usize)> {
     // T052：按影响范围限制刷新对象。库级 dirty → 刷新整库；
     // 仅部分表 dirty（非库级）→ 只刷新那些表，避免每次 DDL 都重刷整库。
-    let table_names: Vec<String> = {
+    let (table_names, database_wide): (Vec<String>, bool) = {
         let Ok(guard) = index.lock() else {
             return Ok((0, 0));
         };
@@ -29,7 +29,7 @@ fn refresh_index_columns_in_background(
             .dirty_table_names(connection_id, database, schema)
             .into_iter()
             .collect::<BTreeSet<_>>();
-        guard
+        let table_names = guard
             .database_tables(connection_id, database, schema)
             .into_iter()
             .filter(|table| matches!(table.kind, ObjectKind::Table | ObjectKind::View))
@@ -43,7 +43,8 @@ fn refresh_index_columns_in_background(
                         .any(|dirty| dirty.eq_ignore_ascii_case(&table.name))
             })
             .map(|table| table.name)
-            .collect()
+            .collect::<Vec<_>>();
+        (table_names, database_wide)
     };
     // 触发后台刷新即说明该 scope 的元数据整体已过期（dirty 或 TTL）：例程/触发器不像列那样
     // 能按表名精确刷新，直接失效该 scope 的例程/触发器索引，下次补全按需重新拉取并写回（§8.4）。
@@ -57,6 +58,21 @@ fn refresh_index_columns_in_background(
             guard.clear_dirty_tables(connection_id, database, schema);
         }
         return Ok((0, 0));
+    }
+    // 库级失效（DDL / 表操作）时同时重取表清单：新建、重命名、删除的表才能及时进出候选，
+    // 否则索引里的表名只在冷启动时建立，删掉的表会一直被建议（§8.4 DDL 后刷新）。
+    if database_wide
+        && let Ok(tables) = list_completion_tables_for_connection_with_cancel(
+            config,
+            database,
+            schema,
+            "",
+            COMPLETION_METADATA_LIMIT,
+            &|| false,
+        )
+        && let Ok(mut guard) = index.lock()
+    {
+        guard.insert_tables(connection_id, database, schema, tables, config.kind);
     }
     let columns = list_completion_columns_for_tables_for_connection_with_cancel(
         config,
@@ -1649,6 +1665,16 @@ impl AppController {
     ///
     /// 与 tables/columns 同一形态：索引里已有该 scope 的例程就直接复用，避免每次补全
     /// 重新拉 catalog；写入后同步持久化，重开应用无需重建。
+    /// 表操作（重命名/复制/删除）成功后失效该 scope 的补全缓存。
+    ///
+    /// 表操作直接执行 SQL、不走查询历史记录路径，故不会经过 `mark_query_history_completion_dirty`；
+    /// 这里按 scope 标脏，后台刷薪触发时会重取表清单与列，旧名/已删表不再被建议（§9.3）。
+    fn mark_table_action_completion_dirty(&self, object: &ObjectPath) {
+        if let Ok(mut index) = self.completion_index.lock() {
+            index.mark_dirty(object.connection_id, object.database.as_deref(), object.schema.as_deref());
+        }
+    }
+
     fn indexed_completion_routines_with_cancel(
         &self,
         config: &ConnectionConfig,
