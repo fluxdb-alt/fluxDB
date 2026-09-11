@@ -10,7 +10,7 @@ impl Render for NavicatMain {
             .state()
             .tabs
             .iter()
-            .any(|tab| matches!(&tab.kind, TabKind::Settings))
+            .any(|tab| matches!(&tab.kind, TabKind::Settings(_)))
         {
             self.settings_editor_draft.show_status_bar
         } else {
@@ -722,7 +722,7 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
             member_grant_edits: admin.member_grant_edits.clone(),
             pending_sql: admin.pending_sql.clone(),
         }),
-        TabKind::Settings => TabKind::Settings,
+        TabKind::Settings(settings) => TabKind::Settings(settings.clone()),
     }
 }
 

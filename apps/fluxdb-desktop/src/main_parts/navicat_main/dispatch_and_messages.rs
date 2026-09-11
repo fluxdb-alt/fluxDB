@@ -47,7 +47,7 @@ impl NavicatMain {
             .state()
             .tabs
             .iter()
-            .any(|tab| tab.id == tab_id && matches!(tab.kind, TabKind::Settings))
+            .any(|tab| tab.id == tab_id && matches!(tab.kind, TabKind::Settings(_)))
     }
 
     fn sync_settings_tab_dirty(&mut self) {
@@ -56,7 +56,7 @@ impl NavicatMain {
             .state()
             .tabs
             .iter()
-            .find(|tab| matches!(tab.kind, TabKind::Settings))
+            .find(|tab| matches!(tab.kind, TabKind::Settings(_)))
             .map(|tab| tab.id)
         else {
             return;

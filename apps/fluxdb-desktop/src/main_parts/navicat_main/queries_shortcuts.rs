@@ -543,7 +543,7 @@ impl NavicatMain {
             .controller
             .state()
             .active_tab()
-            .is_some_and(|tab| matches!(tab.kind, TabKind::Settings))
+            .is_some_and(|tab| matches!(tab.kind, TabKind::Settings(_)))
         {
             let settings = self.settings_editor_draft.clone();
             save_settings_from_ui(self, settings, "设置已保存", cx);

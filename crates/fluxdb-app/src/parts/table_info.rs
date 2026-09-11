@@ -149,7 +149,10 @@ fn tab_belongs_to_database(tab: &TabState, connection_id: ConnectionId, database
         TabKind::BackupList(list) => {
             list.connection_id == connection_id && list.database == database
         }
-        TabKind::UserAdmin(_) | TabKind::Settings => false,
+        TabKind::Settings(settings) => settings.workspace.as_ref().is_some_and(|workspace| {
+            workspace.connection_id == connection_id && workspace.database == database
+        }),
+        TabKind::UserAdmin(_) => false,
     }
 }
 
@@ -171,7 +174,10 @@ fn tab_belongs_to_connection(tab: &TabState, connection_id: ConnectionId) -> boo
         TabKind::CreateTable(create) => create.connection_id == connection_id,
         TabKind::UserAdmin(admin) => admin.connection_id == connection_id,
         TabKind::BackupList(list) => list.connection_id == connection_id,
-        TabKind::Settings => false,
+        TabKind::Settings(settings) => settings
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.connection_id == connection_id),
     }
 }
 

@@ -115,6 +115,75 @@ pub struct TabState {
     pub dirty: bool,
 }
 
+impl TabState {
+    /// 返回标签页所属的「连接 + 库」工作区；首页打开的全局标签没有归属。
+    pub fn workspace(&self) -> Option<TabWorkspace> {
+        match &self.kind {
+            TabKind::DataEditor(editor) => Some(TabWorkspace {
+                connection_id: editor.object.connection_id,
+                database: editor
+                    .object
+                    .database
+                    .clone()
+                    .unwrap_or_else(|| "main".to_string()),
+            }),
+            TabKind::QueryEditor(editor) => Some(TabWorkspace {
+                connection_id: editor.connection_id,
+                database: editor
+                    .database
+                    .clone()
+                    .unwrap_or_else(|| "默认库".to_string()),
+            }),
+            TabKind::RedisWorkbench(workbench) => Some(TabWorkspace {
+                connection_id: workbench.connection_id,
+                database: workbench.database.to_string(),
+            }),
+            TabKind::RedisCli(cli) => Some(TabWorkspace {
+                connection_id: cli.connection_id,
+                database: cli.database.to_string(),
+            }),
+            TabKind::RedisPubSub(pubsub) => Some(TabWorkspace {
+                connection_id: pubsub.connection_id,
+                database: pubsub.database.to_string(),
+            }),
+            TabKind::CreateTable(create) => Some(TabWorkspace {
+                connection_id: create.connection_id,
+                database: create
+                    .database
+                    .clone()
+                    .unwrap_or_else(|| "默认库".to_string()),
+            }),
+            TabKind::ObjectList(list) => list.parent.as_ref().map(|parent| TabWorkspace {
+                connection_id: parent.connection_id,
+                database: parent
+                    .database
+                    .clone()
+                    .unwrap_or_else(|| parent.name.clone()),
+            }),
+            TabKind::UserAdmin(admin) => Some(TabWorkspace {
+                connection_id: admin.connection_id,
+                database: "默认库".to_string(),
+            }),
+            TabKind::BackupList(list) => Some(TabWorkspace {
+                connection_id: list.connection_id,
+                database: list.database.clone(),
+            }),
+            TabKind::Settings(settings) => settings.workspace.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct TabWorkspace {
+    pub connection_id: ConnectionId,
+    pub database: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SettingsTabState {
+    pub workspace: Option<TabWorkspace>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum TabKind {
     ObjectList(ObjectListState),
@@ -125,7 +194,7 @@ pub enum TabKind {
     RedisPubSub(RedisPubSubState),
     CreateTable(CreateTableState),
     UserAdmin(UserAdminState),
-    Settings,
+    Settings(SettingsTabState),
     /// 数据库备份列表 tab（侧边栏「备份」节点单击打开，按库一个）。
     BackupList(BackupListState),
 }
