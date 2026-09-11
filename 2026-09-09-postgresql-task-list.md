@@ -57,7 +57,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T10 | 数据分页、排序、筛选与预览 | T09 | 未开始 / — |
 | T11 | 数据编辑、可靠定位、原子提交和冲突处理 | T10 | 未开始 / — |
 | T12 | 统一 PG 方言、分句和参数解析 | T03 | 进行中 |
-| T13 | SQL 执行、多结果、会话事务、进度和取消 | T05、T09、T12 | 未开始 / — |
+| T13 | SQL 执行、多结果、会话事务、进度和取消 | T05、T09、T12 | 进行中 |
 | T14 | PostgreSQL 补全、元数据索引和语义提示 | T08、T12、T13 | 未开始 / — |
 | T15 | 查询结果编辑、保存查询和历史补偿 | T11、T13、T14 | 未开始 / — |
 | T16 | DDL 读取和 PostgreSQL 新建表 provider | T08、T12、T13 | 未开始 / — |
@@ -290,12 +290,12 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T13 — SQL 执行、事务与取消
 
-- [ ] 完成 T13
+- [x] 完成 T13 增量一（aborted 事务态停止继续；剩余：真实 CancelToken、结果流式/有界、statement→result 索引与 OutcomeUnknown 状态、ordinal 列读取审计，另增增量）
 - **开始前读**：设计 3.3、7.1、8.2、8.3；R02、R06、R07、R24、R27、R28、R33。
 - **工作**：真实元数据判断结果、ordinal 解码、statement/result 映射；流读取与有界结果存储；会话事务/aborted/恢复、continue_on_error、CancelToken、超时和竞态；显式已回滚/取消/OutcomeUnknown 状态。
 - **交付位置**：postgres/execution.rs/connection.rs；core 查询结果状态；app/query_execution 和结果存储接口。
 - **验收**：SELECT/VALUES/SHOW/EXPLAIN/CTE DML/RETURNING/CALL、空结果列、重复列名、多语句中间失败；BEGIN→错误→ROLLBACK 恢复，不能预先 SET search_path 阻止恢复；pg_sleep 真取消；两 tab 隔离；大查询内存有界、翻页不重放写 SQL。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：进行中；执行人 FluxDB（T13 增量一）；内容 — PG 执行器新增会话 aborted 感知：`25P02 in_failed_sql_transaction` 置 aborted 标志，`continue_on_error` 下不再盲目执行后续语句而是逐条产出「已跳过：需 ROLLBACK」摘要（不自动回滚，R27），未开 continue_on_error 立即停止；显式 ROLLBACK 恢复路径保持。验证 — 新增 `pg_live_smoke_aborted_transaction_skips_remaining`（BEGIN→冲突→25P02→跳过标注→ROLLBACK 恢复），真实 PG 冒烟 11 通过、工作区全量通过。剩余：真实 CancelToken、结果流式/有界、statement→result 索引与 OutcomeUnknown 状态、ordinal 读取审计，另增增量。
 
 ### T14 — 补全、索引与语义提示
 

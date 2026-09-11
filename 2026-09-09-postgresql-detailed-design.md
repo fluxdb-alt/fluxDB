@@ -344,6 +344,8 @@ CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不�
 - 本次脚本关闭拆分时按服务器批处理语义送出，多语句错误后的行为按服务器结果呈现；不能声称还能逐句继续。COPY FROM STDIN 及 psql 元命令交给第 11 节的脚本路径。
 - CancelToken 取消正运行语句；接收取消完成并排空结果后再允许下一请求。aborted 会话显示需要回滚；断开/关闭时已存在的脏数据与运行查询确认流程扩展处理未结束事务。
 
+> **实现记录（T13 增量一：aborted 事务态停止继续）**：PG 执行器 `pg_run_statements` 增加会话 aborted 感知 —— 语句失败返回 `25P02 in_failed_sql_transaction` 时置 `aborted`；`continue_on_error` 下不再盲目执行后续语句，而是逐条产出「已跳过：需 ROLLBACK 后继续」摘要（不自动回滚，符合 R27），未开 continue_on_error 仍立即停止。恢复路径由用户显式 `ROLLBACK` 完成，其后会话恢复正常。（真实 CancelToken/结果流式/statement→result 索引等余项另增增量。）
+
 ### 8.4 补全、结果编辑和历史
 
 接通 `DatabaseKind::Postgres → SqlDialect::Postgres → PostgreSqlDialect` 的 AST/语义链路。保留 CompletionIndex 的排序、模糊匹配、分页和 TTL；schema/quoted case/search_path/函数重载必须贯穿查询、缓存、持久化和插入文本。批量 columns 使用一次 catalog 查询（按真实范围分组），不能逐表 N+1；所有列表支持限量和取消。元数据来自独立会话，不影响用户事务。

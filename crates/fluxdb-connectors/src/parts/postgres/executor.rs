@@ -69,12 +69,24 @@ async fn pg_run_statements(
         results: Vec::new(),
         rollback_snapshots: Vec::new(),
     };
+    // 上次失败的语句是否使会话进入 aborted 事务态（显式事务内错误后）。
+    let mut aborted = false;
 
     for statement in statements {
         if should_cancel() {
             break;
         }
         let started = std::time::Instant::now();
+        // 会话已因此前语句失败进入 aborted（显式事务内），后续语句一律不可执行（R27：
+        // 不得在 ROLLBACK 前继续、也不得自动回滚用户事务），逐条跳过并标注。
+        if aborted {
+            push_query_summary(
+                &mut execution,
+                skipped_query_summary(statement, elapsed_ms(started)),
+                on_summary,
+            );
+            continue;
+        }
         if statement_returns_rows(&statement) {
             match tokio::time::timeout(PG_STATEMENT_TIMEOUT, client.query(&statement, &[])).await {
                 Ok(Ok(rows)) => {
@@ -96,6 +108,7 @@ async fn pg_run_statements(
                     execution.results.push(page);
                 }
                 Ok(Err(error)) => {
+                    aborted |= pg_error_aborts_transaction(&error);
                     let error = pg_error(error);
                     push_query_summary(
                         &mut execution,
@@ -107,6 +120,7 @@ async fn pg_run_statements(
                         ),
                         on_summary,
                     );
+                    // continue_on_error 时继续：下一语句若在 aborted 内会返回 25P02/被跳过。
                     if !request.options.continue_on_error {
                         break;
                     }
@@ -142,6 +156,7 @@ async fn pg_run_statements(
                     );
                 }
                 Ok(Err(error)) => {
+                    aborted |= pg_error_aborts_transaction(&error);
                     let error = pg_error(error);
                     push_query_summary(
                         &mut execution,
@@ -194,4 +209,17 @@ fn pg_query_cell_value(row: &tokio_postgres::Row, index: usize, column: &Column)
     // 与 execute 路径（RowDescription 的 type_name）一致：按类型矩阵分类解码（T09）。
     // 覆盖整数/浮点/布尔/文本/json/时间/数值/decimal/bytea，未知类型按文本回退。
     pg_projected_cell_value(row, index, column)
+}
+
+/// 失败的语句并未执行（会话进入 aborted / 或循环因中止而跳过）时使用的摘要。
+fn skipped_query_summary(sql: String, elapsed_ms: u64) -> QueryExecutionSummary {
+    QueryExecutionSummary {
+        sql,
+        kind: QueryStatementKind::ResultSet,
+        success: false,
+        message: "已跳过：会话处于 aborted 事务态，需 ROLLBACK 后继续".to_string(),
+        returned_rows: 0,
+        affected_rows: 0,
+        elapsed_ms,
+    }
 }

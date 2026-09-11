@@ -333,6 +333,16 @@ fn pg_lock_error(
     Error::new(ErrorKind::Internal, "PostgreSQL 会话注册表锁失效")
 }
 
+/// 该错误是否使当前会话进入 aborted 事务态（`25P02 in_failed_sql_transaction`）。
+/// 显式事务内任意语句失败后，后续语句在 ROLLBACK 前都不可执行；用于停止 continue_on_error。
+fn pg_error_aborts_transaction(error: &tokio_postgres::Error) -> bool {
+    use tokio_postgres::error::SqlState;
+    matches!(
+        error.code(),
+        Some(&SqlState::IN_FAILED_SQL_TRANSACTION)
+    )
+}
+
 /// 把 tokio-postgres 错误统一映射为 fluxdb 错误（认证 / 连接 / 查询分类）。
 fn pg_error(error: tokio_postgres::Error) -> Error {
     use tokio_postgres::error::SqlState;

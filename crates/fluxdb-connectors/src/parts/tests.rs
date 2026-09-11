@@ -4474,4 +4474,59 @@ SELECT item_id, name FROM audit_log;"
         connector.execute(&cleanup).expect("清理临时结构应成功");
     }
 
+    #[test]
+    fn pg_live_smoke_aborted_transaction_skips_remaining() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T13 冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "DROP TABLE IF EXISTS t13_abort CASCADE; CREATE TABLE t13_abort(id int PRIMARY KEY);"
+            .to_string();
+        connector.execute(&setup).expect("建表应成功");
+
+        // continue_on_error 下，显式事务内冲突使会话进入 aborted；
+        // 后续语句须逐条跳过（标注「需 ROLLBACK」，不得在 ROLLBACK 前继续）。
+        let mut batch = pg_query_request(&config, None);
+        batch.text = "\
+            BEGIN; \
+            INSERT INTO t13_abort VALUES (1); \
+            INSERT INTO t13_abort VALUES (1); \
+            INSERT INTO t13_abort VALUES (2); \
+            INSERT INTO t13_abort VALUES (3); \
+        "
+        .to_string();
+        batch.options.continue_on_error = true;
+        let result = connector.execute(&batch).expect("continue_on_error 批次应返回而非抛错");
+        // BEGIN 成功、首次插入成功、冲突失败、25P02 失败、随后语句被跳过。
+        assert!(result.summaries.len() >= 4, "summaries = {:#?}", result.summaries);
+        assert!(result.summaries[0].success, "BEGIN 应成功");
+        assert!(result.summaries[1].success, "首次插入应成功");
+        assert!(!result.summaries[2].success, "冲突插入应失败");
+        // 事务内冲突后，存在一条 25P02 与一条被跳过的记录。
+        assert!(
+            result.summaries[3..].iter().any(|s| s.message.contains("已跳过")),
+            "应存在跳过摘要：{:#?}",
+            result.summaries
+        );
+
+        // 用户显式 ROLLBACK 恢复会话，随后仍可正常执行。
+        let mut recover = pg_query_request(&config, None);
+        recover.text = "ROLLBACK; SELECT count(*) AS cnt FROM t13_abort;".to_string();
+        let recovered = connector.execute(&recover).expect("ROLLBACK 后应恢复");
+        assert!(
+            recovered.summaries.iter().all(|s| s.success),
+            "ROLLBACK 后应全部成功：{:#?}",
+            recovered.summaries
+        );
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t13_abort CASCADE;".to_string();
+        connector.execute(&cleanup).expect("清理临时结构应成功");
+    }
+
 }
