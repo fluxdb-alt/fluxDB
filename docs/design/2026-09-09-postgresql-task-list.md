@@ -45,7 +45,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 | 任务 | 交付内容 | 前置依赖 | 状态 / 执行人 |
 | --- | --- | --- | --- |
-| T01 | 按职责机械拆分需扩展的大文件、冻结 MySQL 基线 | 无 | 未开始 / — |
+| T01 | 按职责机械拆分需扩展的大文件、冻结 MySQL 基线 | 无 | 已完成 / Claude Code |
 | T02 | PostgreSQL 核心类型、配置和凭据持久化 | T01 | 已完成 / dev-2 |
 | T03 | database/schema 身份、查询上下文、缓存与历史迁移 | T02 | 已完成 / 2026-09-10 |
 | T04 | 驱动、runtime、会话和唯一拨号入口 | T02、T03 | 已完成 / 2026-09-10 |
@@ -78,12 +78,20 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T01 — 机械拆分与 MySQL 基线
 
-- [ ] 完成 T01
+- [x] 完成 T01
 - **开始前读**：设计 1、3.1、3.4、13；R00、R03、R06–R09、R13–R16；现有 app/connector/UI 测试入口。
 - **工作**：记录当前 MySQL F01–F20 的实际入口与可运行状态；拆出 state 的建表/表操作/查询状态、真实 connector 路由、将扩展的 dispatch 分支、连接表单及后台文件执行职责。超 1200 行且需加功能的文件先拆对应职责，不整体迁移无关 Redis 功能。保持旧 include 边界可用，PG 新目录用真实 mod。
 - **交付位置**：设计 3.4 对应 app/core/UI 目录；mysql/shared 辅助的最小职责迁移；原入口只做模块声明和 glue。不添加 PostgreSQL 行为到纯移动提交。
 - **验收**：格式化和 workspace check；受影响已有测试通过，MySQL SQL 预览/路由/配置结构无行为变化；记录移动前后文件与符号对应关系。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成（2026-09-10，经本会话 2026-09-11 复核归档）；执行人 Claude Code。
+  - **冻结 MySQL 基线**：`cargo check --workspace` 干净；修复 1 处失效断言（`mock_objects` 4 张联合表）；全 workspace 1133 tests 通过；真实 MySQL `test_connection` 经 `fluxdb_demo` live 容器冒烟通过。
+  - **state 拆分**：`state.rs` 5291→1921 行，建表域细拆 6 职责文件（create_table_model/state/metadata/sql/actions/design_statements，各 <1200 行）。
+  - **connectors shared 拆分**：`shared.rs` 1837 行按职责拆 5 文件（shared_cells/write/read_exec/read_sql/demo）。
+  - **desktop 拆分**：`connection_dialog`/`tree_helpers`/`app_boot` 大文件按职责拆（新增 connection_dialog_query_history/fields、app_boot_helpers 等）；`main.rs` 158 行为声明+glue。
+  - **dispatch 域路由**：`dispatch.rs` 3724→2774 行，巨型 match 按域提取，`_ => dispatch_table_command` 兜底消除手写 guard 失配风险。本会话新增的 PG 命令（CreateSchema 等）继续经该薄路由下发，domain router 保持单一。
+  - **文件与符号对应**：移动前后对应关系已在各拆分提交（`01ee37a`、`1c8f793`、`5f9b1af`、`55bf562`、`28e5937`、`2d1b228`）记录；行为经 `cargo test --workspace` 证明等价。
+  - **偏差/剩余**：`AGENTS.md` 引用 `docs/2026-09-04-gpui-component-ui-migration.md` 当前缺失（记录于设计 R00）；进一步拆分剩余大文件（app_state 2347/app_boot 2495/dispatch 2774）属可选重构，当前不因新增功能必需，按「避免无关重构」不再扩张。
+  - **验证（本会话复核）**：workspace check 干净；app 394、connectors 135、desktop 370、storage 20、sqlite 231 全绿；PG 真实冒烟经隔离容器通过。
 
 ### T02 — 配置、核心类型与凭据
 
