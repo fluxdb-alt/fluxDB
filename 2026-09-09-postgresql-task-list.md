@@ -52,7 +52,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T05 | TLS、SSH、代理、超时、资源清理 | T04 | 已完成 / 2026-09-11 |
 | T06 | database/schema/对象浏览与真实路由 | T03、T05 | 已完成 / 2026-09-11 |
 | T07 | 创建/删除数据库与 schema 操作 | T06 | 已完成 / 2026-09-11 |
-| T08 | 列、索引、约束、触发器和类型元数据 | T06 | 未开始 / — |
+| T08 | 列、索引、约束、触发器和类型元数据 | T06 | 已完成 / 2026-09-11 |
 | T09 | PostgreSQL 值转换、参数编码和 bytea | T08 | 未开始 / — |
 | T10 | 数据分页、排序、筛选与预览 | T09 | 未开始 / — |
 | T11 | 数据编辑、可靠定位、原子提交和冲突处理 | T10 | 未开始 / — |
@@ -227,12 +227,30 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T08 — 结构元数据
 
-- [ ] 完成 T08
+- [x] 完成 T08
 - **开始前读**：设计 4.3、6.1、9.1；R02、R05、R08、R21、R22、R25、R26。
 - **工作**：TableMetadata 和 PG 类型身份；columns/default/identity/generated；复合 PK/FK/check、表达式/partial/INCLUDE index、trigger/function、sequence；目录查询按版本和权限准确执行，保留原始 definition。
 - **交付位置**：core/table_metadata.rs、postgres/metadata.rs、app table_info adapter。
 - **验收**：字段顺序、dropped column、复合外键序位不笛卡尔积；同名约束不混表；表达式索引不丢项；PG14/15/16/17/18 字段差异测试；普通用户可用；未知属性保留。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成；执行人 fluxdb；内容/验证 —— 见下「T08 验收」。
+
+#### T08 验收
+
+- **core `table_metadata.rs`**：新增 `ColumnMeta / IndexColumnItem / IndexMeta / ForeignKeyMeta / CheckMeta / UniqueKeyMeta / TriggerMeta / TableStructure` 领域模型；列含 ordinal、类型身份、nullable、默认、identity/generated 与可编辑性、PK/唯一标记、注释；索引含键项列(或表达式)+方向、INCLUDE、unique/primary/predicate/valid/完整 definition；FK 含多列序位投影、ref schema/table/列、动作/匹配/延迟属性；触发器含事件/时相/级别/函数/enabled/definition。
+- **`postgres/table_info.rs` 单一综合加载器 `pg_table_metadata`**：一次建连读全量结构，供四个 table-info tab 与 DDL 复用同一代码路径；视图单走 `pg_get_viewdef` 重建。`pg_load_table_structure` 接受既有 client（供 DDL 复用连接，避免嵌套 runtime）。
+  - **列**：`pg_attribute`+`pg_type`+`pg_attrdef`，`attnum>0` 且非 dropped，按 attnum 序保字段顺序；identity/generated 由 `attidentity/attgenerated` 判定。
+  - **主键/约束**：`pg_constraint` 按 contype 分 p/u/f/c；复合 PK/FK 的 `conkey/confkey` 同序位投影（无笛卡尔积）；FK 由 `confupdtype/confdeltype/confmatchtype` 映射动作与匹配；`deferrable/initially_deferred` 保留。
+  - **索引**：`pg_index`+`pg_am`；`indkey::int2[]` 逐位取键项，attnum==0 判定为表达式键项（不靠括号猜测），剥 `DESC/ASC/NULLS FIRST/LAST` 方向后缀；`indnkeyatts` 之后为 INCLUDE 列；predicate/valid/方法/完整 definition 保留。
+  - **触发器**：`pg_trigger`（`NOT tgisinternal` 过滤内部约束触发器）+ `pg_proc/pg_namespace`；`tgtype` 位掩码解码事件(INSERT/DELETE/UPDATE/TRUNCATE)/时相(BEFORE/AFTER/INSTEAD)/级别(ROW/STATEMENT)。
+  - **决策**：约束展示以 `pg_constraint` 为准；独立唯一索引在索引 tab 呈现（`IndexMeta.is_unique`），约束背衬索引由唯一键名集合去重、不重复出现在 DDL CREATE INDEX。
+- **DDL 重建 `build_table_ddl` / `pg_table_ddl`**：PG 无 SHOW CREATE TABLE，按 `TableStructure` 组装 `CREATE TABLE`（列+identity/generated/默认/NOT NULL、PRIMARY KEY、CONSTRAINT UNIQUE/CHECK/FOREIGN KEY），再 `CREATE INDEX`（跳过 primary 与约束背衬）、`COMMENT ON TABLE/COLUMN`；视图走 `pg_get_viewdef` → `CREATE OR REPLACE VIEW…`。
+- **接线**：`postgres.rs` include `index_items.rs`/`table_info.rs`；connector 新增 `list_indexes/list_foreign_keys/list_triggers/table_ddl` 四臂；app `mock_data.rs` 的 PG 表信息分支由 `pg_not_wired` 改为真实 connector 调用。
+- **修复的隐性问题（并入 T08）**：
+  - **int2[] 数组参数类型不匹配**：`Vec<i32>`(int4[]) 绑定 `ANY($2::int2[])` 触发 tokio-postgres `to_sql_checked` 拒绝（参数推断类型与值编码类型不符，报 `error serializing parameter 1`）——整为 `::int4[]` 与 `Vec<i32>` 对齐。
+  - **`pg_load_constraints` 列序错位**：FK 的 `confrelid` 等 6 列索引整体偏移 1——校正为 SELECT 序。
+  - **`split_sql_statements` 不支持 PostgreSQL 美元引用**：`$$…$$`/`$tag$…$tag$` 体内分号被误切，plpgsql 函数体被执行器拆散（建触发器失败）——新增美元引用识别，函数体保持单条。对应单测 `split_sql_keeps_dollar_quoted_function_body_together`。
+  - **DDL 路径嵌套 runtime**：`pg_table_ddl` 在 `block_on` 内再调 `pg_table_metadata` 二次 `block_on`——抽出 `pg_load_table_structure` 复用既有会话。
+- **测试**：connectors 新增 `t08_structure` 合成结构 + 6 个单测（DDL 子句往返、索引键切分、触发器位码、索引/外键/触发器 tab 适配器）+ 真实 PG 冒烟 `pg_live_smoke_table_info`（建含列/PK/identity/唯一/FK/CHECK/表达式索引/触发器/注释的表，逐 tab 校验 + DDL 重建 + 视图 DDL，清理）。整体 workspace 测试通过（含 T06/T07/T08 冒烟）。
 
 ### T09 — 类型转换、绑定与二进制
 

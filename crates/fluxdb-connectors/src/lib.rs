@@ -3,11 +3,13 @@ use fluxdb_core::{
     CommandExecutionStatus, CommandExecutionSummary, CommandExecutionTarget, CommandReply,
     CommandWorkbenchExecution, CommandWorkbenchRequest, CompletionColumn, CompletionRoutine,
     CompletionRoutineKind, CompletionTable, CompletionTrigger, ConnectionConfig, ConnectionId,
-    ConnectionOverview, Connector, CreateDatabaseRequest, DataChangeSet, DataExportPreview,
-    DataPage, DatabaseKind, Endpoint, Error, ErrorKind, FilterOp, FilterSpec, ForeignKeyInfo,
-    IndexInfo, ObjectKind, ObjectPath, ObjectSummary, Pagination, QueryExecutionResult,
+    CheckMeta, ColumnMeta, ConnectionOverview, Connector, CreateDatabaseRequest,
+    DataChangeSet, DataExportPreview, DataPage, DatabaseKind, Endpoint, Error, ErrorKind,
+    FilterOp, FilterSpec, ForeignKeyInfo, ForeignKeyMeta, IndexColumnItem, IndexInfo,
+    IndexMeta, ObjectKind, ObjectPath, ObjectSummary, Pagination, QueryExecutionResult,
     QueryExecutionSummary, QueryRequest, QuerySessionId, QueryStatementKind, RedisHashFieldTtl,
-    RedisServerVersion, Row, RowUpdate, SortDirection, SortSpec, TriggerInfo, is_binary_type_name,
+    RedisServerVersion, Row, RowUpdate, SortDirection, SortSpec, TableStructure, TriggerInfo,
+    TriggerMeta, UniqueKeyMeta, is_binary_type_name,
     sqlite_attached_databases,
 };
 use sqlx::{

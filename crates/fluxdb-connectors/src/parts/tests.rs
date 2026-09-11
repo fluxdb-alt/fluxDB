@@ -2591,6 +2591,20 @@ SELECT 1;",
     }
 
     #[test]
+    fn split_sql_keeps_dollar_quoted_function_body_together() {
+        // PostgreSQL 美元引用（$$ 与 $tag$）体内的分号不得被切分。
+        let statements = split_sql_statements(
+            "DROP TABLE IF EXISTS t CASCADE; CREATE FUNCTION f() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql; CREATE TRIGGER t_i AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION f(); SELECT 1; SELECT 2;",
+        );
+        assert_eq!(statements.len(), 5);
+        assert_eq!(statements[1], "CREATE FUNCTION f() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql");
+        // 关键：分号切分不得破坏函数体（体内分号原样保留在单条语句里）。
+        assert!(statements[1].contains("RETURN NEW; END; $$"));
+        let statements = split_sql_statements("SELECT $1 FROM t WHERE x = $2; DO $$ BEGIN RAISE NOTICE 'x; y'; END $$;");
+        assert_eq!(statements.len(), 2);
+    }
+
+    #[test]
     fn execute_with_progress_reports_summaries_and_honors_cancel() {
         let connector = MockConnector::sqlite();
         let seen = std::cell::Cell::new(0);
@@ -3401,6 +3415,409 @@ SELECT item_id, name FROM audit_log;"
             !after.iter().any(|o| o.path.name == "t07_db"),
             "删除后 t07_db 不应再出现"
         );
+    }
+
+    // ===== T08 结构元数据（单元 + 真实冒烟）=====
+
+    /// 合成一个覆盖 列默认/identity/generated/PK/唯一/CHECK/FK/索引/注释 的完整结构，
+    /// 用于校验 DDL 重建的片段与顺序（纯函数，不依赖服务器）。
+    fn t08_structure() -> TableStructure {
+        TableStructure {
+            database: Some("db".to_string()),
+            schema: Some("public".to_string()),
+            name: "t08_master".to_string(),
+            kind: ObjectKind::Table,
+            columns: vec![
+                ColumnMeta {
+                    name: "id".into(),
+                    ordinal: 1,
+                    data_type: "integer".into(),
+                    type_schema: Some("pg_catalog".into()),
+                    type_name: Some("int4".into()),
+                    nullable: false,
+                    default_expr: None,
+                    is_identity: true,
+                    identity_generation: Some("a".into()),
+                    is_generated: false,
+                    is_editable: false,
+                    primary_key: true,
+                    unique_key: false,
+                    comment: None,
+                },
+                ColumnMeta {
+                    name: "name".into(),
+                    ordinal: 2,
+                    data_type: "character varying(50)".into(),
+                    type_schema: Some("pg_catalog".into()),
+                    type_name: Some("varchar".into()),
+                    nullable: false,
+                    default_expr: Some("'n/a'::character varying".into()),
+                    is_identity: false,
+                    identity_generation: None,
+                    is_generated: false,
+                    is_editable: true,
+                    primary_key: false,
+                    unique_key: true,
+                    comment: Some("名称".into()),
+                },
+                ColumnMeta {
+                    name: "total".into(),
+                    ordinal: 3,
+                    data_type: "numeric(10,2)".into(),
+                    type_schema: Some("pg_catalog".into()),
+                    type_name: Some("numeric".into()),
+                    nullable: true,
+                    default_expr: None,
+                    is_identity: false,
+                    identity_generation: None,
+                    is_generated: false,
+                    is_editable: true,
+                    primary_key: false,
+                    unique_key: false,
+                    comment: None,
+                },
+                ColumnMeta {
+                    name: "full_name".into(),
+                    ordinal: 4,
+                    data_type: "text".into(),
+                    type_schema: Some("pg_catalog".into()),
+                    type_name: Some("text".into()),
+                    nullable: true,
+                    default_expr: None,
+                    is_identity: false,
+                    identity_generation: None,
+                    is_generated: true,
+                    is_editable: false,
+                    primary_key: false,
+                    unique_key: false,
+                    comment: None,
+                },
+            ],
+            primary_key: vec!["id".into()],
+            foreign_keys: vec![ForeignKeyMeta {
+                name: "t08_master_parent_fk".into(),
+                columns: vec!["parent_id".into()],
+                ref_schema: Some("public".into()),
+                ref_table: "t08_parent".into(),
+                ref_columns: vec!["id".into()],
+                on_delete: Some("CASCADE".into()),
+                on_update: Some("SET NULL".into()),
+                match_type: Some("s".into()),
+                deferrable: true,
+                initially_deferred: true,
+                definition: "FOREIGN KEY (parent_id) REFERENCES public.t08_parent(id)".into(),
+            }],
+            checks: vec![CheckMeta {
+                name: "t08_master_total_check".into(),
+                expression: "(total >= 0)".into(),
+                definition: "CHECK ((total >= 0))".into(),
+            }],
+            unique_keys: vec![UniqueKeyMeta {
+                name: "t08_master_name_key".into(),
+                columns: vec!["name".into()],
+                is_constraint: true,
+                definition: "UNIQUE (name)".into(),
+            }],
+            indexes: vec![
+                IndexMeta {
+                    name: "t08_master_lower_idx".into(),
+                    columns: vec![IndexColumnItem {
+                        column: None,
+                        expression: Some("lower(name)".into()),
+                        descending: false,
+                        nulls_first: false,
+                    }],
+                    include_columns: vec!["total".into()],
+                    is_unique: false,
+                    is_primary: false,
+                    index_type: Some("btree".into()),
+                    predicate: Some("(total > 0)".into()),
+                    valid: true,
+                    definition:
+                        "CREATE INDEX t08_master_lower_idx ON public.t08_master USING btree (lower(name)) INCLUDE (total) WHERE (total > 0)"
+                            .into(),
+                },
+                IndexMeta {
+                    name: "t08_master_pkey".into(),
+                    columns: vec![IndexColumnItem {
+                        column: Some("id".into()),
+                        expression: None,
+                        descending: false,
+                        nulls_first: false,
+                    }],
+                    include_columns: vec![],
+                    is_unique: true,
+                    is_primary: true,
+                    index_type: Some("btree".into()),
+                    predicate: None,
+                    valid: true,
+                    definition: "CREATE UNIQUE INDEX t08_master_pkey ON public.t08_master USING btree (id)".into(),
+                },
+                IndexMeta {
+                    name: "t08_master_name_key".into(),
+                    columns: vec![IndexColumnItem {
+                        column: Some("name".into()),
+                        expression: None,
+                        descending: false,
+                        nulls_first: false,
+                    }],
+                    include_columns: vec![],
+                    is_unique: true,
+                    is_primary: false,
+                    index_type: Some("btree".into()),
+                    predicate: None,
+                    valid: true,
+                    definition: "CREATE UNIQUE INDEX t08_master_name_key ON public.t08_master USING btree (name)".into(),
+                },
+            ],
+            triggers: vec![TriggerMeta {
+                name: "t08_master_audit".into(),
+                event: "INSERT OR UPDATE".into(),
+                timing: "AFTER".into(),
+                level: "ROW".into(),
+                function: "public.audit_fn()".into(),
+                enabled: true,
+                definition: "CREATE TRIGGER t08_master_audit AFTER INSERT OR UPDATE ON public.t08_master FOR EACH ROW EXECUTE FUNCTION public.audit_fn()".into(),
+            }],
+            comment: Some("主表".into()),
+        }
+    }
+
+    #[test]
+    fn pg_build_table_ddl_round_trips_clauses() {
+        let ddl = build_table_ddl(&t08_structure());
+
+        // 列定义：identity、默认、NOT NULL、generated 都在位。
+        assert!(ddl.contains("\"id\" integer GENERATED ALWAYS AS IDENTITY NOT NULL"));
+        assert!(ddl.contains("\"name\" character varying(50) DEFAULT 'n/a'::character varying NOT NULL"));
+        assert!(ddl.contains("\"full_name\" text GENERATED ALWAYS AS (expr) STORED"));
+        // 主键 / 唯一约束。
+        assert!(ddl.contains("PRIMARY KEY (\"id\")"));
+        assert!(ddl.contains("CONSTRAINT \"t08_master_name_key\" UNIQUE (\"name\")"));
+        // CHECK 表达式。
+        assert!(ddl.contains("CONSTRAINT \"t08_master_total_check\" CHECK ((total >= 0))"));
+        // 外键：动作/延迟属性。
+        assert!(ddl.contains("CONSTRAINT \"t08_master_parent_fk\" FOREIGN KEY (\"parent_id\") REFERENCES \"public\".\"t08_parent\" (\"id\") ON DELETE CASCADE ON UPDATE SET NULL DEFERRABLE INITIALLY DEFERRED"));
+        // 独立表达式索引保留（含 INCLUDE/predicate）；主键与唯一约束背衬索引不应重复出现。
+        assert!(ddl.contains("CREATE INDEX t08_master_lower_idx ON public.t08_master USING btree (lower(name)) INCLUDE (total) WHERE (total > 0);"));
+        assert!(!ddl.contains("CREATE UNIQUE INDEX t08_master_pkey"));
+        assert!(!ddl.contains("CREATE UNIQUE INDEX t08_master_name_key"));
+        // 注释。
+        assert!(ddl.contains("COMMENT ON TABLE \"public\".\"t08_master\" IS '主表';"));
+        assert!(ddl.contains("COMMENT ON COLUMN \"public\".\"t08_master\".\"name\" IS '名称';"));
+    }
+
+    #[test]
+    fn pg_split_index_keys_respects_nesting_and_quotes() {
+        let def = "CREATE INDEX i ON s.t USING btree (lower(name), \"weird col\" DESC NULLS LAST) INCLUDE (x) WHERE (a > 0)";
+        let keys = pg_split_index_keys(def);
+        assert_eq!(keys, vec!["lower(name)", "\"weird col\" DESC NULLS LAST"]);
+        // 表达式键项解析（attnum==0 信号驱动）。
+        let expr_item = pg_parse_index_item(&keys[0], true);
+        assert!(expr_item.column.is_none());
+        assert_eq!(expr_item.expression.as_deref(), Some("lower(name)"));
+        // 列 + DESC + NULLS LAST 解析（命名列）。
+        let col_item = pg_parse_index_item(&keys[1], false);
+        assert_eq!(col_item.column.as_deref(), Some("\"weird col\""));
+        assert!(col_item.descending);
+        assert!(!col_item.nulls_first);
+    }
+
+    #[test]
+    fn pg_trigger_bits_decode_event_and_timing() {
+        // AFTER INSERT OR UPDATE（ROW）: ROW=1, AFTER 无位, INSERT=4, UPDATE=16 → 1|4|16=21。
+        assert_eq!(pg_trigger_event(21), "INSERT OR UPDATE");
+        assert_eq!(pg_trigger_timing(21), "AFTER");
+        // BEFORE DELETE（ROW）: 1|2|8=11。
+        assert_eq!(pg_trigger_event(11), "DELETE");
+        assert_eq!(pg_trigger_timing(11), "BEFORE");
+        // INSTEAD OF（STATEMENT? 实际行级）: INSTEAD=64|INSERT=4 = 68。
+        assert_eq!(pg_trigger_timing(68), "INSTEAD OF");
+    }
+
+    #[test]
+    fn pg_indexes_from_structure_keeps_expression_item() {
+        let structure = t08_structure();
+        let indexes = pg_indexes_from_structure(&structure);
+        let expr_index = indexes
+            .iter()
+            .find(|i| i.name == "t08_master_lower_idx")
+            .expect("表达式索引应在索引列表");
+        assert_eq!(expr_index.columns, vec!["lower(name)"]);
+        assert_eq!(expr_index.index_type.as_deref(), Some("btree"));
+        assert!(!expr_index.is_unique);
+        assert!(!expr_index.is_primary);
+    }
+
+    #[test]
+    fn pg_foreign_keys_from_structure_joins_composite_columns() {
+        let mut structure = t08_structure();
+        structure.foreign_keys = vec![ForeignKeyMeta {
+            name: "fk_multi".into(),
+            columns: vec!["a".into(), "b".into()],
+            ref_schema: Some("public".into()),
+            ref_table: "t".into(),
+            ref_columns: vec!["x".into(), "y".into()],
+            on_delete: None,
+            on_update: None,
+            match_type: Some("s".into()),
+            deferrable: false,
+            initially_deferred: false,
+            definition: String::new(),
+        }];
+        let fks = pg_foreign_keys_from_structure(&structure);
+        assert_eq!(fks.len(), 1);
+        // 复合外键按序位折叠展示，不丢序、不出现笛卡尔积排列。
+        assert_eq!(fks[0].column, "a, b");
+        assert_eq!(fks[0].ref_column, "x, y");
+        assert_eq!(fks[0].ref_table, "t");
+    }
+
+    #[test]
+    fn pg_triggers_from_structure_maps_display() {
+        let structure = t08_structure();
+        let triggers = pg_triggers_from_structure(&structure);
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(triggers[0].name, "t08_master_audit");
+        assert_eq!(triggers[0].event, "AFTER INSERT OR UPDATE");
+        assert_eq!(triggers[0].timing, "ROW");
+        assert!(triggers[0].body.as_deref().unwrap().starts_with("CREATE TRIGGER"));
+    }
+
+    /// T08 真实冒烟：在维护库 public 下建一张含 列/PK/唯一/FK/CHECK/表达式索引/触发器/注释
+    /// 的表，逐 tab 校验元数据投影与 DDL 重建，随后清理。
+    #[test]
+    fn pg_live_smoke_table_info() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG 结构元数据冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TRIGGER IF EXISTS t08_audit ON t08_parent CASCADE; \
+            DROP TABLE IF EXISTS t08_child CASCADE; \
+            DROP TABLE IF EXISTS t08_master CASCADE; \
+            DROP TABLE IF EXISTS t08_parent CASCADE; \
+            CREATE TABLE t08_parent(id integer PRIMARY KEY); \
+            CREATE TABLE t08_child( \
+                id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, \
+                name varchar(50) NOT NULL DEFAULT 'x'::varchar, \
+                total numeric(10,2) CHECK (total >= 0), \
+                parent_id integer \
+            ); \
+            ALTER TABLE t08_child ADD CONSTRAINT t08_child_parent_fk \
+                FOREIGN KEY (parent_id) REFERENCES t08_parent(id) ON DELETE CASCADE; \
+            ALTER TABLE t08_child ADD CONSTRAINT t08_child_name_key UNIQUE (name); \
+            CREATE INDEX t08_child_lower_idx ON t08_child (lower(name)); \
+            COMMENT ON TABLE t08_child IS '子表'; \
+            COMMENT ON COLUMN t08_child.name IS '名称'; \
+            CREATE OR REPLACE FUNCTION t08_audit_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql; \
+            CREATE TRIGGER t08_audit AFTER INSERT OR UPDATE ON t08_child \
+                FOR EACH ROW EXECUTE FUNCTION t08_audit_fn(); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建临时结构应成功");
+
+        let child_path = ObjectPath {
+            connection_id: config.id,
+            database: config
+                .postgres_profile
+                .as_ref()
+                .unwrap()
+                .basic
+                .maintenance_database
+                .clone()
+                .into(),
+            schema: Some("public".to_string()),
+            name: "t08_child".to_string(),
+            kind: ObjectKind::Table,
+        };
+
+        // 索引：含主键/唯一约束背衬/表达式索引；表达式键项、INCLUDE/predicate 不丢。
+        let indexes = connector.list_indexes(&child_path).expect("列索引应成功");
+        let pkey = indexes.iter().find(|i| i.name == "t08_child_pkey").expect("主键索引存在");
+        assert!(pkey.is_primary && pkey.is_unique);
+        let lower = indexes
+            .iter()
+            .find(|i| i.name == "t08_child_lower_idx")
+            .expect("表达式索引存在");
+        assert!(
+            lower.columns.iter().any(|c| c.contains("lower")),
+            "表达式键项应保留，实际 {:?}",
+            lower.columns
+        );
+        let name_key = indexes
+            .iter()
+            .find(|i| i.name == "t08_child_name_key")
+            .expect("唯一约束背衬索引存在");
+        assert!(name_key.is_unique);
+
+        // 外键：本表列→被引用表 正确投影（无笛卡尔积）。
+        let fks = connector.list_foreign_keys(&child_path).expect("列外键应成功");
+        assert!(
+            fks.iter().any(|f| f.name == "t08_child_parent_fk"
+                && f.column == "parent_id"
+                && f.ref_schema.as_deref() == Some("public")
+                && f.ref_table == "t08_parent"
+                && f.ref_column == "id"),
+            "外键投影应与建表一致，实际 {:?}",
+            fks
+        );
+
+        // 触发器：用户触发器可见，内部约束触发器被过滤。
+        let triggers = connector.list_triggers(&child_path).expect("列触发器应成功");
+        assert!(
+            triggers.iter().any(|t| t.name == "t08_audit" && t.timing == "ROW"),
+            "用户触发器应可见，实际 {:?}",
+            triggers
+        );
+
+        // DDL：重建包含 列/约束/索引/注释。
+        let ddl = connector.table_ddl(&child_path).expect("表 DDL 应成功");
+        assert!(ddl.contains("\"id\" integer GENERATED BY DEFAULT AS IDENTITY"));
+        // pg_get_expr 会把 varchar 规整为 character varying，DDL 重建以此为准。
+        assert!(ddl.contains("DEFAULT 'x'::character varying"));
+        assert!(ddl.contains("PRIMARY KEY (\"id\")"));
+        assert!(ddl.contains("CONSTRAINT \"t08_child_parent_fk\""));
+        assert!(ddl.contains("ON DELETE CASCADE"));
+        assert!(ddl.contains("CREATE INDEX t08_child_lower_idx"));
+        assert!(ddl.contains("COMMENT ON TABLE \"public\".\"t08_child\" IS '子表';"));
+
+        // 视图 DDL 走 pg_get_viewdef。
+        let mut view_setup = pg_query_request(&config, None);
+        view_setup.text = "CREATE OR REPLACE VIEW t08_view AS SELECT id, name FROM t08_child".to_string();
+        connector.execute(&view_setup).expect("建视图应成功");
+        let view_path = ObjectPath {
+            connection_id: config.id,
+            database: child_path.database.clone(),
+            schema: Some("public".to_string()),
+            name: "t08_view".to_string(),
+            kind: ObjectKind::View,
+        };
+        let view_ddl = connector.table_ddl(&view_path).expect("视图 DDL 应成功");
+        assert!(
+            view_ddl.contains("CREATE OR REPLACE VIEW") && view_ddl.contains("t08_view"),
+            "视图 DDL 应由 viewdef 重建，实际 {view_ddl}"
+        );
+        connector
+            .execute(&{
+                let mut c = pg_query_request(&config, None);
+                c.text = "DROP VIEW t08_view".to_string();
+                c
+            })
+            .expect("清理视图应成功");
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TRIGGER IF EXISTS t08_audit ON t08_child; \
+                        DROP FUNCTION IF EXISTS t08_audit_fn(); \
+                        DROP TABLE IF EXISTS t08_child CASCADE; \
+                        DROP TABLE IF EXISTS t08_parent CASCADE"
+            .to_string();
+        connector.execute(&cleanup).expect("清理临时结构应成功");
     }
 
     fn env(key: &str) -> Option<String> {

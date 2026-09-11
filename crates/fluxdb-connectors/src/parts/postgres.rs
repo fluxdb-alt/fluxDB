@@ -5,5 +5,7 @@ include!("postgres/proxy.rs");
 include!("postgres/connection.rs");
 include!("postgres/metadata.rs");
 include!("postgres/ddl.rs");
+include!("postgres/index_items.rs");
+include!("postgres/table_info.rs");
 include!("postgres/executor.rs");
 include!("postgres/connector.rs");

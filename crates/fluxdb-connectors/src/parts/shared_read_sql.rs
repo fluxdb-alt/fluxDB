@@ -2,6 +2,7 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
     let mut statements = Vec::new();
     let mut start = 0;
     let mut quote: Option<char> = None;
+    let mut dollar_tag: Option<&str> = None;
     let mut line_comment = false;
     let mut block_comment = false;
     let mut chars = sql.char_indices().peekable();
@@ -32,6 +33,14 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
             }
             continue;
         }
+        if let Some(active_delim) = dollar_tag {
+            // 处于 $tag$…$tag$ 美元引号体内：只认配对的结束标签，忽略内部任何 ; 与引号。
+            if sql[index..].starts_with(active_delim) {
+                chars.nth(active_delim.len() - 1);
+                dollar_tag = None;
+            }
+            continue;
+        }
 
         match ch {
             '\'' | '"' | '`' => quote = Some(ch),
@@ -43,6 +52,13 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
             '/' if matches!(chars.peek(), Some((_, '*'))) => {
                 chars.next();
                 block_comment = true;
+            }
+            // PostgreSQL 美元引用 $tag$…$tag$（含无标签 $$）：开启时忽略体内分号。
+            '$' => {
+                if let Some(len) = dollar_quote_len(&sql[index..]) {
+                    chars.nth(len - 1);
+                    dollar_tag = Some(&sql[index..index + len]);
+                }
             }
             ';' | '；' => {
                 if create_trigger_statement_needs_more(&sql[start..index]) {
@@ -56,6 +72,21 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
     }
     push_statement(sql, start, sql.len(), &mut statements);
     statements
+}
+
+/// 从 `$` 处解析美元引用开始标签 `$$` 或 `$tag$`（tag 为 [A-Za-z_][A-Za-z0-9_]*），
+/// 成功返回完整结束定界符 `${tag}$` 的长度；`$` 不是合法标签起点或未闭合时返回 None。
+fn dollar_quote_len(sql: &str) -> Option<usize> {
+    let rest = &sql[1..];
+    let tag_len = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .count();
+    if rest.as_bytes().get(tag_len) == Some(&b'$') {
+        Some(tag_len + 2)
+    } else {
+        None
+    }
 }
 
 fn create_trigger_statement_needs_more(statement: &str) -> bool {

@@ -752,7 +752,11 @@ fn load_table_info_for_connection(
             object,
             tab,
         ),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => load_table_info_from_connector(
+            &PostgresConnector::with_config(config.clone()),
+            object,
+            tab,
+        ),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             load_table_info_from_connector(&MockConnector::new(config.kind), object, tab)
         }

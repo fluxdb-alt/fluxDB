@@ -55,6 +55,46 @@ impl Connector for PostgresConnector {
         pg_delete_database(config, connection_id, database)
     }
 
+    fn list_indexes(&self, path: &ObjectPath) -> fluxdb_core::Result<Vec<IndexInfo>> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 索引元数据需要连接配置上下文",
+            ));
+        };
+        pg_list_indexes(config, path)
+    }
+
+    fn list_foreign_keys(&self, path: &ObjectPath) -> fluxdb_core::Result<Vec<ForeignKeyInfo>> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 外键元数据需要连接配置上下文",
+            ));
+        };
+        pg_list_foreign_keys(config, path)
+    }
+
+    fn list_triggers(&self, path: &ObjectPath) -> fluxdb_core::Result<Vec<TriggerInfo>> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 触发器元数据需要连接配置上下文",
+            ));
+        };
+        pg_list_triggers(config, path)
+    }
+
+    fn table_ddl(&self, path: &ObjectPath) -> fluxdb_core::Result<String> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL DDL 元数据需要连接配置上下文",
+            ));
+        };
+        pg_table_ddl(config, path)
+    }
+
     fn load_data(
         &self,
         _path: &ObjectPath,
