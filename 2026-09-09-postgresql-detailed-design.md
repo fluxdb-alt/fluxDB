@@ -289,6 +289,8 @@ CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不�
 
 动态参数使用驱动 `ToSql` 类型适配；复杂类型可使用明确的 PostgreSQL text-format 参数适配器并绑定目标类型，须验证 `encode_format`，不是向参数放 SQL 字符串。DEFAULT 不作为参数；它是 SQL 语法节点。字节长度限制沿用 HEX_EDIT_LIMIT/BINARY_FILE_UPLOAD_LIMIT，并在读取前和读取过程中都执行，不只依赖 UI。
 
+**文本→类型化列的写入绑定（tokio-postgres 无 numeric/bigdecimal 解码）**：String/Json 值写入 numeric、money、json/jsonb、数组等非字符串列时，客户端会在发送前按推断参数类型校验 `ToSql`，文本无法直绑。采用**双重转换占位** `CAST(CAST($n AS text) AS <type>)`：内层 `AS text` 令 PG 推断 `$n` 为 text 从而通过客户端校验，外层 `AS <type>` 在服务端把 text 转成目标列类型完成赋值。字符串列（text/varchar/char/bpchar/name/citext）免转换；数组（`text[]`/`_text`）因参数被推断为数组类型，仍需上述双重转换。[T09]
+
 ### 7.2 查询分页、排序与筛选
 
 表数据查询全限定对象名、已验证列、`LIMIT limit+1 OFFSET offset`，以额外一行计算 has_more；不默认 COUNT 全表。排序优先用户排序，追加主键作为稳定 tie breaker；无唯一键时展示分页可能随并发变化。offset/limit 转换受边界校验，不把 u64 无检查传入 PG 有符号整型。

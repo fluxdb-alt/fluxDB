@@ -97,25 +97,60 @@ impl Connector for PostgresConnector {
 
     fn load_data(
         &self,
-        _path: &ObjectPath,
-        _offset: u64,
-        _limit: u64,
-        _sort: &[SortSpec],
-        _filters: &[FilterSpec],
+        path: &ObjectPath,
+        offset: u64,
+        limit: u64,
+        sort: &[SortSpec],
+        filters: &[FilterSpec],
     ) -> fluxdb_core::Result<DataPage> {
-        // 数据读取接入在 T07；此处显式失败。
-        Err(Error::new(
-            ErrorKind::Unsupported,
-            "PostgreSQL 数据读取尚未接入（T07）",
-        ))
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 数据读取需要连接配置上下文",
+            ));
+        };
+        pg_load_data(config, path, offset, limit, sort, filters)
     }
 
-    fn apply_changes(&self, _changes: &DataChangeSet) -> fluxdb_core::Result<()> {
-        // 数据编辑提交接入在后续任务；此处显式失败。
-        Err(Error::new(
-            ErrorKind::Unsupported,
-            "PostgreSQL 数据编辑提交尚未接入",
-        ))
+    fn preview_data_export(
+        &self,
+        path: &ObjectPath,
+        fields: &[String],
+        sort: &[SortSpec],
+        filters: &[FilterSpec],
+    ) -> fluxdb_core::Result<DataExportPreview> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 导出预览需要连接配置上下文",
+            ));
+        };
+        pg_preview_data_export(config, path, fields, sort, filters)
+    }
+
+    fn apply_changes(&self, changes: &DataChangeSet) -> fluxdb_core::Result<()> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 数据编辑提交需要连接配置上下文",
+            ));
+        };
+        pg_apply_changes(config, changes)
+    }
+
+    fn load_cell_binary(
+        &self,
+        path: &ObjectPath,
+        identity: &fluxdb_core::RowIdentity,
+        column: &str,
+    ) -> fluxdb_core::Result<Vec<u8>> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 二进制读取需要连接配置上下文",
+            ));
+        };
+        pg_load_cell_binary(config, path, identity, column)
     }
 
     fn test_connection(&self, config: &ConnectionConfig) -> fluxdb_core::Result<()> {

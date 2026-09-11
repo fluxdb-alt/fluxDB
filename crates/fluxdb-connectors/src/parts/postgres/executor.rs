@@ -190,26 +190,8 @@ fn pg_rows_to_page(rows: Vec<tokio_postgres::Row>, offset: u64, limit: u64) -> D
     query_rows_to_page(columns, rows, offset, limit, pg_query_cell_value)
 }
 
-fn pg_query_cell_value(row: &tokio_postgres::Row, index: usize, _column: &Column) -> CellValue {
-    // 与 mysql/sqlite 一致：逐类型尝试，取首个可成功解析的值；
-    // 二进制类型（bytea 等）统一按 Bytes 处理（is_binary_type_name 控制展示）。
-    if let Ok(value) = row.try_get::<_, Option<i64>>(index) {
-        return value.map(CellValue::I64).unwrap_or(CellValue::Null);
-    }
-    if let Ok(value) = row.try_get::<_, Option<f64>>(index) {
-        return value.map(CellValue::F64).unwrap_or(CellValue::Null);
-    }
-    if let Ok(value) = row.try_get::<_, Option<bool>>(index) {
-        return value.map(CellValue::Bool).unwrap_or(CellValue::Null);
-    }
-    if let Ok(value) = row.try_get::<_, Option<String>>(index) {
-        return value.map(CellValue::Text).unwrap_or(CellValue::Null);
-    }
-    if let Ok(value) = row.try_get::<_, Option<Vec<u8>>>(index) {
-        return value.map(CellValue::Bytes).unwrap_or(CellValue::Null);
-    }
-    if let Ok(value) = row.try_get::<_, Option<f32>>(index) {
-        return value.map(|v| CellValue::F64(v as f64)).unwrap_or(CellValue::Null);
-    }
-    CellValue::Null
+fn pg_query_cell_value(row: &tokio_postgres::Row, index: usize, column: &Column) -> CellValue {
+    // 与 execute 路径（RowDescription 的 type_name）一致：按类型矩阵分类解码（T09）。
+    // 覆盖整数/浮点/布尔/文本/json/时间/数值/decimal/bytea，未知类型按文本回退。
+    pg_projected_cell_value(row, index, column)
 }

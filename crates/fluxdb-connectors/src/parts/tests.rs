@@ -3823,4 +3823,234 @@ SELECT item_id, name FROM audit_log;"
     fn env(key: &str) -> Option<String> {
         std::env::var(key).ok().filter(|v| !v.is_empty())
     }
+
+    // ---- T09 值转换、参数编码与 bytea ----
+
+    #[test]
+    fn pg_type_base_strips_modifiers_and_array_suffix() {
+        assert_eq!(pg_type_base("int4"), "int4");
+        assert_eq!(pg_type_base("varchar"), "varchar");
+        assert_eq!(pg_type_base("varchar(50)"), "varchar");
+        assert_eq!(pg_type_base("numeric(10,2)"), "numeric");
+        assert_eq!(pg_type_base("integer[]"), "integer");
+        assert_eq!(pg_type_base("text[]"), "text");
+        assert_eq!(pg_type_base(" double precision "), "double precision");
+    }
+
+    /// 逐值生成 `$n` 占位并分别绑定各自的值（回归：曾误用 `values[0].1` 让所有占位绑定同一值）。
+    #[test]
+    fn pg_insert_sql_binds_each_column_value() {
+        let mkcol = |name: &str, ty: &str| Column {
+            name: name.to_string(),
+            type_name: Some(ty.to_string()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        };
+        let c_id = mkcol("id", "int4");
+        let c_name = mkcol("name", "text");
+        let c_note = mkcol("note", "text");
+        let v_one = CellValue::I64(1);
+        let v_alice = CellValue::Text("alice".to_string());
+        let v_bob = CellValue::Text("bob".to_string());
+        let values = vec![(&c_id, &v_one), (&c_name, &v_alice), (&c_note, &v_bob)];
+        let (sql, _params) = pg_insert_sql("\"public\".\"t\"", &values).unwrap();
+        assert!(
+            sql.contains("(\"id\", \"name\", \"note\")") && sql.contains("VALUES ($1, $2, $3)"),
+            "插入 SQL 应带三列三占位，实际 {sql}"
+        );
+    }
+
+    #[test]
+    fn pg_insert_sql_empty_values_falls_back_to_default() {
+        let (sql, params) = pg_insert_sql("\"public\".\"t\"", &[]).unwrap();
+        assert_eq!(sql, "INSERT INTO \"public\".\"t\" DEFAULT VALUES");
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn pg_identity_where_maps_null_value_to_is_null() {
+        let id_val = CellValue::I64(7);
+        let null_val = CellValue::Null;
+        let identity = RowIdentity {
+            values: [("id".to_string(), id_val), ("deleted_at".to_string(), null_val)].into(),
+        };
+        let c_id = Column {
+            name: "id".to_string(),
+            type_name: Some("int4".to_string()),
+            nullable: false,
+            primary_key: true,
+            comment: None,
+        };
+        let c_del = Column {
+            name: "deleted_at".to_string(),
+            type_name: Some("timestamptz".to_string()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        };
+        let columns = vec![c_id, c_del];
+        let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
+        let where_sql = pg_identity_where(&mut params, &identity, &columns).unwrap();
+        // BTreeMap 按键升序迭代：deleted_at 在 id 之前。
+        assert_eq!(where_sql, " WHERE \"deleted_at\" IS NULL AND \"id\" = $1");
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn pg_identity_where_rejects_empty_identity() {
+        let identity = RowIdentity { values: Default::default() };
+        assert!(pg_identity_where(&mut Vec::new(), &identity, &[]).is_err());
+    }
+
+    #[test]
+    fn pg_next_param_binds_null_as_option_none() {
+        let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
+        let p1 = pg_next_param(&mut params, &CellValue::Null, None);
+        let p2 = pg_next_param(&mut params, &CellValue::Text("x".to_string()), None);
+        assert_eq!(p1, "$1");
+        assert_eq!(p2, "$2");
+        assert_eq!(params.len(), 2);
+    }
+
+    /// T09 冒烟：建含类型化字段与 bytea 的表 → 类型化读取 + 二进制投影 →
+    /// 编辑提交(插/改/删) + 单格完整二进制读取。真实 PG 才跑。
+    #[test]
+    fn pg_live_smoke_typed_read_binary_and_apply_changes() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T09 冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t09_typed CASCADE; \
+            CREATE TABLE t09_typed( \
+                id integer PRIMARY KEY, \
+                price numeric(8,2), \
+                ratio double precision, \
+                tags text[], \
+                meta jsonb, \
+                payload bytea, \
+                created_at timestamptz \
+            ); \
+            INSERT INTO t09_typed \
+                (id, price, ratio, tags, meta, payload, created_at) VALUES \
+                (1, 12.50, 0.25, ARRAY['a','b'], '{\"k\":1}', \
+                 decode('deadbeef','hex'), '2024-01-02 03:04:05+00'); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建临时结构应成功");
+
+        let path = ObjectPath {
+            connection_id: config.id,
+            database: config
+                .postgres_profile
+                .as_ref()
+                .unwrap()
+                .basic
+                .maintenance_database
+                .clone()
+                .into(),
+            schema: Some("public".to_string()),
+            name: "t09_typed".to_string(),
+            kind: ObjectKind::Table,
+        };
+
+        // 有条件的完整读取：类型化值应解码为对应 CellValue（numeric 文本、jsonb Json、bytea 摘要）。
+        let page = connector.load_data(&path, 0, 50, &[], &[]).expect("读取数据应成功");
+        assert_eq!(page.rows.len(), 1, "应读到 1 行");
+        let row = &page.rows[0];
+        let index_of = |name: &str| page.columns.iter().position(|c| c.name == name).unwrap();
+        let i_price = index_of("price");
+        let i_ratio = index_of("ratio");
+        let i_tags = index_of("tags");
+        let i_meta = index_of("meta");
+        let i_payload = index_of("payload");
+        assert_eq!(row.values[i_price], CellValue::Text("12.50".to_string()));
+        assert_eq!(row.values[i_ratio], CellValue::F64(0.25));
+        assert_eq!(row.values[i_tags], CellValue::Text("{a,b}".to_string()));
+        assert_eq!(row.values[i_meta], CellValue::Json("{\"k\": 1}".to_string()));
+        // bytea 走摘要投影：非空、长度 4（deadbeef）。
+        match &row.values[i_payload] {
+            CellValue::BinarySummary(summary) => {
+                assert!(!summary.is_null, "payload 不应为 NULL");
+                assert_eq!(summary.byte_length, 4);
+                assert_eq!(summary.preview_hex, Some("deadbeef".to_string()));
+            }
+            other => panic!("bytea 应以摘要投影，实际 {other:?}"),
+        }
+
+        // 单格完整二进制读取：能得到原始 4 字节。
+        let identity = RowIdentity {
+            values: [("id".to_string(), CellValue::I64(1))].into(),
+        };
+        let bytes = connector
+            .load_cell_binary(&path, &identity, "payload")
+            .expect("完整二进制读取应成功");
+        assert_eq!(bytes, vec![0xde, 0xad, 0xbe, 0xef]);
+
+        // 编辑提交：更新价格、改 bytea、插入新行、删除该行 —— 单事务可回滚语义由连接器保证。
+        let mut changes = DataChangeSet {
+            object: path.clone(),
+            inserts: vec![Row {
+                values: vec![
+                    CellValue::I64(2),
+                    CellValue::Text("9.99".to_string()),
+                    CellValue::F64(-1.0),
+                    CellValue::Text("{}".to_string()),
+                    CellValue::Json("null".to_string()),
+                    CellValue::Bytes(vec![0x01, 0x02]),
+                    CellValue::Null, // created_at
+                ],
+            }],
+            updates: vec![RowUpdate {
+                identity: identity.clone(),
+                cells: vec![
+                    CellUpdate {
+                        column: "price".to_string(),
+                        value: CellValue::Text("20.00".to_string()),
+                    },
+                    CellUpdate {
+                        column: "payload".to_string(),
+                        value: CellValue::Bytes(vec![0xca, 0xfe]),
+                    },
+                ],
+            }],
+            deletes: vec![],
+        };
+        connector.apply_changes(&changes).expect("插入+更新应成功");
+
+        // 校验更新结果。
+        let page2 = connector.load_data(&path, 0, 50, &[], &[]).expect("重新读取应成功");
+        let rows = page2.rows.iter().any(|r| {
+            matches!(r.values[index_of("price")], CellValue::Text(ref p) if p == "20.00")
+        });
+        assert!(rows, "更新后的价格应生效");
+        let new_bytes = connector
+            .load_cell_binary(&path, &identity, "payload")
+            .expect("更新后二进制读取应成功");
+        assert_eq!(new_bytes, vec![0xca, 0xfe]);
+
+        // 删除新插入的行：仅提交删除，清空其后的插入/更新，避免重复执行。
+        changes.inserts.clear();
+        changes.updates.clear();
+        changes.deletes.push(RowIdentity {
+            values: [("id".to_string(), CellValue::I64(2))].into(),
+        });
+        connector.apply_changes(&changes).expect("删除应成功");
+        let page3 = connector.load_data(&path, 0, 50, &[], &[]).expect("删除后读取应成功");
+        assert!(
+            !page3.rows.iter().any(|r| r.values[index_of("id")] == CellValue::I64(2)),
+            "删除后的行不应存在"
+        );
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t09_typed CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理临时结构应成功");
+    }
+
 }

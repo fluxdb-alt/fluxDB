@@ -2096,6 +2096,7 @@ name = "fluxdb-connectors"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "chrono",
  "fluxdb-core",
  "rustls",
  "rustls-pemfile",

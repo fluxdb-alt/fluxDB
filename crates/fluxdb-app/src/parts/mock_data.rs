@@ -594,7 +594,13 @@ fn load_data_for_connection(
             sort,
             filters,
         ),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => PostgresConnector::with_config(config.clone()).load_data(
+            object,
+            pagination.offset,
+            pagination.limit,
+            sort,
+            filters,
+        ),
         DatabaseKind::MongoDb => MockConnector::new(config.kind).load_data(
             object,
             pagination.offset,
@@ -666,7 +672,8 @@ fn preview_data_export_for_connection(
         DatabaseKind::Sqlite => {
             SqliteConnector::with_config(config.clone()).preview_data_export(object, fields, sort, filters)
         }
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => PostgresConnector::with_config(config.clone())
+            .preview_data_export(object, fields, sort, filters),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind).preview_data_export(object, fields, sort, filters)
         }
@@ -690,7 +697,7 @@ fn apply_data_changes_for_connection(
             MySqlConnector::with_config(config.clone()).apply_changes(changes)
         }
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).apply_changes(changes),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => PostgresConnector::with_config(config.clone()).apply_changes(changes),
         DatabaseKind::MongoDb => MockConnector::new(config.kind).apply_changes(changes),
         DatabaseKind::Redis => RedisConnector::with_config(config.clone()).apply_changes(changes),
     }
@@ -717,7 +724,9 @@ fn load_cell_binary_for_connection(
         DatabaseKind::Sqlite => {
             SqliteConnector::with_config(config.clone()).load_cell_binary(object, identity, column)
         }
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => {
+            PostgresConnector::with_config(config.clone()).load_cell_binary(object, identity, column)
+        }
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind).load_cell_binary(object, identity, column)
         }
