@@ -317,6 +317,9 @@ impl NavicatMain {
             TableMenuAction::Truncate => {
                 self.open_danger_table_modal(object_path, DangerTableAction::Truncate, window, cx);
             }
+            TableMenuAction::RemoveFromGroup => {
+                self.remove_table_from_group(object_path, cx);
+            }
         }
         cx.notify();
     }
@@ -424,6 +427,14 @@ impl NavicatMain {
         self.table_context_menu = None;
         self.table_folder_assignments
             .insert(table_tree_key(&object_path), (parent_key, folder));
+        self.persist_sidebar_layout();
+        cx.notify();
+    }
+
+    fn remove_table_from_group(&mut self, object_path: ObjectPath, cx: &mut Context<Self>) {
+        self.table_context_menu = None;
+        self.table_folder_assignments
+            .remove(&table_tree_key(&object_path));
         self.persist_sidebar_layout();
         cx.notify();
     }

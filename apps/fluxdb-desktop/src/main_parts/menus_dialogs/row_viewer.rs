@@ -622,7 +622,7 @@ fn data_row_menu_item(
     tab_id: TabId,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> Div {
+) -> Stateful<Div> {
     data_cell_menu_item(label, icon, true, colors)
         .font_weight(gpui::FontWeight::BOLD)
         .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -637,7 +637,7 @@ fn data_row_copy_item(
     menu: DataRowContextMenu,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> Div {
+) -> Stateful<Div> {
     data_cell_menu_item_text(label, AppIcon::Copy, true, colors)
         .font_weight(gpui::FontWeight::BOLD)
         .on_mouse_down(
@@ -667,7 +667,7 @@ fn data_row_export_item(
     menu: DataRowContextMenu,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> Div {
+) -> Stateful<Div> {
     data_cell_menu_item_text(label, AppIcon::Save, true, colors)
         .font_weight(gpui::FontWeight::BOLD)
         .on_mouse_down(

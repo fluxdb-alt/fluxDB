@@ -1918,8 +1918,122 @@
     #[test]
     fn execute_query_keeps_comment_tokens_inside_strings() {
         assert_eq!(
-            sql_text_for_execution("select '--keep', '#keep', '/*keep*/'"),
+            sql_text_for_execution("select '--keep', '#keep', '/*keep*/'", 100),
             "select '--keep', '#keep', '/*keep*/' LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn default_limit_zero_does_not_append_or_force() {
+        // 不限制（page_size=0）：无 LIMIT 不追加
+        assert_eq!(
+            sql_text_for_execution("select * from Product", 0),
+            "select * from Product"
+        );
+        // 不限制：用户已写 LIMIT 即使超过也不改写
+        assert_eq!(
+            sql_text_for_execution("select * from Product limit 5000", 0),
+            "select * from Product limit 5000"
+        );
+    }
+
+    #[test]
+    fn execute_query_no_limit_when_settings_page_size_is_zero() {
+        // 回归：设置「不限制」= 0，经 default_query_execution_options 必须保持 0，
+        // 不能被 Pagination::new 的 clamp(1, MAX) 改成 1 而追加 LIMIT 1。
+        let mut controller = AppController::with_mock_data();
+        let mut settings = controller.state().settings.clone();
+        settings.page_size = 0;
+        controller.dispatch(AppCommand::SaveSettings(settings));
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "select * from Product".to_string(),
+        });
+
+        controller.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+
+        assert_eq!(
+            active_query_editor(&controller).summaries[0].sql,
+            "select * from Product"
+        );
+    }
+
+    #[test]
+    fn execute_query_caps_settings_page_size() {
+        // 设置 page_size=50：无 LIMIT 追加 LIMIT 50，而非硬编码 100。
+        let mut controller = AppController::with_mock_data();
+        let mut settings = controller.state().settings.clone();
+        settings.page_size = 50;
+        controller.dispatch(AppCommand::SaveSettings(settings));
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "select * from Product".to_string(),
+        });
+
+        controller.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+
+        assert_eq!(
+            active_query_editor(&controller).summaries[0].sql,
+            "select * from Product LIMIT 50"
+        );
+    }
+
+    #[test]
+    fn default_limit_caps_existing_larger_limit() {
+        // 用户 limit 200 > 配置 100 → 强制封顶为 100
+        assert_eq!(
+            sql_text_for_execution("select * from Product limit 200", 100),
+            "select * from Product LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn default_limit_keeps_smaller_or_equal_limit() {
+        // 用户 limit 20 <= 配置 100 → 保持
+        assert_eq!(
+            sql_text_for_execution("select * from Product limit 20", 100),
+            "select * from Product limit 20"
+        );
+        // 相等也保持
+        assert_eq!(
+            sql_text_for_execution("select * from Product limit 100", 100),
+            "select * from Product limit 100"
+        );
+    }
+
+    #[test]
+    fn default_limit_appends_when_missing() {
+        assert_eq!(
+            sql_text_for_execution("select * from Product", 500),
+            "select * from Product LIMIT 500"
+        );
+    }
+
+    #[test]
+    fn default_limit_caps_offset_syntax() {
+        // `limit offset, count`：封顶 count
+        assert_eq!(
+            sql_text_for_execution("select * from Product limit 10, 300", 100),
+            "select * from Product LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn default_limit_caps_offset_clause() {
+        // `limit count offset m`：封顶 count
+        assert_eq!(
+            sql_text_for_execution("select * from Product limit 300 offset 5", 100),
+            "select * from Product LIMIT 100 offset 5"
+        );
+    }
+
+    #[test]
+    fn default_limit_does_not_limit_non_select() {
+        assert_eq!(
+            sql_text_for_execution("update Product set name = 'A'", 100),
+            "update Product set name = 'A'"
         );
     }
 

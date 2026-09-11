@@ -56,8 +56,8 @@ pub use layer::{LayerEdit, LayerPatch, LayerSnapshot};
 pub use model::{
     Anchor, AnchorRange, Bias, CompletionItem, CompletionKind, CompletionRequest, CompletionResult,
     CompletionTrigger, Diagnostic, DiagnosticSeverity, Edit, EditorConfig, EditorEvent,
-    EditorProfile, ExecuteMode, InsertTextFormat, Offset, Point, Range, Selection,
-    SelectionSnapshot, SoftWrapMode, SubmitMode, TextChange,
+    EditorProfile, ExecuteMode, InsertTextFormat, Offset, Point, Range, ScrollBeyondLastLine,
+    Selection, SelectionSnapshot, SoftWrapMode, SubmitMode, TextChange,
 };
 pub use perf::{BACKGROUND_BUDGET_US, FRAME_BUDGET_US, threshold_us};
 pub use snippet::{Snippet, SnippetError, parse_snippet};

@@ -47,6 +47,21 @@ mod paint_perf_tests {
     }
 }
 
+/// 把编辑器动作绑定到编辑器根元素：GPUI 键绑定只派发给在此 `.on_action` 注册的元素。
+/// 泛型 `A` 由 `_marker: fn() -> A` 标注具体动作类型，委托给 `Editor::dispatch_action`。
+/// Div 的 `.on_action` 以 `&mut App` 为上下文，故此处通过 `Entity::update` 进入编辑器上下文。
+/// （下沉自宿主 content_views.rs；编辑器自持全部键鼠交互，宿主不再重复脚手架。）
+fn bind_editor_action<A: gpui::Action>(
+    editor: gpui::Entity<Editor>,
+    _marker: fn() -> A,
+) -> impl Fn(&A, &mut Window, &mut gpui::App) + Clone + 'static {
+    move |action: &A, _window: &mut Window, app: &mut gpui::App| {
+        editor.update(app, |editor, cx| editor.dispatch_action(action, cx));
+    }
+}
+
+// 键鼠/滚动/滚动条交互全部下沉到编辑器自身（对齐 Zed 的编辑器中滚动模型）。
+// 宿主只保留布局定位与配色，见 content_views.rs 两个承载面板的瘦身。
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = cx.entity();
@@ -54,6 +69,7 @@ impl Render for Editor {
         let find_input = self.find_input.clone();
         let replace_input = self.replace_input.clone();
         let theme = self.theme;
+        let element_id = editor.entity_id();
         if find_open {
             // `open_find` can be triggered by an action without a Window handle; sync the
             // selected text when the panel is rendered, where GPUI provides the handle.
@@ -62,10 +78,6 @@ impl Render for Editor {
                 find_input.update(cx, |input, cx| input.set_value(query, window, cx));
             }
         }
-        let mut root = div()
-            .relative()
-            .size_full()
-            .child(EditorCanvas { editor: editor.clone() });
         // 补全浮层打开时，先对全量候选定型一次宽度并缓存，避免滚动到不同标签时逐帧
         // 重算导致抖动（见 completion_placement 对 completion_width 的读取）。
         if self.completion_width.is_none()
@@ -79,6 +91,131 @@ impl Render for Editor {
                 window,
             )));
         }
+
+        let focus_handle = self.focus_handle.clone();
+        let scroll_handle = self.scroll_handle.clone();
+        // 内容：保留编辑器实际高度（.relative + .flex_shrink_0），使 track_scroll
+        // 容器能以内容尺寸计算可滚动范围（默认 stretch 会拉满视口，导致不可滚）。
+        let scroll_content = div()
+            .relative()
+            .flex_shrink_0()
+            .child(EditorCanvas { editor: editor.clone() });
+        let mut root = div()
+            .id(("fluxdb-editor", element_id))
+            .relative()
+            .size_full()
+            .overflow_hidden()
+            .key_context(CONTEXT)
+            .track_focus(&focus_handle)
+            .tab_index(0)
+            .cursor(gpui::CursorStyle::IBeam)
+            // 点击聚焦（先），再进编辑器自身点击命中（框选/折叠/运行/CodeLens）。
+            .on_mouse_down(MouseButton::Left, {
+                let focus_handle = focus_handle.clone();
+                move |_, window, app| {
+                    focus_handle.focus(window, app);
+                }
+            })
+            .on_mouse_down(MouseButton::Left, {
+                let editor = editor.clone();
+                move |event, window, app| {
+                    editor.update(app, |editor, cx| editor.mouse_down(event, window, cx));
+                }
+            })
+            .on_mouse_up(MouseButton::Left, {
+                let editor = editor.clone();
+                move |event, window, app| {
+                    editor.update(app, |editor, cx| editor.mouse_up(event, window, cx));
+                }
+            })
+            .on_mouse_move({
+                let editor = editor.clone();
+                move |event, window, app| {
+                    editor.update(app, |editor, cx| editor.mouse_move(event, window, cx));
+                }
+            })
+            // 滚轮：逐事件把原始 delta 交给 scroll（scroll 内部按「连续手势」在
+            // 动画目标上累加、「新手势」以当前 offset 为基准重算，并做主轴锁定）。
+            // 不做跨事件 coalesce：那会累积放大位移（滚动过快），且让滚到顶后残留的
+            // 纵向累积阻塞后续横向滚动（mac 触摸板小位移的方向切换）。
+            .on_scroll_wheel({
+                let editor = editor.clone();
+                move |event, window, app| {
+                    editor.update(app, |editor, cx| {
+                        editor.scroll(event, event.delta, window, cx);
+                    });
+                }
+            })
+            // 动作分发：GPUI 的键绑定只派发给在此注册 .on_action 的元素。
+            .on_action(bind_editor_action(editor.clone(), || Backspace))
+            .on_action(bind_editor_action(editor.clone(), || Delete))
+            .on_action(bind_editor_action(editor.clone(), || DeleteToPreviousWord))
+            .on_action(bind_editor_action(editor.clone(), || DeleteToNextWord))
+            .on_action(bind_editor_action(editor.clone(), || Enter { secondary: false }))
+            .on_action(bind_editor_action(editor.clone(), || Escape))
+            .on_action(bind_editor_action(editor.clone(), || MoveUp))
+            .on_action(bind_editor_action(editor.clone(), || MoveDown))
+            .on_action(bind_editor_action(editor.clone(), || MovePageUp))
+            .on_action(bind_editor_action(editor.clone(), || MovePageDown))
+            .on_action(bind_editor_action(editor.clone(), || MoveLeft))
+            .on_action(bind_editor_action(editor.clone(), || MoveRight))
+            .on_action(bind_editor_action(editor.clone(), || MoveHome))
+            .on_action(bind_editor_action(editor.clone(), || MoveEnd))
+            .on_action(bind_editor_action(editor.clone(), || MoveToStart))
+            .on_action(bind_editor_action(editor.clone(), || MoveToEnd))
+            .on_action(bind_editor_action(editor.clone(), || MoveToPreviousWord))
+            .on_action(bind_editor_action(editor.clone(), || MoveToNextWord))
+            .on_action(bind_editor_action(editor.clone(), || SelectAll))
+            .on_action(bind_editor_action(editor.clone(), || SelectLeft))
+            .on_action(bind_editor_action(editor.clone(), || SelectRight))
+            .on_action(bind_editor_action(editor.clone(), || SelectUp))
+            .on_action(bind_editor_action(editor.clone(), || SelectDown))
+            .on_action(bind_editor_action(editor.clone(), || SelectPageUp))
+            .on_action(bind_editor_action(editor.clone(), || SelectPageDown))
+            .on_action(bind_editor_action(editor.clone(), || SelectHome))
+            .on_action(bind_editor_action(editor.clone(), || SelectEnd))
+            .on_action(bind_editor_action(editor.clone(), || SelectToStart))
+            .on_action(bind_editor_action(editor.clone(), || SelectToEnd))
+            .on_action(bind_editor_action(editor.clone(), || SelectToPreviousWord))
+            .on_action(bind_editor_action(editor.clone(), || SelectToNextWord))
+            .on_action(bind_editor_action(editor.clone(), || SelectLine))
+            .on_action(bind_editor_action(editor.clone(), || Undo))
+            .on_action(bind_editor_action(editor.clone(), || Redo))
+            .on_action(bind_editor_action(editor.clone(), || Copy))
+            .on_action(bind_editor_action(editor.clone(), || Cut))
+            .on_action(bind_editor_action(editor.clone(), || Paste))
+            .on_action(bind_editor_action(editor.clone(), || IndentInline))
+            .on_action(bind_editor_action(editor.clone(), || OutdentInline))
+            .on_action(bind_editor_action(editor.clone(), || ToggleLineComment))
+            .on_action(bind_editor_action(editor.clone(), || ToggleFold))
+            .on_action(bind_editor_action(editor.clone(), || FoldAll))
+            .on_action(bind_editor_action(editor.clone(), || UnfoldAll))
+            .on_action(bind_editor_action(editor.clone(), || TriggerCompletion))
+            .on_action(bind_editor_action(editor.clone(), || OpenFind))
+            .on_action(bind_editor_action(editor.clone(), || CloseFind))
+            .on_action(bind_editor_action(editor.clone(), || FindNext))
+            .on_action(bind_editor_action(editor.clone(), || FindPrevious))
+            // 滚动视口容器：保留 items_start 防内容被拉伸；overflow_hidden 不放行
+            // GPUI 内建滚轮（滚轮由上方 on_scroll_wheel 自处理，避免同一事件处理两次）。
+            .child(
+                div()
+                    .absolute()
+                    .id(("editor-scroll", element_id))
+                    .inset_0()
+                    .flex()
+                    .items_start()
+                    .size_full()
+                    .track_scroll(&scroll_handle)
+                    .overflow_hidden()
+                    .child(scroll_content),
+            )
+            // 滚动条 overlay（统一显示：SQL 与 Redis 编辑器行为一致）。
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(Scrollbar::new(&scroll_handle)),
+            );
         // 浮层数据在此从 `self` 提取（不借 render 的 `&mut Context` 读 Editor，避免
         // 重入 panic）；事件闭包再各自捕获 Editor Entity 做 accept / hover。
         let popup_data = self.completion_popup_data(window);
@@ -410,6 +547,8 @@ impl Element for EditorCanvas {
         });
 
         let line_height = prepaint.line_height;
+        // gutter 行号列是否启用；与 `line_number_width` 同一判断，逐行绘制时复用。
+        let show_line_numbers = self.editor.read(cx).shows_line_numbers();
         for line in &prepaint.visible_lines {
             let visual_index = line.visual_row;
             let y = viewport.top()
@@ -471,8 +610,9 @@ impl Element for EditorCanvas {
                     .ok();
             }
 
-            // 行号
-            if line.first_fragment {
+            // 行号：必须与 `line_number_width` 同源判断。关闭行号时 gutter 宽为 0，
+            // 仍照画会让行号落在正文左缘上，视觉上就是行号与 SQL 重叠。
+            if line.first_fragment && show_line_numbers {
                 let number = SharedString::from((line.buffer_row + 1).to_string());
                 let number_run = TextRun {
                     len: number.len(),

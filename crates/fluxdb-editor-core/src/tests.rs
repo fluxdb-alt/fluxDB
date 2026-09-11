@@ -158,6 +158,16 @@ fn profile_auto_completion_uses_trigger_chars_and_prefix() {
     assert!(!profile.should_auto_complete_after_edit(&pasted, 6, true));
 }
 
+/// 默认必须是 `OnePage`：编辑场景（查询 / Redis 编辑器）依赖「最后一行能滚到视口顶部」
+/// 的输入手感。只读预览显式改成 `None`，不要为了预览去动默认值。
+#[test]
+fn profile_scroll_beyond_last_line_defaults_to_one_page() {
+    assert_eq!(
+        crate::EditorProfile::default().scroll_beyond_last_line,
+        crate::ScrollBeyondLastLine::OnePage
+    );
+}
+
 #[test]
 fn profile_auto_completion_honors_min_prefix() {
     let mut profile = crate::EditorProfile::default();

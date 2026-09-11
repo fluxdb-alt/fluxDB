@@ -171,7 +171,18 @@ impl TableDelegate for RedisStreamTableDelegate {
                 );
         }
 
-        let tab_id = self.tab_id.expect("stream table tab should be set");
+        let Some(tab_id) = self.tab_id else {
+            // tab_id 未设置时降级渲染：仅展示 entry ID，不画删除 button。
+            return div()
+                .id(("redis-stream-table-entry-id", row_ix))
+                .size_full()
+                .px_3()
+                .flex()
+                .items_center()
+                .text_size(px(13.))
+                .text_color(colors.text)
+                .child(entry.id);
+        };
         let key = self.key.clone();
         let entry_id = entry.id.clone();
         let hovered = self.hovered_entry.as_deref() == Some(entry_id.as_str());

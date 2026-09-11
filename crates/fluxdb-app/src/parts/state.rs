@@ -4198,6 +4198,9 @@ pub enum AppCommand {
     },
     LoadObjectChildren(ObjectPath),
     RefreshObject(Option<ObjectPath>),
+    /// 侧边栏「刷新连接树」：只重拉**已展开**连接的第一层对象（库 / Schema / RedisDb）。
+    /// 不写 `connected` / `expanded`，也不触碰已加载的表 / 视图行（详见 `replace_connection_level0`）。
+    RefreshConnectionTree,
     OpenObjectList(Option<ObjectPath>),
     OpenDataEditor(ObjectPath),
     /// 打开某数据库的备份列表 tab（传入数据库 ObjectPath）。

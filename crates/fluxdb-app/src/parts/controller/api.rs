@@ -102,6 +102,29 @@ impl AppController {
         self.state.last_error = loaded.state.last_error.clone();
     }
 
+    /// 把后台「刷新连接树」的结果合并回 live 控制器：只搬运各连接的 `objects` 与全局
+    /// `last_error`，**不**回写 `connected` / `expanded`。
+    ///
+    /// 后台任务跑在克隆控制器上，期间用户可能已折叠某个连接；若照搬展开态会把用户
+    /// 的操作覆盖掉，因此这两个字段以 live 控制器为准。
+    pub fn merge_refreshed_tree_from(&mut self, loaded: &Self) {
+        for source in &loaded.state.connections {
+            let Some(target) = self
+                .state
+                .connections
+                .iter_mut()
+                .find(|connection| connection.config.id == source.config.id)
+            else {
+                continue;
+            };
+            if target.config != source.config {
+                continue;
+            }
+            target.objects = source.objects.clone();
+        }
+        self.state.last_error = loaded.state.last_error.clone();
+    }
+
     /// 把后台拉取到的 Redis 连接级运行概览合并回 live 控制器。
     /// 概览是「一次性快照」，由 `load_redis_overview_command` 在克隆控制器上计算好
     /// CPU 增量后，通过克隆控制器的 `redis_overview` 字段直接带回来。

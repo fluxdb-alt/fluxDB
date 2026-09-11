@@ -42,7 +42,7 @@ use gpui::{
 };
 use gpui_component::{Sizable, box_shadow};
 use gpui_component::input::{InputEvent, InputState};
-use gpui_component::scroll::ScrollableElement;
+use gpui_component::scroll::{ScrollableElement, Scrollbar};
 
 /// GPUI 像素坐标点（与内核 `Point` 区分）。
 pub(crate) type GPoint = gpui::Point<Pixels>;
@@ -119,6 +119,8 @@ actions!(
     [
         Backspace,
         Delete,
+        DeleteToPreviousWord,
+        DeleteToNextWord,
         IndentInline,
         OutdentInline,
         MoveUp,
@@ -172,6 +174,14 @@ pub(crate) fn register_editor_shortcuts(cx: &mut App) {
     cx.bind_keys(vec![
         KeyBinding::new("backspace", Backspace, Some(CONTEXT)),
         KeyBinding::new("delete", Delete, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-backspace", DeleteToPreviousWord, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-delete", DeleteToNextWord, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-backspace", DeleteToPreviousWord, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-delete", DeleteToNextWord, Some(CONTEXT)),
         KeyBinding::new("enter", Enter { secondary: false }, Some(CONTEXT)),
         KeyBinding::new("secondary-enter", Enter { secondary: true }, Some(CONTEXT)),
         KeyBinding::new("escape", Escape, Some(CONTEXT)),
@@ -306,6 +316,19 @@ pub(crate) enum LineHitKind {
     Explain,
     Hover,
     CodeLens(usize),
+}
+
+/// 鼠标框选模式：决定鼠标按下后（含后续拖动）以何种编辑单元扩展选区。
+///
+/// - `Char`：普通点击/拖动按字符扩展（光标置于点击处）。
+/// - `Word`：双击选词后，拖动按词扩展。
+/// - `Line`：三击选行后，拖动按整行扩展。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) enum MouseSelectMode {
+    #[default]
+    Char,
+    Word,
+    Line,
 }
 
 #[derive(Clone, Debug)]
@@ -655,6 +678,12 @@ pub(crate) struct Editor {
     pub(crate) cursor_visible: bool,
     #[allow(dead_code)] // 鼠标框选交互在 input.rs 实现，尚未接入宿主渲染。
     pub(crate) selecting_with_mouse: bool,
+    /// 鼠标按下的框选单元（双击=词、三击=行、单击=字符）。
+    pub(crate) mouse_select_mode: MouseSelectMode,
+    /// 鼠标框选/点击时的固定锚点（拖拽时保持的一端，Shift+点击时保留旧锚点）。
+    pub(crate) mouse_anchor: usize,
+    /// 本次是否从行号区（gutter）发起选择，用于按行选择。
+    pub(crate) mouse_gutter_select: bool,
     pub(crate) ime_marked_range: Option<CoreRange>,
     pub(crate) soft_wrap: bool,
     /// 当前 viewport 对应的软换行宽度（UTF-16 列）。
@@ -962,6 +991,9 @@ impl Editor {
             scroll_handle: ScrollHandle::new(),
             cursor_visible: false,
             selecting_with_mouse: false,
+            mouse_select_mode: MouseSelectMode::Char,
+            mouse_anchor: 0,
+            mouse_gutter_select: false,
             ime_marked_range: None,
             soft_wrap,
             wrap_width_utf16: 120,
@@ -1206,8 +1238,10 @@ impl Editor {
         self.fold_candidates_cache.borrow_mut().take();
     }
 
-    /// 由接入层/宿主在每帧前调用，把当前 provider 状态应用到视图尺寸。
-    pub(crate) fn apply_settings(&mut self, font_size: f32, soft_wrap: bool) {
+    /// 由接入层/宿主调用，把当前 settings 应用到编辑器。
+    /// `line_height` 为 0 时回退到 `font_size + 2.` 的默认行为。
+    /// `tab_size` 为 0 时保持当前制表宽不变（供未跟踪该 settings 的调用方使用）。
+    pub(crate) fn apply_settings(&mut self, font_size: f32, line_height: f32, soft_wrap: bool, tab_size: usize) {
         if font_size > 0. {
             if (self.font_size - font_size).abs() > f32::EPSILON {
                 self.content_width_cache.borrow_mut().take();
@@ -1215,7 +1249,21 @@ impl Editor {
                 self.shaped_line_cache.borrow_mut().clear();
             }
             self.font_size = font_size;
-            self.line_height = font_size + 2.;
+            // 仅当调用方显式传入行高时才覆盖，避免字号调整吞掉用户自定义行高。
+            if line_height > 0. {
+                self.line_height = line_height;
+            } else if (self.line_height - (font_size + 2.)).abs() <= f32::EPSILON {
+                // 当前行高仍是默认派生值，随字号同步更新。
+                self.line_height = font_size + 2.;
+            }
+        }
+        // Tab 宽度影响制表符的展示列宽，变更需重建 DisplayMap 并清理按列计宽的缓存。
+        if tab_size > 0 && self.tab_width != tab_size {
+            self.tab_width = tab_size.max(1);
+            self.content_width_cache.borrow_mut().take();
+            self.line_width_hint.borrow_mut().take();
+            self.shaped_line_cache.borrow_mut().clear();
+            self.rebuild_display();
         }
         if self.soft_wrap != soft_wrap {
             self.soft_wrap = soft_wrap;
@@ -1849,6 +1897,36 @@ impl Editor {
         self.apply_edit("", start, start, true, cx);
     }
 
+    /// 整词删除（Alt/Ctrl+退格）：删除光标前的一个词。
+    fn delete_word_left(&mut self, cx: &mut Context<Self>) {
+        let (start, end) = self.selection_start_end();
+        if start != end {
+            self.apply_edit("", start, start, true, cx);
+            return;
+        }
+        if start == 0 {
+            return;
+        }
+        let prev = self.prev_word_at(start);
+        self.selection = Selection::new(prev, start);
+        self.apply_edit("", prev, prev, true, cx);
+    }
+
+    /// 整词删除（Alt/Ctrl+Delete）：删除光标后的一个词（到词尾）。
+    fn delete_word_right(&mut self, cx: &mut Context<Self>) {
+        let (start, end) = self.selection_start_end();
+        if start != end {
+            self.apply_edit("", start, start, true, cx);
+            return;
+        }
+        if start >= self.buffer.len() {
+            return;
+        }
+        let word_end = self.next_word_end_at(start);
+        self.selection = Selection::new(start, word_end);
+        self.apply_edit("", start, start, true, cx);
+    }
+
     fn newline(&mut self, secondary: bool, cx: &mut Context<Self>) {
         if !self.profile.multiline {
             return;
@@ -2053,6 +2131,8 @@ impl Editor {
             CursorMove::Right => self.buffer.next_char_boundary(cursor),
             CursorMove::Up => self.move_vertically(point, -1),
             CursorMove::Down => self.move_vertically(point, 1),
+            CursorMove::PageUp => self.move_page(point, -1),
+            CursorMove::PageDown => self.move_page(point, 1),
             CursorMove::Home => self.buffer.line_start(point.row),
             CursorMove::End => self.buffer.line_end_offset(point.row),
             CursorMove::Start => 0,
@@ -2097,6 +2177,28 @@ impl Editor {
         self.row_col_to_offset(target_row, current_col)
     }
 
+    /// 按一屏（可视行数）纵向翻页；`dir` 为 -1（上翻）/ +1（下翻）。
+    /// 保持当前 UTF-16 列（对齐 zed/vscode 的 viewport 翻页：只动行，不动列）。
+    fn move_page(&self, point: Point, dir: isize) -> usize {
+        let current_col = self.buffer.utf16_column_at(point);
+        let row_count = self.buffer.line_count();
+        if row_count == 0 {
+            return 0;
+        }
+        // 可视行数按视口高度 ÷ 行距向下取整，翻一屏约等于可视行数（留一行保持上下文）。
+        let line_height = self.line_height.max(self.font_size + 1.0);
+        let stride = line_height + EDITOR_LINE_GAP;
+        let view_height = f32::from(self.scroll_handle.bounds().size.height);
+        let page = (view_height / stride).floor().max(1.0) as isize;
+        let delta = page * dir;
+        let target_row = if delta < 0 {
+            point.row.saturating_sub((-delta) as usize)
+        } else {
+            ((point.row as isize) + delta).min(row_count as isize - 1) as usize
+        };
+        self.row_col_to_offset(target_row, current_col)
+    }
+
     fn row_col_to_offset(&self, row: usize, utf16_col: usize) -> usize {
         let row = row.min(self.buffer.line_count().saturating_sub(1));
         let line = self.buffer.line_text(row);
@@ -2126,6 +2228,31 @@ impl Editor {
         next_word_start_in_snap(&self.buffer.snapshot(), cursor)
     }
 
+    /// 光标后下一个词的词尾（用于整词删除 Delete-to-next-word-end）。
+    /// 先定位下一个词首，再向前扫描该词的非空白字符直到词尾。
+    fn next_word_end_at(&self, cursor: usize) -> usize {
+        let snap = self.buffer.snapshot();
+        let mut pos = next_word_start_in_snap(&snap, cursor);
+        let mut row = snap.offset_to_point(pos).row;
+        loop {
+            let line_end = snap.line_end_offset(row);
+            let seg = snap.text_in_range(CoreRange::new(pos, line_end));
+            let b = seg.as_bytes();
+            let mut i = 0usize;
+            while i < b.len() && !b[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i > 0 {
+                return pos + i;
+            }
+            if row + 1 >= snap.line_count() {
+                return snap.len();
+            }
+            pos = pos + i; // == line_end
+            row += 1;
+        }
+    }
+
     fn ensure_cursor_visible(&self) {
         let viewport = self.scroll_handle.bounds();
         let viewport_width = f32::from(viewport.size.width);
@@ -2148,9 +2275,8 @@ impl Editor {
         // 仅用于判断光标是否超出视口左右，无需逐字 shape。出界时把视口滚到光标处并留一个字符
         // 边距，避免光标跑出视口不可见（对齐 zed autoscroll_horizontally / vscode reveal position）。
         let char_width = self.font_size * 0.5;
-        let gutter_width = if self.gutter_line_numbers || self.profile.show_line_numbers {
-            (self.line_digits() as f32 * 8.0 + EDITOR_GUTTER_GAP + EDITOR_FOLD_GUTTER)
-                .max(EDITOR_MIN_GUTTER)
+        let gutter_width = if self.shows_line_numbers() {
+            self.gutter_width_value()
         } else {
             0.0
         };
@@ -3421,13 +3547,26 @@ impl Editor {
         }
     }
 
+    /// 是否绘制 gutter 行号列。
+    ///
+    /// 行号列的「宽度」与「绘制」必须同源：只关其一会让行号列宽算成 0、行号却照画，
+    /// 于是行号压在正文左缘（只读 DDL 预览这类关闭行号的宿主会直接看到重叠）。
+    pub(crate) fn shows_line_numbers(&self) -> bool {
+        self.gutter_line_numbers || self.profile.show_line_numbers
+    }
+
     /// 行号区宽度（像素），由渲染阶段采用。
     pub(crate) fn line_number_width(&self, _window: &Window) -> gpui::Pixels {
-        if !self.gutter_line_numbers && !self.profile.show_line_numbers {
+        if !self.shows_line_numbers() {
             return gpui::px(0.);
         }
-        gpui::px(self.line_digits() as f32 * 8.0 + EDITOR_GUTTER_GAP + EDITOR_FOLD_GUTTER)
-            .max(gpui::px(EDITOR_MIN_GUTTER))
+        gpui::px(self.gutter_width_value())
+    }
+
+    /// 行号区宽度（像素，未经 `Window` 包装的原始值），供不持有 `Window` 的布局路径复用。
+    fn gutter_width_value(&self) -> f32 {
+        (self.line_digits() as f32 * 8.0 + EDITOR_GUTTER_GAP + EDITOR_FOLD_GUTTER)
+            .max(EDITOR_MIN_GUTTER)
     }
 
     fn line_digits(&self) -> usize {
@@ -3442,9 +3581,16 @@ impl Editor {
             .block_total_rows()
             .saturating_sub(self.display.visual_row_count()) as f32;
         let line_height = f32::from(self.line_height(window));
-        // Zed 默认 scroll_beyond_last_line=one_page：最后一行可以滚到视口顶部。
+        // 内容末尾之外的滚动手感由 profile 决定（对齐 Zed 的 scroll_beyond_last_line）：
+        // 编辑场景默认 one_page，最后一行可以滚到视口顶部；只读预览用 None，
+        // 否则内容短于视口时会凭空多出一屏可滚空白。
         // 首帧视口尚未布局时退回一行，避免凭空产生大块可滚空白。
-        let overscroll = f32::from(self.scroll_handle.bounds().size.height).max(line_height);
+        let overscroll = match self.profile.scroll_beyond_last_line {
+            fluxdb_editor_core::ScrollBeyondLastLine::OnePage => {
+                f32::from(self.scroll_handle.bounds().size.height).max(line_height)
+            }
+            fluxdb_editor_core::ScrollBeyondLastLine::None => 0.,
+        };
         gpui::px(
             EDITOR_PADDING_Y * 2.
                 + line_count * line_height
@@ -3470,8 +3616,8 @@ impl Editor {
         {
             return gpui::px(cache.width);
         }
+        let longest = self.longest_line_width(window);
         let char_width = measure_character_width(window, self.font_size);
-        let longest = self.longest_line_width(window, char_width);
         let width = gpui::px(EDITOR_PADDING_X * 2.)
             + self.line_number_width(window)
             + gpui::px(EDITOR_CONTENT_GAP)
@@ -3509,9 +3655,9 @@ impl Editor {
             .sum()
     }
 
-    fn longest_line_width(&self, window: &Window, char_width: f32) -> gpui::Pixels {
-        if let Some((columns, measured_width)) = *self.line_width_hint.borrow() {
-            return gpui::px(measured_width.max(columns as f32 * char_width));
+    fn longest_line_width(&self, window: &Window) -> gpui::Pixels {
+        if let Some((_, measured_width)) = *self.line_width_hint.borrow() {
+            return gpui::px(measured_width);
         }
         let mut longest_columns = 0usize;
         let mut longest_text = String::new();
@@ -3540,11 +3686,12 @@ impl Editor {
             &[run],
             None,
         );
-        // ponytail: 只 shape 列数最长的一行；混合宽字符且列数较短的行可能被低估，
-        // 若需要精确支持这类文本，再升级为按行增量宽度缓存。
+        // 与 zed 一致：只 shape 列数最长的一行取真实像素宽，不再用
+        // `列数 × 字宽` 作上限（那会对比例字体/混合宽度大幅高估，导致横向
+        // 超滚）。content_width_cache 已按 buffer version 门控，编辑即重算。
         let measured_width = f32::from(shaped.width);
         *self.line_width_hint.borrow_mut() = Some((longest_columns, measured_width));
-        gpui::px(measured_width.max(longest_columns as f32 * char_width))
+        gpui::px(measured_width)
     }
 }
 
@@ -3567,6 +3714,8 @@ pub(crate) enum CursorMove {
     Right,
     Up,
     Down,
+    PageUp,
+    PageDown,
     Home,
     End,
     Start,

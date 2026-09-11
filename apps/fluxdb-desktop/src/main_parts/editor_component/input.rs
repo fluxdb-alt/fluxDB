@@ -12,6 +12,10 @@ impl Editor {
             self.backspace(cx);
         } else if action.as_any().is::<Delete>() {
             self.delete(cx);
+        } else if action.as_any().is::<DeleteToPreviousWord>() {
+            self.delete_word_left(cx);
+        } else if action.as_any().is::<DeleteToNextWord>() {
+            self.delete_word_right(cx);
         } else if self.completion_visible && completion_accepts_action(action) {
             self.accept_selected(cx);
         } else if action.as_any().is::<Enter>() {
@@ -31,6 +35,10 @@ impl Editor {
             self.move_for_action(CursorMove::Up, false, cx);
         } else if action.as_any().is::<MoveDown>() {
             self.move_for_action(CursorMove::Down, false, cx);
+        } else if action.as_any().is::<MovePageUp>() {
+            self.move_for_action(CursorMove::PageUp, false, cx);
+        } else if action.as_any().is::<MovePageDown>() {
+            self.move_for_action(CursorMove::PageDown, false, cx);
         } else if action.as_any().is::<MoveLeft>() {
             self.move_for_action(CursorMove::Left, false, cx);
         } else if action.as_any().is::<MoveRight>() {
@@ -55,6 +63,10 @@ impl Editor {
             self.move_for_action(CursorMove::Up, true, cx);
         } else if action.as_any().is::<SelectDown>() {
             self.move_for_action(CursorMove::Down, true, cx);
+        } else if action.as_any().is::<SelectPageUp>() {
+            self.move_for_action(CursorMove::PageUp, true, cx);
+        } else if action.as_any().is::<SelectPageDown>() {
+            self.move_for_action(CursorMove::PageDown, true, cx);
         } else if action.as_any().is::<SelectHome>() {
             self.move_for_action(CursorMove::Home, true, cx);
         } else if action.as_any().is::<SelectEnd>() {
@@ -193,7 +205,6 @@ impl Editor {
     // ------------------------------------------------------------ 鼠标
     // 鼠标交互（点击选中 / 框选 / 滚动 / hover）由宿主编辑器面板转发到这里。
 
-    #[allow(dead_code)]
     pub(crate) fn mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -226,7 +237,6 @@ impl Editor {
                 cx.notify();
             }
         }
-        self.selecting_with_mouse = true;
         // 命中行区域（折叠箭头 / 运行按钮）。
         for region in &self.line_hit_regions {
             if region.bounds.contains(&event.position) {
@@ -252,23 +262,97 @@ impl Editor {
                 }
             }
         }
-        if event.click_count >= 2 && self.select_word_from_mouse(event.position, window, cx) {
-            self.selecting_with_mouse = false;
+        self.selecting_with_mouse = true;
+
+        let shift = event.modifiers.shift;
+        let point = self.point_from_mouse(event.position, window);
+        let offset = point.map(|p| self.buffer.point_to_offset(p).min(self.buffer.len()));
+
+        // 行号区（gutter）点击：单击选行，按住拖动按行扩展。
+        if self.hit_gutter(event.position, window) {
+            self.mouse_gutter_select = true;
+            self.mouse_select_mode = MouseSelectMode::Line;
+            let row = self.row_from_mouse_y(event.position, window);
+            self.mouse_anchor = self.buffer.line_start(row);
+            if shift {
+                // Shift+点击行号：从当前选区起始行扩展到点击行。
+                let start_row = self.buffer.offset_to_point(self.selection.range().start).row;
+                let (lo, hi) = (start_row.min(row), start_row.max(row));
+                self.selection = Selection::new(
+                    self.buffer.line_start(lo),
+                    self.buffer.line_end_offset(hi),
+                );
+            } else {
+                self.selection = Selection::new(
+                    self.buffer.line_start(row),
+                    self.buffer.line_end_offset(row),
+                );
+            }
+            self.emit_selection(cx);
             return;
         }
-        // 点击行内部：把坐标换算为 buffer offset。
-        self.set_cursor_from_mouse(event.position, window, cx);
+        self.mouse_gutter_select = false;
+        let Some(offset) = offset else {
+            return;
+        };
+
+        if shift {
+            // Shift+点击：保留既有 anchor，只把 cursor 移到点击处（区间选择）。
+            self.mouse_select_mode = MouseSelectMode::Char;
+            self.mouse_anchor = self.selection.anchor.min(self.buffer.len());
+            self.selection = Selection::new(self.mouse_anchor, offset);
+            self.emit_selection(cx);
+            return;
+        }
+
+        let count = event.click_count;
+        if count >= 4 {
+            // 四击全选（对齐 Zed/VSCode）。
+            self.mouse_select_mode = MouseSelectMode::Char;
+            self.mouse_anchor = 0;
+            self.select_all(cx);
+            return;
+        }
+        if count >= 3 {
+            // 三击选行；拖动时按行扩展。
+            self.mouse_select_mode = MouseSelectMode::Line;
+            let point = self.buffer.offset_to_point(offset);
+            let row = point.row;
+            self.mouse_anchor = self.buffer.line_start(row);
+            self.selection = Selection::new(
+                self.buffer.line_start(row),
+                self.buffer.line_end_offset(row),
+            );
+            self.emit_selection(cx);
+            return;
+        }
+        if count >= 2 {
+            // 双击选词；拖动时按词扩展。
+            self.mouse_select_mode = MouseSelectMode::Word;
+            self.mouse_anchor = offset;
+            if let Some((s, e)) = self.word_range_at(offset) {
+                self.selection = Selection::new(s, e);
+            } else {
+                self.selection = Selection::point(offset);
+            }
+            self.emit_selection(cx);
+            return;
+        }
+        // 单击置光标；拖动按字符扩展。
+        self.mouse_select_mode = MouseSelectMode::Char;
+        self.mouse_anchor = offset;
+        self.selection = Selection::point(offset);
+        self.emit_selection(cx);
     }
 
-    #[allow(dead_code)]
     pub(crate) fn mouse_up(&mut self, _event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.selecting_with_mouse {
             self.selecting_with_mouse = false;
+            self.mouse_gutter_select = false;
             cx.notify();
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn mouse_move(
         &mut self,
         event: &MouseMoveEvent,
@@ -291,7 +375,7 @@ impl Editor {
             }
         }
         if self.selecting_with_mouse {
-            self.set_cursor_from_mouse_continue(event.position, &*window, cx);
+            self.mouse_drag_to(event.position, window, cx);
         } else {
             // hover 请求（阈值由输入层控制）。
             if let Some(point) = self.point_from_mouse(event.position, &*window) {
@@ -301,7 +385,6 @@ impl Editor {
         cx.notify();
     }
 
-    #[allow(dead_code)]
     pub(crate) fn scroll(
         &mut self,
         _event: &ScrollWheelEvent,
@@ -407,61 +490,107 @@ impl Editor {
         cx.on_next_frame(window, |this, window, cx| this.scroll_tick(window, cx));
     }
 
-    #[allow(dead_code)]
-    fn set_cursor_from_mouse(
+    /// 广播选区变更事件并请求重绘（鼠标选区多处复用）。
+    fn emit_selection(&mut self, cx: &mut Context<Self>) {
+        cx.emit(EditorEvent::SelectionChanged(self.selection.clone()));
+        cx.notify();
+    }
+
+    /// 判断位置是否落在行号（gutter）区域内。
+    fn hit_gutter(&self, position: gpui::Point<Pixels>, window: &Window) -> bool {
+        let viewport = self.scroll_handle.bounds();
+        let scroll = self.scroll_handle.offset();
+        let gutter_left = viewport.left() + scroll.x + px(EDITOR_PADDING_X);
+        let gutter_right = gutter_left + self.line_number_width(window);
+        position.x >= gutter_left
+            && position.x <= gutter_right
+            && position.y >= viewport.top()
+            && position.y <= viewport.bottom()
+    }
+
+    /// 由 y 坐标换算 buffer 行号（越界时 clamp 到最近可见行）。
+    fn row_from_mouse_y(&self, position: gpui::Point<Pixels>, window: &Window) -> usize {
+        let viewport = self.scroll_handle.bounds();
+        let line_height = f32::from(self.line_height(window));
+        let stride = line_height + EDITOR_LINE_GAP;
+        if stride <= 0.0 {
+            return 0;
+        }
+        let scroll = self.scroll_handle.offset();
+        let content_y =
+            (f32::from(position.y) - f32::from(viewport.top()) - f32::from(scroll.y) - EDITOR_PADDING_Y)
+                .max(0.0);
+        let line_count = self.display.visual_row_count();
+        let visual = (content_y / stride) as usize;
+        let visual = visual.min(line_count.saturating_sub(1));
+        self.display.visual_line_at(visual).map(|v| v.buffer_row).unwrap_or(0)
+    }
+
+    /// 拖拽过程中把当前鼠标位置扩展进选区（按按下时的模式：字符/词/行）。
+    fn mouse_drag_to(
         &mut self,
         position: gpui::Point<Pixels>,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(point) = self.point_from_mouse(position, window) {
-            let offset = self.buffer.point_to_offset(point).min(self.buffer.len());
-            self.selection = Selection::point(offset);
-            cx.emit(EditorEvent::SelectionChanged(self.selection.clone()));
-            cx.notify();
+        match self.mouse_select_mode {
+            MouseSelectMode::Line => {
+                let row = self.row_from_mouse_y(position, window);
+                let anchor_row = self.buffer.offset_to_point(self.mouse_anchor).row;
+                let (lo, hi) = (anchor_row.min(row), anchor_row.max(row));
+                self.selection = Selection::new(
+                    self.buffer.line_start(lo),
+                    self.buffer.line_end_offset(hi),
+                );
+            }
+            MouseSelectMode::Char => {
+                let Some(offset) = self.offset_from_mouse(position, window) else {
+                    return;
+                };
+                self.selection = Selection::new(self.mouse_anchor, offset);
+            }
+            MouseSelectMode::Word => {
+                let Some(offset) = self.offset_from_mouse(position, window) else {
+                    return;
+                };
+                // 以按下点所在词的两端为固定边界，拖动端按词吸附，保证整词扩展。
+                let Some((ws, we)) = self.word_range_at(self.mouse_anchor) else {
+                    self.selection = Selection::new(self.mouse_anchor, offset);
+                    return;
+                };
+                self.selection = if offset < ws {
+                    // 往左拖：左端按词吸附，右端固定为原词尾。
+                    let s = self.word_range_at(offset).map(|r| r.0).unwrap_or(offset);
+                    Selection::new(s.min(we), we)
+                } else if offset > we {
+                    // 往右拖：右端按词吸附，左端固定为原词首。
+                    let e = self.word_range_at(offset).map(|r| r.1).unwrap_or(offset);
+                    Selection::new(ws, e.max(ws))
+                } else {
+                    Selection::new(ws, we)
+                };
+            }
         }
+        self.emit_selection(cx);
     }
 
-    #[allow(dead_code)]
-    fn set_cursor_from_mouse_continue(
-        &mut self,
-        position: gpui::Point<Pixels>,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(point) = self.point_from_mouse(position, window) {
-            let offset = self.buffer.point_to_offset(point).min(self.buffer.len());
-            self.selection.cursor = offset;
-            cx.emit(EditorEvent::SelectionChanged(self.selection.clone()));
-            cx.notify();
-        }
+    /// 由屏幕坐标换算 buffer 字节 offset。
+    fn offset_from_mouse(&self, position: gpui::Point<Pixels>, window: &Window) -> Option<usize> {
+        let point = self.point_from_mouse(position, window)?;
+        Some(self.buffer.point_to_offset(point).min(self.buffer.len()))
     }
 
-    fn select_word_from_mouse(
-        &mut self,
-        position: gpui::Point<Pixels>,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(point) = self.point_from_mouse(position, window) else {
-            return false;
-        };
-        let offset = self.buffer.point_to_offset(point).min(self.buffer.len());
+    /// 返回 offset 所在词的字节范围；非词字符单独成词，空白返回 None。
+    fn word_range_at(&self, offset: usize) -> Option<(usize, usize)> {
         let snapshot = self.buffer.snapshot();
-        let row = snapshot.offset_to_point(offset).row;
-        let line_start = snapshot.line_start(row);
-        let line_end = snapshot.line_end_offset(row);
+        let point = snapshot.offset_to_point(offset);
+        let line_start = snapshot.line_start(point.row);
+        let line_end = snapshot.line_end_offset(point.row);
         let raw_line = snapshot.text_in_range(CoreRange::new(line_start, line_end));
         let line = raw_line.strip_suffix('\n').unwrap_or(&raw_line);
         let local_offset = offset.saturating_sub(line_start).min(line.len());
-        let Some((start, end)) = word_range_in_text(line, local_offset, |ch| self.word_char(ch))
-        else {
-            return false;
-        };
-        self.selection = Selection::new(line_start + start, line_start + end);
-        cx.emit(EditorEvent::SelectionChanged(self.selection.clone()));
-        cx.notify();
-        true
+        word_range_in_text(line, local_offset, |ch| self.word_char(ch))
+            .map(|(s, e)| (line_start + s, line_start + e))
     }
 }
 

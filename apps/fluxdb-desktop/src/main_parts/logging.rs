@@ -32,7 +32,7 @@ fn build_filter(configured_level: LogLevel) -> EnvFilter {
     // `parse_lossy` 含有显式第三方 directive 时不会自动应用 builder 的默认值，
     // 因此必须显式追加应用级默认 directive，否则 Debug/Info 日志会全部被过滤。
     EnvFilter::builder()
-        .parse_lossy("gpui=warn,sqlx=warn,tracing_subscriber=warn,tower_http=warn,hyper=warn")
+        .parse_lossy("gpui=warn,sqlx=warn,tracing_subscriber=warn,tower_http=warn,hyper=warn,sqlparser=warn")
         .add_directive(match configured_level {
             LogLevel::Error => tracing::Level::ERROR.into(),
             LogLevel::Warn => tracing::Level::WARN.into(),

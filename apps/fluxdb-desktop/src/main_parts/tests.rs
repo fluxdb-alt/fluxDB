@@ -18,6 +18,57 @@ mod tests {
         .expect("mysql ddl highlight query should compile");
     }
 
+    /// 所有只读 SQL / DDL 预览共用 `sql_preview_editor` 工厂：底层
+    /// `editor_component::Editor` + SQL 语法 provider，配色由宿主 `EditorTheme` 注入。
+    /// gpui-component 的 `input::Editor` 取不到本项目主题的 syntax 配色，
+    /// 预览会退化成无高亮纯文本。
+    #[test]
+    fn sql_ddl_previews_share_bottom_editor_factory() {
+        let factory = include_str!("sql_preview.rs");
+        assert!(factory.contains("editor_component::Editor::new("));
+        assert!(factory.contains("sql_editor_adapter::SqlAdapter::new(dialect)"));
+        assert!(factory.contains("syntax: Some(adapter as _)"));
+        assert!(factory.contains("editor.set_theme(editor_theme, cx)"));
+
+        // 表属性抽屉的 DDL 页签。
+        let table_info = include_str!("cell_detail_table_info/table_info.rs");
+        assert!(table_info.contains("fn table_info_ddl_text("));
+        assert!(table_info.contains("sql_preview_editor("));
+
+        // 设计表的 SQL 预览 / DDL 预览：两段函数体都不能再退回
+        // 「gpui-component 组件编辑器（code_editor）+ disabled」的旧实现。
+        let create_table = include_str!("create_table.rs");
+        let sql_start = create_table
+            .find("fn create_table_sql_preview(")
+            .expect("SQL 预览函数应存在");
+        let ddl_start = create_table[sql_start..]
+            .find("fn create_table_ddl_preview(")
+            .map(|offset| sql_start + offset)
+            .expect("DDL 预览函数应存在");
+        let ddl_end = create_table[ddl_start..]
+            .find("fn create_table_input_border_color(")
+            .map(|offset| ddl_start + offset)
+            .expect("DDL 预览函数应结束于下一个函数");
+        for body in [&create_table[sql_start..ddl_start], &create_table[ddl_start..ddl_end]] {
+            assert!(body.contains("sql_preview_editor("), "预览未走统一工厂：{body}");
+            assert!(!body.contains(".code_editor("), "预览退回组件编辑器：{body}");
+            assert!(!body.contains(".disabled(true)"), "预览退回 disabled：{body}");
+        }
+    }
+
+    /// gutter 行号列的「宽度」与「绘制」必须同源判断：只关其一会让行号列宽算成 0、
+    /// 行号照画，行号就压在正文左缘（关闭行号的只读 DDL 预览曾出现该重叠）。
+    #[test]
+    fn gutter_line_number_width_and_paint_share_one_predicate() {
+        let editor = include_str!("editor_component/mod.rs");
+        let render = include_str!("editor_component/render.rs");
+
+        assert!(editor.contains("fn shows_line_numbers(&self) -> bool"));
+        assert!(editor.contains("if !self.shows_line_numbers() {"));
+        assert!(render.contains("let show_line_numbers = self.editor.read(cx).shows_line_numbers();"));
+        assert!(render.contains("if line.first_fragment && show_line_numbers {"));
+    }
+
     #[test]
     fn sql_highlight_uses_tree_sitter_sequel_query() {
         let query = mysql_ddl_highlights_query();
@@ -1204,6 +1255,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let int_meta = DataTableColumnMeta {
             name: "age".to_string(),
             type_name: "int".to_string(),
+            comment: None,
             nullable: false,
             primary_key: false,
             choices: Vec::new(),
@@ -1218,6 +1270,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let nullable_bool = DataTableColumnMeta {
             name: "enabled".to_string(),
             type_name: "tinyint(1)".to_string(),
+            comment: None,
             nullable: true,
             primary_key: false,
             choices: Vec::new(),
@@ -1234,6 +1287,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let enum_meta = DataTableColumnMeta {
             name: "status".to_string(),
             type_name: "enum('draft','published')".to_string(),
+            comment: None,
             nullable: false,
             primary_key: false,
             choices: Vec::new(),
@@ -1247,6 +1301,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let blob_meta = DataTableColumnMeta {
             name: "payload".to_string(),
             type_name: "LONGBLOB".to_string(),
+            comment: None,
             nullable: true,
             primary_key: false,
             choices: Vec::new(),

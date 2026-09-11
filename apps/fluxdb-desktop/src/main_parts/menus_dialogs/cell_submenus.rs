@@ -185,7 +185,7 @@ fn data_cell_action_menu_item(
     menu: &DataCellContextMenu,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> Div {
+) -> Stateful<Div> {
     let tab_id = menu.tab_id;
     data_cell_menu_item_text(label, icon, enabled, colors)
         .font_weight(gpui::FontWeight::BOLD)
@@ -195,7 +195,12 @@ fn data_cell_action_menu_item(
         }))
 }
 
-fn data_cell_menu_item(label: &'static str, icon: AppIcon, enabled: bool, colors: UiColors) -> Div {
+fn data_cell_menu_item(
+    label: &'static str,
+    icon: AppIcon,
+    enabled: bool,
+    colors: UiColors,
+) -> Stateful<Div> {
     data_cell_menu_item_text(label, icon, enabled, colors)
 }
 
@@ -204,8 +209,10 @@ fn data_cell_menu_item_text(
     icon: AppIcon,
     enabled: bool,
     colors: UiColors,
-) -> Div {
+) -> Stateful<Div> {
+    let label = label.into();
     div()
+        .id(SharedString::from(format!("data-cell-menu-item:{label}")))
         .h(px(26.))
         .rounded(colors.radius)
         .px_2()
@@ -234,7 +241,7 @@ fn data_cell_menu_item_text(
                 .overflow_hidden()
                 .text_ellipsis()
                 .whitespace_nowrap()
-                .child(label.into()),
+                .child(label),
         )
 }
 

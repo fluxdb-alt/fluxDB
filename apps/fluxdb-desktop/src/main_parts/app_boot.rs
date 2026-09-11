@@ -2222,6 +2222,7 @@ fn main() {
                             query_save_name_input,
                             _file_picker_task: None,
                             _connection_tasks: BTreeMap::new(),
+                            _tree_refresh_task: None,
                             _database_tasks: BTreeMap::new(),
                             _data_load_tasks: BTreeMap::new(),
                             _redis_key_value_apply_tasks: BTreeMap::new(),
@@ -2360,6 +2361,7 @@ fn main() {
                             query_result_display_pages: BTreeMap::new(),
                             settings_panel_section: SettingsPanelSection::Editor,
                             settings_editor_draft,
+                            settings_dangerous_actions_collapsed: false,
                             settings_font_size_slider,
                             _settings_font_size_slider_subscription:
                                 settings_font_size_slider_subscription,
@@ -2571,6 +2573,21 @@ fn register_shortcuts(cx: &mut App, settings: &Settings) {
     // 旧 SQL 编辑器快捷键已随旧 sql_editor 模块移除，不再注册，避免与新的
     // EditorComponent 快捷键绑定冲突。
     register_terminal_shortcuts(cx);
+
+    // 应用级退出快捷键绑定在无上下文层级，确保编辑器或表格聚焦时也能退出。
+    cx.on_action(|_: &Quit, cx| {
+        tracing::info!(target: "fluxdb_desktop", "收到退出快捷键，退出应用");
+        cx.quit();
+    });
+    cx.bind_keys([KeyBinding::new(
+        if cfg!(target_os = "macos") {
+            "cmd-q"
+        } else {
+            "ctrl-q"
+        },
+        Quit,
+        None,
+    )]);
 
     for definition in SHORTCUT_DEFINITIONS {
         bind_shortcut(

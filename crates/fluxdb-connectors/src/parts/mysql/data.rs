@@ -33,6 +33,7 @@ fn mysql_load_data(
         };
 
         let columns = mysql_columns(&mut connection, database, &path.name).await?;
+        mysql_ensure_columns_available(database, &path.name, &columns)?;
         let select_list = columns
             .iter()
             .map(mysql_select_expr)
@@ -193,6 +194,32 @@ fn mysql_load_cell_binary(
             .map_err(mysql_error)?
             .ok_or_else(|| Error::new(ErrorKind::Query, "二进制单元格为 NULL"))
     })
+}
+
+/// 校验字段信息是否足以拼出 SELECT 列表。
+///
+/// `information_schema.columns` 会按当前账号权限过滤，缺权限时返回空列表；此时 `select_list`
+/// 为空会拼出 `SELECT  FROM \`db\`.\`table\``，服务端只回一句 1064 语法错误——既看不出真实原因，
+/// 也容易被误判成 SQL 生成 bug。这里提前收敛成可读错误。
+fn mysql_ensure_columns_available(
+    database: &str,
+    table: &str,
+    columns: &[Column],
+) -> fluxdb_core::Result<()> {
+    if !columns.is_empty() {
+        return Ok(());
+    }
+
+    tracing::warn!(
+        target: "fluxdb_connectors",
+        database,
+        table,
+        "MySQL 未读取到字段信息，跳过数据查询"
+    );
+    Err(Error::new(
+        ErrorKind::Query,
+        format!("未读取到 `{database}`.`{table}` 的字段信息，请确认当前账号是否有该表的权限"),
+    ))
 }
 
 async fn mysql_columns(

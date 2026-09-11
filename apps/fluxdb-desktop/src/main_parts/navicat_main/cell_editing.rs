@@ -91,6 +91,7 @@ impl NavicatMain {
                 choices: self.column_choices_for_editing_cell(editing, &column.name),
                 name: column.name,
                 type_name: column.type_name.unwrap_or_else(|| "unknown".to_string()),
+                comment: column.comment,
                 nullable: column.nullable,
                 primary_key: column.primary_key,
             })

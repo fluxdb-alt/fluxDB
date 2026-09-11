@@ -45,8 +45,9 @@ fn connection_browser_titlebar(
                 ))
                 .child(sidebar_title_button(AppIcon::Refresh, "刷新", false, colors).on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        this.refresh_active(window, cx);
+                    cx.listener(|this, _, _, cx| {
+                        // 侧边栏刷新只刷连接树，不跟随活动标签页（详见 refresh_connection_tree）。
+                        this.refresh_connection_tree(cx);
                         cx.stop_propagation();
                     }),
                 ))

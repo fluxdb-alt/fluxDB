@@ -59,9 +59,11 @@ use gpui::{
     point, px, rgb, size, svg, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, IconName, IndexPath, Root, Sizable as _,
+    ActiveTheme as _, Colorize as _, Disableable as _, IconName, IndexPath, Root, Sizable as _,
     Theme as ComponentTheme, ThemeConfig, ThemeMode, ThemeRegistry, VirtualListScrollHandle,
-    WindowExt, box_shadow,
+    WindowExt,
+    alert::{Alert, AlertVariant},
+    box_shadow,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::Dialog,
@@ -69,7 +71,7 @@ use gpui_component::{
     group_box::{GroupBox, GroupBoxVariant, GroupBoxVariants as _},
     h_flex,
     highlighter::{LanguageConfig, LanguageRegistry},
-    input::{Editor, EditorState, Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState},
     popover::{Popover, PopoverState},
     progress::Progress,
     scroll::{ScrollableElement, Scrollbar},
@@ -124,6 +126,7 @@ include!("main_parts/theme_registry.rs");
 include!("main_parts/shortcuts.rs");
 include!("main_parts/editor_component.rs");
 include!("main_parts/sql_editor_adapter.rs");
+include!("main_parts/sql_preview.rs");
 include!("main_parts/redis_editor_adapter.rs");
 include!("main_parts/terminal_component.rs");
 include!("main_parts/app_state.rs");

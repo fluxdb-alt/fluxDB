@@ -241,8 +241,12 @@ fn group_menu_item(
     group_id: ConnectionGroupId,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> Div {
+) -> Stateful<Div> {
     div()
+        .id((
+            "group-menu-item",
+            menu_item_hash(ConnectionId(group_id.0), icon, label),
+        ))
         .h(px(32.))
         .rounded(colors.radius_lg)
         .px_2()

@@ -15,9 +15,58 @@ fn app_message_layout(window: &Window) -> AppMessageLayout {
     app_message_layout_for_width(f32::from(window.bounds().size.width))
 }
 
-fn app_message_overlay(message: &AppMessage, window: &Window, colors: UiColors) -> Div {
-    let (bg, text_color) = app_message_colors(message.kind, colors);
+/// `Alert` 非 banner 模式把图标塞进一个固定 `mt(5px)` 的壳里，图标尺寸又跟随字号
+/// （`Alert` 用 `text_sm` = 0.875rem）。那个 5px 是按 gpui 的默认行高（φ × 字号 ≈ 22.7px）
+/// 对的中线；我们把行高压紧之后，图标就会明显偏下，需要按中线对齐反推一个负 margin 补回去。
+const ALERT_ICON_WRAPPER_MARGIN: f32 = 5.;
+/// `Alert` 正文与图标的字号相对根字号的比值（`text_sm` = 0.875rem）。
+const ALERT_TEXT_SM_RATIO: f32 = 0.875;
+
+/// 提示类型 → Alert 变体 / 内置图标 / 主题语义色，一次收敛，避免三处各写一遍 match。
+///
+/// 四个语义色应用都没有覆盖，用的是 gpui-component 主题（默认即 shadcn neutral）的取值。
+fn app_message_style(kind: AppMessageKind, cx: &App) -> (AlertVariant, IconName, gpui::Hsla) {
+    let theme = ComponentTheme::global(cx);
+    match kind {
+        AppMessageKind::Info => (AlertVariant::Info, IconName::Info, theme.info),
+        AppMessageKind::Success => (AlertVariant::Success, IconName::CircleCheck, theme.success),
+        AppMessageKind::Warning => (AlertVariant::Warning, IconName::TriangleAlert, theme.warning),
+        AppMessageKind::Error => (AlertVariant::Error, IconName::CircleX, theme.danger),
+    }
+}
+
+/// 按当前行高把 `Alert` 的图标拉回文字中线，原因见 `ALERT_ICON_WRAPPER_MARGIN`。
+///
+/// 这里写全路径 `gpui_component::Icon`：根作用域里的 `Icon` 已被托盘图标（`tray_icon::Icon`）占用。
+fn alert_icon(name: IconName, cx: &App, line_height: f32) -> gpui_component::Icon {
+    let font_size = f32::from(ComponentTheme::global(cx).font_size) * ALERT_TEXT_SM_RATIO;
+    let offset = ALERT_ICON_WRAPPER_MARGIN + font_size / 2. - line_height / 2.;
+    gpui_component::Icon::new(name).mt(px(-offset))
+}
+
+/// 告警淡色底：把语义色按 `ALERT_TINT` 比例混进面板底色，得到**不透明**的淡色块。
+///
+/// 不直接用 `Alert` 自带的底色：它是 `语义色.mix_oklab(transparent_white(), 0.04)`，
+/// 而 `mix_oklab` 连 alpha 一起插值，结果 alpha 只有 0.04 —— 那是给「贴在面板上的内联提示」
+/// 准备的，浮在内容之上时等于全透明，必须由调用方覆盖。
+/// 文字色与描边仍走 `Alert` 的变体色（语义色），即「淡色底 + 同色文字 + 同色描边」。
+fn alert_tint(accent: gpui::Hsla, colors: UiColors) -> gpui::Hsla {
+    accent.mix_oklab(colors.panel_bg.into(), ALERT_TINT)
+}
+
+/// 底部提示浮层：挂在窗口最上层、贴底居中；3s 后由 `NavicatMain::show_message` 的计时任务清掉。
+/// 视觉承载统一交给 gpui-component 的 `Alert`（图标与配色随变体走）。
+fn app_message_overlay(message: &AppMessage, window: &Window, cx: &App, colors: UiColors) -> Div {
     let layout = app_message_layout(window);
+    let (variant, icon_name, accent) = app_message_style(message.kind, cx);
+    // 同一条提示只存在一个实例；id 随消息自增，避免复用上一条的交互态。
+    let id = ("app-message", message.id);
+    let alert = Alert::new(id, message.text.clone())
+        .with_variant(variant)
+        .icon(alert_icon(icon_name, cx, APP_MESSAGE_LINE_HEIGHT))
+        .bg(alert_tint(accent, colors))
+        .line_height(px(APP_MESSAGE_LINE_HEIGHT));
+
     div()
         .absolute()
         .bottom(px(layout.bottom))
@@ -28,12 +77,7 @@ fn app_message_overlay(message: &AppMessage, window: &Window, colors: UiColors) 
         .child(
             div()
                 .max_w(px(layout.max_width))
-                .min_h(px(28.))
-                .px_4()
-                .py_1()
-                .rounded(colors.radius_lg)
-                .bg(bg)
-                .overflow_hidden()
+                .min_w(px(0.))
                 .shadow(vec![box_shadow(
                     px(0.),
                     px(4.),
@@ -41,43 +85,52 @@ fn app_message_overlay(message: &AppMessage, window: &Window, colors: UiColors) 
                     px(0.),
                     hsla(0., 0., 0., if colors.is_dark { 0.18 } else { 0.12 }),
                 )])
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_center()
-                .text_size(px(13.))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(text_color)
-                .child(
-                    div()
-                        .min_w(px(0.))
-                        .overflow_hidden()
-                        .whitespace_normal()
-                        .line_clamp(2)
-                        .child(message.text.clone()),
-                ),
+                .child(alert),
         )
 }
 
-fn app_message_colors(kind: AppMessageKind, colors: UiColors) -> (gpui::Rgba, gpui::Rgba) {
-    match kind {
-        AppMessageKind::Info => {
-            if colors.is_dark {
-                (rgb(0x2b3038), rgb(0xe8eaed))
-            } else {
-                (rgb(0x20242a), rgb(0xffffff))
-            }
-        }
-        AppMessageKind::Success => {
-            if colors.is_dark {
-                (rgb(0x2b3038), rgb(0xe8eaed))
-            } else {
-                (rgb(0x20242a), rgb(0xffffff))
-            }
-        }
-        AppMessageKind::Warning => (rgb(0xfff2cc), rgb(0x5f3b00)),
-        AppMessageKind::Error => (rgb(0xffe0e0), rgb(0x9f1d1d)),
+/// 页面级错误块：常驻的 gpui-component `Alert`（不参与自动消失），顶部对齐放在内容区，
+/// 承载错误标题、原始报文与可选细节；`actions` 是调用方自备的操作区（重试 / 复制错误等）。
+///
+/// `Alert` 是整行块级布局且没有 actions 槽，所以操作区作为它的兄弟节点纵向排在下方；
+/// 整块限宽，避免长报文在宽窗口里横向铺满、把布局撑变形。
+fn page_error_alert(
+    id: gpui::ElementId,
+    title: &str,
+    message: &str,
+    detail: Option<&str>,
+    actions: Option<gpui::AnyElement>,
+    cx: &App,
+    colors: UiColors,
+) -> Div {
+    let (variant, icon_name, accent) = app_message_style(AppMessageKind::Error, cx);
+    let mut column = div()
+        .max_w(px(880.))
+        .min_w(px(0.))
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(
+            Alert::new(id, message.to_string())
+                .with_variant(variant)
+                .icon(alert_icon(icon_name, cx, PAGE_ERROR_LINE_HEIGHT))
+                .title(title.to_string())
+                .bg(alert_tint(accent, colors))
+                .line_height(px(PAGE_ERROR_LINE_HEIGHT)),
+        );
+
+    if let Some(detail) = detail.map(str::trim).filter(|detail| !detail.is_empty()) {
+        column = column.child(
+            div()
+                .text_size(px(12.))
+                .text_color(colors.muted)
+                .child(detail.to_string()),
+        );
     }
+    if let Some(actions) = actions {
+        column = column.child(div().flex().items_center().gap_2().child(actions));
+    }
+    column
 }
 
 fn app_event_message(event: &AppEvent) -> Option<(String, AppMessageKind)> {

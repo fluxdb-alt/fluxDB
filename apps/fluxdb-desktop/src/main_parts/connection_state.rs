@@ -140,6 +140,8 @@ enum TableMenuAction {
     Backup,
     Drop,
     Truncate,
+    /// 从当前分组中移出该表。
+    RemoveFromGroup,
 }
 
 #[derive(Clone, Copy, Debug)]

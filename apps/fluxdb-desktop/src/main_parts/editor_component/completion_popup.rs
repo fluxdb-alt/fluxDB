@@ -178,15 +178,27 @@ fn completion_doc_panel(
 
     match doc {
         DocumentationState::Ready(text)
-            if selected_item.is_some_and(|item| {
-                matches!(item.kind, fluxdb_editor_core::CompletionKind::Table)
-            }) => panel.child(completion_doc_schema_table(
-            selected_item.expect("table completion item").label.as_str(),
-            &text,
-            theme,
-            font,
-            font_size,
-        )),
+            if selected_item
+                .as_ref()
+                .is_some_and(|item| matches!(item.kind, fluxdb_editor_core::CompletionKind::Table)) =>
+        {
+            if let Some(item) = selected_item {
+                panel.child(completion_doc_schema_table(
+                    item.label.as_str(),
+                    &text,
+                    theme,
+                    font,
+                    font_size,
+                ))
+            } else {
+                panel.child(completion_doc_message(
+                    &text,
+                    theme.completion_text,
+                    font,
+                    font_size,
+                ))
+            }
+        }
         DocumentationState::Loading => panel.child(completion_doc_message(
             "加载中…",
             theme.completion_detail,

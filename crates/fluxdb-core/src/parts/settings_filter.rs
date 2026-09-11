@@ -127,6 +127,10 @@ pub struct Settings {
     /// Redis Workbench 执行破坏性命令（FLUSHDB/FLUSHALL 等）前是否二次确认。
     #[serde(default = "default_dangerous_sql_confirmation")]
     pub confirm_dangerous_redis: bool,
+    /// 危险 SQL 操作清单（"哪些语句算危险"）。集合项见 `DangerousSqlAction` 的 key，
+    /// 空集合 = 不把任何 SQL 判为危险。仅影响 SQL 侧，Redis 清单不受影响。
+    #[serde(default = "default_dangerous_sql_actions")]
+    pub dangerous_sql_actions: BTreeSet<String>,
     #[serde(default = "default_completion_index_enabled")]
     pub enable_completion_index: bool,
     /// Redis Workbench 编辑器区（上方）相对分栏可用高度的占比（0-100），用于记住并恢复分栏大小。
@@ -174,6 +178,7 @@ impl Default for Settings {
             editor_word_wrap: false,
             confirm_dangerous_sql: default_dangerous_sql_confirmation(),
             confirm_dangerous_redis: default_dangerous_sql_confirmation(),
+            dangerous_sql_actions: default_dangerous_sql_actions(),
             enable_completion_index: default_completion_index_enabled(),
             redis_workbench_editor_ratio: default_redis_workbench_editor_ratio(),
             custom_keybindings: BTreeMap::new(),
@@ -182,6 +187,53 @@ impl Default for Settings {
             sqlite3_path: String::new(),
         }
     }
+}
+
+/// 可配置危险 SQL 操作的预置项。`key` 为持久化到 `Settings.dangerous_sql_actions`
+/// 集合的稳定标识（小写下划线）；`title`/`description` 用于设置面板勾选清单展示。
+pub struct DangerousSqlAction {
+    pub key: &'static str,
+    pub title: &'static str,
+    pub description: &'static str,
+    /// 默认是否勾选（即该项默认算不算危险）。
+    pub default_checked: bool,
+}
+
+impl DangerousSqlAction {
+    /// 所有预置项。前四项默认勾选（保持 `is_dangerous_sql_statement` 现状行为），
+    /// `alter_table` 默认关，避免误伤普通 DDL。
+    pub const ALL: [DangerousSqlAction; 5] = [
+        DangerousSqlAction {
+            key: "drop",
+            title: "DROP",
+            description: "删除表或数据库",
+            default_checked: true,
+        },
+        DangerousSqlAction {
+            key: "truncate",
+            title: "TRUNCATE",
+            description: "清空表数据",
+            default_checked: true,
+        },
+        DangerousSqlAction {
+            key: "update_without_where",
+            title: "UPDATE 无 WHERE",
+            description: "更新语句未带 WHERE 条件",
+            default_checked: true,
+        },
+        DangerousSqlAction {
+            key: "delete_without_where",
+            title: "DELETE 无 WHERE",
+            description: "删除语句未带 WHERE 条件",
+            default_checked: true,
+        },
+        DangerousSqlAction {
+            key: "alter_table",
+            title: "ALTER TABLE",
+            description: "修改表结构",
+            default_checked: false,
+        },
+    ];
 }
 
 fn default_editor_font_size() -> u32 {
@@ -198,6 +250,16 @@ fn default_editor_tab_width() -> u32 {
 
 fn default_dangerous_sql_confirmation() -> bool {
     true
+}
+
+/// 默认危险 SQL 操作清单：保持为现行行为（DROP/TRUNCATE/无 WHERE 的 UPDATE/DELETE），
+/// 不含 `alter_table`（用户需手动勾选）。
+fn default_dangerous_sql_actions() -> BTreeSet<String> {
+    DangerousSqlAction::ALL
+        .iter()
+        .filter(|a| a.default_checked)
+        .map(|a| a.key.to_string())
+        .collect()
 }
 
 fn default_completion_index_enabled() -> bool {

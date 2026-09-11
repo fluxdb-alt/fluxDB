@@ -310,6 +310,19 @@ pub enum SoftWrapMode {
     EditorWidth,
 }
 
+/// 最后一行之后还能继续滚动多少（对齐 Zed 的 `scroll_beyond_last_line`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScrollBeyondLastLine {
+    /// 预留一屏：最后一行可以滚到视口顶部。
+    ///
+    /// 编辑场景（Zed 默认）留出输入呼吸空间，但内容短于视口时会凭空多出一屏可滚空白。
+    #[default]
+    OnePage,
+    /// 不预留：可滚范围恰好到内容末尾，内容装得下就没有可滚动的余量。
+    /// 只读预览用这个，避免短文本仍能滚动。
+    None,
+}
+
 /// 回车提交模式：单行输入框回车如何响应。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SubmitMode {
@@ -341,6 +354,8 @@ pub struct EditorProfile {
     pub use_spaces: bool,
     pub show_line_numbers: bool,
     pub show_folding: bool,
+    /// 内容末尾之外的可滚动余量；只读预览应设为 `None`。
+    pub scroll_beyond_last_line: ScrollBeyondLastLine,
     pub auto_close_pairs: bool,
     pub submit_mode: SubmitMode,
     pub completion_trigger: CompletionTrigger,
@@ -386,6 +401,7 @@ impl Default for EditorProfile {
             use_spaces: true,
             show_line_numbers: false,
             show_folding: false,
+            scroll_beyond_last_line: ScrollBeyondLastLine::OnePage,
             auto_close_pairs: true,
             submit_mode: SubmitMode::InsertNewline,
             completion_trigger: CompletionTrigger::Manual,

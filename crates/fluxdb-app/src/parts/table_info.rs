@@ -87,6 +87,35 @@ fn replace_loaded_children(
     current.extend(children);
 }
 
+/// 第一层对象（连接展开后直接可见的那一层）：库 / Schema / Redis 库。
+/// 表 / 视图 / 集合 / Redis Key 属于更深一层，由 `LoadObjectChildren` 就地合入。
+fn is_connection_level0(kind: ObjectKind) -> bool {
+    matches!(
+        kind,
+        ObjectKind::Database | ObjectKind::Schema | ObjectKind::RedisDb
+    )
+}
+
+/// 侧边栏「刷新连接树」的第一层替换：用服务端最新结果换掉旧的第一层条目，
+/// 同时保留「所属库仍然存在」的表 / 视图行，使已展开的数据库子树不会因刷新被清空。
+///
+/// 库名比较沿用 `path_database_name`，与 [`replace_loaded_children`] 保持同一口径；
+/// 库已被删除时其名下的表 / 视图行一并丢弃，避免留下孤儿行。
+fn replace_connection_level0(connection: &mut ConnectionState, level0: Vec<ObjectSummary>) {
+    let live_databases = level0
+        .iter()
+        .map(|object| path_database_name(&object.path).to_string())
+        .collect::<BTreeSet<_>>();
+
+    connection
+        .objects
+        .retain(|object| !is_connection_level0(object.path.kind));
+    connection.objects.retain(|object| {
+        live_databases.contains(path_database_name(&object.path))
+    });
+    connection.objects.extend(level0);
+}
+
 fn tab_belongs_to_database(tab: &TabState, connection_id: ConnectionId, database: &str) -> bool {
     match &tab.kind {
         TabKind::ObjectList(list) => list.parent.as_ref().is_some_and(|path| {
