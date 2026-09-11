@@ -278,6 +278,8 @@ fn object_name_text(name: &ObjectName) -> Option<String> {
 const COMPLETION_CONTEXT_WINDOW_BYTES: usize = 64 * 1024;
 
 fn sql_completion_context(sql: &str, cursor: usize, dialect: DatabaseKind) -> SqlCompletionContext {
+    // 保留原始方言判定（标识符引号字符随方言不同），再换成 AST 方言适配器。
+    let kind = dialect;
     let dialect = sql_completion_dialect(dialect);
     let cursor = cursor.min(sql.len());
     // 补全只需要当前 statement 和光标前的局部语境。窗口上限避免 1MB 文档每次按键
@@ -286,10 +288,13 @@ fn sql_completion_context(sql: &str, cursor: usize, dialect: DatabaseKind) -> Sq
     let context_end = completion_context_end(sql, cursor);
     let context_sql = &sql[context_start..context_end];
     let before = &context_sql[..cursor - context_start];
-    let trailing = trailing_identifier(before);
+    let trailing = trailing_identifier(before, kind);
     let replace_start = context_start + trailing.start;
     let replace_end = if trailing.quoted_identifier
-        && sql.as_bytes().get(cursor).is_some_and(|byte| *byte == b'`')
+        && sql
+            .as_bytes()
+            .get(cursor)
+            .is_some_and(|byte| *byte == dialect_identifier_quote(kind))
     {
         cursor + 1
     } else {
@@ -1561,7 +1566,15 @@ struct TrailingIdentifier {
     quoted_identifier: bool,
 }
 
-fn trailing_identifier(before: &str) -> TrailingIdentifier {
+/// 方言的标识符引号字符：MySQL/TiDB 用反引号，其余（PostgreSQL/SQLite）用双引号。
+fn dialect_identifier_quote(kind: DatabaseKind) -> u8 {
+    match kind {
+        DatabaseKind::MySql | DatabaseKind::TiDb => b'`',
+        _ => b'"',
+    }
+}
+
+fn trailing_identifier(before: &str, kind: DatabaseKind) -> TrailingIdentifier {
     let mut prefix_start = before.len();
     for (index, ch) in before.char_indices().rev() {
         if is_sql_ident_char(ch) {
@@ -1571,7 +1584,10 @@ fn trailing_identifier(before: &str) -> TrailingIdentifier {
         }
     }
     let prefix = before[prefix_start..].to_string();
-    let quoted_identifier = prefix_start > 0 && before.as_bytes()[prefix_start - 1] == b'`';
+    // 已输入的起始引号（MySQL 反引号 / PG 双引号）说明这是带引号标识符：
+    // 替换范围纳入该引号，插入文本强制加引号并保留大小写（§8.4）。
+    let quoted_identifier =
+        prefix_start > 0 && before.as_bytes()[prefix_start - 1] == dialect_identifier_quote(kind);
     // 将左反引号纳入替换范围：既能恢复 FROM/JOIN 上下文，也避免采纳候选后留下旧引号。
     let start = prefix_start - usize::from(quoted_identifier);
     let qualifier_path = trailing_qualifier_path(before, start);
@@ -2653,10 +2669,18 @@ fn snippet_completion_items(prefix: &str) -> Vec<QueryCompletionItem> {
         .collect()
 }
 
-/// 判断标识符是否需要引号包裹（P1.6）：保留字、以数字开头、或含非标识符字符时。
+/// 判断标识符是否需要引号包裹（P1.6 + §8.4 大小写）。
+///
+/// 规则：保留字、以数字开头、含非标识符字符时必须加引号；此外 PostgreSQL 把未加引号的
+/// 标识符折叠为小写，含大写字母的名字不加引号会指向另一个对象，因此同样必须加引号。
+/// MySQL/TiDB/SQLite 不做折叠，保持原判定。
 ///
 /// `reserved` 由调用方提供该方言的保留字判定，避免在纯函数层引入关键字表耦合。
-pub fn identifier_needs_quote(name: &str, reserved: impl Fn(&str) -> bool) -> bool {
+pub fn identifier_needs_quote(
+    name: &str,
+    kind: DatabaseKind,
+    reserved: impl Fn(&str) -> bool,
+) -> bool {
     if name.is_empty() {
         return false;
     }
@@ -2664,6 +2688,9 @@ pub fn identifier_needs_quote(name: &str, reserved: impl Fn(&str) -> bool) -> bo
         return true;
     }
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return true;
+    }
+    if kind == DatabaseKind::Postgres && name.chars().any(|c| c.is_ascii_uppercase()) {
         return true;
     }
     reserved(name)
@@ -2678,7 +2705,7 @@ pub fn quote_identifier(
     kind: DatabaseKind,
     reserved: impl Fn(&str) -> bool,
 ) -> String {
-    if !identifier_needs_quote(name, &reserved) {
+    if !identifier_needs_quote(name, kind, &reserved) {
         return name.to_string();
     }
     let (open, close) = match kind {

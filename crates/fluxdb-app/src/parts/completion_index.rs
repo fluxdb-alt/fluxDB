@@ -70,6 +70,10 @@ impl CompletionIndex {
         }
     }
 
+    /// 表索引键：名称按 catalog 原样持有，不做大小写折叠。
+    ///
+    /// PG 允许 `"Foo"` 与 `"foo"` 并存（未加引号才折叠为小写），折叠会合并两个真实对象
+    /// 并互相覆盖列（§8.4）。大小写差异在匹配阶段按方言处理，不在存储阶段合并。
     fn table_key(
         connection_id: ConnectionId,
         database: Option<&str>,
@@ -80,7 +84,7 @@ impl CompletionIndex {
             connection_id,
             database: database.map(str::to_string),
             schema: schema.map(str::to_string),
-            table: table.to_ascii_lowercase(),
+            table: table.to_string(),
         }
     }
 
@@ -148,8 +152,41 @@ impl CompletionIndex {
 
         self.columns_by_table.insert(table_key, column_ids);
         self.touch_meta(db_key, db_kind);
-        self.dirty_tables
-            .retain(|key| key != &Self::table_key(connection_id, database, schema, table));
+        self.clear_dirty_table_names_matching(connection_id, database, schema, table);
+    }
+
+    /// 清除指定库/schema 下「按名称匹配（忽略大小写）」的表级 dirty 标记。
+    ///
+    /// 存储键按 catalog 原名（§8.4 不折叠、不合并），但 dirty 标记来自 DDL 文本，
+    /// 各客户端方言对未加引号标识符的折叠规则不同（PG 折小写、MySQL 视配置），
+    /// 故清除与匹配都按忽略大小写进行：多清一点只是多刷一次，不会漏刷。
+    /// 清除指定库/schema 的**全部**表级 dirty 标记（库级 dirty 标记保留，由整库刷新负责）。
+    fn clear_dirty_tables(
+        &mut self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+    ) {
+        self.dirty_tables.retain(|key| {
+            !(key.connection_id == connection_id
+                && key.database.as_deref() == database
+                && key.schema.as_deref() == schema)
+        });
+    }
+
+    fn clear_dirty_table_names_matching(
+        &mut self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        table: &str,
+    ) {
+        self.dirty_tables.retain(|key| {
+            !(key.connection_id == connection_id
+                && key.database.as_deref() == database
+                && key.schema.as_deref() == schema
+                && key.table.eq_ignore_ascii_case(table))
+        });
     }
 
     fn insert_snapshot(&mut self, snapshot: CompletionIndexSnapshot) {

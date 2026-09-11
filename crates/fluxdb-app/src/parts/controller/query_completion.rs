@@ -33,15 +33,24 @@ fn refresh_index_columns_in_background(
             .database_tables(connection_id, database, schema)
             .into_iter()
             .filter(|table| matches!(table.kind, ObjectKind::Table | ObjectKind::View))
+            // 存储键按 catalog 原名（§8.4 不折叠、不合并），而 dirty 标记来自 DDL 文本，
+            // 各方言对未加引号标识符的折叠规则不同，故这里按忽略大小写匹配：多刷可接受，漏刷不行。
             .filter(|table| {
                 database_wide
                     || dirty_tables.is_empty()
-                    || dirty_tables.contains(&table.name.to_ascii_lowercase())
+                    || dirty_tables
+                        .iter()
+                        .any(|dirty| dirty.eq_ignore_ascii_case(&table.name))
             })
             .map(|table| table.name)
             .collect()
     };
     if table_names.is_empty() {
+        // 无匹配表的 dirty（对象已 DROP，或名称与 catalog 对不上）不会因刷新自动消失，
+        // 在此清掉，避免该 scope 永久 dirty、每次补全都触发后台刷新。
+        if let Ok(mut guard) = index.lock() {
+            guard.clear_dirty_tables(connection_id, database, schema);
+        }
         return Ok((0, 0));
     }
     let columns = list_completion_columns_for_tables_for_connection_with_cancel(
@@ -52,18 +61,18 @@ fn refresh_index_columns_in_background(
         &|| false,
     )?;
     let refreshed_columns = columns.len();
+    // 按表名精确分组（不折叠大小写）：同一批次内，PG 端已按 search_path 只返回每个表名
+    // 首个可见 schema 的列，故表名在批内唯一；折叠会让 `"Foo"` 与 `"foo"` 互相覆盖列（§8.4）。
     let mut by_table: BTreeMap<String, Vec<CompletionColumn>> = BTreeMap::new();
     for column in columns {
         by_table
-            .entry(column.table.to_ascii_lowercase())
+            .entry(column.table.clone())
             .or_default()
             .push(column);
     }
     if let Ok(mut guard) = index.lock() {
         for table in &table_names {
-            let table_columns = by_table
-                .remove(&table.to_ascii_lowercase())
-                .unwrap_or_default();
+            let table_columns = by_table.remove(table).unwrap_or_default();
             // replace_table_columns 内部 touch_meta → 更新 last_verified_at 并清 dirty，索引转为 fresh。
             guard.replace_table_columns(
                 connection_id,

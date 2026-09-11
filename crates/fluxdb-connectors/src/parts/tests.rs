@@ -4615,6 +4615,38 @@ SELECT item_id, name FROM audit_log;"
             routines
         );
 
+        // 大小写（§8.4）：带引号创建的对象名在 catalog 中按原样持有，不折叠、不合并；
+        // 未加引号的过滤词按 PG 语义折叠为小写，仍能命中（ILIKE）。
+        let mut camel = pg_query_request(&config, None);
+        camel.text = "DROP TABLE IF EXISTS \"T14_Camel\" CASCADE; \
+                      CREATE TABLE \"T14_Camel\"(\"Id\" int PRIMARY KEY, plain int);"
+            .to_string();
+        connector.execute(&camel).expect("建混合大小写表应成功");
+
+        let camel_tables = connector
+            .list_completion_tables(Some(&db_name), Some("public"), "t14_camel", 50)
+            .expect("混合大小写表补全应成功");
+        assert!(
+            camel_tables.iter().any(|t| t.name == "T14_Camel"),
+            "catalog 名称应按原样返回，不被折叠：{:#?}",
+            camel_tables
+        );
+        let camel_columns = connector
+            .list_completion_columns(Some(&db_name), Some("public"), "T14_Camel")
+            .expect("混合大小写列补全应成功");
+        let camel_names: Vec<&str> = camel_columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            camel_names,
+            vec!["Id", "plain"],
+            "列名应按原样返回并保持 attnum 顺序：{camel_names:?}"
+        );
+
+        let mut camel_cleanup = pg_query_request(&config, None);
+        camel_cleanup.text = "DROP TABLE IF EXISTS \"T14_Camel\" CASCADE;".to_string();
+        connector
+            .execute(&camel_cleanup)
+            .expect("清理混合大小写表应成功");
+
         // 触发器补全：t14_trg 关联表 t14_completion。
         let triggers = connector
             .list_completion_triggers(Some(&db_name), Some("public"), "t14_trg", 50)

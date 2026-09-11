@@ -291,11 +291,49 @@
 
     #[test]
     fn identifier_needs_quote_flags_reserved_digit_and_special() {
-        assert!(identifier_needs_quote("select", |w| w == "select"));
-        assert!(identifier_needs_quote("1abc", |_| false));
-        assert!(identifier_needs_quote("a-b", |_| false));
-        assert!(!identifier_needs_quote("user_name", |_| false));
-        assert!(!identifier_needs_quote("", |_| false));
+        assert!(identifier_needs_quote("select", DatabaseKind::Postgres, |w| w
+            == "select"));
+        assert!(identifier_needs_quote("1abc", DatabaseKind::Postgres, |_| false));
+        assert!(identifier_needs_quote("a-b", DatabaseKind::Postgres, |_| false));
+        assert!(!identifier_needs_quote("user_name", DatabaseKind::Postgres, |_| false));
+        assert!(!identifier_needs_quote("", DatabaseKind::Postgres, |_| false));
+    }
+
+    /// §8.4 大小写：PG 未加引号折叠为小写，含大写字母的名字不加引号会指向另一个对象。
+    #[test]
+    fn identifier_needs_quote_quotes_uppercase_for_postgres_only() {
+        assert!(identifier_needs_quote("CamelCase", DatabaseKind::Postgres, |_| false));
+        assert!(identifier_needs_quote("t14_Dup", DatabaseKind::Postgres, |_| false));
+        assert!(!identifier_needs_quote("camelcase", DatabaseKind::Postgres, |_| false));
+        // MySQL 不折叠大小写，保持原判定，不加多余引号。
+        assert!(!identifier_needs_quote("CamelCase", DatabaseKind::MySql, |_| false));
+        assert_eq!(
+            quote_identifier("CamelCase", DatabaseKind::Postgres, |_| false),
+            "\"CamelCase\""
+        );
+        assert_eq!(
+            quote_identifier("CamelCase", DatabaseKind::MySql, |_| false),
+            "CamelCase"
+        );
+    }
+
+    /// 已输入的起始引号按方言识别：PG 用双引号，MySQL 用反引号；
+    /// 替换范围纳入起始引号，避免采纳候选后残留旧引号。
+    #[test]
+    fn completion_context_detects_dialect_quote_prefix() {
+        let sql = "select * from \"Cam";
+        let cursor = sql.len();
+        let context = sql_completion_context(sql, cursor, DatabaseKind::Postgres);
+        assert!(context.quoted_identifier, "PG 双引号应识别为带引号标识符");
+        assert_eq!(context.prefix, "Cam");
+        assert_eq!(context.replace_start, sql.len() - "\"Cam".len());
+
+        let sql = "select * from `Cam";
+        let cursor = sql.len();
+        let context = sql_completion_context(sql, cursor, DatabaseKind::MySql);
+        assert!(context.quoted_identifier, "MySQL 反引号应识别为带引号标识符");
+        assert_eq!(context.prefix, "Cam");
+        assert_eq!(context.replace_start, sql.len() - "`Cam".len());
     }
 
     #[test]
@@ -2611,6 +2649,63 @@
         }));
         let index = second.completion_index.lock().unwrap();
         assert!(index.has_database_index(ConnectionId(1), Some("main"), None));
+    }
+
+    /// §8.4 大小写：`"Foo"` 与 `"foo"` 是两个真实对象，索引不得按折叠键合并互相覆盖列。
+    #[test]
+    fn completion_index_keeps_case_distinct_tables() {
+        let controller = AppController::with_mock_data();
+        let mut index = controller.completion_index.lock().unwrap();
+        index.insert_tables(
+            ConnectionId(1),
+            Some("db"),
+            Some("public"),
+            vec![
+                CompletionTable {
+                    database: Some("db".to_string()),
+                    schema: Some("public".to_string()),
+                    name: "Foo".to_string(),
+                    kind: ObjectKind::Table,
+                },
+                CompletionTable {
+                    database: Some("db".to_string()),
+                    schema: Some("public".to_string()),
+                    name: "foo".to_string(),
+                    kind: ObjectKind::Table,
+                },
+            ],
+            DatabaseKind::Postgres,
+        );
+        for name in ["Foo", "foo"] {
+            index.replace_table_columns(
+                ConnectionId(1),
+                Some("db"),
+                Some("public"),
+                name,
+                vec![CompletionColumn {
+                    database: Some("db".to_string()),
+                    schema: Some("public".to_string()),
+                    table: name.to_string(),
+                    name: format!("{name}_id"),
+                    type_name: Some("integer".to_string()),
+                    nullable: false,
+                    primary_key: true,
+                    comment: None,
+                }],
+                DatabaseKind::Postgres,
+            );
+        }
+
+        let tables = index.database_tables(ConnectionId(1), Some("db"), Some("public"));
+        let names: BTreeSet<&str> = tables.iter().map(|table| table.name.as_str()).collect();
+        assert_eq!(
+            names,
+            BTreeSet::from(["Foo", "foo"]),
+            "大小写不同的对象必须同时保留：{names:?}"
+        );
+        // 两张表各自的列都在，未被对方覆盖（每张 1 列 → 共 2 列）。
+        let columns = index.database_columns(ConnectionId(1), Some("db"), Some("public"), "");
+        assert_eq!(columns.len(), 2, "两表列不应互相覆盖：{columns:#?}");
     }
 
     #[test]
