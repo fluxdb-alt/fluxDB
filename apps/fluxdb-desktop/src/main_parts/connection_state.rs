@@ -671,6 +671,12 @@ impl NewConnectionForm {
 
     /// 用一份 PostgreSQL 档案回填表单的 PG 专用编辑值。
     fn apply_postgres_profile(&mut self, profile: &fluxdb_core::PostgresConnectionProfile) {
+        // TLS：模式与证书路径共同决定拨号行为，必须一起回填。
+        self.tls_enabled = profile.tls.enabled;
+        self.tls_ca = profile.tls.ca.key.clone();
+        self.tls_client_cert = profile.tls.client_cert.key.clone();
+        self.tls_client_key = profile.tls.client_key.key.clone();
+        self.tls_sni = profile.tls.server_name.clone();
         self.pg_tls_ssl_mode = match profile.tls.ssl_mode {
             fluxdb_core::PostgresSslMode::Disabled => "disable".to_string(),
             fluxdb_core::PostgresSslMode::Prefer => "prefer".to_string(),

@@ -3439,3 +3439,89 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
     }
 
 }
+
+/// T19：PG 表单 → 结构化档案 → 回填表单，字段不丢；测试连接与保存用同一份档案。
+#[test]
+fn postgres_connection_form_roundtrips_into_profile() {
+    let mut form = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
+    form.host = "db.internal".to_string();
+    form.port = "5433".to_string();
+    form.database = "appdb".to_string();
+    form.username = "app_user".to_string();
+    form.password = "s3cret".to_string();
+    form.tls_enabled = true;
+    form.pg_tls_ssl_mode = "verify-full".to_string();
+    form.tls_ca = "/etc/ssl/root.crt".to_string();
+    form.tls_sni = "db.example.com".to_string();
+    form.pg_default_schema = "sales".to_string();
+    form.pg_application_name = "FluxDB Desktop".to_string();
+    form.pg_connect_timeout_secs = "7".to_string();
+    form.pg_query_timeout_secs = "30".to_string();
+
+    let profile = form.build_postgres_profile();
+    assert_eq!(profile.basic.host, "db.internal");
+    assert_eq!(profile.basic.port, 5433);
+    assert_eq!(profile.basic.maintenance_database, "appdb");
+    assert_eq!(profile.basic.username, "app_user");
+    assert_eq!(
+        profile.basic.password.value().map(str::to_string),
+        Some("s3cret".to_string())
+    );
+    assert!(profile.tls.enabled);
+    assert_eq!(profile.tls.ssl_mode, fluxdb_core::PostgresSslMode::VerifyFull);
+    assert_eq!(profile.tls.ca.key, "/etc/ssl/root.crt");
+    assert_eq!(profile.tls.server_name, "db.example.com");
+    assert_eq!(profile.scope.default_schema, "sales");
+    assert_eq!(profile.advanced.application_name, "FluxDB Desktop");
+    assert_eq!(profile.advanced.connect_timeout_secs, 7);
+    assert_eq!(profile.advanced.query_timeout_secs, 30);
+    // 未启用 SSH/代理时保持直连（不塞入无效传输层）。
+    assert_eq!(profile.transport.len(), 1);
+
+    // 回填：编辑/重启后表单值应与档案一致。
+    let mut restored = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
+    restored.apply_postgres_profile(&profile);
+    assert_eq!(restored.pg_tls_ssl_mode, "verify-full");
+    assert_eq!(restored.pg_default_schema, "sales");
+    assert_eq!(restored.pg_application_name, "FluxDB Desktop");
+    assert_eq!(restored.pg_connect_timeout_secs, "7");
+    assert_eq!(restored.pg_query_timeout_secs, "30");
+    assert_eq!(restored.database, "appdb");
+    assert_eq!(restored.tls_ca, "/etc/ssl/root.crt");
+
+    // SSH 隧道：启用后进入传输层并可回填。
+    let mut ssh_form = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
+    ssh_form.ssh_enabled = true;
+    ssh_form.ssh_host = "jump.internal".to_string();
+    ssh_form.ssh_username = "ops".to_string();
+    ssh_form.ssh_auth = "private_key".to_string();
+    ssh_form.ssh_private_key = "/home/ops/.ssh/id_ed25519".to_string();
+    let profile = ssh_form.build_postgres_profile();
+    let ssh = profile
+        .transport
+        .iter()
+        .find_map(|layer| match layer {
+            fluxdb_core::PostgresTransportLayer::Ssh(ssh) => Some(ssh),
+            _ => None,
+        })
+        .expect("SSH 传输层应存在");
+    assert_eq!(ssh.host, "jump.internal");
+    assert_eq!(ssh.private_key.key, "/home/ops/.ssh/id_ed25519");
+
+    let mut restored_ssh = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
+    restored_ssh.apply_postgres_profile(&profile);
+    assert!(restored_ssh.ssh_enabled);
+    assert_eq!(restored_ssh.ssh_host, "jump.internal");
+    assert_eq!(restored_ssh.ssh_auth, "private_key");
+}
+
+/// T19：默认值保持 MySQL/TiDB 表单不变（回归）。
+#[test]
+fn mysql_connection_form_defaults_unchanged_by_postgres_fields() {
+    let form = NewConnectionForm::for_kind(DatabaseKind::MySql, 1);
+    assert_eq!(form.host, "127.0.0.1");
+    assert_eq!(form.port, "3306");
+    assert_eq!(form.username, "root");
+    assert_eq!(form.mysql_tls_ssl_mode, "preferred");
+    assert_eq!(form.mysql_charset, "utf8mb4");
+}
