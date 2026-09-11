@@ -65,8 +65,8 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T18 | 复制/重命名/清空/删除表 | T11、T16、T17 | 已完成 / FluxDB |
 | T19 | PostgreSQL 连接对话框 | T02、T05 | 进行中 / FluxDB |
 | T20 | schema 树、数据库对话框和能力路由 | T06、T07、T19 | 进行中 / FluxDB |
-| T21 | 数据/查询/详情与历史 UI 接入 | T10–T16、T20 | 未开始 / — |
-| T22 | 新建/设计表及危险操作 UI | T17、T18、T21 | 未开始 / — |
+| T21 | 数据/查询/详情与历史 UI 接入 | T10–T16、T20 | 实现完成，待人工验收 / FluxDB |
+| T22 | 新建/设计表及危险操作 UI | T17、T18、T21 | 实现完成，待人工验收 / FluxDB |
 | T23 | 所有现有数据导出格式与范围 | T10、T11、T13、T21 | 未开始 / — |
 | T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 未开始 / — |
 | T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 未开始 / — |
@@ -417,21 +417,27 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T21 — 数据、查询、详情与历史 UI
 
-- [ ] 完成 T21
+- [ ] 完成 T21（实现完成，待人工验收）
 - **开始前读**：设计 7、8、10；R00、R10–R17、R28–R30。
 - **工作**：现有 DataTable/delegate 接入 PG 列/值/编辑性；二进制/JSON/时间详情；查询 scope Select、结果标签、取消、事务状态、历史补偿；gpui-component 统一 loading/error/disabled 与 show_message。
 - **交付位置**：data_editor_model、data_table_ui、cell_detail_table_info、sql_editor_adapter、查询参数/保存/历史现有职责。
 - **验收**：复制/多选/键盘/列宽/隐藏/排序/过滤/分页保持；RETURNING 和空结果显示；时区/复杂类型不被错误时间控件改写；明暗主题、Esc/外点/焦点；长操作不冻结窗口；关闭标签后迟到结果安全；MySQL 数据与查询回归。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：实现完成（FluxDB，2026-09-12）；验收待人工（见集中清单 B/C/E 节）。
+  实现要点：delegate 经 `cell_value_label` 渲染 PG 全类型（numeric 精确文本、bytea BinarySummary、jsonb Json、timestamptz 时间控件，编辑安全：binary 只读、temporal 用日期/时间选择器）；cell_detail 支持二进制完整下载/上传/Hex、JSON 格式化编辑、时间编辑；查询结果标签含 RETURNING（ResultSet+DataPage）、空结果保留列头（本会话修复 0 行时渲染列名头）；查询历史详情新增「事务」字段（已提交/未提交/已回滚，`QueryHistoryTransactionState::label`）；loading/error/disabled 与 show_message 统一、全部 DB/查询经 `background_spawn` 不阻塞 GPUI。
+  验证：workspace 全绿（app 395、connectors 135、desktop 370、storage 20）；新增/修改测试覆盖 delegate 类型渲染、temporal/二进制只读、结果 tab 派生、事务状态、历史回滚方言。
+  未完成项：交互/视觉项（复制/键盘/列宽/隐藏/排序/过滤/分页手测、明暗主题、Esc/外点/焦点、长操作、MySQL 数据/查询回归手测）→ 见集中人工验收清单 C/E 节，验收完成后再勾选整个任务。
 
 ### T22 — 结构编辑与表操作 UI
 
-- [ ] 完成 T22
+- [ ] 完成 T22（实现完成，待人工验收）
 - **开始前读**：设计 9、10；R00、R08、R15–R17、R22。
 - **工作**：新建/设计表的 PG provider 字段和 tabs；metadata 保真只读属性；表重命名/复制/清空/删除对话框、依赖与 SQL 预览；PG trigger function 输入语义。
 - **交付位置**：create_table/、table_rename/table_copy/table_danger、表信息面板。
 - **验收**：F12–F14 完整可操作；PG 不展示 engine/unsigned/MySQL FK 开关；RESTART IDENTITY/CASCADE 明确选择；危险操作预览与实际一致；Esc/外点/主题/手形/hover；MySQL 设计表功能与默认值保持。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：实现完成（FluxDB，2026-09-12）；验收待人工（见集中清单 D 节）。
+  实现要点：PG `PostgresCreateTableProvider` 能力位隐藏 MySQL 专属项（engine/unsigned/zerofill/text-options/key-length/auto-update-time/binary），Options 页签对 PG 不渲染 engine；建表/设计表 tabs（字段/索引/外键/检查/触发器/选项/分区/SQL）PG 可用，设计差异预览走 create_table_postgres_design（T17）；表操作对话框 PG SQL 预览（schema 限定）；本会话修复：PG 清空表新增「重置自增序列 RESTART IDENTITY」显式选项（默认 CONTINUE，切换后预览更新）、外键检查选择器（MySQL/TiDB 专属）对 PG 隐藏、PG 触发器「定义」区提示需引用已存在函数 `EXECUTE FUNCTION 函数名()`。
+  验证：workspace 全绿（app 395、connectors 135、desktop 370、storage 20）；PG 建表/设计/表操作单测与真库冒烟（T16/T17/T18）保持通过。
+  未完成项：交互项（对话框 Esc/外点/主题/手形/hover、危险操作预览一致手测、MySQL 设计表默认值回归手测）→ 见集中人工验收清单 D 节，验收完成后再勾选整个任务。
 
 ### T23 — 数据导出
 
