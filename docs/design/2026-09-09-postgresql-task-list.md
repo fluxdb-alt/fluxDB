@@ -361,7 +361,8 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   (三) `b852413`：`validate_new_connection` 增加 Postgres 分支走 `build_postgres_profile().validate()`（此前落入 `_` 兜底只查主机+端口）；新增 `postgres_form_validation_uses_profile_rules` 测试。
   (四) `1a90421`：测试/保存 loading 与防重复——新增 `saving_connection`，保存并连接期间置位、全部退出路径清除；测试按钮在测试任务进行时 disabled，`test_new_connection` 加重复点击防抖；保存按钮在 saving 或测试进行中 disabled。
   验证 — `postgres_form_validation_uses_profile_rules`、`postgres_connection_form_roundtrips_into_profile`、`mysql_connection_form_defaults_unchanged_by_postgres_fields` 通过；desktop 369、app 390、connectors 133 工作区全量通过；`cargo build -p fluxdb-desktop` 通过。
-  未完成项：证书/SSH 指纹/URI 错误反馈细化（PG 连接期 TLS/SSH 具体错误已透出，表单期证书路径校验受 layering 约束不做进 core validate）、复制连接 credential_ref 共享为既有共享缺陷（MySQL 同受影响，需单独处理并回归）、真实重启恢复验证、桌面交互启动验证（明暗主题/Esc/外点/内点防穿透）。
+  未完成项：证书/SSH 指纹/URI 错误反馈细化（PG 连接期 TLS/SSH 具体错误已透出，表单期证书路径校验受 layering 约束不做进 core validate）、真实重启恢复验证、桌面交互启动验证（明暗主题/Esc/外点/内点防穿透）。
+  已核验（§4.1 复制隔离）：`CreateConnection`（dispatch.rs:83）在存在凭据时无条件为连接派生全新 `credential_ref`；复制连接 draft 即便携带原 ref 与内联档案，副本也得到独立 ref、内联密钥原样保留供新 ref 落 keychain。测试 `copy_of_postgres_connection_gets_independent_credential_ref_and_secret`、`copy_of_mysql_connection_with_flat_password_gets_independent_ref` 锁定 PG 档案与 MySQL 扁平密码两路径，更新/删除按 ref 隔离不互相影响。无需额外代码改动（原交给 dispatch 的 ref 覆盖保证），仅补回归测试。`c757e68`。
 
 ### T20 — schema 树与数据库 UI
 
