@@ -4716,6 +4716,67 @@ SELECT item_id, name FROM audit_log;"
         connector.execute(&cleanup).expect("清理临时结构应成功");
     }
 
+    /// T15 验收「INSERT 补偿身份正确」：自增主键由服务端生成，编辑器无从得知，
+    /// 提交后必须由 RETURNING 返回真实身份，补偿 SQL 才能定位到真正插入的行。
+    #[test]
+    fn pg_live_smoke_apply_changes_returns_generated_identity() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T15 冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t15_identity CASCADE; \
+            CREATE TABLE t15_identity(id serial PRIMARY KEY, note text); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建表应成功");
+
+        let path = ObjectPath {
+            connection_id: config.id,
+            database: config
+                .postgres_profile
+                .as_ref()
+                .unwrap()
+                .basic
+                .maintenance_database
+                .clone()
+                .into(),
+            schema: Some("public".to_string()),
+            name: "t15_identity".to_string(),
+            kind: ObjectKind::Table,
+        };
+        let changes = DataChangeSet {
+            object: path.clone(),
+            inserts: vec![Row {
+                values: vec![CellValue::Null, CellValue::Text("first".to_string())],
+            }],
+            updates: vec![],
+            deletes: vec![],
+            insert_intents: None,
+        };
+        let outcome = connector.apply_changes(&changes).expect("插入应成功");
+        assert_eq!(
+            outcome.inserted_identities.len(),
+            1,
+            "应返回 1 行插入身份：{outcome:#?}"
+        );
+        let identity = &outcome.inserted_identities[0];
+        assert_eq!(
+            identity.values.get("id"),
+            Some(&CellValue::I64(1)),
+            "自增主键应由 RETURNING 返回：{identity:#?}"
+        );
+
+        // 真实身份可直接用于回滚（DELETE WHERE id = 1）。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t15_identity CASCADE;".to_string();
+        connector.execute(&cleanup).expect("清理应成功");
+    }
+
     /// T14 验收「列表支持取消」：取消标记生效时补全各列表返回空结果且不报错，
     /// 不阻塞编辑（不发起无意义往返）。
     #[test]

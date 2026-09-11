@@ -214,6 +214,7 @@ impl AppController {
         object: &ObjectPath,
         before_page: &DataPage,
         changes: &DataChangeSet,
+        outcome: &AppliedChangeOutcome,
     ) {
         let executed_at_unix_secs = current_unix_secs();
         // 补偿 SQL 按连接方言生成（PG 双引号/bytea/精确十进制），历史记录里保存该方言。
@@ -225,6 +226,7 @@ impl AppController {
             object,
             before_page,
             changes,
+            outcome,
             executed_at_unix_secs,
             kind,
         ));
@@ -598,6 +600,7 @@ fn data_change_history_entries(
     object: &ObjectPath,
     before_page: &DataPage,
     changes: &DataChangeSet,
+    outcome: &AppliedChangeOutcome,
     executed_at_unix_secs: u64,
     kind: DatabaseKind,
 ) -> Vec<QueryHistoryEntry> {
@@ -637,7 +640,7 @@ fn data_change_history_entries(
         ));
     }
 
-    for row in &changes.inserts {
+    for (insert_index, row) in changes.inserts.iter().enumerate() {
         let insert_values = before_page
             .columns
             .iter()
@@ -661,8 +664,14 @@ fn data_change_history_entries(
                 .join(", ");
             format!("INSERT INTO {table_name} ({columns}) VALUES ({values});")
         };
-        let rollback_snapshot =
-            data_change_insert_rollback_snapshot(object, before_page, row, kind);
+        // 服务端 RETURNING 的身份（自增/序列主键）优先；缺失时回退到编辑器已知的主键值。
+        let rollback_snapshot = data_change_insert_rollback_snapshot(
+            object,
+            before_page,
+            row,
+            outcome.inserted_identities.get(insert_index),
+            kind,
+        );
         entries.push(data_change_history_entry(
             object,
             sql,
@@ -763,8 +772,17 @@ fn data_change_insert_rollback_snapshot(
     object: &ObjectPath,
     before_page: &DataPage,
     row: &Row,
+    inserted_identity: Option<&RowIdentity>,
     kind: DatabaseKind,
 ) -> QueryRollbackSnapshot {
+    // 服务端返回的真实身份优先：自增列在编辑器里根本没有值，只能靠 RETURNING 拿（§8.4/R11）。
+    if let Some(identity) = inserted_identity.filter(|identity| !identity.values.is_empty()) {
+        return QueryRollbackSnapshot::Insert(QueryInsertRollbackSnapshot {
+            db_kind: Some(kind),
+            table: sql_history_object_name_for_path(object, kind),
+            identities: vec![identity.clone()],
+        });
+    }
     let values = before_page
         .columns
         .iter()

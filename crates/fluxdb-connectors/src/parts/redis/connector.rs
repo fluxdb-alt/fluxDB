@@ -538,14 +538,19 @@ impl Connector for RedisConnector {
         redis_load_data(config, path, offset, limit, filters)
     }
 
-    fn apply_changes(&self, changes: &DataChangeSet) -> fluxdb_core::Result<()> {
+    fn apply_changes(
+        &self,
+        changes: &DataChangeSet,
+    ) -> fluxdb_core::Result<AppliedChangeOutcome> {
         let Some(config) = self.config.as_ref() else {
             return Err(Error::new(
                 ErrorKind::Connection,
                 "Redis 数据修改需要连接配置上下文",
             ));
         };
-        redis_apply_changes(config, changes)
+        redis_apply_changes(config, changes)?;
+        // 这些方言暂不返回插入身份：INSERT 补偿回退到编辑器已知的主键值。
+        Ok(AppliedChangeOutcome::default())
     }
 
     fn execute(&self, _: &QueryRequest) -> fluxdb_core::Result<QueryExecutionResult> {

@@ -77,7 +77,10 @@ impl Connector for MockConnector {
         })
     }
 
-    fn apply_changes(&self, changes: &DataChangeSet) -> fluxdb_core::Result<()> {
+    fn apply_changes(
+        &self,
+        changes: &DataChangeSet,
+    ) -> fluxdb_core::Result<AppliedChangeOutcome> {
         if changes.object.name == "FailSubmit" {
             return Err(Error::new(ErrorKind::Query, "模拟提交失败"));
         }
@@ -86,7 +89,8 @@ impl Connector for MockConnector {
             return Err(Error::new(ErrorKind::Query, "没有需要提交的更改"));
         }
 
-        Ok(())
+        // Mock 不产生真实身份：INSERT 补偿回退到编辑器已知的主键值。
+        Ok(AppliedChangeOutcome::default())
     }
 
     fn execute(&self, request: &QueryRequest) -> fluxdb_core::Result<QueryExecutionResult> {

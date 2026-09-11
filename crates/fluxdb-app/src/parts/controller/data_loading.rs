@@ -298,7 +298,8 @@ impl AppController {
         };
 
         match self.apply_data_changes(&object, &changes) {
-            Ok(()) => {
+            // Redis 键写入不记 SQL 历史，插入身份无需消费。
+            Ok(_) => {
                 let key_object = ObjectPath {
                     connection_id: object.connection_id,
                     database: object.database.clone(),
@@ -1089,9 +1090,9 @@ impl AppController {
         }
 
         match self.apply_data_changes(&object, &changes) {
-            Ok(()) => match self.load_data_page(&object, pagination, &sort, &filters) {
+            Ok(outcome) => match self.load_data_page(&object, pagination, &sort, &filters) {
                 Ok(page) => {
-                    self.record_data_change_history(&object, &before_page, &changes);
+                    self.record_data_change_history(&object, &before_page, &changes, &outcome);
                     if let Some(tab) = self.find_tab_mut(tab_id)
                         && let TabKind::DataEditor(editor) = &mut tab.kind
                     {
@@ -1143,8 +1144,8 @@ impl AppController {
         before_page: &DataPage,
     ) -> AppEvent {
         match self.apply_data_changes(object, changes) {
-            Ok(()) => {
-                self.record_data_change_history(object, before_page, changes);
+            Ok(outcome) => {
+                self.record_data_change_history(object, before_page, changes, &outcome);
                 if let Some(tab) = self.find_tab_mut(tab_id)
                     && let TabKind::QueryEditor(editor) = &mut tab.kind
                     && let Some(page_index) = editor.active_result_editor
@@ -1235,7 +1236,7 @@ impl AppController {
         &self,
         object: &ObjectPath,
         changes: &DataChangeSet,
-    ) -> fluxdb_core::Result<()> {
+    ) -> fluxdb_core::Result<AppliedChangeOutcome> {
         let config = self
             .connection_config(object.connection_id)
             .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;

@@ -712,7 +712,7 @@ fn preview_data_export_for_connection(
 fn apply_data_changes_for_connection(
     config: &ConnectionConfig,
     changes: &DataChangeSet,
-) -> fluxdb_core::Result<()> {
+) -> fluxdb_core::Result<AppliedChangeOutcome> {
     if config
         .options
         .get("demo")

@@ -61,6 +61,16 @@ impl Default for QueryExecutionOptions {
     }
 }
 
+/// 数据提交的落定结果（§8.4/R11）。
+///
+/// 目前只承载 INSERT 的真实身份：自增列/序列/默认值生成的主键无法从编辑输入得知，
+/// 只能由服务端 `RETURNING` 返回，否则补偿 SQL 会定位到错误的行。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AppliedChangeOutcome {
+    /// 按 `DataChangeSet.inserts` 顺序给出每行插入的真实身份；无法取回时为空。
+    pub inserted_identities: Vec<RowIdentity>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct QueryExecutionResult {
     pub summaries: Vec<QueryExecutionSummary>,

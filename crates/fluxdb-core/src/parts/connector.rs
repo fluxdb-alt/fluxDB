@@ -35,7 +35,7 @@ pub trait Connector {
     ) -> Result<DataExportPreview> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持导出预览"))
     }
-    fn apply_changes(&self, changes: &DataChangeSet) -> Result<()>;
+    fn apply_changes(&self, changes: &DataChangeSet) -> Result<AppliedChangeOutcome>;
     fn execute(&self, request: &QueryRequest) -> Result<QueryExecutionResult>;
     fn execute_command_workbench(
         &self,

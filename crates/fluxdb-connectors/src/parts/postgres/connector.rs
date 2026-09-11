@@ -264,7 +264,10 @@ impl Connector for PostgresConnector {
         pg_preview_data_export(config, path, fields, sort, filters)
     }
 
-    fn apply_changes(&self, changes: &DataChangeSet) -> fluxdb_core::Result<()> {
+    fn apply_changes(
+        &self,
+        changes: &DataChangeSet,
+    ) -> fluxdb_core::Result<AppliedChangeOutcome> {
         let Some(config) = self.config.as_ref() else {
             return Err(Error::new(
                 ErrorKind::Connection,

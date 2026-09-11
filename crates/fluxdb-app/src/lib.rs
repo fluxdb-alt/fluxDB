@@ -14,7 +14,7 @@ pub use fluxdb_connectors::{
     RedisAddKeyKind, RedisAddKeyRequest, RedisListDirection, RedisPubSubSession,
 };
 use fluxdb_core::{
-    BinaryCellSummary, BinaryPreviewResponse, BinaryUpdatePayload, COMPLETION_INDEX_VERSION,
+    AppliedChangeOutcome, BinaryCellSummary, BinaryPreviewResponse, BinaryUpdatePayload, COMPLETION_INDEX_VERSION,
     CellUpdate, CellValue, Column, ColumnRef, CommandExecutionSource, CommandExecutionSummary,
     CommandExecutionTarget, CommandResultsMode, CommandRunMode, CommandWorkbenchExecution,
     CommandWorkbenchRequest, CompletionColumn, CompletionIndexMeta, CompletionIndexSnapshot,

@@ -6,7 +6,10 @@
 // PG 不经过 sqlx QueryBuilder：SQL 自行拼接，值一律 `$n` 参数化绑定，标识符 `pg_quote_identifier`。
 // 二进制（bytea）写入以 `Vec<u8>` 直接绑定；Hex 编辑回写前由 app 转成 `CellValue::Bytes`。
 
-fn pg_apply_changes(config: &ConnectionConfig, changes: &DataChangeSet) -> fluxdb_core::Result<()> {
+fn pg_apply_changes(
+    config: &ConnectionConfig,
+    changes: &DataChangeSet,
+) -> fluxdb_core::Result<AppliedChangeOutcome> {
     validate_data_changes(changes)?;
 
     let database = changes
@@ -34,16 +37,22 @@ fn pg_apply_changes(config: &ConnectionConfig, changes: &DataChangeSet) -> fluxd
         let result = async {
             pg_apply_deletes(client, &table, changes, &columns).await?;
             pg_apply_updates(client, &table, changes, &columns, &generated).await?;
-            pg_apply_inserts(client, &table, changes, &columns, &generated).await?;
-            Ok(())
+            let inserted_identities =
+                pg_apply_inserts(client, &table, changes, &columns, &generated).await?;
+            Ok::<_, fluxdb_core::Error>(AppliedChangeOutcome {
+                inserted_identities,
+            })
         }
         .await;
 
         match result {
-            Ok(()) => client
-                .batch_execute("COMMIT")
-                .await
-                .map_err(|error| Error::new(ErrorKind::Query, error.to_string())),
+            Ok(outcome) => {
+                client
+                    .batch_execute("COMMIT")
+                    .await
+                    .map_err(|error| Error::new(ErrorKind::Query, error.to_string()))?;
+                Ok(outcome)
+            }
             Err(error) => {
                 let _ = client.batch_execute("ROLLBACK").await;
                 Err(error)
@@ -114,24 +123,55 @@ fn pg_insert_values<'a>(
     Ok(out)
 }
 
+/// 插入行并回传真实身份（§8.4/R11）。
+///
+/// 自增/序列/默认值生成的主键无法从编辑输入得知，故 INSERT 追加 `RETURNING` 主键列，
+/// 用服务端返回值构造行身份——补偿 SQL 才能定位到真正插入的那一行。
 async fn pg_apply_inserts(
     client: &tokio_postgres::Client,
     table: &str,
     changes: &DataChangeSet,
     columns: &[Column],
     generated: &std::collections::BTreeSet<String>,
-) -> fluxdb_core::Result<()> {
+) -> fluxdb_core::Result<Vec<RowIdentity>> {
+    let primary_keys = columns
+        .iter()
+        .filter(|column| column.primary_key)
+        .map(|column| (column.name.clone(), column.clone()))
+        .collect::<Vec<_>>();
+    let mut identities = Vec::with_capacity(changes.inserts.len());
     for (index, row) in changes.inserts.iter().enumerate() {
         // 清除服务端生成列（其值由数据库产生）；意图三态时逐列对齐，
         // 否则退回旧语义（NULL 视为省略 → DEFAULT）。
         let insert_values = pg_insert_values(row, columns, generated, changes.insert_intents_for(index))?;
         let (sql, params) = pg_insert_sql(table, &insert_values)?;
-        client
-            .execute(&sql, &pg_params_refs(&params))
+        if primary_keys.is_empty() {
+            client
+                .execute(&sql, &pg_params_refs(&params))
+                .await
+                .map_err(|error| Error::new(ErrorKind::Query, error.to_string()))?;
+            continue;
+        }
+        let returning = primary_keys
+            .iter()
+            .map(|(name, _)| pg_quote_identifier(name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("{sql} RETURNING {returning}");
+        let returned = client
+            .query(&sql, &pg_params_refs(&params))
             .await
             .map_err(|error| Error::new(ErrorKind::Query, error.to_string()))?;
+        let Some(returned) = returned.into_iter().next() else {
+            continue;
+        };
+        let mut values = std::collections::BTreeMap::new();
+        for (position, (name, column)) in primary_keys.iter().enumerate() {
+            values.insert(name.clone(), pg_projected_cell_value(&returned, position, column));
+        }
+        identities.push(RowIdentity { values });
     }
-    Ok(())
+    Ok(identities)
 }
 
 async fn pg_apply_updates(
