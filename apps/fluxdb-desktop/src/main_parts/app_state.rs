@@ -1071,7 +1071,7 @@ struct NavicatMain {
     redis_workbench_panel_resize_start: Option<RedisWorkbenchPanelResizeStart>,
     query_output_tabs: BTreeMap<TabId, QueryOutputTab>,
     collapsed_query_outputs: BTreeSet<TabId>,
-    query_output_placement: QueryOutputPlacement,
+    results_placement: ResultsPlacement,
     query_result_display_pages: BTreeMap<QueryResultDisplayKey, SortedQueryResultPage>,
     settings_panel_section: SettingsPanelSection,
     settings_editor_draft: Settings,
@@ -1941,12 +1941,19 @@ struct SidebarResizeStart {
     width: f32,
 }
 
-/// Redis Workbench 上下分栏拖动起点：记录按下时的纵向位置与编辑器区高度（像素）。
-/// 分栏占比是全局设置（非按 tab），故无需 tab_id（对齐 RedisInsight 的全局 panelSizes 语义）。
+/// Redis Workbench 分栏拖动起点。分栏尺寸是全局设置（非按 tab），
+/// 故无需 tab_id（对齐 RedisInsight 的全局 panelSizes 语义）。
+///
+/// **必须把 `placement` 一起记下来**，不能在拖动时读实时的全局值：`Div::on_mouse_up`
+/// 只在指针仍悬停在手柄上时才触发（gpui 的 hover 判定），正常拖拽手势在结果区松手，
+/// 于是起点常常不被清理。若此时布局被工具栏切过，残留的「高度」会被当成「宽度」用。
+/// 连 `x`/`y` 一起记录，可保证起点记录的三元组（轴、基准、尺寸）自洽。
 #[derive(Clone, Copy, Debug)]
 struct RedisWorkbenchPanelResizeStart {
+    placement: ResultsPlacement,
+    x: f32,
     y: f32,
-    editor_height: f32,
+    size: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1966,7 +1973,7 @@ struct CellDetailDrawerResizeStart {
 #[derive(Clone, Copy, Debug)]
 struct QueryOutputResizeStart {
     tab_id: TabId,
-    placement: QueryOutputPlacement,
+    placement: ResultsPlacement,
     x: f32,
     y: f32,
     size: f32,
@@ -2075,21 +2082,6 @@ impl QueryOutputTab {
         match self {
             QueryOutputTab::Result(index) => Some(index),
             QueryOutputTab::Summary => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum QueryOutputPlacement {
-    Bottom,
-    Right,
-}
-
-impl QueryOutputPlacement {
-    fn toggled(self) -> Self {
-        match self {
-            QueryOutputPlacement::Bottom => QueryOutputPlacement::Right,
-            QueryOutputPlacement::Right => QueryOutputPlacement::Bottom,
         }
     }
 }

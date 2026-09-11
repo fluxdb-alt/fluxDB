@@ -1,8 +1,13 @@
 /// 顶部栏图标按钮：统一尺寸/圆角/手形光标/hover/tooltip，直接以 AppIcon 渲染。
 /// 「仅图标」按钮的通用封装，用于顶部栏收起侧边栏 / 首页等无标签按钮。
+///
+/// `enabled` 为 false 时置灰（`opacity`，与本文件其它禁用块的观感一致）、
+/// 去掉手形光标与 hover 反馈，但**保留 tooltip** —— 否则用户看到一个点不动的按钮
+/// 却不知道为什么。
 fn topbar_icon_button(
     icon: AppIcon,
     tooltip: &'static str,
+    enabled: bool,
     colors: UiColors,
 ) -> Stateful<Div> {
     div()
@@ -12,8 +17,11 @@ fn topbar_icon_button(
         .flex()
         .items_center()
         .justify_center()
-        .cursor_pointer()
-        .hover(move |style| style.bg(colors.hover))
+        .when(enabled, |this| {
+            this.cursor_pointer()
+                .hover(move |style| style.bg(colors.hover))
+        })
+        .when(!enabled, |this| this.opacity(0.45))
         .id(tooltip)
         .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
         .child(app_icon_box(icon, 30., 17., colors.muted))
@@ -72,6 +80,7 @@ fn topbar(
                 } else {
                     "展开侧边栏"
                 },
+                true,
                 colors,
             )
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -80,7 +89,7 @@ fn topbar(
                 cx.notify();
             })),
         )
-        .child(topbar_icon_button(AppIcon::Home, "首页", colors).on_mouse_down(
+        .child(topbar_icon_button(AppIcon::Home, "首页", true, colors).on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
                 this.dispatch(AppCommand::DeactivateTab, cx);
@@ -119,15 +128,28 @@ fn topbar(
                     cx.stop_propagation();
                 }),
         )
-        // 顶部栏最右侧：历史 + 设置（业务按钮移除后收纳在此，保持功能可达）。
-        .child(topbar_icon_button(AppIcon::CalendarClock, "历史", colors).on_mouse_down(
+        // 顶部栏最右侧：github + 询问 AI + 历史 + 设置。
+        // 「询问 AI」原先挂在 SQL 编辑器工具栏上，移到这里与其余全局入口同排；
+        // 「历史」「设置」是业务按钮移除后收纳在此的既有项。
+        .child(
+            topbar_icon_button(AppIcon::Github, "GitHub 仓库", true, colors).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _, _, cx| {
+                    cx.open_url(GITHUB_REPOSITORY_URL);
+                    cx.stop_propagation();
+                }),
+            ),
+        )
+        // AI 能力尚未接入，先置灰占位；tooltip 说明原因，避免看起来像坏掉的按钮。
+        .child(topbar_icon_button(AppIcon::Bot, "询问 AI（暂未开放）", false, colors))
+        .child(topbar_icon_button(AppIcon::CalendarClock, "历史", true, colors).on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _, window, cx| {
                 this.toggle_history(window, cx);
                 cx.stop_propagation();
             }),
         ))
-        .child(topbar_icon_button(AppIcon::Settings, "设置", colors).on_mouse_down(
+        .child(topbar_icon_button(AppIcon::Settings, "设置", true, colors).on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
                 this.dispatch(AppCommand::OpenSettings, cx);

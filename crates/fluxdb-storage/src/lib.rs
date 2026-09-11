@@ -771,6 +771,43 @@ mod tests {
         assert_eq!(storage.load_settings().unwrap(), Settings::default());
     }
 
+    /// 迁移守卫：缺少后加字段的旧配置文件必须仍能加载。
+    ///
+    /// 这条测的是**新增字段是否带了 `#[serde(default...)]`**。漏了的话
+    /// `toml::from_str` 会整体失败，而 `app_boot` 处是
+    /// `load_settings().unwrap_or_default()` —— 结果就是**用户全部设置被静默重置**。
+    /// 这是唯一会破坏用户数据的失败模式，且平时跑不出来。
+    ///
+    /// 旧文件不是手写常量，而是从真实序列化产物里**删掉**这些字段得到：
+    /// 这样它永远等于「上个版本写出的文件」，也不会因无关必填字段增减而失效。
+    #[test]
+    fn settings_toml_missing_newer_fields_still_loads() {
+        const NEWER_FIELDS: [&str; 3] = [
+            "data_table_page_size",
+            "results_placement",
+            "redis_workbench_editor_width",
+        ];
+        let full = toml::to_string_pretty(&Settings::default()).unwrap();
+        let legacy: String = full
+            .lines()
+            .filter(|line| {
+                !NEWER_FIELDS
+                    .iter()
+                    .any(|field| line.trim_start().starts_with(field))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // 先确认真的删干净了，否则这条测试会退化成一个假绿。
+        for field in NEWER_FIELDS {
+            assert!(!legacy.contains(field), "{field} 应从旧配置文件里被删掉");
+        }
+
+        let parsed: Settings = toml::from_str(&legacy)
+            .expect("缺少后加字段的旧配置必须仍能加载，否则用户设置会被重置");
+        assert_eq!(parsed, Settings::default());
+    }
+
     #[test]
     fn saves_and_loads_settings() {
         let storage = FileStorage::new(unique_temp_dir());
@@ -791,6 +828,7 @@ mod tests {
             light_theme: "Default Light".to_string(),
             dark_theme: "Default Dark".to_string(),
             page_size: 250,
+            data_table_page_size: 500,
             show_sidebar: false,
             show_inspector: true,
             editor_font_size: 13,
@@ -799,8 +837,11 @@ mod tests {
             editor_word_wrap: true,
             confirm_dangerous_sql: false,
             confirm_dangerous_redis: false,
+            dangerous_sql_actions: std::collections::BTreeSet::from(["truncate".to_string()]),
             enable_completion_index: true,
             redis_workbench_editor_ratio: 63,
+            results_placement: fluxdb_core::ResultsPlacement::Right,
+            redis_workbench_editor_width: 900,
             custom_keybindings: BTreeMap::from([(
                 "app.refresh".to_string(),
                 "ctrl-shift-r".to_string(),

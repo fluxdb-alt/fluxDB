@@ -1,3 +1,12 @@
+/// 数据页 SQL 面板里解析出的 LIMIT 的封顶处理。
+///
+/// 封顶值取「默认分页行数」设置的最大档（见 `data_table_page_size_max`）—— 面板里显示的
+/// LIMIT 正是 app 按当前页大小生成的，刷新（⌘R）时会重新解析回来。二者若不同源，
+/// 设置选 500/1000 的表一刷新就会掉回封顶值。
+fn data_editor_effective_limit(limit: u64) -> u64 {
+    limit.clamp(1, data_table_page_size_max())
+}
+
 impl NavicatMain {
     fn add_data_filter_rule(
         &mut self,
@@ -205,7 +214,7 @@ impl NavicatMain {
             parse_data_editor_sql_text(&self.data_sql_panel_input.read(cx).value().to_string())
                 .and_then(|parsed| parsed.limit)
         {
-            let effective_limit = limit.clamp(1, 100);
+            let effective_limit = data_editor_effective_limit(limit);
             let offset = self
                 .controller
                 .state()
@@ -223,9 +232,12 @@ impl NavicatMain {
                 offset,
                 limit: effective_limit,
             });
-            if limit > 100 {
+            // 只在「超出封顶」时提示。下限（0 → 1）静默处理，否则会弹出
+            // 「最大支持 1000，已自动改为 1000」这种对不上号的文案。
+            let max = data_table_page_size_max();
+            if limit > max {
                 self.show_message(
-                    "LIMIT 最大支持 100，已自动改为 100",
+                    format!("LIMIT 最大支持 {max}，已自动改为 {max}"),
                     AppMessageKind::Warning,
                     cx,
                 );

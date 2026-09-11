@@ -1,5 +1,6 @@
 fn settings_editor_changed(saved: &Settings, draft: &Settings) -> bool {
     saved.page_size != draft.page_size
+        || saved.results_placement != draft.results_placement
         || saved.confirm_dangerous_sql != draft.confirm_dangerous_sql
         || saved.dangerous_sql_actions != draft.dangerous_sql_actions
         || saved.confirm_dangerous_redis != draft.confirm_dangerous_redis
@@ -41,7 +42,8 @@ fn settings_section_changed(
                 || saved.performance_diagnostics != draft.performance_diagnostics
         }
         SettingsPanelSection::Data => {
-            saved.backup_dir != draft.backup_dir
+            saved.data_table_page_size != draft.data_table_page_size
+                || saved.backup_dir != draft.backup_dir
                 || saved.mysqldump_path != draft.mysqldump_path
                 || saved.sqlite3_path != draft.sqlite3_path
         }
@@ -92,6 +94,7 @@ fn settings_apply_section_fields(
 }
 
 fn settings_apply_backup_fields(settings: &mut Settings, draft: &Settings) {
+    settings.data_table_page_size = draft.data_table_page_size;
     settings.backup_dir = draft.backup_dir.clone();
     settings.mysqldump_path = draft.mysqldump_path.clone();
     settings.sqlite3_path = draft.sqlite3_path.clone();
@@ -160,6 +163,7 @@ fn save_settings_section_from_ui(
 
 fn settings_apply_editor_fields(settings: &mut Settings, draft: &Settings) {
     settings.page_size = draft.page_size;
+    settings.results_placement = draft.results_placement;
     settings.confirm_dangerous_sql = draft.confirm_dangerous_sql;
     settings.dangerous_sql_actions = draft.dangerous_sql_actions.clone();
     settings.confirm_dangerous_redis = draft.confirm_dangerous_redis;
@@ -182,6 +186,14 @@ fn save_settings_from_ui(
     message: &'static str,
     cx: &mut Context<NavicatMain>,
 ) {
+    // 「查询结果默认布局」改了应当立刻生效，不必重启 —— 否则旁边的工具栏按钮能即时切换、
+    // 设置项却要重启，是个 UX 陷阱。只在**该项本身变了**时才动运行时布局：
+    // 工具栏切换是仅本次会话的临时覆盖，若无条件同步，用户改个字号一保存就会把布局莫名拉回。
+    // 必须在 dispatch 之前比较 —— 那一步会把 state.settings 换成新值。
+    if settings.results_placement != this.controller.state().settings.results_placement {
+        this.results_placement = settings.results_placement;
+    }
+
     let _ = this.controller.dispatch(AppCommand::SaveSettings(settings));
     let _ = this.storage.save_settings(&this.controller.state().settings);
     // 热更新：把新设置推送到所有已打开的编辑器，无需重启。
@@ -259,8 +271,6 @@ fn settings_status_id(title: &'static str, label: &'static str) -> u64 {
         ("执行危险 SQL 前弹出确认", "待接入") => 3,
         ("跟随系统外观", "待接入") => 4,
         ("默认分页行数", "待接入") => 5,
-        ("单元格内容显示", "待接入") => 6,
-        ("查询结果默认布局", "待接入") => 7,
         ("连接超时", "待接入") => 8,
         ("敏感信息保存", "已启用") => 10,
         ("FluxDB Desktop", "开发中") => 11,

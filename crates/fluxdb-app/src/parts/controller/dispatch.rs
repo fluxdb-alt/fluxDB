@@ -614,7 +614,9 @@ impl AppController {
 
                 let tab_id = self.next_tab_id();
                 let title = object.name.clone();
-                let pagination = Pagination::default();
+                // 数据表默认每页行数来自「设置-数据」，与 SQL 查询结果的 page_size 无关。
+                // 经 Pagination::new 收敛到 1..=MAX_LIMIT，避免脏配置把页大小置成 0。
+                let pagination = Pagination::new(0, self.state.settings.data_table_page_size);
 
                 self.push_tab(TabState {
                     id: tab_id,

@@ -35,6 +35,8 @@ jobs:
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
+          # 完成 app 签名后释放编译中间产物，为 hdiutil 预留镜像创建空间。
+          CLEAN_CARGO_TARGET_BEFORE_DMG: "1"
         run: |
           set -euo pipefail
           export VERSION="${GITHUB_REF_NAME#v}"
