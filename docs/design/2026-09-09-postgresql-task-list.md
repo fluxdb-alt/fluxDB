@@ -382,8 +382,20 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   同名 orders key 唯一、MySQL 无 Schema 行）、`replace_loaded_children_scopes_to_schema_for_postgres`
   与 `replace_loaded_children_without_schema_keeps_legacy_database_scope`；工作区全量通过
   （desktop 370、app 392、connectors 133）。
-  未完成项：PG 右键菜单（建 schema、建库编码/owner/template/locale 对话框、schema 与 database 菜单
-  不混淆）、旧请求 generation 防覆盖、脏标签保护（删库/断开）、真正 PG 交互启动验证、加载 Spinner 视觉核对。
+  增量二（`ec12ddb`，PG schema 右键菜单）：`schema_tree` 加右键 → `show_schema_context_menu`，
+  独立 `SchemaContextMenu` + 状态字段 + 渲染；四动作全部 schema 作用域——新建查询/新建表（均带 schema
+  下传 OpenQueryEditorInDatabase/OpenCreateTable）、设置默认 schema、刷新（按 schema 路径重载关系）。
+  各 `show_*` 与 `close_context_menus` 清空 `schema_context_menu`，schema 节点不再落到数据库菜单（解「上下文
+  数据库/schema 不混淆」）。菜单沿用既有手绘 div + `context_menu_backdrop`（外点关闭/内点防穿透/贴齐）。
+  增量三（`f828179`，PG 建库 owner/encoding/locale/template）：`CreateDatabaseRequest` 增 owner/template，
+  `pg_create_database_sql` 生成 `OWNER`/`TEMPLATE`（标识符白名单防注入，与 ENCODING/LC 同源）；连接对话框
+  开放 Postgres（编码 ENCODING + Locale LC_COLLATE/LC_CTYPE 下拉 + Owner/模板输入框），编码/locale 按 PG
+  语义提供（不套 MySQL 字符集）；`select_create_database_charset` PG 下保持 locale 选项。
+  验证 — 新测试 `pg_create_database_sql_builds_options_and_quotes` 扩展 owner/template 生成与注入拒绝；
+  PG live 建/删库冒烟 `pg_live_smoke_create_delete_database` 真实 PG 通过；工作区全量通过
+  （app 394、desktop 370、connectors 133）。
+  未完成项：建 schema 命令与对话框（当前 schema 菜单未含“新建 schema”，建 schema 走 SQL 透传）、
+  旧请求 generation 防覆盖、脏标签保护（删库/断开）、真正 PG 交互启动验证（明暗/Esc/外点/loading Spinner 视觉）。
 
 ### T21 — 数据、查询、详情与历史 UI
 
