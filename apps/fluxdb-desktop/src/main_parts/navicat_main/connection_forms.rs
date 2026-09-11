@@ -3,8 +3,20 @@ impl NavicatMain {
         let Some(connection_id) = self.pending_delete_connection.take() else {
             return;
         };
+        // 删除前记录该连接配置，用于按拥有权清理其 Keychain 条目（复制/更新各拥有独立 ref，
+        // 只删本连接，不触碰其他连接）。
+        let deleted_config = self
+            .controller
+            .state()
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == connection_id)
+            .map(|connection| connection.config.clone());
 
         self.dispatch(AppCommand::DeleteConnection(connection_id), cx);
+        if let Some(config) = deleted_config {
+            self.storage.delete_connection_secrets(&config);
+        }
         let _ = self
             .storage
             .save_connections(&self.controller.connection_configs());

@@ -412,6 +412,16 @@ impl NavicatMain {
         cx: &mut Context<Self>,
     ) {
         self.connection_context_menu = None;
+        // 删库保护：该连接下有未保存或运行中的查询时禁止直接删除，先处理/断开，避免静默丢数据。
+        let warning = self.disconnect_connection_warning(connection_id);
+        if warning.unsaved_queries > 0 || warning.running_queries > 0 {
+            self.show_message(
+                "该连接存在未保存或运行中的查询，请先保存/关闭或先断开连接再删除",
+                AppMessageKind::Warning,
+                cx,
+            );
+            return;
+        }
         self.pending_delete_connection = Some(connection_id);
         self.focus_handle.focus(window, cx);
         cx.notify();
@@ -499,6 +509,23 @@ impl NavicatMain {
         cx: &mut Context<Self>,
     ) {
         self.database_context_menu = None;
+        // 删库保护：该库下存在未保存或运行中的查询时禁止直接删除，避免静默丢数据。
+        let has_active_query = self.controller.state().tabs.iter().any(|tab| {
+            let TabKind::QueryEditor(editor) = &tab.kind else {
+                return false;
+            };
+            editor.connection_id == connection_id
+                && editor.database.as_deref() == Some(database.as_str())
+                && (editor.has_unsaved_sql() || editor.running)
+        });
+        if has_active_query {
+            self.show_message(
+                "该数据库存在未保存或运行中的查询，请先保存/关闭相关查询再删除",
+                AppMessageKind::Warning,
+                cx,
+            );
+            return;
+        }
         self.pending_delete_database = Some(PendingDeleteDatabase {
             connection_id,
             database,
