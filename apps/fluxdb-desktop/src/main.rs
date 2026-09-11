@@ -22,12 +22,12 @@ use fluxdb_app::{
     CreateTableIndexColumnField, CreateTableIndexField, CreateTableOptionField,
     CreateTablePartitionField, CreateTableState, CreateTableTab, CreateTableTrigger,
     CreateTableTriggerEvent, CreateTableTriggerField, DataEditorState, ForeignKeyCheckMode,
-    LoadState, ObjectListState, QueryEditorState, QueryHistoryEntry, QueryHistoryKind, QueryHistoryTransactionState, QueryOrigin,
-    RedisAddKeyKind, RedisAddKeyRequest, RedisConnectionOverview, RedisListDirection,
-    RedisWorkbenchState, TabId, TabKind, TabState, TableInfoState, TableInfoTab,
-    UserAdminDetailTab, UserAdminState, compress_sql_text, copy_table_sql_preview_with_source_ddl,
-    create_table_provider, drop_table_sql_preview, format_sql_text_for_dialect,
-    rename_table_sql_preview, truncate_table_sql_preview,
+    LoadState, ObjectListState, QueryEditorState, QueryHistoryEntry, QueryHistoryKind,
+    QueryHistoryTransactionState, QueryOrigin, RedisAddKeyKind, RedisAddKeyRequest,
+    RedisConnectionOverview, RedisListDirection, RedisWorkbenchState, TabId, TabKind, TabState,
+    TableInfoState, TableInfoTab, UserAdminDetailTab, UserAdminState, compress_sql_text,
+    copy_table_sql_preview_with_source_ddl, create_table_provider, drop_table_sql_preview,
+    format_sql_text_for_dialect, rename_table_sql_preview, truncate_table_sql_preview,
 };
 use fluxdb_core::{
     BinaryUpdatePayload, CellValue, Column as GdbColumn, CommandBulk, CommandExecutionItem,

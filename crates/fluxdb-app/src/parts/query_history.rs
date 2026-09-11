@@ -446,19 +446,28 @@ fn annotate_snapshot_columns(
     table: &str,
     page: &mut DataPage,
 ) {
+    // schema 必须随请求下传：PG 里同名跨 schema 的表若按 search_path 取元数据，
+    // 会拿到另一个 schema 的主键/类型，补偿身份就此写错（§8.4/R11）。列名先精确匹配，
+    // 再退回忽略大小写（MySQL/SQLite 的大小写差异输入）。
     let Ok(metadata) = controller.completion_columns(
         config,
         request.connection_id,
         request.database.as_deref(),
-        None,
+        request.schema.as_deref(),
         table,
     ) else {
         return;
     };
     for column in &mut page.columns {
-        if let Some(metadata_column) = metadata
+        let matched = metadata
             .iter()
-            .find(|metadata_column| metadata_column.name.eq_ignore_ascii_case(&column.name))
+            .find(|metadata_column| metadata_column.name == column.name)
+            .or_else(|| {
+                metadata
+                    .iter()
+                    .find(|metadata_column| metadata_column.name.eq_ignore_ascii_case(&column.name))
+            });
+        if let Some(metadata_column) = matched
         {
             column.type_name = metadata_column
                 .type_name
