@@ -64,7 +64,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T17 | 设计表差异计划和结构修改执行 | T16 | 已完成 / FluxDB |
 | T18 | 复制/重命名/清空/删除表 | T11、T16、T17 | 已完成 / FluxDB |
 | T19 | PostgreSQL 连接对话框 | T02、T05 | 进行中 / FluxDB |
-| T20 | schema 树、数据库对话框和能力路由 | T06、T07、T19 | 未开始 / — |
+| T20 | schema 树、数据库对话框和能力路由 | T06、T07、T19 | 进行中 / FluxDB |
 | T21 | 数据/查询/详情与历史 UI 接入 | T10–T16、T20 | 未开始 / — |
 | T22 | 新建/设计表及危险操作 UI | T17、T18、T21 | 未开始 / — |
 | T23 | 所有现有数据导出格式与范围 | T10、T11、T13、T21 | 未开始 / — |
@@ -364,7 +364,19 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 - **工作**：connection/database/schema/object 层级、Tree/ListItem、懒加载/错误/刷新/显示库、建库与 schema Dialog、能力菜单；上下文数据库/schema 不混淆；断开/删除后的任务/标签处理。
 - **交付位置**：sidebar/、tree_helpers 拆分职责、menus_dialogs/create_database/display_database、连接菜单。
 - **验收**：两库/多 schema/同名对象能独立浏览；加载有 Spinner，旧请求不会覆盖新对象；菜单外点关闭/内点阻止穿透/二级贴齐；脏标签保护；库删除失败不提前删 UI；MySQL 仍保持原树层级。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：进行中；执行人 FluxDB（T20 增量一：PG schema 树层级）；内容 —
+  自 `5044f83`：sidebar 拉平新增 `SidebarRowKind::Schema`，PG 数据库展开后按 schema 分桶
+  （Database → Schema → ObjectGroup → Table），同名表跨 schema 独立成行（`schema_tree_key`/
+  `object_group_tree_key_scoped` 带 schema）；新增 `schema_tree` 渲染与 `toggle_schema_tree`
+  （schema 键独立展开并懒加载该 schema 关系）；`group_objects` 加 schema 过滤，MySQL/SQLite/Redis
+  无 schema 时（schema=None）保持原扁平层级；修 `replace_loaded_children` 跨 schema 互清——
+  PG 父节点为 schema 时只替换该 schema 的表/视图，无 schema 父节点保持原整库替换。
+  验证 — 新测试：`postgres_schema_level_buckets_tables_and_keeps_mysql_flat`（三 schema 独立、
+  同名 orders key 唯一、MySQL 无 Schema 行）、`replace_loaded_children_scopes_to_schema_for_postgres`
+  与 `replace_loaded_children_without_schema_keeps_legacy_database_scope`；工作区全量通过
+  （desktop 370、app 392、connectors 133）。
+  未完成项：PG 右键菜单（建 schema、建库编码/owner/template/locale 对话框、schema 与 database 菜单
+  不混淆）、旧请求 generation 防覆盖、脏标签保护（删库/断开）、真正 PG 交互启动验证、加载 Spinner 视觉核对。
 
 ### T21 — 数据、查询、详情与历史 UI
 
