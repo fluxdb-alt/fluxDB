@@ -58,8 +58,8 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T11 | 数据编辑、可靠定位、原子提交和冲突处理 | T10 | 未开始 / — |
 | T12 | 统一 PG 方言、分句和参数解析 | T03 | 进行中 |
 | T13 | SQL 执行、多结果、会话事务、进度和取消 | T05、T09、T12 | 进行中 |
-| T14 | PostgreSQL 补全、元数据索引和语义提示 | T08、T12、T13 | 未开始 / — |
-| T15 | 查询结果编辑、保存查询和历史补偿 | T11、T13、T14 | 未开始 / — |
+| T14 | PostgreSQL 补全、元数据索引和语义提示 | T08、T12、T13 | 已完成 / FluxDB |
+| T15 | 查询结果编辑、保存查询和历史补偿 | T11、T13、T14 | 已完成 / FluxDB |
 | T16 | DDL 读取和 PostgreSQL 新建表 provider | T08、T12、T13 | 未开始 / — |
 | T17 | 设计表差异计划和结构修改执行 | T16 | 未开始 / — |
 | T18 | 复制/重命名/清空/删除表 | T11、T16、T17 | 未开始 / — |
@@ -308,12 +308,12 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T15 — 结果编辑、查询保存与历史补偿
 
-- [ ] 完成 T15
+- [x] 完成 T15
 - **开始前读**：设计 4.2、8.4；R02、R10–R14、R29、R30。
 - **工作**：基于真实来源/可靠身份开放单表结果编辑；正确处理 PG 引用名；查询保存/重启恢复 scope；PG 历史分类、前像/RETURNING 身份、补偿 SQL；事务提交/回滚历史状态；敏感语句不记录。
 - **交付位置**：app/query_result_edit、query_history、query_saving；storage/query history；PG 补偿字面量 provider。
 - **验收**：简单 SELECT 可编辑，JOIN/计算/聚合等不误写；二段对象名不写错库；保存后 schema 保持；INSERT/UPDATE/DELETE 补偿预览/执行目标正确，bytea/decimal 不失真；ROLLBACK 的写入不显示已提交；MySQL 历史可读可用。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成；执行人 FluxDB（T15 增量一～五）；内容 — (一) 结果编辑按方言解析对象名：`editable_query_object` 二段名 PG=schema.table（避免误写 public）、MySQL/TiDB/SQLite=database.table，PG 三段取 database.schema.table；标识符按方言引号解析（反引号/双引号，支持连续引号转义），PG 未加引号折小写、带引号保留大小写；结果列元数据复用查找加 schema 约束并优先精确名称匹配。(二) 补偿 SQL 按方言渲染：三个回滚快照新增 `db_kind`（旧记录 None 按 MySQL 渲染，兼容读取）；标识符 PG 双引号、限定名 PG 用 schema.table；字面量按列类型——PG hex bytea 显式 `::bytea`、numeric/decimal/money 精确十进制文本按裸数值输出（不失真）、json/jsonb 具名转换，MySQL 保持 `X'..'`。(三) 事务状态：`QueryHistoryEntry.transaction_state`（已提交/未提交/已回滚），一次执行内 BEGIN 后写入先标未提交、COMMIT 转已提交、ROLLBACK 转已回滚，批次结束仍未提交（连接释放被服务端回滚）同样标已回滚，不谎报已提交；ROLLBACK TO SAVEPOINT 不结束事务；已回滚条目不提供补偿 SQL。(四) 敏感语句（SET PASSWORD、CREATE/ALTER/DROP USER|ROLE|LOGIN、GRANT/REVOKE、含 IDENTIFIED BY）不入历史，仅 debug 日志且不落 SQL 文本。(五) `apply_changes` 返回 `AppliedChangeOutcome`（core 新类型），PG 插入追加 `RETURNING` 主键列以捕获自增/序列生成的真实身份，app 补偿快照优先用服务端身份、缺失回退编辑器已知主键值；快照列元数据按请求 schema 取并按精确名匹配。保存查询恢复时保留 schema 作用域（原先硬编码 None 会丢失）。验证 — 真实 PG 冒烟 `pg_live_smoke_apply_changes_returns_generated_identity`（serial 主键 RETURNING 返回 id=1）；app 测试：`pg_query_result_object_name_uses_schema_and_quoted_identifiers`（二段/三段/折小写/引用转义/MySQL 回归/JOIN 与派生表只读）、`pg_rollback_literals_use_dialect_quoting_and_types`（decimal/bytea/jsonb/文本转义）、`pg_update_rollback_sql_quotes_identifiers_and_keeps_decimal`、`legacy_rollback_snapshot_without_dialect_renders_mysql`（MySQL 历史可读）、`history_marks_uncommitted_and_rolled_back_writes`、`sensitive_statements_are_not_recorded_in_history`、`query_editor_keeps_schema_scope_on_open`；MySQL 回归 app 376 项通过、工作区全量通过。未完成项：SQL 文本直接执行的 INSERT 仍不生成补偿快照（与 MySQL 基线一致：无法可靠捕获 RETURNING 身份时明确不提供，不猜 SQL）。
 
 ### T16 — DDL 与新建表
 

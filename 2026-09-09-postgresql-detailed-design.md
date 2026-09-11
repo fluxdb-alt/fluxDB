@@ -367,6 +367,15 @@ CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不�
 
 结果编辑仅开放可证明来自一个基础表的直接列投影，含完整可靠行身份。JOIN、聚合、DISTINCT、窗口/计算列、CTE 复杂派生和不确定来源结果只读；可保留部分直接列编辑，但必须有明确来源证明。二段名称按 PG schema.table；引用标识符用解析器，不能靠现有反引号简易 parser。[R10、R30]
 
+实现记录（T15 增量一～五）：
+
+- **对象名解析**：`editable_query_object` 按方言解释段数——PG 二段为 `schema.table`（避免误写成 `public.table`）、三段为 `database.schema.table`，MySQL/TiDB/SQLite 仍为 `database.table`；标识符按方言引号解析（反引号/双引号，支持连续引号转义），PG 未加引号折叠为小写、带引号保留大小写。结果列元数据复用查找增加 schema 约束并优先精确名称匹配，避免同名跨 schema 取到对方元数据。
+- **补偿 SQL 方言化**：三个回滚快照新增 `db_kind`（`#[serde(default, skip_serializing_if)]`），旧记录缺省按 MySQL 渲染以保持可读；标识符 PG 用双引号、限定名 PG 取 `schema.table`；字面量按列类型渲染——PG hex `bytea` 显式 `::bytea`（防止按 text 写入）、`numeric/decimal/money` 精确十进制文本按裸数值输出（不失真）、`json/jsonb` 具名转换；MySQL 保持 `X'..'` 与引号文本。
+- **事务状态**：`QueryHistoryEntry.transaction_state`（已提交/未提交/已回滚）。一次执行内多条语句共用连接，BEGIN 后的写入先标未提交，COMMIT 转已提交，ROLLBACK 转已回滚；批次结束时事务仍未提交（连接释放即被服务端回滚）同样标已回滚，不谎报已提交；`ROLLBACK TO SAVEPOINT` 不结束事务；已回滚条目不再提供补偿 SQL。
+- **敏感语句**：口令/角色/授权类语句（`SET PASSWORD`、`CREATE|ALTER|DROP USER|ROLE|LOGIN`、`GRANT|REVOKE`、含 `IDENTIFIED BY`）不入历史，仅记 debug 日志且不落 SQL 文本。
+- **RETURNING 身份**：`Connector::apply_changes` 返回 `AppliedChangeOutcome`，PG 插入追加 `RETURNING` 主键列以捕获自增/序列生成的真实身份（编辑器无从得知），app 的插入补偿快照优先使用服务端身份、缺失时回退编辑器已知主键值；快照列元数据按请求 schema 获取。SQL 文本直接执行的 INSERT 仍不生成补偿快照（无法可靠捕获身份时不猜 SQL，与 MySQL 基线一致）。
+- **保存查询 scope**：恢复已保存查询时把记录的 schema 一并交给编辑器（原先硬编码 `None` 会丢失作用域，PG 下同名跨 schema 的查询会落到错误 search_path）。
+
 查询/数据修改历史沿用现有页面、保存和补偿入口。PG 历史保存完整对象身份、schema、方言；补偿 SQL 用 PG 双引号、布尔、bytea decode 和类型化字面量。对已有 MySQL 支持的简单单表 UPDATE/DELETE，在同一拥有的事务/连接读取并锁定前像；INSERT 及数据提交用 RETURNING 捕获真实身份。用户显式事务的历史先标未提交，COMMIT 后才可作为成功修改，ROLLBACK 后标已回滚；复杂语句不能生成可靠补偿时明确说明，不能生成猜测 SQL。补偿是需要用户检查并执行的新语句，不是保证能恢复任意并发后的数据库状态。[R11]
 
 ## 9. 表结构、DDL 与表操作
