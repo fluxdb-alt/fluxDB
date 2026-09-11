@@ -345,6 +345,8 @@ CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不�
 - CancelToken 取消正运行语句；接收取消完成并排空结果后再允许下一请求。aborted 会话显示需要回滚；断开/关闭时已存在的脏数据与运行查询确认流程扩展处理未结束事务。
 
 > **实现记录（T13 增量一：aborted 事务态停止继续）**：PG 执行器 `pg_run_statements` 增加会话 aborted 感知 —— 语句失败返回 `25P02 in_failed_sql_transaction` 时置 `aborted`；`continue_on_error` 下不再盲目执行后续语句，而是逐条产出「已跳过：需 ROLLBACK 后继续」摘要（不自动回滚，符合 R27），未开 continue_on_error 仍立即停止。恢复路径由用户显式 `ROLLBACK` 完成，其后会话恢复正常。（真实 CancelToken/结果流式/statement→result 索引等余项另增增量。）
+>
+> **实现记录（T13 增量二：空结果保留列头 + ordinal 读取）**：结果集语句先 `prepare` 取 RowDescription 再执行，空结果仍保留列头（§8.2）；无法 prepare 时退回从首行取列。值一律按 ordinal 读取不靠列名（`query_rows_to_page` 按 `enumerate` 索引取），同名列不串位。新建 `pg_live_smoke_empty_result_retains_columns`（空结果列头 + 同名列 ordinal）。
 
 ### 8.4 补全、结果编辑和历史
 

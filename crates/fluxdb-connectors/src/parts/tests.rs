@@ -4529,4 +4529,29 @@ SELECT item_id, name FROM audit_log;"
         connector.execute(&cleanup).expect("清理临时结构应成功");
     }
 
+    #[test]
+    fn pg_live_smoke_empty_result_retains_columns() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T13 冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        // 空结果集仍有列头（§8.2），且同名列按 ordinal 读取不串位。
+        let mut request = pg_query_request(&config, None);
+        request.text = "SELECT 1 AS a, 'x' AS b WHERE false; SELECT a AS a, a AS a2 FROM (VALUES (1)) AS t(a);"
+            .to_string();
+        let result = connector.execute(&request).expect("执行应成功");
+        assert_eq!(result.summaries.len(), 2, "{:#?}", result.summaries);
+        // 第一条：0 行但保留列头 a、b。
+        let first = &result.results[0];
+        let names: Vec<_> = first.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"], "空结果应保留列头：{names:?}");
+        assert_eq!(first.rows.len(), 0);
+        // 第二条：同名列 a（alias a 与 a2）按 ordinal 读取。
+        let second = &result.results[1];
+        assert_eq!(second.rows.len(), 1, "应有 1 行");
+        assert_eq!(second.rows[0].values[1], CellValue::I64(1), "按 ordinal 取 a2 应得 1");
+    }
 }

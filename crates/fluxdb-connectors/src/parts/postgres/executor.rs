@@ -88,10 +88,17 @@ async fn pg_run_statements(
             continue;
         }
         if statement_returns_rows(&statement) {
-            match tokio::time::timeout(PG_STATEMENT_TIMEOUT, client.query(&statement, &[])).await {
-                Ok(Ok(rows)) => {
+            match tokio::time::timeout(PG_STATEMENT_TIMEOUT, pg_query_with_columns(client, &statement))
+                .await
+            {
+                Ok(Ok((columns, rows))) => {
                     let elapsed_ms = elapsed_ms(started);
-                    let page = pg_rows_to_page(rows, request.options.page_offset, request.options.page_size);
+                    let page = pg_rows_to_page(
+                        columns,
+                        rows,
+                        request.options.page_offset,
+                        request.options.page_size,
+                    );
                     push_query_summary(
                         &mut execution,
                         QueryExecutionSummary {
@@ -191,17 +198,41 @@ async fn pg_run_statements(
     (Error::new(ErrorKind::Internal, ""), Some(execution))
 }
 
-/// 把 `query()` 结果集的分页 DataPage（列类型来自 extended protocol 的 RowDescription）。
-fn pg_rows_to_page(rows: Vec<tokio_postgres::Row>, offset: u64, limit: u64) -> DataPage {
-    let columns = rows
-        .first()
-        .map(|row| {
-            row.columns()
+/// 先 `prepare` 取 RowDescription 列头，再执行取行。空结果仍保留列头（§8.2「空行结果仍有列头」）。
+/// 无法 prepare（SQL 方言差异）时退回 execute 后从首行取列。
+async fn pg_query_with_columns(
+    client: &tokio_postgres::Client,
+    statement: &str,
+) -> Result<(Vec<Column>, Vec<tokio_postgres::Row>), tokio_postgres::Error> {
+    let prepared = client.prepare(statement).await;
+    match prepared {
+        Ok(prepared) => {
+            let columns = prepared
+                .columns()
                 .iter()
                 .map(|column| query_column(column.name(), column.type_().name()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+                .collect::<Vec<_>>();
+            let rows = client.query(&prepared, &[]).await?;
+            Ok((columns, rows))
+        }
+        Err(_) => {
+            let rows = client.query(statement, &[]).await?;
+            let columns = rows
+                .first()
+                .map(|row| {
+                    row.columns()
+                        .iter()
+                        .map(|column| query_column(column.name(), column.type_().name()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            Ok((columns, rows))
+        }
+    }
+}
+
+/// 把结果集分页为 DataPage（列头来自 prepared 的 RowDescription，空结果也保留）。
+fn pg_rows_to_page(columns: Vec<Column>, rows: Vec<tokio_postgres::Row>, offset: u64, limit: u64) -> DataPage {
     query_rows_to_page(columns, rows, offset, limit, pg_query_cell_value)
 }
 
