@@ -2753,7 +2753,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         };
         let mut pinned = BTreeSet::new();
         pinned.insert(table_tree_key(&connection.objects[1].path));
-        let table_names = sorted_group_objects(&connection, "main", ObjectGroup::Tables, &pinned)
+        let table_names = sorted_group_objects(&connection, "main", None, ObjectGroup::Tables, &pinned)
             .into_iter()
             .map(|object| object.path.name.as_str())
             .collect::<Vec<_>>();
@@ -2782,6 +2782,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let unassigned_tables = sorted_unassigned_group_objects(
             &connection,
             "main",
+            None,
             ObjectGroup::Tables,
             &pinned,
             &assignments,

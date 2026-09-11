@@ -324,6 +324,33 @@ impl NavicatMain {
         cx.notify();
     }
 
+    fn toggle_schema_tree(
+        &mut self,
+        connection_id: ConnectionId,
+        schema_path: ObjectPath,
+        has_loaded_children: bool,
+        cx: &mut Context<Self>,
+    ) {
+        // PG schema 行独立于数据库行展开/加载：key 带 schema，展开时懒加载该 schema 的关系。
+        let database = schema_path
+            .database
+            .clone()
+            .unwrap_or_else(|| schema_path.name.clone());
+        let schema = schema_path
+            .schema
+            .clone()
+            .unwrap_or_else(|| schema_path.name.clone());
+        let key = schema_tree_key(connection_id, &database, &schema);
+        let expanded = self.expanded_databases.get(&key).copied().unwrap_or(false);
+        self.expanded_databases.insert(key.clone(), !expanded);
+
+        if !expanded && !has_loaded_children && !self.loading_databases.contains(&key) {
+            self.load_database_children(schema_path, key, cx);
+            return;
+        }
+        cx.notify();
+    }
+
     fn toggle_object_group_tree(
         &mut self,
         connection_id: ConnectionId,

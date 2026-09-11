@@ -336,6 +336,51 @@ fn database_tree(
     )
 }
 
+fn schema_tree(
+    connection_id: ConnectionId,
+    database_path: ObjectPath,
+    schema: String,
+    indent: u8,
+    expanded: bool,
+    loading: bool,
+    has_loaded_children: bool,
+    selected: bool,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let schema_for_click = database_path.clone();
+    let arrow: gpui::AnyElement = if loading {
+        loading_spinner(13.).into_any_element()
+    } else {
+        arrow_element(expanded, colors)
+    };
+    tree_with_highlight(
+        arrow,
+        "database",
+        schema,
+        indent,
+        selected,
+        false,
+        None,
+        None,
+        None,
+        colors,
+    )
+    .on_mouse_down(
+        MouseButton::Left,
+        cx.listener(move |this, _, _, cx| {
+            this.close_context_menus(cx);
+            this.toggle_schema_tree(
+                connection_id,
+                schema_for_click.clone(),
+                has_loaded_children,
+                cx,
+            );
+            cx.stop_propagation();
+        }),
+    )
+}
+
 fn object_group_tree(
     connection_id: ConnectionId,
     database_path: ObjectPath,
@@ -935,12 +980,18 @@ fn object_glyph(kind: ObjectKind) -> &'static str {
 fn group_objects<'a>(
     connection: &'a ConnectionState,
     database: &str,
+    schema: Option<&str>,
     group: ObjectGroup,
 ) -> Vec<&'a ObjectSummary> {
     connection
         .objects
         .iter()
         .filter(|object| object.path.database.as_deref().unwrap_or("main") == database)
+        // PG 按 schema 分桶；非 schema 数据库传 `None` 不额外过滤。
+        .filter(|object| match schema {
+            Some(schema) => object.path.schema.as_deref() == Some(schema),
+            None => true,
+        })
         .filter(|object| match group {
             ObjectGroup::Tables => object.path.kind == ObjectKind::Table,
             ObjectGroup::Views => object.path.kind == ObjectKind::View,
@@ -955,10 +1006,11 @@ fn group_objects<'a>(
 fn sorted_group_objects<'a>(
     connection: &'a ConnectionState,
     database: &str,
+    schema: Option<&str>,
     group: ObjectGroup,
     pinned_tables: &BTreeSet<String>,
 ) -> Vec<&'a ObjectSummary> {
-    let mut objects = group_objects(connection, database, group);
+    let mut objects = group_objects(connection, database, schema, group);
     objects.sort_by_key(|object| (!pinned_tables.contains(&table_tree_key(&object.path)), &object.path.name));
     objects
 }
@@ -966,11 +1018,12 @@ fn sorted_group_objects<'a>(
 fn sorted_unassigned_group_objects<'a>(
     connection: &'a ConnectionState,
     database: &str,
+    schema: Option<&str>,
     group: ObjectGroup,
     pinned_tables: &BTreeSet<String>,
     table_folder_assignments: &BTreeMap<String, (String, String)>,
 ) -> Vec<&'a ObjectSummary> {
-    sorted_group_objects(connection, database, group, pinned_tables)
+    sorted_group_objects(connection, database, schema, group, pinned_tables)
         .into_iter()
         .filter(|object| !table_folder_assignments.contains_key(&table_tree_key(&object.path)))
         .collect()
@@ -984,7 +1037,7 @@ fn sorted_folder_table_objects<'a>(
     pinned_tables: &BTreeSet<String>,
     table_folder_assignments: &BTreeMap<String, (String, String)>,
 ) -> Vec<&'a ObjectSummary> {
-    sorted_group_objects(connection, database, ObjectGroup::Tables, pinned_tables)
+    sorted_group_objects(connection, database, None, ObjectGroup::Tables, pinned_tables)
         .into_iter()
         .filter(|object| {
             table_folder_assignments
@@ -1115,6 +1168,28 @@ fn connection_databases(connection: &ConnectionState) -> Vec<ObjectSummary> {
         .collect()
 }
 
+/// 该库已加载的表/视图按 schema 分桶的升序 schema 名；无 schema（MySQL/SQLite/Redis）返回空。
+///
+/// PG 对象 `path.schema` 为 `Some`；空 schema / "main" 等非 schema 数据库视为未分桶。
+fn database_schemas(connection: &ConnectionState, database: &str) -> Vec<String> {
+    let mut schemas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for object in &connection.objects {
+        let matches_db = object.path.database.as_deref().unwrap_or("main") == database;
+        let is_relation = matches!(
+            object.path.kind,
+            ObjectKind::Table | ObjectKind::View
+        );
+        if matches_db && is_relation {
+            if let Some(schema) = object.path.schema.as_deref() {
+                if !schema.is_empty() {
+                    schemas.insert(schema.to_string());
+                }
+            }
+        }
+    }
+    schemas.into_iter().collect()
+}
+
 fn all_connection_database_names(connection: &ConnectionState) -> Vec<String> {
     let mut names = connection_databases_unfiltered(connection)
         .into_iter()
@@ -1188,6 +1263,25 @@ fn object_group_tree_key(
     group: ObjectGroup,
 ) -> String {
     format!("{}:{database}:{}", connection_id.0, group.key())
+}
+
+/// 分组在 schema 作用域下的 key：PG 按 schema 分桶后，同一数据库不同 schema 的
+/// “Tables/Views” 分组必须互不共享展开态，故 key 带 schema。
+fn object_group_tree_key_scoped(
+    connection_id: ConnectionId,
+    database: &str,
+    schema: Option<&str>,
+    group: ObjectGroup,
+) -> String {
+    match schema {
+        Some(schema) => object_group_tree_key(connection_id, &format!("{database}.{schema}"), group),
+        None => object_group_tree_key(connection_id, database, group),
+    }
+}
+
+/// PostgreSQL schema 行 key：连接 + 库 + schema，保证同名 schema 分属不同库时唯一。
+fn schema_tree_key(connection_id: ConnectionId, database: &str, schema: &str) -> String {
+    format!("{}:{database}:{schema}", connection_id.0)
 }
 
 fn table_header(colors: UiColors) -> impl IntoElement {

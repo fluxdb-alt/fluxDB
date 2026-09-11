@@ -3,6 +3,8 @@ enum SidebarRowKind {
     Connection,
     Group,
     Database,
+    /// PostgreSQL schema 节点（表/视图按 schema 分桶）。
+    Schema,
     ObjectGroup,
     Table,
     SavedQuery,
@@ -37,6 +39,8 @@ struct SidebarVisibleRow {
     pub database_path: Option<ObjectPath>,
     /// ObjectGroup 行：数据库显示名（构建 object_group_tree 用）。
     pub database_name: Option<String>,
+    /// Schema 行：schema 名（PG 表/视图按其分桶）；ObjectGroup/Table 行：所属 schema 作用域。
+    pub schema: Option<String>,
     /// ObjectGroup 行：分组种类。
     pub object_group: Option<ObjectGroup>,
     /// Table 行：表对象。
@@ -152,6 +156,7 @@ fn flatten_sidebar_visible_rows(
                     group_id: Some(group.id),
                     database_path: None,
                     database_name: None,
+                    schema: None,
                     object_group: None,
                     object: None,
                     query: None,
@@ -230,6 +235,7 @@ fn push_connection_visible_rows(
         group_id,
         database_path: None,
         database_name: None,
+        schema: None,
         object_group: None,
         object: None,
         query: None,
@@ -275,14 +281,14 @@ fn push_connection_visible_rows(
                     .into_iter()
                     .any(|saved| search_matches_text(&saved.name, search_query)),
                     ObjectGroup::Tables => {
-                        group_objects(connection, &database_name, *group)
+                        group_objects(connection, &database_name, None, *group)
                             .into_iter()
                             .any(|object| object_matches_sidebar_search(object, search_query))
                             || sorted_table_folders(table_folders, connection_id, &database_name)
                                 .into_iter()
                                 .any(|folder| search_matches_text(folder, search_query))
                     }
-                    _ => group_objects(connection, &database_name, *group)
+                    _ => group_objects(connection, &database_name, None, *group)
                         .into_iter()
                         .any(|object| object_matches_sidebar_search(object, search_query)),
                 })
@@ -313,6 +319,7 @@ fn push_connection_visible_rows(
             group_id,
             database_path: Some(database.path.clone()),
             database_name: Some(database_name.clone()),
+            schema: None,
             object_group: None,
             object: None,
             query: None,
@@ -321,13 +328,41 @@ fn push_connection_visible_rows(
         });
 
         let show_groups = database.path.kind != ObjectKind::RedisDb && database_expanded;
-        if search_active && database_expanded {
-            for group in matching_groups {
-                if show_groups {
+        // PG 按 schema 分桶；无 schema 的数据库（MySQL/SQLite/Redis）保持原树层级。
+        let schemas = database_schemas(connection, &database_name);
+        if schemas.is_empty() {
+            if search_active && database_expanded {
+                for group in &matching_groups {
+                    if show_groups && !database_loading {
+                        push_object_group_visible_rows(
+                            connection,
+                            &database,
+                            &database_name,
+                            None,
+                            *group,
+                            group_id,
+                            indent + 2,
+                            search_active,
+                            search_query,
+                            _connecting_connections,
+                            loading_databases,
+                            _loaded_database_children,
+                            pinned_tables,
+                            table_folders,
+                            table_folder_assignments,
+                            expanded_object_groups,
+                            saved_queries,
+                            rows,
+                        );
+                    }
+                }
+            } else if show_groups && !database_loading {
+                for group in ObjectGroup::ALL {
                     push_object_group_visible_rows(
                         connection,
                         &database,
                         &database_name,
+                        None,
                         group,
                         group_id,
                         indent + 2,
@@ -346,26 +381,80 @@ fn push_connection_visible_rows(
                 }
             }
         } else if show_groups && !database_loading {
-            for group in ObjectGroup::ALL {
-                push_object_group_visible_rows(
-                    connection,
-                    &database,
-                    &database_name,
-                    group,
-                    group_id,
-                    indent + 2,
+            // PG schema 行：数据库展开后列出各 schema，schema 展开后再下钻到分组。
+            for schema in schemas {
+                let schema_key = schema_tree_key(connection_id, &database_name, &schema);
+                let schema_expanded = tree_expanded_for_search(
+                    expanded_databases.get(&schema_key).copied(),
                     search_active,
-                    search_query,
-                    _connecting_connections,
-                    loading_databases,
-                    _loaded_database_children,
-                    pinned_tables,
-                    table_folders,
-                    table_folder_assignments,
-                    expanded_object_groups,
-                    saved_queries,
-                    rows,
                 );
+                let schema_loading = loading_databases.contains(&schema_key);
+                rows.push(SidebarVisibleRow {
+                    kind: SidebarRowKind::Schema,
+                    indent: indent + 2,
+                    key: schema_key,
+                    connection_id,
+                    group_id,
+                    database_path: Some(database.path.clone()),
+                    database_name: Some(database_name.clone()),
+                    schema: Some(schema.clone()),
+                    object_group: None,
+                    object: None,
+                    query: None,
+                    folder_parent_key: None,
+                    folder_name: None,
+                });
+                if !schema_expanded || schema_loading {
+                    continue;
+                }
+                // search：只列匹配分组；正常：列全部分组。
+                if search_active && database_expanded {
+                    for group in &matching_groups {
+                        push_object_group_visible_rows(
+                            connection,
+                            &database,
+                            &database_name,
+                            Some(&schema),
+                            *group,
+                            group_id,
+                            indent + 3,
+                            search_active,
+                            search_query,
+                            _connecting_connections,
+                            loading_databases,
+                            _loaded_database_children,
+                            pinned_tables,
+                            table_folders,
+                            table_folder_assignments,
+                            expanded_object_groups,
+                            saved_queries,
+                            rows,
+                        );
+                    }
+                } else {
+                    for group in ObjectGroup::ALL {
+                        push_object_group_visible_rows(
+                            connection,
+                            &database,
+                            &database_name,
+                            Some(&schema),
+                            group,
+                            group_id,
+                            indent + 3,
+                            search_active,
+                            search_query,
+                            _connecting_connections,
+                            loading_databases,
+                            _loaded_database_children,
+                            pinned_tables,
+                            table_folders,
+                            table_folder_assignments,
+                            expanded_object_groups,
+                            saved_queries,
+                            rows,
+                        );
+                    }
+                }
             }
         }
     }
@@ -376,6 +465,8 @@ fn push_object_group_visible_rows(
     connection: &ConnectionState,
     database: &ObjectSummary,
     database_name: &str,
+    // PG 下为所属 schema；非 schema 分桶数据库为 `None`。
+    schema: Option<&str>,
     group: ObjectGroup,
     group_id: Option<ConnectionGroupId>,
     indent: u8,
@@ -392,7 +483,7 @@ fn push_object_group_visible_rows(
     rows: &mut Vec<SidebarVisibleRow>,
 ) {
     let connection_id = connection.config.id;
-    let group_key = object_group_tree_key(connection_id, database_name, group);
+    let group_key = object_group_tree_key_scoped(connection_id, database_name, schema, group);
     let group_expanded = if search_active {
         tree_expanded_for_search(expanded_object_groups.get(&group_key).copied(), true)
     } else {
@@ -407,6 +498,7 @@ fn push_object_group_visible_rows(
         group_id,
         database_path: Some(database.path.clone()),
         database_name: Some(database_name.to_string()),
+        schema: schema.map(str::to_string),
         object_group: Some(group),
         object: None,
         query: None,
@@ -436,6 +528,7 @@ fn push_object_group_visible_rows(
                 group_id,
                 database_path: None,
                 database_name: None,
+                schema: None,
                 object_group: None,
                 object: None,
                 query: Some(query.clone()),
@@ -489,6 +582,7 @@ fn push_object_group_visible_rows(
                 group_id,
                 database_path: Some(database.path.clone()),
                 database_name: Some(database_name.to_string()),
+                schema: schema.map(str::to_string),
                 object_group: None,
                 object: None,
                 query: None,
@@ -515,12 +609,13 @@ fn push_object_group_visible_rows(
         sorted_unassigned_group_objects(
             connection,
             database_name,
+            schema,
             group,
             pinned_tables,
             table_folder_assignments,
         )
     } else {
-        sorted_group_objects(connection, database_name, group, pinned_tables)
+        sorted_group_objects(connection, database_name, schema, group, pinned_tables)
     };
     for object in objects.into_iter().filter(|object| {
         !search_active || object_matches_sidebar_search(object, search_query)
@@ -544,6 +639,7 @@ fn push_table_visible_row(
         group_id,
         database_path: None,
         database_name: None,
+        schema: None,
         object_group: None,
         object: Some(object.clone()),
         query: None,
@@ -657,11 +753,48 @@ fn build_sidebar_row(
             )
             .into_any_element()
         }
+        SidebarRowKind::Schema => {
+            let database_name = row
+                .database_name
+                .clone()
+                .expect("schema row has database name");
+            let schema = row.schema.clone().expect("schema row has schema");
+            let database_path = row.database_path.clone().expect("schema row has path");
+            let schema_key = schema_tree_key(row.connection_id, &database_name, &schema);
+            let schema_expanded = if search_active {
+                tree_expanded_for_search(this.expanded_databases.get(&schema_key).copied(), true)
+            } else {
+                this.expanded_databases.get(&schema_key).copied().unwrap_or(false)
+            };
+            let schema_loading = this.loading_databases.contains(&schema_key);
+            let schema_loaded = this.loaded_database_children.contains(&schema_key);
+            let schema_selected = active_object_path.is_some_and(|path| {
+                path.connection_id == row.connection_id
+                    && path.schema.as_deref() == Some(schema.as_str())
+            });
+            schema_tree(
+                row.connection_id,
+                database_path,
+                schema,
+                row.indent,
+                schema_expanded,
+                schema_loading,
+                schema_loaded,
+                schema_selected,
+                colors,
+                cx,
+            )
+            .into_any_element()
+        }
         SidebarRowKind::ObjectGroup => {
             let database_name = row.database_name.clone().expect("object group has db name");
             let group = row.object_group.expect("object group row has group");
-            let group_key =
-                object_group_tree_key(row.connection_id, &database_name, group);
+            let group_key = object_group_tree_key_scoped(
+                row.connection_id,
+                &database_name,
+                row.schema.as_deref(),
+                group,
+            );
             let group_expanded = if search_active {
                 tree_expanded_for_search(
                     this.expanded_object_groups.get(&group_key).copied(),
@@ -768,6 +901,47 @@ mod sidebar_flatten_tests {
             modified_at: None,
             comment: None,
         }
+    }
+
+    /// PG 表对象：带 schema 作用域。
+    fn pg_table_option(connection: ConnectionId, db: &str, schema: &str, name: &str) -> ObjectSummary {
+        ObjectSummary {
+            path: ObjectPath {
+                connection_id: connection,
+                database: Some(db.to_string()),
+                schema: Some(schema.to_string()),
+                name: name.to_string(),
+                kind: ObjectKind::Table,
+            },
+            rows: None,
+            modified_at: None,
+            comment: None,
+        }
+    }
+
+    fn make_config(kind: DatabaseKind) -> ConnectionConfig {
+        ConnectionConfig {
+            id: ConnectionId(1),
+            name: "c1".into(),
+            kind,
+            endpoint: Endpoint::Tcp {
+                host: "h".into(),
+                port: 0,
+                database: None,
+            },
+            credential_ref: None,
+            options: BTreeMap::new(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+        }
+    }
+
+    fn pg_config() -> ConnectionConfig {
+        make_config(DatabaseKind::Postgres)
+    }
+    fn mysql_config() -> ConnectionConfig {
+        make_config(DatabaseKind::MySql)
     }
 
     fn connection_state(connection: &ConnectionConfig, expanded: bool) -> ConnectionState {
@@ -909,6 +1083,96 @@ mod sidebar_flatten_tests {
         uniq.sort();
         uniq.dedup();
         assert_eq!(uniq.len(), ks.len());
+    }
+
+    #[test]
+    fn postgres_schema_level_buckets_tables_and_keeps_mysql_flat() {
+        // PG：库展开后按 schema 分桶——Database → Schema → ObjectGroup → Table。
+        let mut pg = connection_state(&pg_config(), true);
+        pg.objects.push(pg_table_option(ConnectionId(1), "appdb", "public", "t_common"));
+        pg.objects.push(pg_table_option(ConnectionId(1), "appdb", "tenant_a", "orders"));
+        pg.objects.push(pg_table_option(ConnectionId(1), "appdb", "tenant_b", "orders"));
+        let mut expanded_databases = BTreeMap::new();
+        expanded_databases.insert(database_tree_key(ConnectionId(1), "appdb"), true);
+        expanded_databases.insert(schema_tree_key(ConnectionId(1), "appdb", "public"), true);
+        expanded_databases.insert(schema_tree_key(ConnectionId(1), "appdb", "tenant_a"), true);
+        expanded_databases.insert(schema_tree_key(ConnectionId(1), "appdb", "tenant_b"), true);
+        // 各 schema 的 Tables 分组展开，才能下钻出表行。
+        let mut expanded_object_groups = BTreeMap::new();
+        for schema in ["public", "tenant_a", "tenant_b"] {
+            let key = object_group_tree_key_scoped(
+                ConnectionId(1),
+                "appdb",
+                Some(schema),
+                ObjectGroup::Tables,
+            );
+            expanded_object_groups.insert(key, true);
+        }
+        let rows = flatten_sidebar_visible_rows(
+            &[pg],
+            &layout_with(vec![SidebarOrderEntry::Connection { id: ConnectionId(1) }]),
+            &[],
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &expanded_databases,
+            &expanded_object_groups,
+            "",
+        );
+        let kinds: Vec<SidebarRowKind> = rows.iter().map(|r| r.kind).collect();
+        // Connection → Database → 三个 Schema 行（public/tenant_a/tenant_b）。
+        assert_eq!(kinds[1], SidebarRowKind::Database);
+        let schema_keys: Vec<String> = rows
+            .iter()
+            .filter(|r| r.kind == SidebarRowKind::Schema)
+            .map(|r| r.schema.clone().unwrap())
+            .collect();
+        assert_eq!(
+            schema_keys,
+            vec![
+                "public".to_string(),
+                "tenant_a".to_string(),
+                "tenant_b".to_string()
+            ],
+            "三个 schema 各自独立成行"
+        );
+        // 同名表 orders 分属不同 schema，key 必须不同（避免互相覆盖）。
+        let order_keys: Vec<String> = rows
+            .iter()
+            .filter(|r| {
+                r.kind == SidebarRowKind::Table
+                    && r.object.as_ref().is_some_and(|o| o.path.name == "orders")
+            })
+            .map(|r| table_tree_key(&r.object.as_ref().unwrap().path))
+            .collect();
+        assert_eq!(order_keys.len(), 2);
+        assert_ne!(order_keys[0], order_keys[1], "跨 schema 同名表 key 须唯一");
+
+        // MySQL：同一表数据但无 schema，仍保持 Database → ObjectGroup → Table 扁平层级。
+        let mut mysql = connection_state(&mysql_config(), true);
+        mysql.objects.push(database_option(ObjectKind::Database, "db1"));
+        mysql.objects.push(table_option(ConnectionId(1), "db1", "orders"));
+        let mysql_rows = flatten_sidebar_visible_rows(
+            &[mysql],
+            &layout_with(vec![SidebarOrderEntry::Connection { id: ConnectionId(1) }]),
+            &[],
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            "",
+        );
+        let mk: Vec<SidebarRowKind> = mysql_rows.iter().map(|r| r.kind).collect();
+        assert!(!mk.contains(&SidebarRowKind::Schema), "MySQL 树不应出现 schema 行");
     }
 
     #[test]

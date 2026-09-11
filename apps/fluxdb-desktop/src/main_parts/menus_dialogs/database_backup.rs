@@ -107,7 +107,7 @@ impl NavicatMain {
             .iter()
             .find(|connection| connection.config.id == connection_id)
             .map(|connection| {
-                let names: BTreeSet<String> = group_objects(connection, database, ObjectGroup::Tables)
+                let names: BTreeSet<String> = group_objects(connection, database, None, ObjectGroup::Tables)
                     .into_iter()
                     .map(|object| object.path.name.clone())
                     .collect();
@@ -127,7 +127,7 @@ impl NavicatMain {
             .iter()
             .find(|connection| connection.config.id == connection_id)
             .map(|connection| {
-                group_objects(connection, database, ObjectGroup::Views)
+                group_objects(connection, database, None, ObjectGroup::Views)
                     .into_iter()
                     .map(|object| object.path.name.clone())
                     .collect()
