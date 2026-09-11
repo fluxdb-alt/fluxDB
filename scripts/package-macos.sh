@@ -141,6 +141,16 @@ fi
 plutil -lint "$INFO_PLIST"
 
 if [[ "$CREATE_DMG" == "1" ]]; then
+    if [[ "${CLEAN_CARGO_TARGET_BEFORE_DMG:-0}" == "1" ]]; then
+        # CI 的 macOS Runner 磁盘较小；bundle 已完成签名后，不再需要当前架构的编译中间产物。
+        echo "Disk usage before cleaning Cargo artifacts:"
+        df -h "$WORKSPACE_ROOT"
+        du -sh "$TARGET_DIR/$TARGET" 2>/dev/null || true
+        cargo clean --target "$TARGET"
+        echo "Disk usage after cleaning Cargo artifacts:"
+        df -h "$WORKSPACE_ROOT"
+    fi
+
     # 标准 DMG 布局：卷内包含 app 本体 + 指向 /Applications 的软链（Finder 识别为 alias），
     # 打开 DMG 后即可直接把 app 拖到 Applications 图标完成安装
     STAGING_DIR="$PACKAGE_ROOT/dmg-staging"
