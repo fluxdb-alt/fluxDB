@@ -396,6 +396,7 @@ fn sqlite_completion_tables_with_cancel(
                     } else {
                         ObjectKind::Table
                     },
+                    comment: None,
                 })
             })
             .collect()

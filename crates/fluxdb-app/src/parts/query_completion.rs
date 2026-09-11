@@ -2555,7 +2555,13 @@ fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<Que
                 insert_text,
                 kind,
                 detail,
-                documentation: None,
+                // 表/视图注释作为文档提示；无注释时不伪造。
+                documentation: table
+                    .comment
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|comment| !comment.is_empty())
+                    .map(str::to_string),
                 filter_text: None,
                 sort_text: None,
                 ..Default::default()
@@ -2881,6 +2887,32 @@ fn derived_column_completion_items(
 }
 
 #[allow(dead_code)]
+/// 列候选的文档提示（§8.4）：类型、可空性、主键与注释，逐行展示。
+///
+/// 只在有真实 metadata 时输出对应行，不用占位文本冒充已知信息。
+pub fn column_completion_documentation(column: &CompletionColumn) -> Option<String> {
+    let mut lines = Vec::new();
+    if let Some(type_name) = column
+        .type_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(format!("类型：{type_name}"));
+    }
+    lines.push(format!("可空：{}", if column.nullable { "是" } else { "否" }));
+    if column.primary_key {
+        lines.push("主键".to_string());
+    }
+    if let Some(comment) = column
+        .comment
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(format!("注释：{}", comment.trim()));
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
 fn column_completion_detail(column: &CompletionColumn) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(type_name) = column.type_name.as_ref().filter(|value| !value.is_empty()) {

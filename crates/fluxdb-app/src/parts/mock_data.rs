@@ -335,6 +335,7 @@ fn loaded_completion_tables(
             schema: object.path.schema.clone(),
             name: object.path.name.clone(),
             kind: object.path.kind,
+            comment: None,
         })
         .collect()
 }

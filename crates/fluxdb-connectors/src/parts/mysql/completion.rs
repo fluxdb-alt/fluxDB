@@ -72,6 +72,9 @@ fn mysql_completion_tables_with_cancel(
                     } else {
                         ObjectKind::Table
                     },
+                    // information_schema.tables 的 table_comment 与 MySQL 习惯不同步（含统计信息），
+                    // 此处不取，避免把内部注释当作业务注释展示。
+                    comment: None,
                 })
             })
             .collect()

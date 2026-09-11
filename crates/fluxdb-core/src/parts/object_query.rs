@@ -230,6 +230,8 @@ pub struct CompletionTable {
     pub schema: Option<String>,
     pub name: String,
     pub kind: ObjectKind,
+    /// 表/视图注释（PG `obj_description`），用于补全项的文档提示；无注释为 None。
+    pub comment: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

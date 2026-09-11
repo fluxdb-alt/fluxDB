@@ -336,6 +336,65 @@
         assert_eq!(context.replace_start, sql.len() - "`Cam".len());
     }
 
+    /// §8.4 文档提示：列出类型/可空/主键/注释，缺项不伪造；表注释进补全项文档。
+    #[test]
+    fn column_completion_documentation_lists_type_nullable_key_and_comment() {
+        let column = CompletionColumn {
+            database: Some("db".into()),
+            schema: Some("public".into()),
+            table: "account".into(),
+            name: "id".into(),
+            type_name: Some("integer".into()),
+            nullable: false,
+            primary_key: true,
+            comment: Some("主键标识".into()),
+        };
+        let documentation = column_completion_documentation(&column).expect("应有文档提示");
+        assert!(documentation.contains("类型：integer"), "{documentation}");
+        assert!(documentation.contains("可空：否"), "{documentation}");
+        assert!(documentation.contains("主键"), "{documentation}");
+        assert!(documentation.contains("注释：主键标识"), "{documentation}");
+
+        // 无类型/无注释时仍给出可空性，不用占位文本冒充未知信息。
+        let minimal = CompletionColumn {
+            type_name: None,
+            comment: None,
+            nullable: true,
+            primary_key: false,
+            ..column
+        };
+        let documentation = column_completion_documentation(&minimal).expect("至少可空性");
+        assert_eq!(documentation, "可空：是");
+    }
+
+    /// §8.4 文档提示：表/视图注释随索引进候选文档。
+    #[test]
+    fn table_completion_items_carries_comment_as_documentation() {
+        let tables = vec![CompletionTable {
+            database: Some("db".into()),
+            schema: Some("public".into()),
+            name: "account".into(),
+            kind: ObjectKind::Table,
+            comment: Some("账户主表".into()),
+        }];
+        let items = table_completion_items(tables, "");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].documentation.as_deref(), Some("账户主表"));
+
+        // 无注释时不伪造文档。
+        let no_comment = table_completion_items(
+            vec![CompletionTable {
+                database: Some("db".into()),
+                schema: Some("public".into()),
+                name: "account".into(),
+                kind: ObjectKind::Table,
+                comment: None,
+            }],
+            "",
+        );
+        assert!(no_comment[0].documentation.is_none(), "无注释不伪造文档");
+    }
+
     /// §8.4 函数重载：同 schema 同名但签名不同的例程是不同候选，不得合并；
     /// 文档展示签名，apply 文本仍是可调用的 `name()`。
     #[test]
@@ -447,18 +506,21 @@
                 schema: Some("t14_a".into()),
                 name: "orders".into(),
                 kind: ObjectKind::Table,
+                comment: None,
             },
             CompletionTable {
                 database: Some("db".into()),
                 schema: Some("t14_b".into()),
                 name: "orders".into(),
                 kind: ObjectKind::Table,
+                comment: None,
             },
             CompletionTable {
                 database: Some("db".into()),
                 schema: Some("t14_a".into()),
                 name: "users".into(),
                 kind: ObjectKind::View,
+                comment: None,
             },
         ];
         let items = table_completion_items(tables, "");
@@ -2361,18 +2423,21 @@
                     schema: None,
                     name: "shining_factory_type".to_string(),
                     kind: ObjectKind::Table,
+                    comment: None,
                 },
                 CompletionTable {
                     database: None,
                     schema: None,
                     name: "type_config".to_string(),
                     kind: ObjectKind::Table,
+                    comment: None,
                 },
                 CompletionTable {
                     database: None,
                     schema: None,
                     name: "shining_dental_order".to_string(),
                     kind: ObjectKind::Table,
+                    comment: None,
                 },
             ],
             "type",
@@ -2769,12 +2834,14 @@
                     schema: Some("public".to_string()),
                     name: "Foo".to_string(),
                     kind: ObjectKind::Table,
+                    comment: None,
                 },
                 CompletionTable {
                     database: Some("db".to_string()),
                     schema: Some("public".to_string()),
                     name: "foo".to_string(),
                     kind: ObjectKind::Table,
+                    comment: None,
                 },
             ],
             DatabaseKind::Postgres,

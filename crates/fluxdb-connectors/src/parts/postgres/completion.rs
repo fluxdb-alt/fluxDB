@@ -147,7 +147,8 @@ async fn pg_list_completion_tables_async(
     let pattern = pg_completion_like_pattern(filter);
     // ORDER BY array_position：search_path 靠前的 schema 先出，符合 PG 可见性优先级。
     let sql = format!(
-        "SELECT c.relname, c.relkind::text, n.nspname \
+        "SELECT c.relname, c.relkind::text, n.nspname, \
+                COALESCE(pg_catalog.obj_description(c.oid, 'pg_class'), '') \
          FROM pg_catalog.pg_class c \
          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
          WHERE n.nspname = ANY($1::text[]) AND c.relkind IN ({PG_COMPLETION_RELKINDS}) \
@@ -166,6 +167,7 @@ async fn pg_list_completion_tables_async(
             let name: String = row.get(0);
             let relkind: String = row.get(1);
             let schema: String = row.get(2);
+            let comment: String = row.get(3);
             CompletionTable {
                 database: Some(physical_db.to_string()),
                 schema: Some(schema),
@@ -175,6 +177,7 @@ async fn pg_list_completion_tables_async(
                     ObjectKind::Table
                 },
                 name,
+                comment: (!comment.trim().is_empty()).then_some(comment),
             }
         })
         .collect())

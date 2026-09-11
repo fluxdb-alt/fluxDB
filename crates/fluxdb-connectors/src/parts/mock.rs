@@ -164,6 +164,7 @@ impl Connector for MockConnector {
                 schema: object.path.schema,
                 name: object.path.name,
                 kind: object.path.kind,
+                comment: None,
             })
             .collect())
     }

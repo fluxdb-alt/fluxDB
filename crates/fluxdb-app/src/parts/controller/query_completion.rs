@@ -615,8 +615,14 @@ impl AppController {
                     label: trigger.name.clone(),
                     insert_text: trigger.name,
                     kind: QueryCompletionKind::Trigger,
-                    detail: trigger.table,
-                    documentation: None,
+                    detail: trigger.table.clone(),
+                    // 文档提示：触发器所属 schema 与表，便于确认作用于哪个对象（§8.4）。
+                    documentation: match (trigger.schema.as_deref(), trigger.table.as_deref()) {
+                        (Some(schema), Some(table)) => Some(format!("触发器（schema {schema}）\n表：{table}")),
+                        (None, Some(table)) => Some(format!("触发器\n表：{table}")),
+                        (Some(schema), None) => Some(format!("触发器（schema {schema}）")),
+                        (None, None) => None,
+                    },
                     filter_text: None,
                     sort_text: None,
                                     ..Default::default()

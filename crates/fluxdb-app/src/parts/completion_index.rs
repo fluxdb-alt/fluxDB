@@ -117,7 +117,8 @@ impl CompletionIndex {
                 name: table.name,
                 kind: table.kind,
                 rows: None,
-                comment: None,
+                // 注释随表元数据进索引与快照，供补全项文档提示（§8.4）。
+                comment: table.comment,
             };
             let table_id = TableId(self.tables.len());
             self.tables.push(source);
@@ -618,6 +619,7 @@ impl CompletionIndex {
                 schema: table.schema.clone(),
                 name: table.name.clone(),
                 kind: table.kind,
+                comment: table.comment.clone(),
             })
             .collect()
     }
@@ -787,6 +789,8 @@ fn rank_column_completion(
         score += 10;
     }
     let detail = column_completion_detail_with_table(&column);
+    // 文档提示含类型/可空/主键/注释，而非仅注释（§8.4）；须在 name 被移动前计算。
+    let documentation = column_completion_documentation(&column);
     RankedCompletionItem {
         rank: completion_match_rank(&column.name, prefix),
         source_table: column.table.to_ascii_lowercase(),
@@ -796,7 +800,7 @@ fn rank_column_completion(
             insert_text: column.name,
             kind: QueryCompletionKind::Column,
             detail,
-            documentation: column.comment.clone(),
+            documentation,
             filter_text: None,
             sort_text: None,
                     ..Default::default()

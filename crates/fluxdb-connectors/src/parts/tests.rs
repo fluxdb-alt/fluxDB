@@ -4570,6 +4570,8 @@ SELECT item_id, name FROM audit_log;"
             DROP TABLE IF EXISTS t14_completion CASCADE; \
             DROP FUNCTION IF EXISTS t14_fn() CASCADE; \
             CREATE TABLE t14_completion(id int PRIMARY KEY, note text); \
+            COMMENT ON TABLE t14_completion IS '补全冒烟表'; \
+            COMMENT ON COLUMN t14_completion.note IS '备注列'; \
             CREATE FUNCTION t14_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql; \
             CREATE TRIGGER t14_trg BEFORE INSERT ON t14_completion FOR EACH ROW EXECUTE FUNCTION t14_fn(); \
         "
@@ -4585,6 +4587,12 @@ SELECT item_id, name FROM audit_log;"
             "表补全应含 t14_completion：{:#?}",
             tables
         );
+        // 表注释进补全元数据，供上层作为文档提示（§8.4）。
+        let commented = tables
+            .iter()
+            .find(|t| t.name == "t14_completion")
+            .and_then(|t| t.comment.as_deref());
+        assert_eq!(commented, Some("补全冒烟表"), "表注释应随补全返回：{tables:#?}");
 
         // 列补全：含主键列与 comment。
         let columns = connector
@@ -4594,6 +4602,13 @@ SELECT item_id, name FROM audit_log;"
         assert_eq!(names, vec!["id", "note"], "列补全应按 attnum 排序：{names:?}");
         let pk = columns.iter().find(|c| c.name == "id").unwrap();
         assert!(pk.primary_key, "id 应为主键列");
+        // 列注释同样进补全元数据。
+        let note = columns.iter().find(|c| c.name == "note").unwrap();
+        assert_eq!(
+            note.comment.as_deref(),
+            Some("备注列"),
+            "列注释应随补全返回：{columns:#?}"
+        );
 
         // 批量列：单次 catalog 查询取多表列，避免逐表 N+1。
         let batch = connector
