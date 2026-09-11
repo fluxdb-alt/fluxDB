@@ -39,7 +39,7 @@ fn pg_load_data(
         let mut sql = format!("SELECT {select_list}\nFROM {table}");
         let (where_sql, params) = pg_where_params(filters, &columns)?;
         sql.push_str(&where_sql);
-        sql.push_str(&data_order_by_clause(sort, &columns, pg_quote_identifier));
+        sql.push_str(&pg_order_by_clause(sort, &columns));
         // limit+1 探测是否还有下一页。
         sql.push_str(&format!(" LIMIT {}", pagination.limit + 1));
         if pagination.offset > 0 {
@@ -320,20 +320,48 @@ fn pg_qualified_table(database: &str, schema: Option<&str>, table: &str) -> Stri
     )
 }
 
+/// 用户排序后面追加主键作为稳定 tie breaker（设计 7.2），避免同值行分页随并发漂移。
+/// 主键列若已在用户排序中出现则跳过；无主键时保持共享排序原样。
+fn pg_order_by_clause(sort: &[SortSpec], columns: &[Column]) -> String {
+    let user_clause = data_order_by_clause(sort, columns, pg_quote_identifier);
+    let sorted: Vec<&str> = sort.iter().map(|spec| spec.field.as_str()).collect();
+    let tie: Vec<String> = columns
+        .iter()
+        .filter(|column| column.primary_key && !sorted.contains(&column.name.as_str()))
+        .map(|column| pg_quote_identifier(&column.name))
+        .collect();
+    if tie.is_empty() {
+        return user_clause;
+    }
+    // 用户排序存在则给同一 ORDER BY 追加 tie 列（逗号分隔）；否则新建一个。
+    let tie_list = tie.join(", ");
+    if user_clause.is_empty() {
+        format!(" ORDER BY {tie_list}")
+    } else {
+        format!("{}, {tie_list}", user_clause.trim_end())
+    }
+}
+
 /// 拼参数化 WHERE 与绑定参数（`$1..$n`）。
+/// 对齐设计 7.2：无法翻译的过滤（列不存在、缺值操作）显式报错，不静默忽略。
 fn pg_where_params(filters: &[FilterSpec], columns: &[Column]) -> fluxdb_core::Result<(String, Vec<Box<dyn ToSql + Sync>>)> {
     let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
     let mut clauses = Vec::new();
     for filter in filters.iter().filter(|filter| filter.enabled) {
         if !data_filter_clause_is_pushable(filter) {
-            continue;
+            // 缺值操作（空 IN、缺比较值/BETWEEN 端点）属于非法过滤，报错而非丢弃。
+            return Err(filter_clause_error(filter));
         }
-        let Some(column) = columns.iter().find(|column| column.name == filter.field) else {
-            continue;
-        };
-        if let Some(clause) = pg_filter_clause(filter, column, &mut params)? {
-            clauses.push(clause);
-        }
+        let column = columns
+            .iter()
+            .find(|column| column.name == filter.field)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Query,
+                    format!("过滤引用了不存在的列: {}", filter.field),
+                )
+            })?;
+        clauses.push(pg_filter_clause(filter, column, &mut params)?);
     }
     if clauses.is_empty() {
         Ok((String::new(), params))
@@ -342,15 +370,25 @@ fn pg_where_params(filters: &[FilterSpec], columns: &[Column]) -> fluxdb_core::R
     }
 }
 
+/// 缺值过滤的明确错误（对齐「非法操作不静默忽略」）。
+fn filter_clause_error(filter: &FilterSpec) -> fluxdb_core::Error {
+    let op = format!("{:?}", filter.op).to_uppercase();
+    Error::new(
+        ErrorKind::Query,
+        format!("过滤操作 {op} 缺少必要的比较值"),
+    )
+}
+
 /// 单条过滤器 → 带 `$n` 的 SQL 子句；并收集绑定参数。
+/// 由 `pg_where_params` 保证：值类过滤（Between/InList/比较）已带足够值，此处不再判空。
 fn pg_filter_clause(
     filter: &FilterSpec,
     column: &Column,
     params: &mut Vec<Box<dyn ToSql + Sync>>,
-) -> fluxdb_core::Result<Option<String>> {
+) -> fluxdb_core::Result<String> {
     let col = column;
     let column = pg_quote_identifier(&column.name);
-    Ok(Some(match filter.op {
+    Ok(match filter.op {
         FilterOp::IsNull | FilterOp::NotExists => format!("{column} IS NULL"),
         FilterOp::IsNotNull | FilterOp::Exists => format!("{column} IS NOT NULL"),
         FilterOp::IsEmpty => format!("{column} = {}", pg_next_param(params, &CellValue::Text(String::new()), None)),
@@ -358,9 +396,7 @@ fn pg_filter_clause(
             format!("{column} != {}", pg_next_param(params, &CellValue::Text(String::new()), None))
         }
         FilterOp::Between | FilterOp::NotBetween => {
-            let (Some(start), Some(end)) = (filter.values.first(), filter.values.get(1)) else {
-                return Ok(None);
-            };
+            let (start, end) = (&filter.values[0], &filter.values[1]);
             let neg = if filter.op == FilterOp::NotBetween { " NOT" } else { "" };
             format!(
                 "{column}{neg} BETWEEN {} AND {}",
@@ -369,9 +405,6 @@ fn pg_filter_clause(
             )
         }
         FilterOp::InList | FilterOp::NotInList => {
-            if filter.values.is_empty() {
-                return Ok(None);
-            }
             let neg = if filter.op == FilterOp::NotInList { " NOT" } else { "" };
             let placeholders = filter
                 .values
@@ -408,9 +441,6 @@ fn pg_filter_clause(
         | FilterOp::GreaterThanOrEqual
         | FilterOp::LessThan
         | FilterOp::LessThanOrEqual => {
-            let Some(value) = filter.values.first() else {
-                return Ok(None);
-            };
             let op = match filter.op {
                 FilterOp::GreaterThan => ">",
                 FilterOp::GreaterThanOrEqual => ">=",
@@ -418,9 +448,9 @@ fn pg_filter_clause(
                 FilterOp::LessThanOrEqual => "<=",
                 _ => unreachable!(),
             };
-            format!("{column} {op} {}", pg_bind_sql(params, col, value))
+            format!("{column} {op} {}", pg_bind_sql(params, col, &filter.values[0]))
         }
-    }))
+    })
 }
 
 /// 追加绑定参数并返回其 `$n` 占位。NULL 以 `Option::<String>::None` 绑定。

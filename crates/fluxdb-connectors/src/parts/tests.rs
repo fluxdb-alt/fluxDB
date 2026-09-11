@@ -3913,6 +3913,125 @@ SELECT item_id, name FROM audit_log;"
         assert_eq!(params.len(), 2);
     }
 
+    #[test]
+    fn pg_order_by_clause_appends_primary_key_tiebreaker() {
+        let mkcol = |name: &str, pk: bool| Column {
+            name: name.to_string(),
+            type_name: Some("int4".to_string()),
+            nullable: false,
+            primary_key: pk,
+            comment: None,
+        };
+        let columns = vec![
+            mkcol("id", true),
+            mkcol("score", false),
+            mkcol("name", false),
+        ];
+        // 无用户排序：追加主键 ASC 作为稳定 tie breaker。
+        assert_eq!(
+            pg_order_by_clause(&[], &columns),
+            " ORDER BY \"id\"",
+            "无用户排序时应只按主键稳定排序"
+        );
+        // 用户排序与主键不同列：主键追加在末尾，逗号分隔。
+        let sort = [SortSpec { field: "score".to_string(), direction: SortDirection::Desc }];
+        assert_eq!(
+            pg_order_by_clause(&sort, &columns),
+            " ORDER BY \"score\" DESC, \"id\"",
+            "同值行应按主键稳定排序"
+        );
+        // 用户已按主键排：不重复追加。
+        let sort = [SortSpec { field: "id".to_string(), direction: SortDirection::Asc }];
+        assert_eq!(
+            pg_order_by_clause(&sort, &columns),
+            " ORDER BY \"id\" ASC"
+        );
+        // 无主键表：保持共享排序原样，不额外 ORDER。
+        let no_pk = vec![mkcol("score", false)];
+        assert_eq!(pg_order_by_clause(&[], &no_pk), "");
+    }
+
+    #[test]
+    fn pg_where_params_rejects_unknown_column_and_missing_value() {
+        let mkcol = |name: &str, ty: &str| Column {
+            name: name.to_string(),
+            type_name: Some(ty.to_string()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        };
+        let columns = vec![mkcol("id", "int4"), mkcol("name", "text")];
+
+        // 过滤引用不存在的列：显式报错，不静默忽略。
+        let unknown = vec![FilterSpec {
+            field: "nope".to_string(),
+            op: FilterOp::Eq,
+            values: vec![CellValue::Text("x".to_string())],
+            enabled: true,
+        }];
+        let err = pg_where_params(&unknown, &columns).unwrap_err();
+        assert!(err.to_string().contains("nope"), "应指出缺失列名: {err}");
+
+        // 空 IN：缺值操作必须显式报错。
+        let empty_in = vec![FilterSpec {
+            field: "id".to_string(),
+            op: FilterOp::InList,
+            values: vec![],
+            enabled: true,
+        }];
+        assert!(
+            pg_where_params(&empty_in, &columns).is_err(),
+            "空 IN 应报错而非丢弃"
+        );
+    }
+
+    #[test]
+    fn pg_where_params_translates_typed_and_pattern_filters() {
+        let mkcol = |name: &str, ty: &str| Column {
+            name: name.to_string(),
+            type_name: Some(ty.to_string()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        };
+        let columns = vec![
+            mkcol("id", "int4"),
+            mkcol("price", "numeric(8,2)"),
+            mkcol("name", "text"),
+        ];
+        // 文本值写非字符串列 → 双重转换占位（对齐 T09 绑定策略）。
+        let between = vec![FilterSpec {
+            field: "price".to_string(),
+            op: FilterOp::Between,
+            values: vec![
+                CellValue::Text("1.00".to_string()),
+                CellValue::Text("9.99".to_string()),
+            ],
+            enabled: true,
+        }];
+        let (where_sql, params) = pg_where_params(&between, &columns).unwrap();
+        assert!(
+            where_sql.contains("CAST(CAST($1 AS text) AS numeric(8,2))")
+                && where_sql.contains("CAST(CAST($2 AS text) AS numeric(8,2))"),
+            "numeric 列应有双重转换占位: {where_sql}"
+        );
+        assert_eq!(params.len(), 2);
+
+        // Contains → LIKE `%值%` 参数化。
+        let contains = vec![FilterSpec {
+            field: "name".to_string(),
+            op: FilterOp::Contains,
+            values: vec![CellValue::Text("alice".to_string())],
+            enabled: true,
+        }];
+        let (where_sql, params) = pg_where_params(&contains, &columns).unwrap();
+        assert!(
+            where_sql.contains("\"name\" LIKE $1"),
+            "Contains 应翻译为 LIKE: {where_sql}"
+        );
+        assert_eq!(params.len(), 1);
+    }
+
     /// T09 冒烟：建含类型化字段与 bytea 的表 → 类型化读取 + 二进制投影 →
     /// 编辑提交(插/改/删) + 单格完整二进制读取。真实 PG 才跑。
     #[test]
@@ -4050,6 +4169,108 @@ SELECT item_id, name FROM audit_log;"
         // 清理。
         let mut cleanup = pg_query_request(&config, None);
         cleanup.text = "DROP TABLE IF EXISTS t09_typed CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理临时结构应成功");
+    }
+
+    /// T10 冒烟：分页 has_more、主键稳定 tie breaker、过滤（Between/Contains/等值）在真实 PG 生效。
+    #[test]
+    fn pg_live_smoke_pagination_sort_and_filter() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T10 冒烟");
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let path = ObjectPath {
+            connection_id: ConnectionId(1),
+            kind: ObjectKind::Table,
+            database: Some(db_name),
+            schema: Some("public".to_string()),
+            name: "t10_page".to_string(),
+        };
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t10_page CASCADE; \
+            CREATE TABLE t10_page( \
+                id integer PRIMARY KEY, \
+                score integer, \
+                name text \
+            ); \
+            INSERT INTO t10_page (id, score, name) VALUES \
+                (1, 10, 'alice'), (2, 10, 'bob'), (3, 30, 'carol'), (4, 40, 'dave'), (5, 50, 'erin'); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建表+数据应成功");
+
+        // 分页：limit=2，应 has_more 且只回两行。
+        let page1 = connector
+            .load_data(&path, 0, 2, &[], &[])
+            .expect("第一页读取应成功");
+        assert!(page1.has_more, "limit 小于总数应 has_more");
+        assert_eq!(page1.rows.len(), 2);
+
+        // 稳定排序：按 score DESC，同级(10) 由主键 id ASC 作 tie breaker → id 1 先于 id 2。
+        let sort = [SortSpec { field: "score".to_string(), direction: SortDirection::Desc }];
+        let sorted = connector
+            .load_data(&path, 0, 50, &sort, &[])
+            .expect("排序读取应成功");
+        let ids: Vec<i64> = sorted
+            .rows
+            .iter()
+            .map(|r| match r.values[0] {
+                CellValue::I64(v) => v,
+                _ => panic!("id 应为整数"),
+            })
+            .collect();
+        assert_eq!(ids, vec![5, 4, 3, 1, 2], "降序 + 主键 tie breaker 应稳定");
+
+        // 过滤：score BETWEEN 10 AND 40 且 name LIKE '%a%' → id 1,3。
+        let filters = vec![
+            FilterSpec {
+                field: "score".to_string(),
+                op: FilterOp::Between,
+                values: vec![CellValue::I64(10), CellValue::I64(40)],
+                enabled: true,
+            },
+            FilterSpec {
+                field: "name".to_string(),
+                op: FilterOp::Contains,
+                values: vec![CellValue::Text("a".to_string())],
+                enabled: true,
+            },
+        ];
+        let filtered = connector
+            .load_data(&path, 0, 50, &[], &filters)
+            .expect("过滤读取应成功");
+        let fids: Vec<i64> = filtered
+            .rows
+            .iter()
+            .map(|r| match r.values[0] {
+                CellValue::I64(v) => v,
+                _ => panic!("id 应为整数"),
+            })
+            .collect();
+        // score∈[10,40]: id 1/2/3/4；name 含 'a': alice/carol/dave → 交集 1/3/4。
+        assert_eq!(fids, vec![1, 3, 4], "BETWEEN + LIKE 过滤应命中 id 1、3、4");
+        assert!(!filtered.has_more);
+
+        // 非法过滤（引用不存在的列）→ 明确报错，不静默忽略。
+        let bad = vec![FilterSpec {
+            field: "missing_col".to_string(),
+            op: FilterOp::Eq,
+            values: vec![CellValue::I64(1)],
+            enabled: true,
+        }];
+        assert!(
+            connector.load_data(&path, 0, 50, &[], &bad).is_err(),
+            "引用不存在的过滤列应报错"
+        );
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t10_page CASCADE".to_string();
         connector.execute(&cleanup).expect("清理临时结构应成功");
     }
 

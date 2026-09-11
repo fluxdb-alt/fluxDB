@@ -299,6 +299,8 @@ CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不�
 
 导出预览可显式 COUNT，但单独后台执行、可取消，不能阻塞普通数据页。多个过滤/排序状态与请求绑定，旧响应不覆盖新排序。[R05、R06、R10]
 
+**T10 实现**：`pg_load_data` 用 `LIMIT limit+1 OFFSET offset` 探测 has_more，普通分页不 COUNT；用户排序经 `data_order_by_clause`，随后 `pg_order_by_clause` 追加主键（未在用户排序中出现的）为稳定 tie breaker，同值行分页不随并发漂移。过滤（`pg_where_params`/`pg_filter_clause`）逐一翻译 FilterOp 到参数化 `$n` 表达式（IS NULL、比较、IN/NOT IN、BETWEEN、LIKE 模式），数值/类型比较沿用 T09 双重转换绑定；**非法过滤显式报错**——引用不存在的列、空 IN、缺比较值/BETWEEN 端点，均不静默忽略。[T10]
+
 ### 7.3 数据变更
 
 复用 DataChangeSet、DataEditorState、行/单元格草稿交互；新增写入值意图 `Default | Null | Value`，可通过独立 `WriteValue` 与插入草稿字段表达，不污染只读 CellValue。旧 MySQL 适配器保留旧语义，PG 必须显式传递三态。
