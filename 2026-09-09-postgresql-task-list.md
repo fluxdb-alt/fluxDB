@@ -61,7 +61,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T14 | PostgreSQL 补全、元数据索引和语义提示 | T08、T12、T13 | 已完成 / FluxDB |
 | T15 | 查询结果编辑、保存查询和历史补偿 | T11、T13、T14 | 已完成 / FluxDB |
 | T16 | DDL 读取和 PostgreSQL 新建表 provider | T08、T12、T13 | 已完成 / FluxDB |
-| T17 | 设计表差异计划和结构修改执行 | T16 | 未开始 / — |
+| T17 | 设计表差异计划和结构修改执行 | T16 | 已完成 / FluxDB |
 | T18 | 复制/重命名/清空/删除表 | T11、T16、T17 | 未开始 / — |
 | T19 | PostgreSQL 连接对话框 | T02、T05 | 未开始 / — |
 | T20 | schema 树、数据库对话框和能力路由 | T06、T07、T19 | 未开始 / — |
@@ -326,12 +326,12 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T17 — 设计表和差异执行
 
-- [ ] 完成 T17
+- [x] 完成 T17
 - **开始前读**：设计 9.1、9.2；R08、R16、R21、R22、R26。
 - **工作**：结构直接加载 metadata；字段/约束/索引/trigger/注释变化转为有序操作；ALTER TYPE USING、依赖保护、事务能力分组；结构指纹防止旧快照覆盖，保留未知定义。
 - **交付位置**：app/create_table 设计模型/provider、postgres/ddl.rs，既有设计命令。
 - **验收**：无修改无 SQL；增删改名/默认值/类型/NULL/identity/索引/FK/check/trigger 可预览执行；失败回滚；外部 DDL 后阻止过期应用；修改普通列不删除 RLS/分区/排除等未知属性；特殊非事务语句明确单独状态。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成；执行人 FluxDB（T17 增量一）；内容 — 新增 `app/parts/create_table_postgres_design.rs`：设计状态与打开时的原始快照做差异，按依赖顺序生成 PG 动作——表改名（RENAME TO 只接新名）、先丢旧主键约束再加新主键、列删除/新增/改名（RENAME COLUMN 先于其它动作）/类型（ALTER COLUMN TYPE，**不自动编造 USING**：隐式转换成功、需要显式转换时由服务端报错提示用户补写，避免静默截断）/默认值 SET|DROP DEFAULT/可空 SET|DROP NOT NULL/identity ADD GENERATED …|DROP IDENTITY IF EXISTS/列注释 COMMENT ON COLUMN；索引走独立 `CREATE [UNIQUE] INDEX` 与 `DROP INDEX "schema"."name"`；FK 与 CHECK 统一 `ADD/DROP CONSTRAINT`；触发器 `CREATE TRIGGER … EXECUTE FUNCTION` 与 `DROP TRIGGER … ON 表`；表注释 COMMENT ON TABLE。删除路径覆盖（单测 `postgres_design_drops_constraints_and_triggers`）。**只发生差异动作**，不重建整表：分区/RLS/排除约束等编辑器不能表示的属性不会因普通字段修改被抹掉。执行侧：建表/设计保存统一走单批事务路径 `BEGIN … COMMIT`，任一条失败不提交、连接释放即回滚（顺带修掉 PG 建表保存时触发器被 MySQL/SQLite 拆分路径丢掉的缺陷）；建表向导 schema 随状态下传到 QueryRequest（原先硬编码 None）。防过期：保存前重查表 DDL，与打开设计器时的快照逐字比对，不一致即拒绝并提示重新打开（`ensure_postgres_design_not_stale`，日志 warn 记录 connection/table）。验证 — 单测 6 项（无修改无 SQL、列变更有序动作与不使用 USING、对象变更 PG 语法且不重建表、索引删除带 schema 限定、约束/触发器删除、类型能力位）；真实 PG 冒烟 `postgres_design_diff_applies_atomically_and_blocks_stale_snapshot`（无修改无 SQL → 追加列/注释/唯一索引 → 外部 DDL 后保存被拒 → 刷新后保存成功且新列/索引/注释落库、外部列保留 → 非法默认值导致失败时前面的 ADD COLUMN 一并回滚）；工作区全量通过（app 386、connectors 133 等）。未完成项：无。特殊非事务语句（CREATE INDEX CONCURRENTLY）不在生成范围内，故无需单独的非事务执行计划；若后续加入，需按设计拆独立计划并反馈部分执行状态。
 
 ### T18 — 表操作
 
