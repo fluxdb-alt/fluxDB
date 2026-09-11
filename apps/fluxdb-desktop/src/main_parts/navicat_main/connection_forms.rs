@@ -23,8 +23,10 @@ impl NavicatMain {
 
     fn create_connection_from_form(&mut self, cx: &mut Context<Self>) {
         let kind = self.new_connection_kind.unwrap_or(DatabaseKind::MySql);
+        self.saving_connection = true;
         if let Err(message) = self.validate_new_connection(kind) {
             self.new_connection_form.test_status = Some(ConnectionTestStatus::Error(message));
+            self.saving_connection = false;
             cx.notify();
             return;
         }
@@ -72,6 +74,7 @@ impl NavicatMain {
             if matches!(event, fluxdb_app::AppEvent::ConnectionUpdated(_)) {
                 self.open_connection_from_sidebar(config.id, cx);
             }
+            self.saving_connection = false;
             cx.notify();
             return;
         }
@@ -85,6 +88,7 @@ impl NavicatMain {
             fluxdb_app::AppEvent::ConnectionTested(_, Err(error)) => {
                 self.new_connection_form.test_status =
                     Some(ConnectionTestStatus::Error(error.to_string()));
+                self.saving_connection = false;
                 cx.notify();
                 return;
             }
@@ -93,12 +97,14 @@ impl NavicatMain {
                     "{}：{}",
                     error.title, error.message
                 )));
+                self.saving_connection = false;
                 cx.notify();
                 return;
             }
             _ => {
                 self.new_connection_form.test_status =
                     Some(ConnectionTestStatus::Error("连接失败，未保存".to_string()));
+                self.saving_connection = false;
                 cx.notify();
                 return;
             }
@@ -133,6 +139,7 @@ impl NavicatMain {
             self.persist_sidebar_layout();
             self.open_connection_from_sidebar(config.id, cx);
         }
+        self.saving_connection = false;
         cx.notify();
     }
 
@@ -449,6 +456,10 @@ impl NavicatMain {
     }
 
     fn test_new_connection(&mut self, cx: &mut Context<Self>) {
+        // 已有测试在跑时忽略重复点击，避免叠加并发测试任务。
+        if self._test_connection_task.is_some() {
+            return;
+        }
         let Some(kind) = self.new_connection_kind else {
             return;
         };

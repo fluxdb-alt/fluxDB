@@ -940,6 +940,8 @@ struct NavicatMain {
     _danger_table_task: Option<Task<()>>,
     data_export_task_seq: u64,
     _test_connection_task: Option<Task<()>>,
+    /// 连接保存/测试期间为 `true`，用于绑定“测试”“保存并连接”按钮 loading/禁用。
+    saving_connection: bool,
     /// Redis 连接串导入 / 云自动发现的异步任务。
     _redis_discover_task: Option<Task<()>>,
     /// Redis 连接串导入成功后，输入框实体待与表单重新同步的标记

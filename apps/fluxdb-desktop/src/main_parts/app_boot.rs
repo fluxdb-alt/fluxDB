@@ -2251,6 +2251,7 @@ fn main() {
                             _danger_table_task: None,
                             data_export_task_seq: 0,
                             _test_connection_task: None,
+                            saving_connection: false,
                             _redis_discover_task: None,
                             redis_discovery_pending_sync: false,
                             connection_context_menu: None,

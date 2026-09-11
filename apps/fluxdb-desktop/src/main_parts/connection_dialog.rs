@@ -358,20 +358,29 @@ fn new_connection_modal(
                         .when_none(&form.test_status, |this| {
                             this.child(div().flex_1().min_w(px(0.)))
                         })
-                        .child(Button::new("new-connection-test").label("测试").on_click({
-                            let view = view.clone();
-                            move |_, _, cx| {
-                                view.update(cx, |this, cx| {
-                                    this.test_new_connection(cx);
-                                });
-                                cx.stop_propagation();
-                            }
-                        }))
+                        .child(
+                            Button::new("new-connection-test")
+                                .label("测试")
+                                .disabled(cx.entity().read(cx)._test_connection_task.is_some())
+                                .on_click({
+                                    let view = view.clone();
+                                    move |_, _, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.test_new_connection(cx);
+                                        });
+                                        cx.stop_propagation();
+                                    }
+                                }),
+                        )
                         .child(
                             Button::new("new-connection-save")
                                 .label("保存并连接")
                                 .primary()
                                 .w(px(116.))
+                                .disabled({
+                                    let state = cx.entity().read(cx);
+                                    state.saving_connection || state._test_connection_task.is_some()
+                                })
                                 .on_click({
                                     let view = view.clone();
                                     move |_, _, cx| {
