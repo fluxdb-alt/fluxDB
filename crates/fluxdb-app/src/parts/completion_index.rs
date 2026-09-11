@@ -173,6 +173,20 @@ impl CompletionIndex {
     /// 存储键按 catalog 原名（§8.4 不折叠、不合并），但 dirty 标记来自 DDL 文本，
     /// 各客户端方言对未加引号标识符的折叠规则不同（PG 折小写、MySQL 视配置），
     /// 故清除与匹配都按忽略大小写进行：多清一点只是多刷一次，不会漏刷。
+    /// 失效指定库/schema 的例程与触发器索引（表与列不受影响）。
+    ///
+    /// 例程/触发器无法按表名精确刷新，DDL 或 TTL 过期后整体失效，下次补全按需重取（§8.4）。
+    fn clear_routines_and_triggers(
+        &mut self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+    ) {
+        let db_key = Self::db_key(connection_id, database, schema);
+        self.routines_by_db.remove(&db_key);
+        self.triggers_by_db.remove(&db_key);
+    }
+
     /// 清除指定库/schema 的**全部**表级 dirty 标记（库级 dirty 标记保留，由整库刷新负责）。
     fn clear_dirty_tables(
         &mut self,

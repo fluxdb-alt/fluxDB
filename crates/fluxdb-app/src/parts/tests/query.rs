@@ -2927,6 +2927,75 @@
         }
     }
 
+    /// §8.4 DDL 后刷新：例程/触发器无法按表名精确刷新，DDL 触发后台刷新时整体失效，
+    /// 下次补全重新从连接器取回（缓存不返回已失效的旧元数据）。
+    #[test]
+    fn ddl_invalidates_routine_and_trigger_index() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::WarmCompletionIndex {
+            connection_id: ConnectionId(1),
+            database: Some("main".to_string()),
+        });
+        {
+            let mut index = controller.completion_index.lock().unwrap();
+            index.insert_routines(
+                ConnectionId(1),
+                Some("main"),
+                None,
+                vec![CompletionRoutine {
+                    schema: None,
+                    name: "stale_fn".into(),
+                    kind: CompletionRoutineKind::Function,
+                    signature: None,
+                }],
+                DatabaseKind::Postgres,
+            );
+            index.insert_triggers(
+                ConnectionId(1),
+                Some("main"),
+                None,
+                vec![CompletionTrigger {
+                    schema: None,
+                    name: "stale_trg".into(),
+                    table: Some("product".into()),
+                }],
+                DatabaseKind::Postgres,
+            );
+            assert_eq!(
+                index
+                    .database_routines(ConnectionId(1), Some("main"), None)
+                    .len(),
+                1
+            );
+        }
+
+        // 建函数属于库级失效：索引 dirty 后后台刷新会连带失效例程/触发器。
+        controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
+            connection_id: ConnectionId(1),
+            database: Some("main".to_string()),
+            schema: None,
+        });
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "create function f() returns int as $$ select 1 $$ language sql".to_string(),
+        });
+        controller.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+
+        let index = controller.completion_index.lock().unwrap();
+        assert!(
+            index
+                .database_routines(ConnectionId(1), Some("main"), None)
+                .is_empty(),
+            "DDL 后例程索引应失效，避免返回过期元数据"
+        );
+        assert!(
+            index
+                .database_triggers(ConnectionId(1), Some("main"), None)
+                .is_empty(),
+            "DDL 后触发器索引应失效"
+        );
+    }
+
     #[test]
     fn ddl_marks_target_table_dirty_and_warmup_refreshes_it() {
         let mut controller = AppController::with_mock_data();

@@ -45,6 +45,11 @@ fn refresh_index_columns_in_background(
             .map(|table| table.name)
             .collect()
     };
+    // 触发后台刷新即说明该 scope 的元数据整体已过期（dirty 或 TTL）：例程/触发器不像列那样
+    // 能按表名精确刷新，直接失效该 scope 的例程/触发器索引，下次补全按需重新拉取并写回（§8.4）。
+    if let Ok(mut guard) = index.lock() {
+        guard.clear_routines_and_triggers(connection_id, database, schema);
+    }
     if table_names.is_empty() {
         // 无匹配表的 dirty（对象已 DROP，或名称与 catalog 对不上）不会因刷新自动消失，
         // 在此清掉，避免该 scope 永久 dirty、每次补全都触发后台刷新。
