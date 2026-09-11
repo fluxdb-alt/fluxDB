@@ -394,8 +394,15 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   验证 — 新测试 `pg_create_database_sql_builds_options_and_quotes` 扩展 owner/template 生成与注入拒绝；
   PG live 建/删库冒烟 `pg_live_smoke_create_delete_database` 真实 PG 通过；工作区全量通过
   （app 394、desktop 370、connectors 133）。
-  未完成项：建 schema 命令与对话框（当前 schema 菜单未含“新建 schema”，建 schema 走 SQL 透传）、
-  旧请求 generation 防覆盖、脏标签保护（删库/断开）、真正 PG 交互启动验证（明暗/Esc/外点/loading Spinner 视觉）。
+  增量四（`d861652`，新建 schema）：`Connector::create_schema` + PG `pg_create_schema`（维护库 autocommit
+  `CREATE SCHEMA`，schema 名标识符白名单校验，连接前拒绝空格/引号/分号/分号注入）；app `CreateSchema` 命令 +
+  `create_schema_for_connection` 真实路由 + `AppEvent::SchemaCreated`；PG 数据库右键菜单加「新建 schema」，
+  `show_create_schema_modal` 弹框（名称输入，Esc/外点/Cancel/Enter 处理），confirm 后台执行，成功后
+  `invalidate_database_schema_cache` 重取 schema 清单使新 schema 出现在对象树，失败保留弹框报错。
+  验证 — 新测试 `pg_create_schema_rejects_untrusted_names_before_connect`（非法名连接前拒绝）、
+  `pg_live_smoke_create_schema`（真实 PG 建 schema + 清理）；工作区全量通过（app 394、connectors 135、desktop 370）。
+  未完成项：旧请求 generation 防覆盖（stale 响应覆盖新对象）、脏标签保护（删库/断开未校验脏标签）、
+  真正 PG 交互启动验证（明暗主题/Esc/外点/loading Spinner 视觉核对，需人工桌面运行）。
 
 ### T21 — 数据、查询、详情与历史 UI
 
