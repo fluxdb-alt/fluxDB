@@ -1,4 +1,4 @@
-// PostgreSQL 拨号与会话管理（T04）。
+// PostgreSQL 拨号与会话管理（T04 / T05 传输与 TLS）。
 //
 // 设计要点（design 3.3）：
 // - 单一共享 tokio runtime（`OnceLock`），任何请求都不重复创建 runtime；
@@ -28,14 +28,17 @@ struct PgSessionKey {
     purpose: PgSessionPurpose,
 }
 
-/// 一个 PostgreSQL 会话 = 一条活连接（`tokio_postgres::Client`）。
+/// 一个 PostgreSQL 会话 = 一条活连接（`tokio_postgres::Client`）+ 可选的 SSH 隧道。
 ///
-/// 底层 `Connection` future 在共享 runtime 上独立 spawn 持续驱动，
-/// `Client` 是 `Send + Sync`，用 `Arc` 包裹以便从注册表复用句柄。
+/// 底层 `Connection` future 在共享 runtime 上独立 spawn 持续驱动；
+/// `Client` 用 `Arc` 包裹以便从注册表复用句柄。SSH 隧道用 `Arc` 包裹：任一会话副本存活期间
+/// 隧道常开，全部副本释放（会话淘汰/断开）时监听器关闭、桥线程收敛退出，无线程泄漏（T05 M4）。
 #[derive(Clone)]
 struct PgSession {
     /// `tokio_postgres::Client` 非 Clone，用 `Arc` 包裹以便从注册表复用句柄。
     client: std::sync::Arc<tokio_postgres::Client>,
+    /// SSH 隧道句柄（直连 / 代理路径为 None）。持有即保活。
+    _tunnel: Option<std::sync::Arc<SshTunnel>>,
     last_used: std::time::Instant,
 }
 
@@ -72,7 +75,10 @@ fn pg_sweep_idle(now: std::time::Instant) {
     }
 }
 
-/// 从连接档案构建 `tokio_postgres::Config`（T04 仅直连；TLS/SSH/代理见 T05）。
+/// 从连接档案构建 `tokio_postgres::Config`。
+///
+/// 只填认证/库/超时/会话参数；传输（直连/SSH/代理）与 TLS 在 `pg_connect` 按传输层选择。
+/// `host` 恒为真实远端主机（作为 TLS 校验主机名）；SSH 路径另设 `hostaddr` 走隧道本地端口。
 fn pg_config(
     config: &ConnectionConfig,
     database: &str,
@@ -81,21 +87,6 @@ fn pg_config(
         .postgres_profile
         .as_ref()
         .ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 连接档案缺失"))?;
-
-    // T04 仅支持直连同居（无隧道）；SSH/代理留待 T05。
-    if profile.ssh().is_some() || profile.proxy().is_some() {
-        return Err(Error::new(
-            ErrorKind::Unsupported,
-            "PostgreSQL SSH 隧道 / 代理拨号尚未接入（T05）",
-        ));
-    }
-    // T04 仅支持明文；TLS 加密留待 T05。
-    if profile.tls.enabled {
-        return Err(Error::new(
-            ErrorKind::Unsupported,
-            "PostgreSQL TLS 拨号尚未接入（T05）",
-        ));
-    }
 
     let (host, port) = profile.dial_endpoint();
     let mut pg = tokio_postgres::Config::new();
@@ -138,20 +129,25 @@ fn pg_request_database(config: &ConnectionConfig, request_database: Option<&str>
 /// 注意：本函数为 `async`——调用方（`test_connection` / `pg_execute_query*`）统一在共享
 /// runtime 的 `block_on` 里 `.await` 它，避免在已进入 runtime 的线程上再 `block_on` 导致
 /// tokio「Cannot start a runtime from within a runtime」。
+/// 建连并返回会话（含 SSH 隧道句柄）。
+///
+/// 传输按 `transport_layer` 三选一：直连 `connect` / SSH 隧道（`hostaddr` 走隧道本地端口，
+/// TLS 身份仍取真实主机）/ 代理（拨代理拿裸流后 `connect_raw`）。TLS 由 `pg_tls_connect` 决定。
+/// 整体（传输握手 + TLS 握手 + 启动）统一受 `connect_timeout` 约束。
 async fn pg_connect(config: &ConnectionConfig, database: &str) -> fluxdb_core::Result<PgSession> {
-    let pg = pg_config(config, database)?;
-    let default_schema = config
+    let profile = config
         .postgres_profile
         .as_ref()
-        .map(|profile| profile.scope.default_schema.clone())
-        .unwrap_or_default();
+        .ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 连接档案缺失"))?;
+    let pg = pg_config(config, database)?;
+    let default_schema = profile.scope.default_schema.clone();
+    let connect_timeout = profile.connect_timeout();
 
-    let (client, connection) = pg
-        .connect(tokio_postgres::NoTls)
+    let (client, tunnel) = tokio::time::timeout(connect_timeout, pg_connect_transport(profile, pg))
         .await
-        .map_err(pg_error)?;
-    // 连接 future 持续驱动：detach 即可，任务随 runtime 常驻，无需持有 JoinHandle。
-    pg_runtime().spawn(connection);
+        .map_err(|_| {
+            Error::new(ErrorKind::Timeout, "PostgreSQL 建连超时（含传输与 TLS 握手）")
+        })??;
 
     if !default_schema.is_empty() {
         client
@@ -162,8 +158,114 @@ async fn pg_connect(config: &ConnectionConfig, database: &str) -> fluxdb_core::R
 
     Ok(PgSession {
         client: std::sync::Arc::new(client),
+        _tunnel: tunnel.map(std::sync::Arc::new),
         last_used: std::time::Instant::now(),
     })
+}
+
+/// 按传输层建连并 spawn 连接 future，返回 `Client` 与隧道句柄。
+async fn pg_connect_transport(
+    profile: &fluxdb_core::PostgresConnectionProfile,
+    mut pg: tokio_postgres::Config,
+) -> fluxdb_core::Result<(tokio_postgres::Client, Option<SshTunnel>)> {
+    let tls = pg_tls_connect(profile)?;
+    let connect_timeout = profile.connect_timeout();
+
+    match profile.transport_layer() {
+        // SSH：先建带 hostkey 校验的隧道，再向 `127.0.0.1:<local_port>` 拨号；
+        // 保持 `host` 为真实主机，TLS 校验仍针对真实远端（hostaddr 分离，R33）。
+        fluxdb_core::PostgresTransportLayer::Ssh(ssh) => {
+            let auth = pg_ssh_auth(&ssh);
+            let (host, port) = profile.dial_endpoint();
+            let options = SshTunnelOptions {
+                connect_timeout_secs: if ssh.connect_timeout_secs > 0 {
+                    ssh.connect_timeout_secs
+                } else {
+                    profile.connect_timeout_secs()
+                },
+                keepalive_interval_secs: ssh.keepalive_interval_secs,
+                verify_host_key: true, // PG 传输路径强制校验已知主机（错误 hostkey 直接拒绝）。
+            };
+            let tunnel = open_tunnel_with((ssh.host.as_str(), ssh.port), &auth, (&host, port), options)?;
+            pg.hostaddr(std::net::IpAddr::from(std::net::Ipv4Addr::LOCALHOST));
+            pg.port(tunnel.local_port);
+            let client = match tls {
+                Some(t) => pg_connect_spawn(&pg, t).await?,
+                None => pg_connect_spawn(&pg, tokio_postgres::NoTls).await?,
+            };
+            Ok((client, Some(tunnel)))
+        }
+        // 代理：拨代理（SOCKS5 / HTTP CONNECT）拿裸流，再 `connect_raw`；TLS 校验主机名取 profile。
+        fluxdb_core::PostgresTransportLayer::Proxy(proxy) => {
+            let (host, port) = profile.dial_endpoint();
+            let stream = pg_proxy_connect(&proxy, (&host, port), connect_timeout).await?;
+            let client = match tls {
+                Some(mut t) => {
+                    let server_name = pg_server_name(profile);
+                    let ready = tokio_postgres::tls::MakeTlsConnect::<tokio::net::TcpStream>::make_tls_connect(&mut t, server_name)
+                        .map_err(|e| {
+                            Error::new(ErrorKind::Connection, format!("TLS 连接器构建失败: {e}"))
+                        })?;
+                    pg_connect_raw_spawn(&pg, stream, ready).await?
+                }
+                None => pg_connect_raw_spawn(&pg, stream, tokio_postgres::NoTls).await?,
+            };
+            Ok((client, None))
+        }
+        // 直连：`connect` 走 host/hostaddr，TLS 身份即配置主机。
+        fluxdb_core::PostgresTransportLayer::Direct => {
+            let client = match tls {
+                Some(t) => pg_connect_spawn(&pg, t).await?,
+                None => pg_connect_spawn(&pg, tokio_postgres::NoTls).await?,
+            };
+            Ok((client, None))
+        }
+    }
+}
+
+/// `connect` 建连并 spawn 连接 future，返回 `Client`。
+/// `C::Stream` 需为 `Send` 才能被 tokio runtime 的独立任务驱动。
+async fn pg_connect_spawn<C>(
+    pg: &tokio_postgres::Config,
+    tls: C,
+) -> fluxdb_core::Result<tokio_postgres::Client>
+where
+    C: tokio_postgres::tls::MakeTlsConnect<tokio_postgres::Socket>,
+    C::Stream: Send + 'static,
+{
+    let (client, connection) = pg.connect(tls).await.map_err(pg_error)?;
+    pg_runtime().spawn(connection);
+    Ok(client)
+}
+
+/// `connect_raw`（代理裸流）建连并 spawn 连接 future，返回 `Client`。
+/// 连接 future 需 `Send` 才能 spawn 到共享 runtime，故要求流与 TLS 结果流均 `Send + 'static`。
+async fn pg_connect_raw_spawn<C, S>(
+    pg: &tokio_postgres::Config,
+    stream: S,
+    tls: C,
+) -> fluxdb_core::Result<tokio_postgres::Client>
+where
+    C: tokio_postgres::tls::TlsConnect<S>,
+    C::Stream: Send + 'static,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (client, connection) = pg.connect_raw(stream, tls).await.map_err(pg_error)?;
+    pg_runtime().spawn(connection);
+    Ok(client)
+}
+
+/// 由 SSH options 组装认证参数：密码或私钥任一存在即用，空字段自动忽略。
+fn pg_ssh_auth(ssh: &fluxdb_core::PostgresSshOptions) -> SshAuthParams {
+    fn nonempty(s: Option<&str>) -> Option<String> {
+        s.filter(|v| !v.is_empty()).map(str::to_string)
+    }
+    SshAuthParams {
+        username: ssh.username.clone(),
+        password: nonempty(ssh.password.value()),
+        private_key_path: ssh.private_key.value().unwrap_or_default().trim().to_string(),
+        passphrase: nonempty(ssh.passphrase.value()),
+    }
 }
 
 /// 获取本次请求的会话键：

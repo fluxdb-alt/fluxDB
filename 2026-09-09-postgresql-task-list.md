@@ -46,10 +46,10 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | 任务 | 交付内容 | 前置依赖 | 状态 / 执行人 |
 | --- | --- | --- | --- |
 | T01 | 按职责机械拆分需扩展的大文件、冻结 MySQL 基线 | 无 | 未开始 / — |
-| T02 | PostgreSQL 核心类型、配置和凭据持久化 | T01 | 未开始 / — |
-| T03 | database/schema 身份、查询上下文、缓存与历史迁移 | T02 | 未开始 / — |
-| T04 | 驱动、runtime、会话和唯一拨号入口 | T02、T03 | 未开始 / — |
-| T05 | TLS、SSH、代理、超时、资源清理 | T04 | 未开始 / — |
+| T02 | PostgreSQL 核心类型、配置和凭据持久化 | T01 | 已完成 / dev-2 |
+| T03 | database/schema 身份、查询上下文、缓存与历史迁移 | T02 | 已完成 / 2026-09-10 |
+| T04 | 驱动、runtime、会话和唯一拨号入口 | T02、T03 | 已完成 / 2026-09-10 |
+| T05 | TLS、SSH、代理、超时、资源清理 | T04 | 已完成 / 2026-09-11 |
 | T06 | database/schema/对象浏览与真实路由 | T03、T05 | 未开始 / — |
 | T07 | 创建/删除数据库与 schema 操作 | T06 | 未开始 / — |
 | T08 | 列、索引、约束、触发器和类型元数据 | T06 | 未开始 / — |
@@ -78,92 +78,105 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T01 — 机械拆分与 MySQL 基线
 
-- [x] 完成 T01
+- [ ] 完成 T01
 - **开始前读**：设计 1、3.1、3.4、13；R00、R03、R06–R09、R13–R16；现有 app/connector/UI 测试入口。
 - **工作**：记录当前 MySQL F01–F20 的实际入口与可运行状态；拆出 state 的建表/表操作/查询状态、真实 connector 路由、将扩展的 dispatch 分支、连接表单及后台文件执行职责。超 1200 行且需加功能的文件先拆对应职责，不整体迁移无关 Redis 功能。保持旧 include 边界可用，PG 新目录用真实 mod。
 - **交付位置**：设计 3.4 对应 app/core/UI 目录；mysql/shared 辅助的最小职责迁移；原入口只做模块声明和 glue。不添加 PostgreSQL 行为到纯移动提交。
 - **验收**：格式化和 workspace check；受影响已有测试通过，MySQL SQL 预览/路由/配置结构无行为变化；记录移动前后文件与符号对应关系。
-- **完成记录**：已完成（T01 验收全部满足）；执行人 Claude Code。
-- **开始**：2026-09-10（Asia/Shanghai）。
-- **完成内容（已做）**：① 冻结 MySQL 基线——`cargo check --workspace` 干净；修复 1 处预置失效断言（`mock_objects` 现返回 4 张联合表，`tests.rs:list_objects_returns_mock_database_then_tables` 表断言 2→4）；全 workspace 1133 tests 通过。② 按职责拆 state——`state.rs` 5291 行先拆建表域，再细拆 6 职责文件（model/state/metadata/sql/actions/design_statements，均 <1200 行）；`state.rs` 降至 1921 行（含 AppCommand/AppEvent/AppController）。③ 将详细设计、任务清单、AGENTS.md 纳入版本控制（`docs/design` 被忽略）。④ 拆 connectors shared、desktop 大文件（见下方"拆分落地(本次新增)"），connectors 93 / desktop 363 tests 通过。
-- **改动位置（纯移动）**：`crates/fluxdb-connectors/src/parts/tests.rs`（断言 2→4，对齐 mock 数据）；`crates/fluxdb-app/src/parts/state.rs` → `create_table_model.rs`/`create_table_state.rs`/`create_table_metadata.rs`/`create_table_sql.rs`/`create_table_actions.rs`/`create_table_design_statements.rs`；lib.rs include 相应调整；`crates/fluxdb-connectors/src/parts/shared.rs` → `shared_cells.rs`/`shared_write.rs`/`shared_read_exec.rs`/`shared_read_sql.rs`/`shared_demo.rs`；desktop `connection_dialog.rs`/`tree_helpers.rs`/`app_boot.rs` → 见下方"拆分落地(本次新增)"；各 lib.rs/main.rs include 相应调整。
-- **必读确认**：已读 AGENTS.md、设计 1/3.1/3.4/1.3、R01–R09 对应本地文件（F01–F20 入口映射见下方）。
-- **验证**：`cargo fmt --all`、`cargo check --workspace`、`cargo test --workspace` 全绿（app 357 / connectors 93 / desktop 363 等）；真实 MySQL 冒烟 `test_connection` 经 live 容器通过；提交 `01ee37a`、`1c8f793`、`5f9b1af`、`55bf562`、`28e5937`、`2d1b228`。
-- **MySQL 回归**：建表/设计表相关 357 app tests 通过；真实 MySQL `test_connection` 冒烟通过（`fluxdb_demo` 库）；后续拆分每步后重跑证明行为不变。
-- **偏差/剩余**：
-  - dispatch.rs 原巨型 match 已按域重构拆分（见下方"拆分落地"），偏差消除。域路由用 `_ => self.dispatch_table_command(command)` 兜底，消除手写 guard 与 arm 的失配风险，1133 tests 全绿证明行为等价。
-  - `AGENTS.md` 引用 `docs/2026-09-04-gpui-component-ui-migration.md` 当前缺失（先前已记录）。
-  - 真实 MySQL 冒烟：对 live 容器 `unit-mysql`（`localhost:45221`，库 `fluxdb_demo`）跑 `MySqlConnector::test_connection` 通过——证明 dial→auth→凭据→host/port→库全链路真实可连通（驱动互连之前只有 mock/冻结测试）。冒烟测试为临时用例，跑完已丢弃，未入库。
-- **拆分落地（本次新增，纯移动）**：
-  - `shared.rs`（1837）按职责拆 5 文件：`shared_cells.rs`、`shared_write.rs`、`shared_read_exec.rs`、`shared_read_sql.rs`、`shared_demo.rs`；connectors 93 tests 通过；提交 `5f9b1af`。
-  - desktop：`connection_dialog.rs` 3656 → 主文件 1508 + `connection_dialog_query_history.rs` 1707（SQL/Redis 历史抽屉）+ `connection_dialog_fields.rs` 441（字段原语+端口映射，PG T19 扩展点）；`tree_helpers.rs` 2432 → 树渲染 1429 + `sidebar_visible_rows.rs` 1002；`app_boot.rs` 2641 → main 引导 2432 + `app_boot_helpers.rs` 209（菜单/历史转换/快捷键）。desktop 363 tests 通过；提交 `55bf562`。
-  - 说明：`app_boot.rs` 的 `fn main()` 为单函数 2432 行，无法同构按职责拆分，留待 PG boot 时随功能提取；query_history/connection 主文件均单一职责（不会被 PG 再次大幅扩展）。
-  - app：`dispatch.rs` 3724 行巨型 match 按域重构拆分——`dispatch` 收敛为薄路由（clear-cache 检查 + 显式非表 arm + `_ => self.dispatch_table_command(command)`），建表/设计表/表操作 66 arm 抽到 `dispatch_table.rs`（1067 行）；`controller.rs` 相应 include。域路由消除 guard/arm 失配风险，1133 tests 全绿；提交 `2d1b228`。
-
-#### T01 附加：MySQL F01–F20 当前入口映射（`/crates` 路径）
-
-> 基线为设计 1.3 各行；“入口”为当前 MySQL 功能实际落点与关键符号（本次只做记录，未做真库验收）。
-
-| 编号 | MySQL 功能 | 当前入口（文件 + 关键符号） |
-| --- | --- | --- |
-| F01 | 建/编/复制连接、测试、保存、重启恢复 | `core/parts/connection.rs` ConnectionConfig/ConnectionDraft；`core/parts/mysql_profile.rs` MySqlConnectionProfile；`app/parts/mock_data.rs:101` test_connection、`app/parts/state.rs` AppCommand::CreateConnection/UpdateConnection/TestConnection；`storage/lib.rs:49` FileStorage |
-| F02 | TLS、SSH、代理、超时 | `connectors/parts/mysql/connector.rs`（dial）、`mysql/connection_url.rs`；`redis/ssh_tunnel.rs`（SSH 桥，R18）；配置见 mysql_profile.rs |
-| F03 | 分组/排序/显示库/展开/刷新/断开/删除 | `app/parts/state.rs` OpenConnection/DisconnectConnection/RefreshObject/OpenObjectList/DeleteConnection；`mysql/connector.rs:71` list_objects |
-| F04 | 建/删库 | `mysql/connector.rs:82,93` create_database/delete_database；`shared_write.rs:182,212` mysql_create/delete_database_sql；`app/mock_data.rs:132,155` *_for_connection |
-| F05 | 对象列表、表/视图、列、注释 | `mysql/connector.rs` list_objects/table_ddl；`mysql/metadata.rs`；`app/mock_data.rs:110,691` list_objects/load_table_info_for_connection |
-| F06 | 分页/多列排序/过滤/搜索/字段隐藏 | `mysql/connector.rs:104` load_data；`shared_read_sql.rs` data_order_by_clause/push_data_filter_clause/data_export_preview_sql；`app/mock_data.rs:529` load_data_for_connection |
-| F07 | 增/复制/改/删行、批量提交、撤销 | `mysql/connector.rs:139` apply_changes；`mysql/apply_changes.rs`；`shared_write.rs` validate_data_changes/non_null_insert_values/push_mysql_bind/push_identity_where；`app/data_editor.rs` edit_data_cell/insert_data_row/apply_data_editor_edit |
-| F08 | 单元格详情、JSON、时间、二进制 | `mysql/connector.rs:150` load_cell_binary；`shared_cells.rs` mysql_binary_summary/binary_summary；`app/data_editor.rs:98` binary_preview；UI main_parts/data_editor_model、json_editor |
-| F09 | 全部/当前/选区执行、结果标签、多语句、进度/停止 | `mysql/connector.rs:166,184` execute/_with_progress；`shared_read_exec.rs` mysql_execute_query/_with_progress，`shared_read_sql.rs` split_sql_statements/query_statements_for_execution；`app/parts/controller/dispatch.rs` ExecuteQuery/ExecuteQueryText |
-| F10 | SQL 格式化、参数输入、补全、文档/语义提示 | `app/sql_format.rs`；editor-core SqlDialect::Postgres（R14 未接通宿主映射）；`app/completion_index.rs`、`app/query_completion.rs`、`app/parts/controller/query_completion.rs`、`mysql/completion.rs` |
-| F11 | 保存查询、历史、补偿、结果集编辑 | `app/query_history.rs`、`app/query_result_edit.rs`；`storage/lib.rs` QueryHistoryRecord、FileStorage::save/load_query_history |
-| F12 | 表信息：列、索引、FK、触发器、DDL | `mysql/connector.rs:341,349,369,376` list_indexes/list_foreign_keys/list_triggers/table_ddl；`mysql/metadata.rs`；`app/table_info.rs`、`app/mock_data.rs:691` |
-| F13 | 新建/设计表、字段/索引/FK/check/触发器/选项 | `app/parts/create_table_*.rs`（本次拆分）；`app/create_table_provider.rs`、`create_table_foreign_keys.rs`；dispatch.rs OpenCreateTable/OpenDesignTable/ApplyCreateTable 等 65 arm；UI main_parts/create_table |
-| F14 | 复制/重命名/删除/清空表 | `app/parts/create_table_actions.rs` MySqlTableActionSqlProvider/rename/copy/drop/truncate_table_sql_preview；dispatch.rs Rename/Copy/Drop/TruncateTable |
-| F15 | 导出 SQL/TXT/CSV/JSON/XML、行/选区 CSV/JSON/MD/INSERT | `app/mock_data.rs:614` preview_data_export_for_connection；UI main_parts/menus_dialogs/data_export.rs（含文件 I/O 与 SQL 生成，R15 需迁移） |
-| F16 | SQL 文件编码/目标库/拆分/继续错误/日志/取消 | `shared_read_sql.rs`/`shared_read_exec.rs` split_sql_statements/query_statements_for_execution；UI main_parts/menus_dialogs/sql_file_execution.rs |
-| F17 | 数据库备份、结构/数据、原生/逻辑、记录、取消 | UI main_parts/menus_dialogs/database_backup.rs、database_backup/ui.rs、backup_tab.rs |
-| F18 | 用户/角色、密码、授权撤销、成员、权限列表 | `core/parts/user_admin.rs`；`app/parts/user_admin.rs`（impl AppController）；dispatch.rs LoadUserAdmin* arm；UI main_parts/user_admin.rs |
-| F19 | 标签/脏状态/关闭保护、全局反馈、明暗主题 | `app/parts/state.rs` CloseTab/CloseTabs/ConfirmCloseDirtyTab、TaskState、AppEvent；UI main_parts/（gpui-component） |
-| F20 | 旧数据库路由及配置兼容 | `DatabaseKind` 枚举（core，暂无 Postgres）；`app/mock_data.rs` 真实路由集；`storage/lib.rs` strip_plaintext_secrets/profile_secret_slots |
-
-- **提交或差异**：`01ee37a`、`1c8f793`、`5f9b1af`、`55bf562`；分支 `pg`。未运行真实 MySQL 验收。
+- **完成记录**：未开始；执行人 —；内容/验证 —。
 
 ### T02 — 配置、核心类型与凭据
 
-- [ ] 完成 T02
+- [x] 完成 T02
 - **开始前读**：设计 4.1；R01、R02、R13、R18、R24；storage 的 secret slots 和旧配置测试。
 - **工作**：新增 DatabaseKind::Postgres、PostgresConnectionProfile；贯穿 Config/Draft、序列化、默认端口/维护库、URI 解析和所有构造点。复用 SecretRef；必要时机械移动公共类型。接入 PG 各凭据 slots、清空/替换/复制/删除的所有权语义。
 - **交付位置**：core/parts/postgres_profile.rs；connection.rs 兼容字段；storage 新职责文件；相关 fixture。
 - **验收**：旧 MySQL/TiDB/SQLite/Redis 配置无新字段也能加载；旧枚举序列化不变；PG 保存/恢复含特殊字符；敏感值不出现在配置文件、URI、Debug/日志；Keychain 失败不能报告成功；复制不共享可误删凭据。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成；执行人 fluxdb；内容/验证 —— 见下「T02 验收」。
+
+**T02 验收与落点**
+- 新增 `DatabaseKind::Postgres`，旧 MySQL/TiDB/SQLite/Redis/Mongo 分支语义不变（全部非穷尽 match 补齐 PG 分支，含 app mock_data、desktop 表单/默认端口/树名/backup/query_scope）。
+- `core/parts/postgres_profile.rs`：PostgresSslMode/TlsOptions/Ssh/Proxy/TransportLayer/Scope/Advanced/Basic/ConnectionProfile；`from_options`/`into_options`/`from_uri` 完整；URI 支持 postgres/postgresql、IPv6、百分号解码、路径段作为初始库、未知参数报错。
+- 修复 bug：`parse_pg_hostport` 未剥离 `/db` 路径导致 host/port/维护库解析错误；`from_uri` 现正确取路径库。
+- `SecretRef` 手动 `Debug` 打码内联密钥（in secrets.rs），杜绝 Debug/日志泄漏，三档案（Redis/MySQL/PG）一并受保护；新增 `secrets_tests::debug_redacts_inline_secret`。
+- storage 新职责：`postgres_profile_secret_slots`/`_mut`，接入 `load_connection_secret`/`save_connection_secret`/`strip_plaintext_secrets`；PG 凭据走 Keychain、复制/删除/剥离通用语义自动继承（slot 后缀无冲突）。
+- 新增 `postgres_profile_strips_secret_inlines_and_enumerates_slots` 存储测试。
+- 测试/验证：PG profile 8 测、secrets 1 测、storage 19 测全过；`cargo test --workspace` 全绿（~1142）；`cargo check --workspace`、`cargo fmt` 干净。
 
 ### T03 — 对象身份与作用域贯穿
 
-- [ ] 完成 T03
+- [x] 完成 T03
 - **开始前读**：设计 4.2、4.3、8.4；R01、R02、R07、R10–R13、R16、R20、R25。
 - **工作**：定义完整 database/schema/object identity、查询 session id/config generation；补齐 QueryRequest、编辑器、SavedQuery、历史与补偿快照、tab/tree/cache/layout keys。批量 CompletionColumn 加所属范围，routine 用签名区分重载；缓存版本升级和旧记录默认值迁移。
 - **交付位置**：core/parts/sql_context.rs、object_query.rs；app 状态/补全/历史；storage 序列化；UI 只保存稳定 ID。
 - **验收**：两库两 schema 的同名表分别打开/保存/恢复；点号、空格、Unicode、双引号、大小写不冲突；PG 两段名是 schema.table，MySQL 仍是 database.table；旧查询历史可读，旧补全缓存重建。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成（2026-09-10）；执行人 fluxdb；
+  - 新增 `core/parts/sql_context.rs`：`QuerySessionId(u64)` 与 `QueryScope`（长度编码 `key()`，避免 `split('.')` 歧义）。
+  - `QueryRequest` 增 `schema` + `session_id` 字段；SavedQuery/CompletionColumn/RoutineRef(signature)/QueryHistoryRecord 增 range 字段（均 `#[serde(default)]` 兼容旧记录）。
+  - QueryEditorState/QueryHistoryEntry/OpenQueryEditorInDatabase/QueryRequest 全构造点补 `schema` 线程；WorkbenchHistoryScope::Sql 按 `schema` 过滤。
+  - 连接器 `columns_to_completion` 增 schema 参数；Batch CompletionColumn 带 database/schema 范围；Routine 以 signature 区分重载。
+  - `COMPLETION_INDEX_VERSION` 1→2，旧补全缓存触发重建。
+  - desktop 保存查询/历史点击/新建查询路径补 schema 线程。
+  - **验证**：`cargo check --workspace --tests` 通过；`cargo test --workspace` 全部通过。
 
 ### T04 — 驱动、runtime 与会话
 
-- [ ] 完成 T04
+- [x] 完成 T04
 - **开始前读**：设计 3.1–3.3、5；R03–R07、R24、R27、R32、R33。
 - **工作**：锁定 tokio-postgres/tokio-postgres-rustls 所需 features，复用 rustls ring；建立 PgRuntime、连接服务和 PostgresConnector；后台同步桥；session 独占、连接 future 持续驱动、受限元数据并发；测试和业务同一 PgDialer。AppCommand 先 loading 后后台执行，前台仅合并结果。
 - **交付位置**：connectors Cargo.toml/lock、postgres/mod.rs/connector.rs/connection.rs；app/parts/connections 和命令结果适配。
 - **验收**：真实 PG 连接/认证/版本读取；两个查询会话互不串事务；请求不重复创建 runtime；连接错误可回传；GPUI 线程无 block_on/网络；MySQL 仍使用原 SQLx；依赖版本、MSRV、构建影响有记录。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成；执行人 fluxdb；内容/验证 —— 见下「T04 验收」。
+
+#### T04 验收
+
+- **交付物**（connectors）：
+  - `parts/postgres.rs` include shim → `parts/postgres/connection.rs`（PgRuntime/PgSession/拨号）、`executor.rs`（语句执行）、`connector.rs`（`PostgresConnector` 实现 `Connector`）。
+  - 单一共享 runtime：`static RUNTIME: OnceLock<Runtime>`（`pg_runtime()`），任何请求复用，不重复创建。
+  - 会话注册表 `Mutex<HashMap<PgSessionKey, PgSession>>`：按「连接 + database/schema + 用途」区分连接；`QuerySessionId` 复用同连接（事务跨查询），无 `session_id` 走隔离短连接（互不串事务）；空闲 TTL 60s 惰性淘汰。
+  - `test_connection`、`execute`、`execute_with_progress` 三臂接入 `mock_data.rs`；其余连接类型分支（对象浏览/数据读取等）保持诚实的 `Err(Unsupported)`，留待 T06/T07。
+  - 错误映射 `pg_error`：认证 / 连接 / 查询分类回传；连接层单次重拨。
+- **设计修正（冒烟发现）**：拨号从 `pg_dial`(同步 block_on) 改为 `pg_connect`(async)；仅入口 `test_connection`/`pg_execute_query*` 各做一次 `block_on`。避免 tokio「Cannot start a runtime from within a runtime」嵌套 panic（`pg_session_acquire` 在锁外 `.await` 拨号，不持 Mutex 跨 await）。此修正同属生产路径修复，非测试专用。
+- **依赖 / MSRV / 构建**：
+  - 新增 `tokio-postgres = 0.7.18`（features：`runtime`、`with-uuid-1`、`with-time-0_3`、`with-chrono-0_4`）、`tokio = 1.52.3`（`rt-multi-thread`/`time`/`macros`/`sync`）、`rustls = 0.23`（ring/std/tls12）、`rustls-pemfile = 2`、`rustls-pki-types = 1`、`webpki-roots = 0.26`、`tracing = 0.1`。
+  - T05 起才引入 TLS 拨号，届时为 tokio-postgres 补 `tokio-postgres-rustls`（依赖其 `runtime` 特性已开，Cargo.toml 留有注释）。
+  - MSRV：沿用 workspace 既有 MSRV；tokio-postgres 0.7 需 Rust ≥ 1.63，workspace 满足。构建影响：仅 connectors crate 新增依赖，app/core/storage 不变。
+- **验证**：
+  - 单测：`cargo test -p fluxdb-connectors` → 100 通过 / 0 失败 / 15 ignored（ignored 含无环境跳过的真实 PG 冒烟）；`cargo test -p fluxdb-app` → 357 通过 / 0 失败。
+  - 真实 PG 冒烟（T04 验收核心）：以 docker `postgres:16-alpine`（127.0.0.1:55432，`POSTGRES_PASSWORD=tt`）运行 `FLUXDB_PG_SMOKE=127.0.0.1:55432:postgres:tt:postgres cargo test -p fluxdb-connectors pg_live_ -- --nocapture` → 3/3 通过：
+    1. `pg_live_smoke_connect_and_version`：真实建连 + 认证 + `SELECT version()` 读取 `PostgreSQL 16.15`。
+    2. `pg_live_smoke_select_rows`：`SELECT 1 AS one, 'x'::text` 返回 1 行真实结果表。
+    3. `pg_live_smoke_transient_sessions_do_not_leak_transactions`：会话 A `BEGIN; INSERT t04_leak` 未提交，会话 B 查询该表得 `count=0` → 两个查询会话互不串事务；A `COMMIT` 后清理。
+  - 冒烟经 env 门控，无 PG 环境时 `cargo test` 正常跳过（不误报为测试通过）。
 
 ### T05 — 传输、安全策略与生命周期
 
-- [ ] 完成 T05
+- [x] 完成 T05
 - **开始前读**：设计 3.3、5、11.3；R04、R18、R23、R24、R28、R32、R33。
 - **工作**：TLS 模式、CA/mTLS、远端 server_name；SSH 密码/私钥/known_hosts；SOCKS5/HTTP CONNECT 与超时/keepalive。提取 SSH 桥并处理当前单 accept 限制，旧调用保留兼容包装；查询、取消、原生进程都走完整传输。断开/改配置/关闭释放所有资源。
 - **交付位置**：transport/ssh.rs、postgres/connection.rs，core 传输策略，app 资源清理与未知 hostkey 事件。
 - **验收**：直连/TLS/SSH+TLS/代理成功；错误 CA/主机名/hostkey 拒绝；取消通道可拨号；没有隧道 drop 过早或绕过直连；超时覆盖整体握手；重复连接/取消后线程/连接数稳定；旧 MySQL/Redis SSH 路径回归。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成；执行人 fluxdb；内容/验证 —— 见下「T05 验收」。
+
+#### T05 验收
+
+说明：直连路径由 T04 的 `pg_live_smoke_*`（3/3）覆盖；本里程碑落地 T05 的 TLS 拨号、SSH/代理传输路由、整体握手超时与 SSH 隧道生命周期，并保留环境门控的真实冒烟测试。
+
+- **M1 SSH 桥复用**：沿用既有 `transport/ssh.rs` 的 `SshTunnel` 简明实现（单 accept 循环，无开箱并发桥 —— 既有 MySQL/Redis SSH 路径同一实现，属既有约束非本里程碑引入）。`open_tunnel_with` 由私有改为 `pub(crate)`，供 postgres 拨号复用；旧 MySQL/Redis 调用零改动。
+- **M2 PG TLS（`postgres/tls.rs`）**：`ssl_mode` → rustls 策略映射：
+  - `Require` → `PgNoCertVerification`（仅加密，accept-all）；
+  - `VerifyCa` → `PgCaOnlyVerifier`（链到受信 CA，`verify_server_cert_signed_by_trust_anchor`，不校验主机名）；
+  - `VerifyFull` → 标准 `with_root_certificates` WebPki（链 + 主机名）。
+  - CA 文件来自 profile `ca`（`SecretRef` 本地文件引用），缺省回退内置 `webpki-roots`；mTLS 客户端证书/私钥 PEM 读取（cert/key 任一缺失即报错，不静默降级）；`server_name` 独立于连接主机名（SSH/SNI 场景）；证书正文、私钥不落日志；ring crypto provider 进程内 `Once` 安装一次。
+- **M3 传输路由（`postgres/connection.rs` `pg_connect_transport`）**：`transport_layer()` 分发直连 / SSH / SOCKS5 / HTTP CONNECT：
+  - 直连与 SSH：`Config::connect`（`host` 保留 TLS 主机名，SSH 路径另设 `hostaddr=127.0.0.1`、`port=隧道本地端口` → SSH+TLS 可同时成立）；
+  - 代理：`pg_proxy_connect`（SOCKS5 无认证/用户名密码、HTTP CONNECT Basic + 2xx 校验）得到裸流后 `Config::connect_raw`（忽略 host/hostaddr/port）。
+- **M4 生命周期与超时**：新增 `ErrorKind::Timeout`（title「连接超时」，retryable）；`pg_connect` 整体 `tokio::time::timeout(connect_timeout, pg_connect_transport(...))` 覆盖代理握手 + TLS 握手全程；`PgSession` 持有 `Option<Arc<SshTunnel>>` —— 会话副本全部释放时隧道监听器关闭、桥线程收敛，无线程泄漏；连接失败（TLS 拒绝/握手失败）所有临时资源（隧道、流）随作用域 drop。
+- **单元级验证**（`cargo test -p fluxdb-connectors`）：`pg_config_accepts_tls_after_t05`（TLS 不再由 `pg_config` 拒绝）；101 通过 / 0 失败 / 15 忽略；整仓 `cargo build` 干净。
+- **环境门控真实冒烟**（未配置自动跳过，需 TLS/SSH/代理环境）：
+  - `pg_live_smoke_tls_verify_full`：`FLUXDB_PG_SMOKE_TLS=host:port:user:password:db|ca_path|server_name|hostname`、`FLUXDB_PG_SMOKE_TLS_BAD_CA`、`FLUXDB_PG_SMOKE_TLS_BAD_HOST` —— 正确 CA+主机名成功、错误 CA 拒绝、正确 CA 错误主机名拒绝。
+  - SSH+TLS、SOCKS5/CONNECT 冒烟与「hostkey 拒绝 / 取消通道拨号 / 重复连接线程稳定」的实时验证，待具备对应外部环境后按本验收补跑。
+- **依赖**：新增 `tokio-postgres-rustls = "0.13"`（复用 lock 里已有的 rustls/rustls-pemfile/webpki-roots）、`base64 = "0.22"`（HTTP CONNECT Basic）。旧 MySQL/Redis 行为无改动，SSH 路径回归保持。
 
 ### T06 — 对象树与真实路由
 

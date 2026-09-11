@@ -71,7 +71,7 @@ impl SshTunnel {
 }
 
 /// 建隧道，可指定建连超时 / 心跳 / hostkey 校验（PostgreSQL 传输路径使用）。
-fn open_tunnel_with(
+pub(crate) fn open_tunnel_with(
     jump: (&str, u16),
     auth: &SshAuthParams,
     target: (&str, u16),

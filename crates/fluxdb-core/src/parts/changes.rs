@@ -118,6 +118,7 @@ impl From<Error> for UserFacingError {
             ErrorKind::Query => "查询失败",
             ErrorKind::Cancelled => "操作已取消",
             ErrorKind::Unsupported => "暂不支持",
+            ErrorKind::Timeout => "连接超时",
             ErrorKind::Internal => "内部错误",
         };
 
@@ -125,7 +126,10 @@ impl From<Error> for UserFacingError {
             title: title.to_string(),
             message: error.message,
             detail: None,
-            retryable: matches!(error.kind, ErrorKind::Connection | ErrorKind::Cancelled),
+            retryable: matches!(
+                error.kind,
+                ErrorKind::Connection | ErrorKind::Cancelled | ErrorKind::Timeout
+            ),
         }
     }
 }

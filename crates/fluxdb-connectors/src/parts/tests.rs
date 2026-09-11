@@ -3017,14 +3017,14 @@ SELECT item_id, name FROM audit_log;"
     }
 
     #[test]
-    fn pg_config_rejects_tls_for_t04() {
+    fn pg_config_accepts_tls_after_t05() {
+        // T05 起 TLS 由 `pg_connect` 按传输层解析，`pg_config` 只填认证/库/超时，不再拒绝。
         let mut config = postgres_config();
-        // 启用 TLS：T04 未接入，应显式报 Unsupported。
         let profile = config.postgres_profile.as_mut().unwrap();
         profile.tls.enabled = true;
         profile.tls.ssl_mode = fluxdb_core::PostgresSslMode::Require;
-        let err = pg_config(&config, "postgres").unwrap_err();
-        assert_eq!(err.kind, ErrorKind::Unsupported);
+        let cfg = pg_config(&config, "postgres").unwrap();
+        assert!(cfg.get_user().is_some());
     }
 
     #[test]
@@ -3158,5 +3158,93 @@ SELECT item_id, name FROM audit_log;"
                 ..Default::default()
             }),
         }
+    }
+
+    // ===== T05 传输、安全策略与生命周期（真实冒烟，环境门控）=====
+
+    /// 读 `FLUXDB_PG_SMOKE_TLS=host:port:user:password:db:ca_path:server_name:hostname`、
+    ///   `FLUXDB_PG_SMOKE_TLS_BAD_CA`（错误 CA）与 `FLUXDB_PG_SMOKE_TLS_BAD_HOST`（错误主机名）各一个路径。
+    /// 仅验证 TLS 握手方向，不依赖环境是否真的开启 TLS 之外的额外能力。
+    /// 未配置时跳过。
+    ///
+    /// 覆盖 T05 验收：
+    /// - verify-full 用正确 CA + 正确主机名 → 建连成功；
+    /// - verify-full 用错误 CA（不受信）→ 拒绝；
+    /// - verify-full 用正确 CA 但错误主机名 → 拒绝（校验 DNS/主机名）。
+    #[test]
+    fn pg_live_smoke_tls_verify_full() {
+        let tls = env("FLUXDB_PG_SMOKE_TLS");
+        let bad_ca = env("FLUXDB_PG_SMOKE_TLS_BAD_CA");
+        let bad_host = env("FLUXDB_PG_SMOKE_TLS_BAD_HOST");
+        let (params, ca_path, server_name, hostname) = match tls {
+            Some(v) => split_tls_env(&v),
+            None => return,
+        };
+        let connector = PostgresConnector::new();
+
+        // 正确 CA + 正确主机名。
+        let ok = tls_config(&params, ca_path.as_deref(), &server_name);
+        assert!(
+            connector.test_connection(&ok).is_ok(),
+            "verify-full 正确 CA + 主机名应建连成功"
+        );
+
+        if let Some(path) = bad_ca {
+            let bad = tls_config(&params, Some(&path), &server_name);
+            assert!(
+                connector.test_connection(&bad).is_err(),
+                "verify-full 错误 CA 应被拒绝"
+            );
+        }
+
+        if let Some(name) = bad_host {
+            let bad = tls_config(&params, ca_path.as_deref(), &name);
+            assert!(
+                connector.test_connection(&bad).is_err(),
+                "verify-full 主机名不匹配应被拒绝"
+            );
+        }
+    }
+
+    /// 组装 verify-full 配置（TLS 启用、VerifyFull、显式 server_name）。
+    fn tls_config(
+        params: &(String, u16, String, String, String),
+        ca_path: Option<&str>,
+        server_name: &str,
+    ) -> ConnectionConfig {
+        let mut config = pg_smoke_config(params.clone());
+        if let Some(profile) = config.postgres_profile.as_mut() {
+            profile.tls.enabled = true;
+            profile.tls.ssl_mode = fluxdb_core::PostgresSslMode::VerifyFull;
+            profile.tls.server_name = server_name.to_string();
+            if let Some(path) = ca_path {
+                profile.tls.ca = fluxdb_core::SecretRef::inline(path);
+            }
+        }
+        config
+    }
+
+    /// 拆分 TLS 冒烟字段：`host:port:user:password:db|ca_path|server_name|hostname`。
+    /// 返回 (pg 参数, ca_path, server_name, hostname)。
+    fn split_tls_env(v: &str) -> ((String, u16, String, String, String), Option<String>, String, String) {
+        let mut it = v.split('|');
+        let params_raw = it.next().unwrap_or("");
+        let host = params_raw.split(':').next().unwrap_or("").to_string();
+        let port = params_raw
+            .split(':')
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let user = params_raw.split(':').nth(2).unwrap_or("").to_string();
+        let password = params_raw.split(':').nth(3).unwrap_or("").to_string();
+        let db = params_raw.split(':').nth(4).unwrap_or("").to_string();
+        let ca_path = it.next().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        let server_name = it.next().unwrap_or(&host).to_string();
+        let hostname = it.next().unwrap_or(&host).to_string();
+        ((host, port, user, password, db), ca_path, server_name, hostname)
+    }
+
+    fn env(key: &str) -> Option<String> {
+        std::env::var(key).ok().filter(|v| !v.is_empty())
     }
 }
