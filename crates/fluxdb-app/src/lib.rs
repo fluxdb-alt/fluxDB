@@ -56,6 +56,7 @@ include!("parts/create_table_actions.rs");
 include!("parts/create_table_design_statements.rs");
 include!("parts/create_table_foreign_keys.rs");
 include!("parts/create_table_provider.rs");
+include!("parts/create_table_postgres.rs");
 include!("parts/controller.rs");
 include!("parts/data_editor.rs");
 include!("parts/mock_data.rs");

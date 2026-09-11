@@ -5,13 +5,26 @@ impl AppController {
             AppCommand::OpenCreateTable {
                 connection_id,
                 database,
+                schema,
             } => {
                 let Some(config) = self.connection_config(connection_id) else {
                     return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
                 };
                 let database_kind = config.kind;
+                // 显式 schema 优先；缺省时用档案默认 schema，保证 PG 建表落在用户所见 schema（§9.2）。
+                let create_schema = schema
+                    .filter(|schema| !schema.trim().is_empty())
+                    .or_else(|| {
+                        config
+                            .postgres_profile
+                            .as_ref()
+                            .map(|profile| profile.scope.default_schema.clone())
+                            .filter(|schema| !schema.trim().is_empty())
+                    })
+                    .unwrap_or_default();
                 let tab_id = self.next_tab_id();
-                let create = CreateTableState::new(connection_id, database, database_kind);
+                let mut create = CreateTableState::new(connection_id, database, database_kind);
+                create.schema = create_schema;
                 self.push_tab(TabState {
                     id: tab_id,
                     title: create.tab_title(),

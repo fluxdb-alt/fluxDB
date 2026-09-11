@@ -1221,6 +1221,8 @@ pub enum AppCommand {
     OpenCreateTable {
         connection_id: ConnectionId,
         database: Option<String>,
+        /// schema 作用域（PG）；None/空表示用连接默认 search_path。
+        schema: Option<String>,
     },
     OpenDesignTable(ObjectPath),
     RenameTable {

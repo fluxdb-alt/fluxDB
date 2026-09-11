@@ -215,6 +215,7 @@ impl NavicatMain {
                     AppCommand::OpenCreateTable {
                         connection_id: menu.connection_id,
                         database: Some(menu.database),
+                        schema: None,
                     },
                     cx,
                 );

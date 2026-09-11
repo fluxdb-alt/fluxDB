@@ -674,6 +674,12 @@ fn create_table_check_lines(
                         quote_sqlite_identifier(name)
                     )
                 }
+                CreateTableSqlDialect::Postgres => {
+                    format!(
+                        "CONSTRAINT {} CHECK ({expression})",
+                        quote_postgres_identifier(name)
+                    )
+                }
             }
         };
         if check.not_enforced {
@@ -681,6 +687,10 @@ fn create_table_check_lines(
                 CreateTableSqlDialect::MySql => line.push_str(" NOT ENFORCED"),
                 CreateTableSqlDialect::Sqlite => {
                     return Err("SQLite does not support NOT ENFORCED checks.".to_string());
+                }
+                // PG 的 CHECK 恒为强制（无 NOT ENFORCED），不生成假语法。
+                CreateTableSqlDialect::Postgres => {
+                    return Err("PostgreSQL 不支持 NOT ENFORCED 检查约束".to_string());
                 }
             }
         }
@@ -736,6 +746,8 @@ fn create_table_trigger_statements(
     let table_name = match dialect {
         CreateTableSqlDialect::MySql => quote_mysql_identifier(create.table_name.trim()),
         CreateTableSqlDialect::Sqlite => quote_sqlite_identifier(create.table_name.trim()),
+        // PG 触发器走 create_table_postgres.rs 的专用生成（引用已存在函数），不走此路径。
+        CreateTableSqlDialect::Postgres => quote_postgres_identifier(create.table_name.trim()),
     };
     create
         .triggers
@@ -752,6 +764,7 @@ fn create_table_trigger_statements(
             let trigger_name = match dialect {
                 CreateTableSqlDialect::MySql => quote_mysql_identifier(name),
                 CreateTableSqlDialect::Sqlite => quote_sqlite_identifier(name),
+                CreateTableSqlDialect::Postgres => quote_postgres_identifier(name),
             };
             Ok(format!(
                 "CREATE TRIGGER {trigger_name}\n{} {} ON {table_name}\nFOR EACH ROW\n{body};",

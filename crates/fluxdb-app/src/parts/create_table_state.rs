@@ -12,6 +12,7 @@ impl CreateTableState {
         Self {
             connection_id,
             database,
+            schema: String::new(),
             database_kind,
             mode: CreateTableMode::Create,
             table_name: String::new(),
@@ -62,6 +63,8 @@ impl CreateTableState {
         let provider = create_table_provider(database_kind);
         let mut create = Self::new(object.connection_id, object.database.clone(), database_kind);
         create.table_name = object.name.clone();
+        // 设计模式必须带上原表 schema：PG 下同名跨 schema 的设计/保存否则会落到别的 schema。
+        create.schema = object.schema.clone().unwrap_or_default();
         create.columns = columns
             .into_iter()
             .enumerate()

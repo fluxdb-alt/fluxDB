@@ -111,6 +111,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         let event = controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
 
         assert_eq!(event, AppEvent::TabOpened(TabId(1)));
@@ -197,6 +198,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -233,6 +235,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -257,6 +260,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::AddCreateTableColumn(TabId(1)));
         controller.dispatch(AppCommand::SelectCreateTableColumn {
@@ -315,6 +319,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -394,6 +399,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
         });
 
         let create = create_table(&controller);
@@ -414,6 +420,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::AddCreateTableColumn(TabId(1)));
         controller.dispatch(AppCommand::AddCreateTableColumn(TabId(1)));
@@ -468,6 +475,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -529,6 +537,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -565,6 +574,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableColumnField {
             tab_id: TabId(1),
@@ -599,6 +609,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -654,6 +665,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -737,6 +749,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -786,6 +799,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -825,6 +839,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::AddCreateTableIndex(TabId(1)));
         controller.dispatch(AppCommand::SetCreateTableIndexField {
@@ -878,6 +893,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::AddCreateTableColumn(TabId(1)));
 
@@ -944,6 +960,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -1013,6 +1030,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
 
         let create = create_table(&controller);
@@ -1087,6 +1105,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -1129,6 +1148,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),

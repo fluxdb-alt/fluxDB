@@ -283,6 +283,7 @@ impl NavicatMain {
                     AppCommand::OpenCreateTable {
                         connection_id: object_path.connection_id,
                         database: object_path.database.clone(),
+                        schema: object_path.schema.clone(),
                     },
                     cx,
                 );
@@ -336,6 +337,7 @@ impl NavicatMain {
                     AppCommand::OpenCreateTable {
                         connection_id: menu.connection_id,
                         database: Some(menu.database),
+                        schema: None,
                     },
                     cx,
                 );

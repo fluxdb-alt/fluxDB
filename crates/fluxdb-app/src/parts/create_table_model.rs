@@ -2,6 +2,8 @@
 pub struct CreateTableState {
     pub connection_id: ConnectionId,
     pub database: Option<String>,
+    /// schema 作用域（PG：表所属 schema，空串表示用连接默认 search_path / public）。
+    pub schema: String,
     pub database_kind: DatabaseKind,
     pub mode: CreateTableMode,
     pub table_name: String,

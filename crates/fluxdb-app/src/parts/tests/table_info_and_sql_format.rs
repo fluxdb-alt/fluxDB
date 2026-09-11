@@ -606,6 +606,7 @@ SELECT $1, f();";
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::AddCreateTableForeignKey(TabId(1)));
         controller.dispatch(AppCommand::SetCreateTableForeignKeyField {
