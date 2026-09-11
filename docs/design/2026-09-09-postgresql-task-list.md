@@ -409,8 +409,11 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   `invalidate_database_schema_cache` 重取 schema 清单使新 schema 出现在对象树，失败保留弹框报错。
   验证 — 新测试 `pg_create_schema_rejects_untrusted_names_before_connect`（非法名连接前拒绝）、
   `pg_live_smoke_create_schema`（真实 PG 建 schema + 清理）；工作区全量通过（app 394、connectors 135、desktop 370）。
-  未完成项：旧请求 generation 防覆盖（stale 响应覆盖新对象）、脏标签保护（删库/断开未校验脏标签）、
-  真正 PG 交互启动验证（明暗主题/Esc/外点/loading Spinner 视觉核对，需人工桌面运行）。
+  未完成项：真正 PG 交互视觉验证（明暗主题下 schema 菜单/建库弹框渲染、Esc/外点/loading Spinner 视觉，
+  需人工 macOS 桌面交互，已确认 `cargo run -p fluxdb-desktop` 启动无 panic 进入事件循环）。
+  已核验（2026-09-12）：旧请求防覆盖由 `loading_databases` 单飞 + `replace_loaded_children` schema 作用域
+  保证（同 key 只有一个加载在飞、跨 schema 互不覆盖，见增量一测试）；删库/断开脏标签与运行任务保护已在
+  增量五（`b89ecca`）落地（删连接/删库均有未保存/运行中查询拦截提示，断开本已有 warning）。
 
 ### T21 — 数据、查询、详情与历史 UI
 
