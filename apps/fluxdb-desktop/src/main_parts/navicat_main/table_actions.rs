@@ -135,6 +135,18 @@ impl NavicatMain {
         }
     }
 
+    /// PG 清空表时是否 RESTART IDENTITY；改动后重算 SQL 预览。
+    fn set_danger_table_restart_identity(&mut self, restart: bool, cx: &mut Context<Self>) {
+        if self._danger_table_task.is_some() {
+            return;
+        }
+        if let Some(form) = &mut self.pending_danger_table_action {
+            form.restart_identity = restart;
+            form.error = None;
+            cx.notify(); // notify 触发重渲染，render 处重算 SQL 预览（含 RESTART IDENTITY）。
+        }
+    }
+
     fn set_copy_table_data_mode(&mut self, copy_data: bool, cx: &mut Context<Self>) {
         if self._copy_table_task.is_some() {
             return;

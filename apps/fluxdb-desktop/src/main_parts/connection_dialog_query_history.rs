@@ -1454,6 +1454,11 @@ fn query_history_detail_modal(
                             rollback_status.to_string(),
                             colors,
                         ))
+                        .child(query_history_detail_meta(
+                            "事务",
+                            entry.transaction_state.label().to_string(),
+                            colors,
+                        ))
                         .when(!entry.success, |this| {
                             this.child(query_history_detail_meta(
                                 "错误",

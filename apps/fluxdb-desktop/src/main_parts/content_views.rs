@@ -6066,6 +6066,38 @@ fn query_output_empty_state(colors: UiColors) -> Div {
         .child("执行 SQL 后显示结果和摘要")
 }
 
+/// 空结果集的列头条：仅对列列表渲染列名，供 0 行但保留列头的结果显示。
+fn query_result_empty_columns_header(
+    columns: &[fluxdb_core::Column],
+    colors: UiColors,
+) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(32.))
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .border_b_1()
+        .border_color(colors.border)
+        .bg(colors.panel_alt)
+        .text_size(px(13.))
+        .text_color(colors.muted)
+        .children(columns.iter().enumerate().map(|(index, column)| {
+            let name = if column.name.is_empty() {
+                format!("列{}", index + 1)
+            } else {
+                column.name.clone()
+            };
+            div()
+                .flex_none()
+                .max_w(px(240.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(name)
+        }))
+}
+
 fn query_output_error_state(error: &fluxdb_core::UserFacingError, colors: UiColors) -> Div {
     div()
         .size_full()
@@ -6289,11 +6321,23 @@ fn query_result_view(
         }
     }
     if page.rows.is_empty() {
+        // 空结果仍保留列头（T13 后端按列头生成），避免 PG/MY 空集合查询丢字段信息。
+        let column_header = if page.columns.is_empty() {
+            None
+        } else {
+            Some(
+                query_result_empty_columns_header(&page.columns, colors)
+                    .into_any_element(),
+            )
+        };
         return div()
             .size_full()
+            .flex()
+            .flex_col()
+            .child(column_header.unwrap_or_else(|| div().into_any_element()))
             .child(
                 div()
-                    .size_full()
+                    .flex_1()
                     .overflow_y_scrollbar()
                     .child(
                         div()

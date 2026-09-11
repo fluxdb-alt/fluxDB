@@ -777,6 +777,15 @@ impl QueryHistoryTransactionState {
         }
     }
 
+    /// 中文展示标签（历史详情 UI 用）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Committed => "已提交",
+            Self::Uncommitted => "未提交",
+            Self::RolledBack => "已回滚",
+        }
+    }
+
     /// 从持久化字符串还原；未知值按已提交（旧记录兼容）。
     pub fn from_storage(value: Option<&str>) -> Self {
         match value {

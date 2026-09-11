@@ -14,6 +14,18 @@ fn danger_table_modal(
     };
     let error = form.error.clone().or(validation_error);
     let can_submit = !running && form.acknowledged && sql.is_some() && error.is_none();
+    // PG：外键检查选择器为 MySQL 专属，PG 不适用（with_foreign_key_check 会拒绝），隐藏；
+    // 清空表提供「重置自增值 RESTART IDENTITY」显式选项（默认 CONTINUE IDENTITY）。
+    let is_postgres = cx
+        .entity()
+        .read(cx)
+        .controller
+        .state()
+        .connections
+        .iter()
+        .any(|c| c.config.id == form.object_path.connection_id && c.config.kind == DatabaseKind::Postgres);
+    let is_truncate = form.action == DangerTableAction::Truncate;
+    let pg_restart_identity = is_postgres && is_truncate;
 
     div()
         .absolute()
@@ -67,11 +79,22 @@ fn danger_table_modal(
                         .flex_col()
                         .gap_3()
                         .child(danger_table_prompt(&form))
-                        .child(danger_table_fk_row(
-                            foreign_key_check_select,
-                            running,
-                            colors,
-                        ))
+                        // 外键检查为 MySQL/TiDB 专属；PG 隐藏（无 disable-FK-check 语义）。
+                        .when(!is_postgres, |this| {
+                            this.child(danger_table_fk_row(
+                                foreign_key_check_select,
+                                running,
+                                colors,
+                            ))
+                        })
+                        .when(pg_restart_identity, |this| {
+                            this.child(danger_table_restart_identity_row(
+                                &form,
+                                running,
+                                colors,
+                                cx,
+                            ))
+                        })
                         .when_some(sql, |this, sql| {
                             this.child(table_sql_preview_box(
                                 form.action.sql_preview_key(),
@@ -239,6 +262,39 @@ fn danger_table_ack_row(
             cx.listener(move |this, _, _, cx| {
                 if !running {
                     this.set_danger_table_acknowledged(!acknowledged, cx);
+                }
+                cx.stop_propagation();
+            }),
+        )
+}
+
+/// PG 清空表：重置自增序列（RESTART IDENTITY vs CONTINUE IDENTITY）显式选项。
+fn danger_table_restart_identity_row(
+    form: &PendingDangerTableAction,
+    running: bool,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> impl IntoElement {
+    let restart = form.restart_identity;
+    div()
+        .h(px(34.))
+        .rounded(colors.radius)
+        .flex()
+        .items_center()
+        .gap_2()
+        .cursor_pointer()
+        .hover(|this| this.bg(colors.hover))
+        .child(Checkbox::new("danger-table-restart-identity").checked(restart))
+        .child(
+            div()
+                .text_size(px(13.))
+                .child("重置自增序列（RESTART IDENTITY；默认 CONTINUE IDENTITY）"),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                if !running {
+                    this.set_danger_table_restart_identity(!restart, cx);
                 }
                 cx.stop_propagation();
             }),
