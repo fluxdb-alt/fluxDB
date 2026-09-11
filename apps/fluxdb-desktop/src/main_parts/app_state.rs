@@ -1075,6 +1075,8 @@ struct NavicatMain {
     query_result_display_pages: BTreeMap<QueryResultDisplayKey, SortedQueryResultPage>,
     settings_panel_section: SettingsPanelSection,
     settings_editor_draft: Settings,
+    /// 设置面板「危险 SQL 操作清单」折叠区是否展开（UI 瞬时状态，不进渲染快照）。
+    settings_dangerous_actions_collapsed: bool,
     settings_font_size_slider: Entity<SliderState>,
     _settings_font_size_slider_subscription: Subscription,
     settings_line_height_input: Entity<InputState>,

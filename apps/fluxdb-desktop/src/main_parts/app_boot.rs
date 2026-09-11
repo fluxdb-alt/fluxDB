@@ -2361,6 +2361,7 @@ fn main() {
                             query_result_display_pages: BTreeMap::new(),
                             settings_panel_section: SettingsPanelSection::Editor,
                             settings_editor_draft,
+                            settings_dangerous_actions_collapsed: false,
                             settings_font_size_slider,
                             _settings_font_size_slider_subscription:
                                 settings_font_size_slider_subscription,

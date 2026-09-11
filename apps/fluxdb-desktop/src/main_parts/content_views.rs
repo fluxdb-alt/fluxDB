@@ -121,6 +121,7 @@ fn content(
                 this.settings_font_size_slider.clone(),
                 this.settings_line_height_input.clone(),
                 this.settings_radius_input.clone(),
+                this.settings_dangerous_actions_collapsed,
                 window,
                 cx,
             )
@@ -213,6 +214,7 @@ fn settings_content(
     font_size_slider: Entity<SliderState>,
     line_height_input: Entity<InputState>,
     radius_input: Entity<InputState>,
+    dangerous_actions_collapsed: bool,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -262,6 +264,7 @@ fn settings_content(
                                     font_size_slider,
                                     line_height_input,
                                     radius_input,
+                                    dangerous_actions_collapsed,
                                     window,
                                     cx,
                                 )),
@@ -465,6 +468,7 @@ fn settings_panel_body(
     font_size_slider: Entity<SliderState>,
     line_height_input: Entity<InputState>,
     radius_input: Entity<InputState>,
+    dangerous_actions_collapsed: bool,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -475,6 +479,7 @@ fn settings_panel_body(
                 font_size_slider,
                 colors,
                 line_height_input,
+                dangerous_actions_collapsed,
                 window,
                 cx,
             )
@@ -509,6 +514,7 @@ fn settings_editor_panel(
     font_size_slider: Entity<SliderState>,
     colors: UiColors,
     line_height_input: Entity<InputState>,
+    dangerous_actions_collapsed: bool,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -547,6 +553,7 @@ fn settings_editor_panel(
                     AppIcon::Table,
                     settings.page_size,
                     &[
+                        ("不限制", 0),
                         ("100", 100),
                         ("500", 500),
                         ("1000", 1000),
@@ -558,7 +565,7 @@ fn settings_editor_panel(
                 ))
                 .child(settings_checkbox_row(
                     "执行危险 SQL 前弹出确认",
-                    "DROP、TRUNCATE、无 WHERE 的 UPDATE/DELETE 会先确认",
+                    "勾选下方操作后，执行命中清单的 SQL 会先确认",
                     AppIcon::CircleSlash,
                     "settings-confirm-dangerous-sql",
                     settings.confirm_dangerous_sql,
@@ -571,7 +578,66 @@ fn settings_editor_panel(
                             !this.settings_editor_draft.confirm_dangerous_sql;
                         cx.notify();
                     }),
-                )),
+                ))
+                .child(
+                    div()
+                        .h(px(52.))
+                        .border_t_1()
+                        .border_color(colors.border_soft)
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(colors.hover))
+                        .child(settings_row_label(
+                            "危险 SQL 操作清单",
+                            "勾选哪些操作算危险（默认 DROP/TRUNCATE/无 WHERE 的 UPDATE/DELETE）",
+                            AppIcon::CircleSlash,
+                            colors,
+                        ))
+                        .child(app_icon_box(
+                            if dangerous_actions_collapsed {
+                                AppIcon::ChevronRight
+                            } else {
+                                AppIcon::ChevronDown
+                            },
+                            24.,
+                            13.,
+                            colors.muted,
+                        ))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                this.settings_dangerous_actions_collapsed =
+                                    !this.settings_dangerous_actions_collapsed;
+                                cx.notify();
+                            }),
+                        ),
+                )
+                .when(!dangerous_actions_collapsed, |this| {
+                    this.children(fluxdb_core::DangerousSqlAction::ALL.iter().map(|action| {
+                        let key = action.key;
+                        settings_checkbox_row(
+                            action.title,
+                            action.description,
+                            AppIcon::CircleSlash,
+                            key,
+                            settings.dangerous_sql_actions.contains(key),
+                            colors,
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                let draft = &mut this.settings_editor_draft.dangerous_sql_actions;
+                                if !draft.insert(key.to_string()) {
+                                    draft.remove(key);
+                                }
+                                cx.notify();
+                            }),
+                        )
+                    }))
+                }),
         )
         .child(
             settings_panel_group("Redis", colors)
@@ -1919,6 +1985,10 @@ fn settings_panel_group(title: &'static str, _colors: UiColors) -> GroupBox {
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(title),
         )
+        // GroupBox Outline 默认给内容区 p_4()(16px)+gap_4()(16px)，会在每行下方叠出明显留白。
+        // 改由各设置行自身的行高/顶部分隔线(如 h(52.) + border_t_1) 统一控制间距，
+        // 让所有设置项与分隔线之间间距紧凑一致。
+        .content_style(gpui::StyleRefinement::default().p_0().gap_0())
 }
 
 fn settings_section_label(section: SettingsPanelSection) -> &'static str {
@@ -2501,6 +2571,7 @@ fn settings_checkbox_row(
 fn settings_editor_changed(saved: &Settings, draft: &Settings) -> bool {
     saved.page_size != draft.page_size
         || saved.confirm_dangerous_sql != draft.confirm_dangerous_sql
+        || saved.dangerous_sql_actions != draft.dangerous_sql_actions
         || saved.confirm_dangerous_redis != draft.confirm_dangerous_redis
         || saved.editor_font_size != draft.editor_font_size
         || saved.editor_line_height != draft.editor_line_height
@@ -2660,6 +2731,7 @@ fn save_settings_section_from_ui(
 fn settings_apply_editor_fields(settings: &mut Settings, draft: &Settings) {
     settings.page_size = draft.page_size;
     settings.confirm_dangerous_sql = draft.confirm_dangerous_sql;
+    settings.dangerous_sql_actions = draft.dangerous_sql_actions.clone();
     settings.confirm_dangerous_redis = draft.confirm_dangerous_redis;
     settings.editor_font_size = draft.editor_font_size;
     settings.editor_line_height = draft.editor_line_height;
