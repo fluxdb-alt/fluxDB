@@ -853,7 +853,10 @@ impl NavicatMain {
         execution: PendingQueryExecution,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.controller.state().settings.confirm_dangerous_sql || !is_dangerous_sql(text) {
+        let settings = &self.controller.state().settings;
+        if !settings.confirm_dangerous_sql
+            || !is_dangerous_sql(text, &settings.dangerous_sql_actions)
+        {
             return false;
         }
         self.pending_dangerous_query = Some(PendingDangerousQuery {
@@ -991,11 +994,16 @@ fn is_dangerous_redis_command(text: &str) -> bool {
     })
 }
 
-fn is_dangerous_sql(sql: &str) -> bool {
-    sql.split(';').any(is_dangerous_sql_statement)
+/// 判断一段 SQL 文本是否命中已启用的危险操作清单（`enabled` 来自
+/// `Settings.dangerous_sql_actions`，见 `DangerousSqlAction::ALL`）。
+fn is_dangerous_sql(sql: &str, enabled: &std::collections::BTreeSet<String>) -> bool {
+    sql.split(';').any(|s| is_dangerous_sql_statement(s, enabled))
 }
 
-fn is_dangerous_sql_statement(statement: &str) -> bool {
+fn is_dangerous_sql_statement(
+    statement: &str,
+    enabled: &std::collections::BTreeSet<String>,
+) -> bool {
     let normalized = statement
         .split_whitespace()
         .map(str::to_ascii_lowercase)
@@ -1003,7 +1011,84 @@ fn is_dangerous_sql_statement(statement: &str) -> bool {
     let Some(first) = normalized.first().map(String::as_str) else {
         return false;
     };
-    matches!(first, "drop" | "truncate")
-        || matches!(first, "update" | "delete")
-            && !normalized.iter().any(|token| token == "where")
+    if enabled.contains("drop") && first == "drop" {
+        return true;
+    }
+    if enabled.contains("truncate") && first == "truncate" {
+        return true;
+    }
+    if enabled.contains("update_without_where")
+        && first == "update"
+        && !normalized.iter().any(|token| token == "where")
+    {
+        return true;
+    }
+    if enabled.contains("delete_without_where")
+        && first == "delete"
+        && !normalized.iter().any(|token| token == "where")
+    {
+        return true;
+    }
+    // 只匹配 `alter table`，避免误伤 `alter user` / `alter session` 等。
+    if enabled.contains("alter_table")
+        && first == "alter"
+        && normalized.get(1).map(String::as_str) == Some("table")
+    {
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+mod dangerous_sql_tests {
+    use super::*;
+
+    fn set(keys: &[&str]) -> std::collections::BTreeSet<String> {
+        keys.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn default_enabled_matches_legacy_detection() {
+        // fluxdb_core 默认清单 = DROP/TRUNCATE/无 WHERE 的 UPDATE/DELETE
+        let enabled = fluxdb_core::Settings::default().dangerous_sql_actions;
+        assert!(is_dangerous_sql("drop table t;", &enabled));
+        assert!(is_dangerous_sql("truncate table t", &enabled));
+        assert!(is_dangerous_sql("update t set a=1", &enabled));
+        assert!(is_dangerous_sql("delete from t", &enabled));
+        // ALTER TABLE 默认不算危险
+        assert!(!is_dangerous_sql(
+            "alter table customers add column c varchar(255)",
+            &enabled
+        ));
+        // 带 WHERE 的不算危险
+        assert!(!is_dangerous_sql("update t set a=1 where id=2", &enabled));
+        assert!(!is_dangerous_sql("delete from t where id=2", &enabled));
+        // 普通语句不算危险
+        assert!(!is_dangerous_sql("select * from t", &enabled));
+    }
+
+    #[test]
+    fn alter_table_only_when_enabled() {
+        let enabled = set(&["alter_table"]);
+        assert!(is_dangerous_sql(
+            "alter table customers add column c varchar(255)",
+            &enabled
+        ));
+        // 不误伤 alter user / alter session
+        assert!(!is_dangerous_sql("alter user root identified by 'x'", &enabled));
+        assert!(!is_dangerous_sql("insert into t values(1)", &enabled));
+    }
+
+    #[test]
+    fn empty_set_marks_nothing_dangerous() {
+        let enabled = set(&[]);
+        assert!(!is_dangerous_sql("drop table t; delete from u", &enabled));
+    }
+
+    #[test]
+    fn removing_an_action_disables_it() {
+        let enabled = set(&["drop", "truncate", "update_without_where"]);
+        assert!(is_dangerous_sql("drop table t", &enabled));
+        assert!(!is_dangerous_sql("delete from t", &enabled));
+    }
 }

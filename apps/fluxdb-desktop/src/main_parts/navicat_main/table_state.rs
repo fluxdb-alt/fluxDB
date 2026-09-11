@@ -420,7 +420,9 @@ impl NavicatMain {
             sql_editor.update(cx, |sql_editor, cx| {
                 sql_editor.apply_settings(
                     settings.editor_font_size.clamp(10, 24) as f32,
+                    settings.editor_line_height.clamp(13, 28) as f32,
                     settings.editor_word_wrap,
+                    settings.editor_tab_width as usize,
                 );
                 sql_editor.sync_text_silent(&editor.text, cx);
             });
@@ -566,6 +568,8 @@ impl NavicatMain {
         // 避免大文档每次按键都拉起 completion provider（性能诊断：comp 任务挂起会压帧）。
         // 注：`.` 与 ` ` 走 trigger_chars 独立分支，不受本前缀门控，`SELECT u.` 仍即时触发。
         profile.completion_min_prefix = 2;
+        // Tab 宽度接入「设置→编辑器」的 Tab 宽度取值（2/4/8）。
+        profile.tab_size = settings.editor_tab_width.max(1) as usize;
         let config = fluxdb_editor_core::EditorConfig {
             profile,
             font: editor_component::EDITOR_FONT.to_string(),

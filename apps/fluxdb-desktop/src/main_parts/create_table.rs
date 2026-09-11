@@ -1037,10 +1037,15 @@ fn create_table_editor(
             CreateTableTab::Partitions => {
                 create_table_partitions(tab_id, create, this, window, colors, cx)
             }
+            // 两个预览页签都用底层编辑器渲染，需要宿主当前主题派生的编辑器配色。
             CreateTableTab::SqlPreview => {
-                create_table_sql_preview(tab_id, create, window, colors, cx)
+                let editor_theme = this.editor_theme_for(cx);
+                create_table_sql_preview(tab_id, create, editor_theme, window, colors, cx)
             }
-            CreateTableTab::Ddl => create_table_ddl_preview(tab_id, create, window, colors, cx),
+            CreateTableTab::Ddl => {
+                let editor_theme = this.editor_theme_for(cx);
+                create_table_ddl_preview(tab_id, create, editor_theme, window, colors, cx)
+            }
         })
 }
 
@@ -3710,28 +3715,23 @@ fn create_table_empty_state(message: &'static str, colors: UiColors) -> Div {
 fn create_table_sql_preview(
     tab_id: TabId,
     create: &CreateTableState,
+    editor_theme: editor_component::EditorTheme,
     window: &mut Window,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let preview = create.sql_preview();
     let text = preview.clone().unwrap_or_else(|message| message.to_string());
-    let editor_key = SharedString::from(format!("create-table-sql-preview-{}", tab_id.0));
-    let editor = window.use_keyed_state(editor_key, cx, {
-        let text = text.clone();
-        move |window, cx| {
-            InputState::new(window, cx)
-                .code_editor(SQL_HIGHLIGHT_LANGUAGE)
-                .line_number(false)
-                .legacy_soft_wrap(false)
-                .default_value(text)
-        }
-    });
-    editor.update(cx, |state, cx| {
-        if state.value().to_string() != text {
-            state.set_value(text.clone(), window, cx);
-        }
-    });
+    let editor = sql_preview_editor(
+        SharedString::from(format!("create-table-sql-preview-{}", tab_id.0)),
+        &text,
+        sql_editor_adapter::SqlDialect::from_database_kind(create.database_kind),
+        // 预览与 DDL 页签一致：不自动换行，长语句横向滚动查看。
+        false,
+        editor_theme,
+        window,
+        cx,
+    );
 
     div()
         .flex_1()
@@ -3769,61 +3769,41 @@ fn create_table_sql_preview(
                 .flex_1()
                 .min_h(px(0.))
                 .p_3()
-                .child(
-                    Input::new(&editor)
-                        .appearance(false)
-                        .bordered(false)
-                        .focus_bordered(false)
-                        .disabled(true)
-                        .text_size(px(12.))
-                        .font_family(EDITOR_FONT)
-                        .size_full(),
-                ),
+                .child(editor),
         )
 }
 
 fn create_table_ddl_preview(
     tab_id: TabId,
     create: &CreateTableState,
+    editor_theme: editor_component::EditorTheme,
     window: &mut Window,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let preview = create.ddl_preview();
     let text = preview.clone().unwrap_or_else(|message| message.to_string());
-    let editor_key = SharedString::from(format!("create-table-ddl-preview-{}", tab_id.0));
-    let editor = window.use_keyed_state(editor_key, cx, {
-        let text = text.clone();
-        move |window, cx| {
-            InputState::new(window, cx)
-                .code_editor(MYSQL_DDL_HIGHLIGHT_LANGUAGE)
-                .line_number(false)
-                .legacy_soft_wrap(false)
-                .default_value(text)
-        }
-    });
-    editor.update(cx, |state, cx| {
-        if state.value().to_string() != text {
-            state.set_value(text.clone(), window, cx);
-        }
-    });
+    let editor = sql_preview_editor(
+        SharedString::from(format!("create-table-ddl-preview-{}", tab_id.0)),
+        &text,
+        sql_editor_adapter::SqlDialect::from_database_kind(create.database_kind),
+        // 与 SQL 预览一致：不自动换行，长列定义横向滚动查看。
+        false,
+        editor_theme,
+        window,
+        cx,
+    );
 
+    // 结构与 SQL 预览保持一致：外层必须是 flex 列，编辑器才有一个高度确定的容器
+    // （编辑器根元素 `size_full()` 且内部全是绝对定位，容器高度塌陷时预览就是一片空白）。
     div()
         .flex_1()
         .min_h(px(0.))
         .bg(colors.panel_bg)
         .overflow_hidden()
-        .child(
-            Input::new(&editor)
-                .appearance(false)
-                .bordered(false)
-                .focus_bordered(false)
-                .disabled(true)
-                .text_size(px(12.))
-                .font_family(EDITOR_FONT)
-                .p_3()
-                .size_full(),
-        )
+        .flex()
+        .flex_col()
+        .child(div().flex_1().min_h(px(0.)).p_3().child(editor))
 }
 
 fn create_table_input_border_color(focused: bool, colors: UiColors) -> gpui::Rgba {

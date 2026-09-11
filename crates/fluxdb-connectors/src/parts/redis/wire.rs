@@ -296,21 +296,32 @@ struct RedisSession {
     connection: Option<RedisConnection>,
 }
 
+impl RedisSession {
+    /// 获取内部连接引用。会话被 Drop 或连接已归还后返回 `None`，
+    /// 调用方应据此判断而非依赖 `Deref` 的 panic。
+    pub fn conn(&self) -> Option<&RedisConnection> {
+        self.connection.as_ref()
+    }
+
+    /// 获取内部连接可变引用。会话被 Drop 或连接已归还后返回 `None`。
+    pub fn conn_mut(&mut self) -> Option<&mut RedisConnection> {
+        self.connection.as_mut()
+    }
+}
+
 impl std::ops::Deref for RedisSession {
     type Target = RedisConnection;
 
     fn deref(&self) -> &Self::Target {
-        self.connection
-            .as_ref()
-            .expect("Redis 连接在归还后被使用")
+        self.conn()
+            .expect("RedisSession 被 Drop 后仍被使用（连接已归还到池）")
     }
 }
 
 impl std::ops::DerefMut for RedisSession {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.connection
-            .as_mut()
-            .expect("Redis 连接在归还后被使用")
+        self.conn_mut()
+            .expect("RedisSession 被 Drop 后仍被使用（连接已归还到池）")
     }
 }
 

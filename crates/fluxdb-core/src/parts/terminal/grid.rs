@@ -189,7 +189,9 @@ impl TermGrid {
                 }
             }
         };
-        for i in start..total_lines {
+        // 保证输出不超过 rows 行，避免渲染器溢出。
+        let end = (start + self.rows as usize).min(total_lines);
+        for i in start..end {
             let row = if i < self.scrollback.len() {
                 &self.scrollback[i]
             } else {

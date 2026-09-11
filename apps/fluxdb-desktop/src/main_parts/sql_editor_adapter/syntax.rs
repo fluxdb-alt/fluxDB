@@ -2718,6 +2718,23 @@ mod syntax_tests {
         assert!(k.len() >= 3);
     }
 
+    /// 表属性抽屉的 DDL 预览走同一条 `highlight_sql_tree_sitter` 路径。
+    /// 典型的 `SHOW CREATE TABLE` 输出必须产出 keyword / type / field / string
+    /// 四类 token，否则只读预览会退化成无高亮纯文本。
+    #[test]
+    fn create_table_ddl_yields_keyword_type_and_field_highlights() {
+        let ddl = "CREATE TABLE `users` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  \
+                   `name` varchar(64) NOT NULL COMMENT '昵称',\n  PRIMARY KEY (`id`)\n\
+                   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
+        let highlights = highlight_sql_tree_sitter(ddl, SqlDialect::Mysql);
+        let has = |kind: &str| highlights.iter().any(|h| h.kind == kind);
+
+        assert!(has("keyword"), "DDL 关键字未高亮：{highlights:?}");
+        assert!(has("type"), "DDL 数据类型未高亮：{highlights:?}");
+        assert!(has("field"), "DDL 列名未高亮：{highlights:?}");
+        assert!(has("string"), "DDL 注释字符串未高亮：{highlights:?}");
+    }
+
     #[test]
     fn snapshot_tokenizer_matches_string_tokenizer_across_chunks() {
         let text = format!(

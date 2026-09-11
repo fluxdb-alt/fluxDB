@@ -183,7 +183,7 @@ impl AppController {
             TabKind::QueryEditor(editor) => Some(QueryRequest {
                 connection_id: editor.connection_id,
                 database: editor.database.clone(),
-                text: sql_text_for_execution(&text),
+                text: sql_text_for_execution(&text, fluxdb_core::Pagination::DEFAULT_LIMIT),
                 mode: fluxdb_core::QueryMode::Selection,
                 options,
             }),
@@ -215,7 +215,7 @@ impl AppController {
         let request = QueryRequest {
             connection_id,
             database,
-            text: sql_text_for_execution(&text),
+            text: sql_text_for_execution(&text, fluxdb_core::Pagination::DEFAULT_LIMIT),
             mode: fluxdb_core::QueryMode::Selection,
             options,
         };

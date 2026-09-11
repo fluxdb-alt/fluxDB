@@ -198,8 +198,10 @@ impl FileStorage {
 
     pub fn load_saved_queries(&self) -> Result<Vec<SavedQuery>> {
         let conn = self.open_sqlite()?;
-        Ok(sqlite::get_json::<Vec<SavedQuery>>(&conn, sqlite::KEY_SAVED_QUERIES)?
-            .unwrap_or_default())
+        Ok(
+            sqlite::get_json::<Vec<SavedQuery>>(&conn, sqlite::KEY_SAVED_QUERIES)?
+                .unwrap_or_default(),
+        )
     }
 
     pub fn save_saved_queries(&self, queries: &[SavedQuery]) -> Result<()> {
@@ -209,11 +211,10 @@ impl FileStorage {
 
     pub fn load_query_history(&self) -> Result<Vec<QueryHistoryRecord>> {
         let conn = self.open_sqlite()?;
-        Ok(sqlite::get_json::<Vec<QueryHistoryRecord>>(
-            &conn,
-            sqlite::KEY_QUERY_HISTORY,
-        )?
-        .unwrap_or_default())
+        Ok(
+            sqlite::get_json::<Vec<QueryHistoryRecord>>(&conn, sqlite::KEY_QUERY_HISTORY)?
+                .unwrap_or_default(),
+        )
     }
 
     pub fn save_query_history(&self, entries: &[QueryHistoryRecord]) -> Result<()> {
@@ -296,11 +297,13 @@ impl Storage for FileStorage {
 
     fn load_connections(&self) -> Result<Vec<ConnectionConfig>> {
         let conn = self.open_sqlite()?;
-        Ok(sqlite::get_json::<Vec<ConnectionConfig>>(&conn, sqlite::KEY_CONNECTIONS)?
-            .unwrap_or_default()
-            .into_iter()
-            .map(|connection| self.load_connection_secret(connection))
-            .collect())
+        Ok(
+            sqlite::get_json::<Vec<ConnectionConfig>>(&conn, sqlite::KEY_CONNECTIONS)?
+                .unwrap_or_default()
+                .into_iter()
+                .map(|connection| self.load_connection_secret(connection))
+                .collect(),
+        )
     }
 
     fn save_connections(&self, connections: &[ConnectionConfig]) -> Result<()> {
@@ -309,18 +312,16 @@ impl Storage for FileStorage {
         }
         // 与历史行为一致：保存连接时若已有 layout 则保留并修复，否则按连接重建。
         let conn = self.open_sqlite()?;
-        let mut layout =
-            sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)?
-                .unwrap_or_else(|| SidebarLayout::for_connections(connections));
+        let mut layout = sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)?
+            .unwrap_or_else(|| SidebarLayout::for_connections(connections));
         layout.repair(connections);
         self.write_connections_and_layout(&conn, connections, &layout)
     }
 
     fn load_sidebar_layout(&self, connections: &[ConnectionConfig]) -> Result<SidebarLayout> {
         let conn = self.open_sqlite()?;
-        let mut layout =
-            sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)?
-                .unwrap_or_else(|| SidebarLayout::for_connections(connections));
+        let mut layout = sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)?
+            .unwrap_or_else(|| SidebarLayout::for_connections(connections));
         layout.repair(connections);
         Ok(layout)
     }
@@ -455,10 +456,7 @@ impl FileStorage {
         sqlite::put_json(conn, sqlite::KEY_SIDEBAR_LAYOUT, layout)?;
         Ok(())
     }
-
 }
-
-
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QueryHistoryRecord {
@@ -1002,7 +1000,9 @@ mod tests {
         let bytes = fs::read(sqlite::db_path(&storage.root)).unwrap();
         for forbidden in ["topsecret", "sshpass", "do-not-save-this"] {
             assert!(
-                !bytes.windows(forbidden.len()).any(|w| w == forbidden.as_bytes()),
+                !bytes
+                    .windows(forbidden.len())
+                    .any(|w| w == forbidden.as_bytes()),
                 "明文密钥不应落入 sqlite: {forbidden}"
             );
         }
@@ -1336,5 +1336,4 @@ mod tests {
         assert_eq!(loaded[0].id, 5, "最早的 5 条应被丢弃，保留从 id=5 起");
         assert_eq!(loaded[999].id, 1004, "最新一条应保留");
     }
-
 }

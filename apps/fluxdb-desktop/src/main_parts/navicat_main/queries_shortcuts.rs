@@ -543,7 +543,7 @@ impl NavicatMain {
             .controller
             .state()
             .active_tab()
-            .is_some_and(|tab| matches!(tab.kind, TabKind::Settings))
+            .is_some_and(|tab| matches!(tab.kind, TabKind::Settings(_)))
         {
             let settings = self.settings_editor_draft.clone();
             save_settings_from_ui(self, settings, "设置已保存", cx);
@@ -1102,6 +1102,76 @@ impl NavicatMain {
                 self.start_query_execution(tab.id, window, cx);
             }
             _ => {}
+        }
+    }
+
+    /// 侧边栏「刷新连接树」：重拉已展开连接的第一层对象，并重拉已展开数据库的表清单。
+    ///
+    /// 与 [`Self::refresh_active`] 的关键区别是**不跟随活动标签页**：不会执行 SQL、
+    /// 不会重取数据页，也不改变任何连接的展开态。命令本身只在后台线程读一次
+    /// `expanded`，因此连点刷新不会把用户刚收起的连接又展开。
+    fn refresh_connection_tree(&mut self, cx: &mut Context<Self>) {
+        let mut controller = self.controller.clone();
+        let task = cx.spawn(async move |view, cx| {
+            let (controller, event) = cx
+                .background_spawn(async move {
+                    let event = controller.dispatch(AppCommand::RefreshConnectionTree);
+                    (controller, event)
+                })
+                .await;
+
+            let _ = cx.update(|cx| {
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| {
+                    if matches!(event, AppEvent::ObjectsLoaded(_, _)) {
+                        this.controller.merge_refreshed_tree_from(&controller);
+                    } else {
+                        this.controller.merge_last_error_from(&controller);
+                    }
+                    if let Some((text, kind)) = app_event_message(&event) {
+                        this.show_message(text, kind, cx);
+                    }
+                    this.reload_expanded_database_children(cx);
+                    cx.notify();
+                });
+            });
+        });
+        // 只保留最近一次：连点刷新时旧任务被丢弃即取消，避免多轮结果交错回写。
+        self._tree_refresh_task = Some(task);
+        cx.notify();
+    }
+
+    /// 连接树第一层刷新后，重拉当前处于展开态数据库的表清单，使命中"外部新增/删除表"的场景。
+    /// 未被展开的库不请求（展开时由 `load_database_children` 自然拉取），
+    /// `load_database_children` 自带 `loading_databases` 去重，重复触发无副作用。
+    fn reload_expanded_database_children(&mut self, cx: &mut Context<Self>) {
+        let expanded_databases = &self.expanded_databases;
+        let targets = self
+            .controller
+            .state()
+            .connections
+            .iter()
+            .filter(|connection| connection.expanded)
+            .flat_map(|connection| {
+                let connection_id = connection.config.id;
+                connection_databases(connection)
+                    .into_iter()
+                    .map(move |database| {
+                        let name = database
+                            .path
+                            .database
+                            .clone()
+                            .unwrap_or_else(|| database.path.name.clone());
+                        (database_tree_key(connection_id, &name), database.path)
+                    })
+            })
+            .filter(|(key, _)| expanded_databases.get(key).copied().unwrap_or(false))
+            .collect::<Vec<_>>();
+
+        for (key, path) in targets {
+            self.load_database_children(path, key, cx);
         }
     }
 

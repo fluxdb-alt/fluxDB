@@ -165,8 +165,11 @@ pub fn compress_sql_text(sql: &str) -> String {
     compressed.trim().to_string()
 }
 
-fn sql_text_for_execution(sql: &str) -> String {
-    apply_default_select_limit(&strip_sql_comments(&normalize_double_quoted_sql_strings(sql)))
+fn sql_text_for_execution(sql: &str, default_limit: u64) -> String {
+    apply_default_select_limit(
+        &strip_sql_comments(&normalize_double_quoted_sql_strings(sql)),
+        default_limit,
+    )
 }
 
 fn strip_sql_comments(sql: &str) -> String {
@@ -197,7 +200,7 @@ fn strip_sql_comments(sql: &str) -> String {
     stripped
 }
 
-fn apply_default_select_limit(sql: &str) -> String {
+fn apply_default_select_limit(sql: &str, default_limit: u64) -> String {
     let mut output = String::with_capacity(sql.len() + 16);
     let mut start = 0;
     for (end, separator_len) in sql_statement_ranges(sql) {
@@ -206,7 +209,7 @@ fn apply_default_select_limit(sql: &str) -> String {
             if !output.is_empty() {
                 output.push(' ');
             }
-            output.push_str(&limit_select_statement(&statement));
+            output.push_str(&limit_select_statement(&statement, default_limit));
             if separator_len > 0 {
                 output.push(';');
             }
@@ -288,13 +291,73 @@ fn trim_sql_statement_range(sql: &str, range: &mut std::ops::Range<usize>) {
     }
 }
 
-fn limit_select_statement(statement: &str) -> String {
-    if starts_with_sql_keyword(statement, "select") && !has_top_level_sql_keyword(statement, "limit")
-    {
-        format!("{statement} LIMIT 100")
-    } else {
-        statement.to_string()
+/// 对单个 SELECT 应用默认 limit（封顶值）。
+///
+/// - `page_size == 0` 表示「不限制」：不追加 LIMIT，也不强制改写用户已写的 LIMIT。
+/// - 无 LIMIT 且 `page_size > 0`：追加 `LIMIT {page_size}`。
+/// - 有 LIMIT 且 count `> page_size`：强制改写为 `LIMIT {page_size}`（封顶）；
+///   count `<= page_size` 保持不动。
+fn limit_select_statement(statement: &str, page_size: u64) -> String {
+    if !starts_with_sql_keyword(statement, "select") || page_size == 0 {
+        return statement.to_string();
     }
+    if let Some(limit_start) = find_top_level_sql_keyword(statement, "limit") {
+        // 已有 LIMIT：仅当 count 超过封顶值时改写，否则保持原样。
+        return cap_existing_limit(statement, limit_start, page_size).unwrap_or_else(|| statement.to_string());
+    }
+    format!("{statement} LIMIT {page_size}")
+}
+
+/// 仅当用户已写 LIMIT 的单行 count 超过 page_size 时，返回重写后的字符串
+/// `... LIMIT {page_size}`；否则返回 `None`（保持原 statement）。
+///
+/// `limit_start` 是顶层 `limit` 关键字的字节起始位置（来自 `find_top_level_sql_keyword`）。
+fn cap_existing_limit(statement: &str, limit_start: usize, page_size: u64) -> Option<String> {
+    // ponytail: 只解析字面整数 count（`LIMIT n` / `LIMIT offset, n` / `LIMIT n OFFSET m`），
+    // 不做表达式求值；SQL 表达式 limit 属罕见场景，忽略封顶。
+    let rest = &statement[limit_start + "limit".len()..];
+    // 状态机：digit_start = count 数字起点；逗号表示 `LIMIT offset, count`（count 重新起）。
+    let mut digit_start: Option<usize> = None;
+    let mut seen_digit = false;
+    for (index, ch) in rest.char_indices() {
+        match ch {
+            _ if ch.is_ascii_digit() => {
+                digit_start.get_or_insert(index);
+                seen_digit = true;
+            }
+            ' ' | '\t' | '\r' | '\n' => {}
+            ',' => {
+                // `LIMIT offset, count`：逗号后是真正的 count
+                digit_start = None;
+                seen_digit = false;
+            }
+            _ => {
+                // 非数字非空白（如 OFFSET / subquery / ;）→ count 结束
+                break;
+            }
+        }
+    }
+    let Some(start) = digit_start.filter(|_| seen_digit) else {
+        return None;
+    };
+    let count_text = rest[start..].trim();
+    let count_text = count_text
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    let Ok(count) = count_text.parse::<u64>() else {
+        return None;
+    };
+    if count <= page_size {
+        return None;
+    }
+    // 重写 [limit_start .. limit_start+limit.len()+start+count_text.len()] 为新的 LIMIT 子句
+    let end = limit_start + "limit".len() + start + count_text.len();
+    Some(format!(
+        "{} LIMIT {page_size}{}",
+        statement[..limit_start].trim_end(),
+        &statement[end..]
+    ))
 }
 
 fn starts_with_sql_keyword(statement: &str, keyword: &str) -> bool {

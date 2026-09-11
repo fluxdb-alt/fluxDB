@@ -10,7 +10,7 @@ impl Render for NavicatMain {
             .state()
             .tabs
             .iter()
-            .any(|tab| matches!(&tab.kind, TabKind::Settings))
+            .any(|tab| matches!(&tab.kind, TabKind::Settings(_)))
         {
             self.settings_editor_draft.show_status_bar
         } else {
@@ -39,6 +39,12 @@ impl Render for NavicatMain {
                     )
                 })
         });
+        // 提示浮层在这里先构造好：它的配色要读主题（`cx`），放进 `.when_some` 闭包里会和
+        // 同一表达式链上其它对 `cx` 的借用打架。
+        let app_message_element = self
+            .app_message
+            .as_ref()
+            .map(|message| app_message_overlay(message, window, cx, colors));
         let (sidebar_rows, sidebar_item_sizes) = if self.show_connection_browser {
             self.sidebar_tree_rows(
                 &state,
@@ -192,9 +198,7 @@ impl Render for NavicatMain {
                     cx,
                 ))
             })
-            .when_some(self.app_message.as_ref(), |this, message| {
-                this.child(app_message_overlay(message, window, colors))
-            })
+            .when_some(app_message_element, |this, element| this.child(element))
             .when(
                 self.connection_context_menu.is_some()
                     || self.database_context_menu.is_some()
@@ -231,6 +235,7 @@ impl Render for NavicatMain {
                     menu,
                     &self.pinned_tables,
                     &self.table_folders,
+                    &self.table_folder_assignments,
                     colors,
                     cx,
                 ))
@@ -717,7 +722,7 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
             member_grant_edits: admin.member_grant_edits.clone(),
             pending_sql: admin.pending_sql.clone(),
         }),
-        TabKind::Settings => TabKind::Settings,
+        TabKind::Settings(settings) => TabKind::Settings(settings.clone()),
     }
 }
 

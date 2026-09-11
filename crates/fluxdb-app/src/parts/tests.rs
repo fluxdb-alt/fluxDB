@@ -10,6 +10,7 @@ mod tests {
     include!("tests/system_ast.rs");
     include!("tests/fixture.rs");
     include!("tests/tabs_and_connections.rs");
+    include!("tests/connection_tree_refresh.rs");
     include!("tests/table_info_and_sql_format.rs");
     include!("tests/user_admin.rs");
     include!("tests/data_editor.rs");

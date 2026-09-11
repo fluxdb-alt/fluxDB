@@ -554,6 +554,32 @@ impl AppController {
                 }
                 AppEvent::ObjectsLoaded(path.clone(), objects)
             }
+            // 侧边栏「刷新连接树」：只重拉树上可见（已展开）连接的第一层对象。
+            // 与 `RefreshObject(None)` 的两点区别：
+            //  1. 折叠连接不发请求（`RefreshObject` 用的是 `connected || expanded`）；
+            //  2. 只换第一层，保留已加载的表 / 视图行，不打断已展开的数据库子树。
+            // 刷新不负责建立连接，也不改变用户的折叠态，因此不写 `connected` / `expanded`。
+            AppCommand::RefreshConnectionTree => {
+                let mut first_error: Option<Error> = None;
+                for connection in &mut self.state.connections {
+                    if !connection.expanded {
+                        continue;
+                    }
+                    let config = connection.config.clone();
+                    match list_objects_for_connection(&config, None) {
+                        Ok(level0) => replace_connection_level0(connection, level0),
+                        // 单个连接失败不中断整轮刷新：保留该连接原有对象，记下首个错误继续。
+                        Err(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                    }
+                }
+
+                match first_error {
+                    None => AppEvent::ObjectsLoaded(None, Vec::new()),
+                    Some(error) => self.fail(error),
+                }
+            }
             AppCommand::OpenObjectList(parent) => {
                 let tab_id = self.next_tab_id();
                 let objects = mock_child_objects(parent.as_ref());
@@ -2612,13 +2638,14 @@ impl AppController {
                 }
             }
             AppCommand::ExecuteQuery(tab_id) => {
+                let options = self.default_query_execution_options();
                 let request = self.find_tab(tab_id).and_then(|tab| match &tab.kind {
                     TabKind::QueryEditor(editor) => Some(QueryRequest {
                         connection_id: editor.connection_id,
                         database: editor.database.clone(),
-                        text: sql_text_for_execution(&editor.text),
+                        text: sql_text_for_execution(&editor.text, options.page_size),
                         mode: fluxdb_core::QueryMode::All,
-                        options: self.default_query_execution_options(),
+                        options,
                     }),
                     _ => None,
                 });
@@ -2679,7 +2706,7 @@ impl AppController {
                     TabKind::QueryEditor(editor) => Some(QueryRequest {
                         connection_id: editor.connection_id,
                         database: editor.database.clone(),
-                        text: sql_text_for_execution(&text),
+                        text: sql_text_for_execution(&text, options.page_size),
                         mode: fluxdb_core::QueryMode::Selection,
                         options,
                     }),
@@ -2773,7 +2800,7 @@ impl AppController {
                         Some(QueryRequest {
                             connection_id: editor.connection_id,
                             database: editor.database.clone(),
-                            text: sql_text_for_execution(&editor.text),
+                            text: sql_text_for_execution(&editor.text, Pagination::DEFAULT_LIMIT),
                             mode: fluxdb_core::QueryMode::All,
                             options: QueryExecutionOptions::default(),
                         })
@@ -3530,7 +3557,9 @@ impl AppController {
 impl AppController {
     fn default_query_execution_options(&self) -> QueryExecutionOptions {
         QueryExecutionOptions {
-            page_size: Pagination::new(0, self.state.settings.page_size).limit,
+            // 直接透传 page_size：0 表示「不限制」，不能经 Pagination::new 的
+            // clamp(1, MAX) 被改成 1。
+            page_size: self.state.settings.page_size,
             ..QueryExecutionOptions::default()
         }
     }

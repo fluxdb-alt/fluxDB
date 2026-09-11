@@ -1461,6 +1461,31 @@ mod tests {
     }
 
     #[test]
+    fn mysql_ensure_columns_available_rejects_empty_column_list() {
+        // 空列列表会拼出 `SELECT  FROM \`db\`.\`t\``，必须提前拦下，而不是丢给服务端报 1064。
+        let error = mysql_ensure_columns_available("gaea", "3d_applications", &[])
+            .expect_err("空列列表必须报错");
+
+        assert!(
+            error.to_string().contains("3d_applications"),
+            "实际错误：{error}"
+        );
+    }
+
+    #[test]
+    fn mysql_ensure_columns_available_accepts_non_empty_column_list() {
+        let columns = vec![Column {
+            name: "id".to_string(),
+            type_name: Some("int".to_string()),
+            nullable: false,
+            primary_key: true,
+            comment: None,
+        }];
+
+        assert!(mysql_ensure_columns_available("gaea", "3d_applications", &columns).is_ok());
+    }
+
+    #[test]
     fn mysql_create_database_sql_quotes_database_and_validates_options() {
         let sql = mysql_create_database_sql(&CreateDatabaseRequest {
             connection_id: ConnectionId(2),

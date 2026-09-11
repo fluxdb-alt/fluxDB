@@ -1455,9 +1455,7 @@ struct SidebarVisibleRow {
     pub kind: SidebarRowKind,
     /// 树的缩进深度（0..=4），直接传给 `*_tree(indent, ...)`。
     pub indent: u8,
-    /// 稳定行标识：唯一身份锚点；仅被 flatten 单测断言（`#[cfg(test)]`），
-    /// 运行时构建函数走自身 ElementId，故显式放行 dead_code。
-    #[allow(dead_code)]
+    /// 稳定行标识：同时用于虚拟树行的元素身份，避免展开、搜索后 hover 状态串行。
     pub key: String,
     pub connection_id: ConnectionId,
     /// Connection/Group 行所属分组（顶层连接为 None）。
@@ -2012,6 +2010,11 @@ fn build_sidebar_row(
         .iter()
         .find(|connection| connection.config.id == row.connection_id);
 
+    // 已核对 gpui-component 0.6.0 Tree/ListItem：会接管选中态并覆盖连接专属背景，
+    // 本次保留现有虚拟树和行内重命名布局，仅修复元素身份。
+    // gpui-pre 的 hover 仅在有 ID 的元素上保存状态并在进出时 notify；复用节点 key，
+    // 不按可见行下标编号，也不在鼠标移动时刷新整个窗口。连接行已有自己的 ID。
+    let row_id = SharedString::from(row.key.clone());
     match row.kind {
         SidebarRowKind::Connection => {
             let connection = connection.expect("connection row always has a connection");
@@ -2040,6 +2043,8 @@ fn build_sidebar_row(
                 colors,
                 cx,
             )
+            .id(row_id)
+            .cursor_pointer()
             .into_any_element()
         }
         SidebarRowKind::Database => {
@@ -2084,6 +2089,8 @@ fn build_sidebar_row(
                 colors,
                 cx,
             )
+            .id(row_id)
+            .cursor_pointer()
             .into_any_element()
         }
         SidebarRowKind::ObjectGroup => {
@@ -2110,6 +2117,8 @@ fn build_sidebar_row(
                 colors,
                 cx,
             )
+            .id(row_id)
+            .cursor_pointer()
             .into_any_element()
         }
         SidebarRowKind::Table => {
@@ -2129,11 +2138,16 @@ fn build_sidebar_row(
                 colors,
                 cx,
             )
+            .id(row_id)
+            .cursor_pointer()
             .into_any_element()
         }
         SidebarRowKind::SavedQuery => {
             let query = row.query.clone().expect("saved query row has query");
-            saved_query_tree(&query, row.indent, search_opt, colors, cx).into_any_element()
+            saved_query_tree(&query, row.indent, search_opt, colors, cx)
+                .id(row_id)
+                .cursor_pointer()
+                .into_any_element()
         }
         SidebarRowKind::TableFolder => {
             let parent_key = row
@@ -2160,6 +2174,8 @@ fn build_sidebar_row(
                 colors,
                 cx,
             )
+            .id(row_id)
+            .cursor_pointer()
             .into_any_element()
         }
     }

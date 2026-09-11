@@ -56,6 +56,7 @@ impl DataPageTableDelegate {
             column_meta.push(DataTableColumnMeta {
                 name: String::new(),
                 type_name: String::new(),
+                comment: None,
                 nullable: false,
                 primary_key: false,
                 choices: Vec::new(),
@@ -86,6 +87,7 @@ impl DataPageTableDelegate {
                     .type_name
                     .clone()
                     .unwrap_or_else(|| "unknown".to_string()),
+                comment: column.comment.clone(),
                 nullable: column.nullable,
                 primary_key: column.primary_key,
                 choices: column_choices
@@ -109,6 +111,7 @@ impl DataPageTableDelegate {
             column_meta.push(DataTableColumnMeta {
                 name: "操作".to_string(),
                 type_name: "redis_action".to_string(),
+                comment: None,
                 nullable: false,
                 primary_key: false,
                 choices: Vec::new(),

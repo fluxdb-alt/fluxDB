@@ -45,8 +45,9 @@ fn connection_browser_titlebar(
                 ))
                 .child(sidebar_title_button(AppIcon::Refresh, "刷新", false, colors).on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        this.refresh_active(window, cx);
+                    cx.listener(|this, _, _, cx| {
+                        // 侧边栏刷新只刷连接树，不跟随活动标签页（详见 refresh_connection_tree）。
+                        this.refresh_connection_tree(cx);
                         cx.stop_propagation();
                     }),
                 ))
@@ -426,7 +427,7 @@ fn tab_width(tab: &TabState, compact: bool) -> f32 {
         TabKind::RedisPubSub(_) => 210.,
         TabKind::CreateTable(_) => 210.,
         TabKind::UserAdmin(_) => 180.,
-        TabKind::Settings => 160.,
+        TabKind::Settings(_) => 160.,
         TabKind::BackupList(_) => 210.,
     };
 
@@ -475,7 +476,7 @@ fn tab_icon(tab: &TabState, colors: UiColors) -> impl IntoElement {
             12.,
         ),
         TabKind::UserAdmin(_) => (rgb(0x2563eb), None, rgb(0xffffff), AppIcon::Users, 12.),
-        TabKind::Settings => (rgb(0xc8ccd2), None, rgb(0x4f5661), AppIcon::Settings, 12.),
+        TabKind::Settings(_) => (rgb(0xc8ccd2), None, rgb(0x4f5661), AppIcon::Settings, 12.),
         // 备份列表 tab：与侧边栏备份节点一致的保存图标，配色用墨绿区分数据表。
         TabKind::BackupList(_) => (rgb(0x0f9d78), None, rgb(0xffffff), AppIcon::Save, 12.),
     };

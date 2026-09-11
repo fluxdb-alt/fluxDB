@@ -912,6 +912,9 @@ struct NavicatMain {
     query_save_name_input: Entity<InputState>,
     _file_picker_task: Option<Task<()>>,
     _connection_tasks: BTreeMap<u64, Task<()>>,
+    /// 侧边栏「刷新连接树」的后台任务。只保留最近一次：连点刷新时旧任务被丢弃即取消，
+    /// 避免多轮刷新结果交错回写。
+    _tree_refresh_task: Option<Task<()>>,
     _database_tasks: BTreeMap<String, Task<()>>,
     _data_load_tasks: BTreeMap<u64, Task<()>>,
     _query_execute_tasks: BTreeMap<u64, Task<()>>,
@@ -1072,6 +1075,8 @@ struct NavicatMain {
     query_result_display_pages: BTreeMap<QueryResultDisplayKey, SortedQueryResultPage>,
     settings_panel_section: SettingsPanelSection,
     settings_editor_draft: Settings,
+    /// 设置面板「危险 SQL 操作清单」折叠区是否展开（UI 瞬时状态，不进渲染快照）。
+    settings_dangerous_actions_collapsed: bool,
     settings_font_size_slider: Entity<SliderState>,
     _settings_font_size_slider_subscription: Subscription,
     settings_line_height_input: Entity<InputState>,
@@ -2101,6 +2106,7 @@ type DataTableSortHandler = Arc<dyn Fn(TabId, String, Option<DataTableSortDirect
 struct DataTableColumnMeta {
     name: String,
     type_name: String,
+    comment: Option<String>,
     nullable: bool,
     primary_key: bool,
     choices: Vec<ColumnChoice>,
