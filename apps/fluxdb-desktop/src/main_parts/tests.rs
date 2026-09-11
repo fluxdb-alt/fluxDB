@@ -524,6 +524,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             executed_at_unix_secs: 1,
             object: Some("users".to_string()),
             rollback_snapshot: None,
+            transaction_state: fluxdb_app::QueryHistoryTransactionState::Committed,
         });
 
         let snapshot = render_state_snapshot(&state);

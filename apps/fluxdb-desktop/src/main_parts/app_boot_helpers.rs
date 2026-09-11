@@ -45,6 +45,9 @@ fn query_history_record_to_entry(record: QueryHistoryRecord) -> QueryHistoryEntr
         executed_at_unix_secs: record.executed_at_unix_secs,
         object: record.object,
         rollback_snapshot: record.rollback_snapshot,
+        transaction_state: QueryHistoryTransactionState::from_storage(
+            record.transaction_state.as_deref(),
+        ),
     }
 }
 
@@ -61,6 +64,7 @@ fn query_history_entry_to_record(entry: &QueryHistoryEntry) -> QueryHistoryRecor
         object: entry.object.clone(),
         rollback_sql: None,
         rollback_snapshot: entry.rollback_snapshot.clone(),
+        transaction_state: Some(entry.transaction_state.as_str().to_string()),
         message: Some(entry.summary.message.clone()),
         returned_rows: entry.summary.returned_rows,
         affected_rows: entry.summary.affected_rows,

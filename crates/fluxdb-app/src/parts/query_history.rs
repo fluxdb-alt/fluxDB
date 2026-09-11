@@ -5,26 +5,93 @@ impl AppController {
         execution: &QueryExecutionResult,
     ) {
         let executed_at_unix_secs = current_unix_secs();
+        // 一次执行内的多条语句共用同一连接，显式事务因此在批次内有效（§8.4/R11）：
+        // COMMIT 前的写入先标「未提交」，COMMIT 后转「已提交」，ROLLBACK 转「已回滚」；
+        // 批次结束时事务仍未提交（连接释放即被服务端回滚）也按「已回滚」标注，不谎报已提交。
+        let mut transaction_open = false;
+        let mut recorded_in_run = Vec::new();
         for (index, summary) in execution.summaries.iter().enumerate() {
+            if history_statement_is_sensitive(&summary.sql) {
+                // 敏感语句（口令/授权）不记录历史，也不留可回放的文本。
+                tracing::debug!(
+                    target: "gdb_query_history",
+                    op = "history_record",
+                    skipped = "sensitive",
+                    connection_id = ?request.connection_id,
+                    "敏感语句不入历史"
+                );
+                continue;
+            }
             self.mark_query_history_completion_dirty(request, &summary.sql);
+            let kind = query_history_kind(&summary.sql);
+            let control = history_transaction_control(&summary.sql);
+            if control == HistoryTransactionControl::Begin {
+                transaction_open = true;
+            }
+            let transaction_state = if matches!(
+                kind,
+                QueryHistoryKind::DataChange | QueryHistoryKind::SchemaChange
+            ) && transaction_open
+                && control == HistoryTransactionControl::None
+            {
+                QueryHistoryTransactionState::Uncommitted
+            } else {
+                QueryHistoryTransactionState::Committed
+            };
+            let rollback_snapshot = execution
+                .rollback_snapshots
+                .get(index)
+                .cloned()
+                .flatten()
+                .filter(|_| summary.success);
             self.state.query_history.push(QueryHistoryEntry {
                 connection_id: request.connection_id,
                 database: request.database.clone(),
                 schema: request.schema.clone(),
                 text: summary.sql.clone(),
                 tables: query_history_tables(&summary.sql),
-                kind: query_history_kind(&summary.sql),
+                kind,
                 success: summary.success,
                 summary: summary.clone(),
                 executed_at_unix_secs,
                 object: sql_history_object_name(&summary.sql),
-                rollback_snapshot: execution
-                    .rollback_snapshots
-                    .get(index)
-                    .cloned()
-                    .flatten()
-                    .filter(|_| summary.success),
+                rollback_snapshot,
+                transaction_state,
             });
+            recorded_in_run.push(self.state.query_history.len() - 1);
+
+            match control {
+                HistoryTransactionControl::Commit => {
+                    transaction_open = false;
+                    self.settle_history_transaction(&recorded_in_run, true);
+                    recorded_in_run.clear();
+                }
+                HistoryTransactionControl::Rollback => {
+                    transaction_open = false;
+                    self.settle_history_transaction(&recorded_in_run, false);
+                    recorded_in_run.clear();
+                }
+                HistoryTransactionControl::Begin | HistoryTransactionControl::None => {}
+            }
+        }
+        if transaction_open {
+            // 未 COMMIT：连接释放时服务端回滚未提交事务，历史必须如实标注，不显示为已提交。
+            self.settle_history_transaction(&recorded_in_run, false);
+        }
+    }
+
+    /// 结束一次显式事务：把本次执行内已记录的写入条目按提交/回滚落定状态。
+    fn settle_history_transaction(&mut self, indexes: &[usize], committed: bool) {
+        for index in indexes {
+            if let Some(entry) = self.state.query_history.get_mut(*index)
+                && entry.transaction_state == QueryHistoryTransactionState::Uncommitted
+            {
+                entry.transaction_state = if committed {
+                    QueryHistoryTransactionState::Committed
+                } else {
+                    QueryHistoryTransactionState::RolledBack
+                };
+            }
         }
     }
 
@@ -137,6 +204,8 @@ impl AppController {
             executed_at_unix_secs: current_unix_secs(),
             object: sql_history_object_name(&request.text),
             rollback_snapshot: None,
+            // 失败语句没有落定的写入，按已提交（无写入）处理。
+            transaction_state: QueryHistoryTransactionState::Committed,
         });
     }
 
@@ -469,6 +538,62 @@ fn current_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// 显式事务控制语句类型（用于历史事务状态）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HistoryTransactionControl {
+    Begin,
+    Commit,
+    Rollback,
+    None,
+}
+
+/// 识别显式事务控制语句。`ROLLBACK TO SAVEPOINT` 不算结束事务（事务仍开着）。
+fn history_transaction_control(sql: &str) -> HistoryTransactionControl {
+    let tokens = sql_identifier_tokens(sql)
+        .into_iter()
+        .map(|token| token.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    match tokens.first().map(String::as_str) {
+        Some("begin") => HistoryTransactionControl::Begin,
+        Some("start") if tokens.get(1).is_some_and(|token| token == "transaction") => {
+            HistoryTransactionControl::Begin
+        }
+        Some("commit") => HistoryTransactionControl::Commit,
+        Some("rollback") => {
+            // `ROLLBACK TO [SAVEPOINT] x` 只回退到保存点，事务继续。
+            if tokens.get(1).is_some_and(|token| token == "to") {
+                HistoryTransactionControl::None
+            } else {
+                HistoryTransactionControl::Rollback
+            }
+        }
+        _ => HistoryTransactionControl::None,
+    }
+}
+
+/// 敏感语句不入历史（§8.4/R11）：口令/角色/授权类语句既含凭据也不能安全回放。
+fn history_statement_is_sensitive(sql: &str) -> bool {
+    let tokens = sql_identifier_tokens(sql)
+        .into_iter()
+        .map(|token| token.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let first = tokens.first().map(String::as_str);
+    let second = tokens.get(1).map(String::as_str);
+    let third = tokens.get(2).map(String::as_str);
+    match (first, second) {
+        (Some("set"), Some("password")) => true,
+        (Some("create" | "alter" | "drop"), Some("user" | "role" | "login" | "group")) => true,
+        (Some("grant" | "revoke"), _) => true,
+        // `ALTER USER ... IDENTIFIED BY ...` / `CREATE USER ... PASSWORD ...` 等口令行。
+        _ => third.is_some_and(|_| {
+            tokens
+                .iter()
+                .any(|token| matches!(token.as_str(), "identified" | "password" | "passwd"))
+                && matches!(first, Some("create" | "alter" | "set" | "update"))
+        }),
+    }
+}
+
 fn data_change_history_entries(
     object: &ObjectPath,
     before_page: &DataPage,
@@ -590,6 +715,8 @@ fn data_change_history_entry(
         executed_at_unix_secs,
         object: Some(object.name.clone()),
         rollback_snapshot,
+        // 数据编辑器的提交是即时写入（各自自动提交），落定即已提交。
+        transaction_state: QueryHistoryTransactionState::Committed,
     }
 }
 
@@ -696,6 +823,10 @@ fn data_change_delete_rollback_snapshot(
 
 impl QueryHistoryEntry {
     pub fn rollback_sql(&self) -> Option<String> {
+        // 已回滚的写入没有留下任何变更：不提供补偿 SQL，避免把从未生效的改动再写一遍（§8.4/R11）。
+        if self.transaction_state == QueryHistoryTransactionState::RolledBack {
+            return None;
+        }
         self.rollback_snapshot
             .as_ref()
             .and_then(query_history_rollback_sql)
@@ -705,6 +836,15 @@ impl QueryHistoryEntry {
         self.rollback_snapshot
             .as_ref()
             .map(query_history_rollback_snapshot_summary)
+    }
+
+    /// 事务状态文案；已提交时不额外标注，避免噪声。
+    pub fn transaction_state_label(&self) -> Option<&'static str> {
+        match self.transaction_state {
+            QueryHistoryTransactionState::Committed => None,
+            QueryHistoryTransactionState::Uncommitted => Some("未提交（事务进行中）"),
+            QueryHistoryTransactionState::RolledBack => Some("已回滚（未提交或显式 ROLLBACK）"),
+        }
     }
 }
 
@@ -984,10 +1124,6 @@ fn sql_history_object_name_for_path(object: &ObjectPath, kind: DatabaseKind) -> 
     }
 }
 
-fn sql_history_row_identity(identity: &RowIdentity) -> String {
-    sql_history_row_identity_for(identity.values.iter(), DatabaseKind::MySql)
-}
-
 /// 行身份 → WHERE 子句（按方言渲染，供历史条目展示的 SQL 使用）。
 fn sql_history_row_identity_for<'a>(
     pairs: impl Iterator<Item = (&'a String, &'a CellValue)>,
@@ -1006,10 +1142,6 @@ fn sql_history_row_identity_for<'a>(
         return "1 = 0".to_string();
     }
     clauses.join(" AND ")
-}
-
-fn sql_history_row_identity_for_rollback(identity: &RowIdentity) -> Option<String> {
-    sql_history_row_identity_for_rollback_in(identity, DatabaseKind::MySql)
 }
 
 /// 行身份 → WHERE 子句（按方言渲染标识符与字面量）。
@@ -1041,10 +1173,6 @@ fn sql_history_quote_ident_for(value: &str, kind: DatabaseKind) -> String {
     } else {
         format!("`{}`", value.replace('`', "``"))
     }
-}
-
-fn sql_history_quote_ident(value: &str) -> String {
-    sql_history_quote_ident_for(value, DatabaseKind::MySql)
 }
 
 /// 十六进制字节序列（bytea/BLOB 共用）。
@@ -1149,17 +1277,6 @@ fn sql_history_value_literal_for_type(
     }
 }
 
-fn sql_history_value_literal(value: &CellValue) -> String {
-    sql_history_value_literal_for_type(value, DatabaseKind::MySql, None)
-}
-
-fn sql_history_value_literal_for_rollback(value: &CellValue) -> Option<String> {
-    match value {
-        CellValue::BinarySummary(summary) if !summary.is_null => None,
-        value => Some(sql_history_value_literal(value)),
-    }
-}
-
 fn sql_history_value_literal_for_rollback_with_type(
     value: &CellValue,
     kind: DatabaseKind,
@@ -1171,12 +1288,3 @@ fn sql_history_value_literal_for_rollback_with_type(
     }
 }
 
-/// 快照携带的方言；旧记录（None）按 MySQL 兼容渲染，保证既有历史可读可用。
-fn rollback_snapshot_kind(snapshot: &QueryRollbackSnapshot) -> DatabaseKind {
-    let kind = match snapshot {
-        QueryRollbackSnapshot::Insert(snapshot) => snapshot.db_kind,
-        QueryRollbackSnapshot::Update(snapshot) => snapshot.db_kind,
-        QueryRollbackSnapshot::Delete(snapshot) => snapshot.db_kind,
-    };
-    kind.unwrap_or(DatabaseKind::MySql)
-}

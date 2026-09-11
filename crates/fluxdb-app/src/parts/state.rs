@@ -752,6 +752,39 @@ pub struct QueryHistoryEntry {
     pub executed_at_unix_secs: u64,
     pub object: Option<String>,
     pub rollback_snapshot: Option<QueryRollbackSnapshot>,
+    /// 写入是否已提交（§8.4/R11）。显式事务里未 COMMIT 的写入不显示为已提交。
+    pub transaction_state: QueryHistoryTransactionState,
+}
+
+/// 写入的事务状态。默认 `Committed`（无显式事务、旧记录缺省时按已提交展示）。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum QueryHistoryTransactionState {
+    /// 已提交（自动提交或显式 COMMIT）。
+    #[default]
+    Committed,
+    /// 事务仍未提交（显式事务进行中）。
+    Uncommitted,
+    /// 已回滚（显式 ROLLBACK，或连接释放时未提交被服务端回滚）。
+    RolledBack,
+}
+
+impl QueryHistoryTransactionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Committed => "committed",
+            Self::Uncommitted => "uncommitted",
+            Self::RolledBack => "rolled_back",
+        }
+    }
+
+    /// 从持久化字符串还原；未知值按已提交（旧记录兼容）。
+    pub fn from_storage(value: Option<&str>) -> Self {
+        match value {
+            Some("uncommitted") => Self::Uncommitted,
+            Some("rolled_back") => Self::RolledBack,
+            _ => Self::Committed,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

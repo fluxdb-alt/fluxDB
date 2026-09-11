@@ -1918,6 +1918,109 @@
         assert!(editor.changes.is_none());
     }
 
+    /// §8.4/R11：显式事务的历史状态——未 COMMIT 的写入不显示为已提交，
+    /// ROLLBACK 的写入标已回滚且不提供补偿 SQL。
+    #[test]
+    fn history_marks_uncommitted_and_rolled_back_writes() {
+        // 未提交（BEGIN; UPDATE 后批次结束）→ 已回滚：连接释放时服务端回滚，历史不得谎报成功提交。
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "BEGIN; UPDATE products SET name = 'X' WHERE id = 1;".to_string(),
+        });
+        controller.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+        let states: Vec<_> = controller
+            .state()
+            .query_history
+            .iter()
+            .map(|entry| entry.transaction_state)
+            .collect();
+        assert!(
+            states.contains(&QueryHistoryTransactionState::RolledBack),
+            "未提交的写入应标已回滚：{states:?}"
+        );
+        let write = controller
+            .state()
+            .query_history
+            .iter()
+            .find(|entry| entry.text.starts_with("UPDATE"))
+            .expect("应有 UPDATE 历史");
+        assert_eq!(
+            write.transaction_state,
+            QueryHistoryTransactionState::RolledBack
+        );
+        assert!(
+            write.rollback_sql().is_none(),
+            "已回滚的写入不应提供补偿 SQL"
+        );
+        assert!(write.transaction_state_label().is_some());
+
+        // BEGIN; UPDATE; COMMIT → 已提交，展示与补偿 SQL 正常。
+        let mut committed = AppController::with_mock_data();
+        committed.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        committed.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "BEGIN; UPDATE products SET name = 'X' WHERE id = 1; COMMIT;".to_string(),
+        });
+        committed.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+        let write = committed
+            .state()
+            .query_history
+            .iter()
+            .find(|entry| entry.text.starts_with("UPDATE"))
+            .expect("应有 UPDATE 历史");
+        assert_eq!(
+            write.transaction_state,
+            QueryHistoryTransactionState::Committed
+        );
+        assert!(write.transaction_state_label().is_none());
+
+        // BEGIN; DELETE; ROLLBACK → 已回滚。
+        let mut rolled_back = AppController::with_mock_data();
+        rolled_back.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        rolled_back.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "BEGIN; DELETE FROM products WHERE id = 1; ROLLBACK;".to_string(),
+        });
+        rolled_back.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+        let write = rolled_back
+            .state()
+            .query_history
+            .iter()
+            .find(|entry| entry.text.starts_with("DELETE"))
+            .expect("应有 DELETE 历史");
+        assert_eq!(
+            write.transaction_state,
+            QueryHistoryTransactionState::RolledBack
+        );
+    }
+
+    /// §8.4/R11：敏感语句（口令/角色/授权）不入历史，避免凭据留痕与可回放。
+    #[test]
+    fn sensitive_statements_are_not_recorded_in_history() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "ALTER USER admin IDENTIFIED BY 'secret123'".to_string(),
+        });
+        controller.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+        assert!(
+            controller.state().query_history.is_empty(),
+            "敏感语句不应进入历史：{:#?}",
+            controller.state().query_history
+        );
+
+        // 普通语句仍记录（回归）。
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "select * from Product".to_string(),
+        });
+        controller.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+        assert_eq!(controller.state().query_history.len(), 1);
+    }
+
     /// §8.4 补偿 SQL 字面量：PG 用双引号标识符、hex bytea、精确十进制与 jsonb 具名转换；
     /// MySQL 保持反引号与 X'..'，旧记录（db_kind=None）按 MySQL 渲染仍可读。
     #[test]

@@ -60,6 +60,7 @@ fn seed_history(controller: &mut AppController) -> Vec<WorkbenchHistoryScope> {
         executed_at_unix_secs: 900,
         object: None,
         rollback_snapshot: None,
+        transaction_state: QueryHistoryTransactionState::Committed,
     });
 
     vec![

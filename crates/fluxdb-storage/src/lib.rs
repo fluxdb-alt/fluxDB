@@ -506,6 +506,9 @@ pub struct QueryHistoryRecord {
     pub rollback_sql: Option<String>,
     #[serde(default)]
     pub rollback_snapshot: Option<QueryRollbackSnapshot>,
+    /// 写入事务状态（committed/uncommitted/rolled_back，§8.4）；旧记录缺省按已提交。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transaction_state: Option<String>,
     #[serde(default)]
     pub message: Option<String>,
     #[serde(default)]
@@ -931,6 +934,7 @@ mod tests {
                 object: None,
                 rollback_sql: None,
                 rollback_snapshot: None,
+                transaction_state: None,
                 message: None,
                 returned_rows: 0,
                 affected_rows: 0,
