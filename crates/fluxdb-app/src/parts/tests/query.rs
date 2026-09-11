@@ -2927,6 +2927,66 @@
         }
     }
 
+    /// T14 验收「无权限/超时不阻塞编辑」：元数据源不可用（连接被拒）时，
+    /// 补全仍返回成功并保留本地候选，不把错误抛给编辑器。
+    #[test]
+    fn completion_degrades_when_metadata_source_unavailable() {
+        let mut controller = AppController::with_mock_data();
+        // 指向必然拒绝连接的端口，模拟「连不上 / 无权限」的元数据源。
+        let draft = ConnectionDraft {
+            name: "PG 不可达".to_string(),
+            kind: DatabaseKind::Postgres,
+            endpoint: Endpoint::Tcp {
+                host: "127.0.0.1".to_string(),
+                port: 1,
+                database: Some("postgres".to_string()),
+            },
+            credential_ref: None,
+            options: Default::default(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: Some(fluxdb_core::PostgresConnectionProfile {
+                basic: fluxdb_core::PostgresBasicOptions {
+                    host: "127.0.0.1".to_string(),
+                    port: 1,
+                    maintenance_database: "postgres".to_string(),
+                    username: "nobody".to_string(),
+                    password: fluxdb_core::SecretRef::inline(""),
+                },
+                ..Default::default()
+            }),
+        };
+        let AppEvent::ConnectionCreated(config) = controller.dispatch(AppCommand::CreateConnection(draft))
+        else {
+            panic!("创建连接应成功");
+        };
+        controller.dispatch(AppCommand::OpenQueryEditor(config.id));
+
+        let text = "sel".to_string();
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: text.clone(),
+        });
+        let event = controller.dispatch(AppCommand::RequestQueryCompletions {
+            tab_id: TabId(1),
+            request_seq: 1,
+            cursor: text.len(),
+            explicit: false,
+        });
+
+        let AppEvent::QueryCompletionsLoaded(_, _, result) = event else {
+            panic!("元数据不可用时补全仍应成功返回：{event:?}");
+        };
+        assert!(
+            result
+                .items
+                .iter()
+                .any(|item| item.kind == QueryCompletionKind::Keyword),
+            "应保留本地关键字候选：{:#?}",
+            result.items
+        );
+    }
+
     /// §8.4 DDL 后刷新：例程/触发器无法按表名精确刷新，DDL 触发后台刷新时整体失效，
     /// 下次补全重新从连接器取回（缓存不返回已失效的旧元数据）。
     #[test]

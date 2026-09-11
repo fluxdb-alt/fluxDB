@@ -4716,6 +4716,62 @@ SELECT item_id, name FROM audit_log;"
         connector.execute(&cleanup).expect("清理临时结构应成功");
     }
 
+    /// T14 验收「元数据会话不影响用户事务」：补全元数据走独立会话（pg_connect 新拨），
+    /// 用户会话里的未提交事务在补全期间保持原状，不被提交也不被回滚。
+    #[test]
+    fn pg_live_smoke_completion_does_not_disturb_user_transaction() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T14 冒烟");
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t14_tx CASCADE; \
+            CREATE TABLE t14_tx(id int); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建表应成功");
+
+        // 用户会话：显式 BEGIN 后插入未提交数据（同一 session_id ⇒ 复用同一连接）。
+        let user_session = Some(QuerySessionId(1401));
+        let mut begin = pg_query_request(&config, user_session);
+        begin.text = "BEGIN; INSERT INTO t14_tx VALUES (1);".to_string();
+        connector.execute(&begin).expect("用户事务写入应成功");
+
+        // 期间执行补全元数据查询（独立会话）。
+        let tables = connector
+            .list_completion_tables(Some(&db_name), Some("public"), "t14_tx", 50)
+            .expect("补全元数据查询应成功");
+        assert!(tables.iter().any(|t| t.name == "t14_tx"));
+        connector
+            .list_completion_columns(Some(&db_name), Some("public"), "t14_tx")
+            .expect("补全列查询应成功");
+
+        // 用户事务未提交数据仍在（补全没有偷偷 COMMIT/ROLLBACK），ROLLBACK 后消失。
+        let mut count = pg_query_request(&config, user_session);
+        count.text = "SELECT count(*) FROM t14_tx;".to_string();
+        let result = connector.execute(&count).expect("读取未提交数据应成功");
+        let visible = result
+            .results
+            .last()
+            .and_then(|page| page.rows.first())
+            .map(|row| row.values.clone())
+            .unwrap_or_default();
+        assert_eq!(
+            visible,
+            vec![CellValue::I64(1)],
+            "补全元数据不应提交或回滚用户事务：{visible:?}"
+        );
+
+        let mut rollback = pg_query_request(&config, user_session);
+        rollback.text = "ROLLBACK; DROP TABLE IF EXISTS t14_tx CASCADE;".to_string();
+        connector.execute(&rollback).expect("回滚与清理应成功");
+    }
+
     /// T14 验收：search_path 跟随服务器有效顺序，不硬编码 public；显式 schema 可跨 schema；
     /// 同表名跨 schema 时列按 search_path 首个可见 schema 解析，不串列。
     #[test]
