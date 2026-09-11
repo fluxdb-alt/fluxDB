@@ -354,6 +354,17 @@ CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不�
 
 实现记录（T14 增量一）：`postgres/completion.rs` 从 pg_catalog 提供真实补全 — tables 按 `relkind IN ('r','v','m','p','f')` 的常数 IN 列表（不绑定数组避免 `char[]` 类型推断失败）、`nspname = $1` 精确 schema、`relname ILIKE $2 ESCAPE '\'` 模糊匹配（ESCAPE 单反斜杠，避免 PG「invalid escape string」），LIMIT 限量；columns 一次批量查询按 `c.relname = ANY($2::text[])` 取真实表范围（非逐表 N+1），`pg_attribute.attnum > 0 AND NOT attisdropped` 排序列、`format_type` 得首参 schema/长度类型名、`col_description` 取注释、`EXISTS(pg_index … indisprimary AND attnum = ANY(indkey))` 判断主键、`attnotnull` 反推 nullable；routines 用 `pg_proc.prokind` 区分 f/p（a/w 按函数）；triggers 过滤 `NOT tgisinternal`。物理库缺省回退档案维护库，schema 显式 > 档案默认 > `public`。这些查询元数据取独立会话（`pg_connect` 新拨），不干扰用户事务；值一律 `$n` 参数化，值列表 `text[]` 数组绑定。增量二：app 分发层（mock_data.rs）把六类补全/外键路由真实化，PG 连接不再回退占位错误。
 
+实现记录（T14 增量三～八）：
+
+- **增量三 search_path 与跨 schema**：无显式 schema 时读服务器 `current_schemas(false)`，按 search_path 顺序作为补全范围（不硬编码 public）；四类查询统一 `nspname = ANY($1::text[])` + `array_position($1, nspname)` 排序，结果逐行携带真实 schema。同表名跨 schema 的列按 search_path **首个可见 schema** 解析（与 PG 未限定名解析一致），避免串列。显式 schema 仍可定向跨 schema。同时修掉 `pg_connect` 的 `SET search_path TO $1`：SET 属 utility 语句不接受 `$n`，配置档案带默认 schema 时必然建连失败；改为逐段 `pg_quote_identifier` 转义后设置并支持逗号分隔多段顺序。
+- **增量四 大小写引用**：`identifier_needs_quote` 增加方言参数——PG 未加引号折叠为小写，含大写字母的标识符不加引号会指向另一个对象，故必须加引号（MySQL/SQLite 判定不变）。补全上下文按方言识别已输入的起始引号（MySQL 反引号 / PG 双引号）并纳入替换范围、强制加引号插入。CompletionIndex 表键改为按 catalog 原名持有，**不折叠**：PG 允许 `"Foo"` 与 `"foo"` 并存，折叠会合并两个真实对象并互相覆盖列。刷新 worker 的 dirty 匹配改为忽略大小写（dirty 来自 DDL 文本，各方言折叠规则不同：多刷可接受、漏刷不行），并清理无匹配表的 dirty 以免 scope 永久 dirty。
+- **增量五 函数签名索引**：快照新增 routines（含 `pg_get_function_identity_arguments` 签名）与 triggers 并持久化，`COMPLETION_INDEX_VERSION` 2→3（旧缓存版本不匹配被拒后重建，连接/查询/历史不受影响）。索引去重键含签名：同名不同签名是不同候选，不合并。控制器例程/触发器改为索引优先、未命中走连接器后写回索引并持久化。补全项按签名分条：label 为 `name(signature)`、detail 标注函数/过程签名、文档给 schema 与参数。
+- **增量六 插入文本引用与文档提示**：`CompletionTable` 增加 `comment`（`obj_description`），表注释随索引与快照传递；列候选文档为结构化多行（类型/可空/主键/注释），表为注释，触发器为 schema 与所属表——缺项不伪造占位。MySQL 不取 `table_comment`（与业务注释不同步）。
+- **增量七 失效**：后台刷新触发（dirty 或 TTL 过期）时一并失效该 scope 的例程/触发器索引——二者无法按表名精确刷新，整体失效后按需重取，避免缓存长期返回过期元数据。
+- **增量八 取消**：五个补全列表在「建连 + search_path 取完 → 主 catalog 查询之间」检查取消标记并提前返回空结果；`PostgresConnector` 覆写 `_with_cancel` 把 `should_cancel` 下传到多段往返内部，而非仅靠 trait 默认的调用前后各查一次。
+
+验证证据（真实 PG 冒烟，`FLUXDB_PG_SMOKE` 门控）：`pg_live_smoke_completion_metadata`（表/列/批量列/例程/触发器 + 表列注释 + 引号建表 `"T14_Camel"`/`"Id"` 原名保留 + `t14_ovl(int)`/`t14_ovl(int,text)` 双重载签名）、`pg_live_smoke_completion_search_path_and_cross_schema`（默认 search_path 不含 t14_sa、档案默认 schema 生效、多段顺序 sa→sb、列取首个可见、显式跨 schema）、`pg_live_smoke_completion_does_not_disturb_user_transaction`（用户会话未提交数据在补全期间不被提交/回滚）、`pg_live_smoke_completion_cancel_returns_empty`。app 侧：跨 schema 同名表消歧、大小写不同对象不合并、重载分条与快照往返、DDL 后例程/触发器失效、元数据源不可用时降级保留本地候选。MySQL 回归：connectors 14 项、app 33 项通过；别名/CTE 相关 29 项通过。
+
 结果编辑仅开放可证明来自一个基础表的直接列投影，含完整可靠行身份。JOIN、聚合、DISTINCT、窗口/计算列、CTE 复杂派生和不确定来源结果只读；可保留部分直接列编辑，但必须有明确来源证明。二段名称按 PG schema.table；引用标识符用解析器，不能靠现有反引号简易 parser。[R10、R30]
 
 查询/数据修改历史沿用现有页面、保存和补偿入口。PG 历史保存完整对象身份、schema、方言；补偿 SQL 用 PG 双引号、布尔、bytea decode 和类型化字面量。对已有 MySQL 支持的简单单表 UPDATE/DELETE，在同一拥有的事务/连接读取并锁定前像；INSERT 及数据提交用 RETURNING 捕获真实身份。用户显式事务的历史先标未提交，COMMIT 后才可作为成功修改，ROLLBACK 后标已回滚；复杂语句不能生成可靠补偿时明确说明，不能生成猜测 SQL。补偿是需要用户检查并执行的新语句，不是保证能恢复任意并发后的数据库状态。[R11]
