@@ -83,6 +83,7 @@ impl AppController {
                     .filter_map(|(index, column)| column.primary_key.then_some(index))
                     .collect::<Vec<_>>();
                 QueryRollbackSnapshot::Update(QueryUpdateRollbackSnapshot {
+                    db_kind: Some(config.kind),
                     table: table_sql,
                     columns: page.columns.clone(),
                     changed_columns: changed_columns.clone(),
@@ -106,6 +107,7 @@ impl AppController {
                 table_name: _,
                 where_clause: _,
             } => QueryRollbackSnapshot::Delete(QueryDeleteRollbackSnapshot {
+                db_kind: Some(config.kind),
                 table: table_sql,
                 columns: page.columns,
                 rows: page.rows,
@@ -145,9 +147,18 @@ impl AppController {
         changes: &DataChangeSet,
     ) {
         let executed_at_unix_secs = current_unix_secs();
-        self.state.query_history.extend(
-            data_change_history_entries(object, before_page, changes, executed_at_unix_secs)
-        );
+        // 补偿 SQL 按连接方言生成（PG 双引号/bytea/精确十进制），历史记录里保存该方言。
+        let kind = self
+            .connection_config(object.connection_id)
+            .map(|config| config.kind)
+            .unwrap_or(DatabaseKind::MySql);
+        self.state.query_history.extend(data_change_history_entries(
+            object,
+            before_page,
+            changes,
+            executed_at_unix_secs,
+            kind,
+        ));
     }
 
     fn mark_query_history_completion_dirty(&mut self, request: &QueryRequest, sql: &str) {
@@ -463,8 +474,10 @@ fn data_change_history_entries(
     before_page: &DataPage,
     changes: &DataChangeSet,
     executed_at_unix_secs: u64,
+    kind: DatabaseKind,
 ) -> Vec<QueryHistoryEntry> {
     let mut entries = Vec::new();
+    let table_name = sql_history_object_name_for_path(object, kind);
 
     for update in &changes.updates {
         if update.cells.is_empty() {
@@ -474,20 +487,23 @@ fn data_change_history_entries(
             .cells
             .iter()
             .map(|cell| {
+                let column_type = before_page
+                    .columns
+                    .iter()
+                    .find(|column| column.name == cell.column)
+                    .and_then(|column| column.type_name.as_deref());
                 format!(
                     "{} = {}",
-                    sql_history_quote_ident(&cell.column),
-                    sql_history_value_literal(&cell.value)
+                    sql_history_quote_ident_for(&cell.column, kind),
+                    sql_history_value_literal_for_type(&cell.value, kind, column_type)
                 )
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let where_clause = sql_history_row_identity(&update.identity);
-        let sql = format!(
-            "UPDATE {} SET {assignments} WHERE {where_clause};",
-            sql_history_object_name_for_path(object)
-        );
-        let rollback_snapshot = data_change_update_rollback_snapshot(object, before_page, update);
+        let where_clause = sql_history_row_identity_for(update.identity.values.iter(), kind);
+        let sql = format!("UPDATE {table_name} SET {assignments} WHERE {where_clause};");
+        let rollback_snapshot =
+            data_change_update_rollback_snapshot(object, before_page, update, kind);
         entries.push(data_change_history_entry(
             object,
             sql,
@@ -504,27 +520,24 @@ fn data_change_history_entries(
             .filter(|(_, value)| !matches!(value, CellValue::Null))
             .collect::<Vec<_>>();
         let sql = if insert_values.is_empty() {
-            format!(
-                "INSERT INTO {} DEFAULT VALUES;",
-                sql_history_object_name_for_path(object)
-            )
+            format!("INSERT INTO {table_name} DEFAULT VALUES;")
         } else {
             let columns = insert_values
                 .iter()
-                .map(|(column, _)| sql_history_quote_ident(&column.name))
+                .map(|(column, _)| sql_history_quote_ident_for(&column.name, kind))
                 .collect::<Vec<_>>()
                 .join(", ");
             let values = insert_values
                 .iter()
-                .map(|(_, value)| sql_history_value_literal(value))
+                .map(|(column, value)| {
+                    sql_history_value_literal_for_type(value, kind, column.type_name.as_deref())
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!(
-                "INSERT INTO {} ({columns}) VALUES ({values});",
-                sql_history_object_name_for_path(object)
-            )
+            format!("INSERT INTO {table_name} ({columns}) VALUES ({values});")
         };
-        let rollback_snapshot = data_change_insert_rollback_snapshot(object, before_page, row);
+        let rollback_snapshot =
+            data_change_insert_rollback_snapshot(object, before_page, row, kind);
         entries.push(data_change_history_entry(
             object,
             sql,
@@ -535,11 +548,11 @@ fn data_change_history_entries(
 
     for identity in &changes.deletes {
         let sql = format!(
-            "DELETE FROM {} WHERE {};",
-            sql_history_object_name_for_path(object),
-            sql_history_row_identity(identity)
+            "DELETE FROM {table_name} WHERE {};",
+            sql_history_row_identity_for(identity.values.iter(), kind)
         );
-        let rollback_snapshot = data_change_delete_rollback_snapshot(object, before_page, identity);
+        let rollback_snapshot =
+            data_change_delete_rollback_snapshot(object, before_page, identity, kind);
         entries.push(data_change_history_entry(
             object,
             sql,
@@ -584,6 +597,7 @@ fn data_change_update_rollback_snapshot(
     object: &ObjectPath,
     before_page: &DataPage,
     update: &RowUpdate,
+    kind: DatabaseKind,
 ) -> Option<QueryRollbackSnapshot> {
     let row = page_row_for_identity(before_page, &update.identity)?;
     let values = update
@@ -602,7 +616,8 @@ fn data_change_update_rollback_snapshot(
         return None;
     }
     Some(QueryRollbackSnapshot::Update(QueryUpdateRollbackSnapshot {
-        table: sql_history_object_name_for_path(object),
+        db_kind: Some(kind),
+        table: sql_history_object_name_for_path(object, kind),
         columns: before_page.columns.clone(),
         changed_columns: update
             .cells
@@ -621,6 +636,7 @@ fn data_change_insert_rollback_snapshot(
     object: &ObjectPath,
     before_page: &DataPage,
     row: &Row,
+    kind: DatabaseKind,
 ) -> QueryRollbackSnapshot {
     let values = before_page
         .columns
@@ -649,7 +665,8 @@ fn data_change_insert_rollback_snapshot(
         values
     };
     QueryRollbackSnapshot::Insert(QueryInsertRollbackSnapshot {
-        table: sql_history_object_name_for_path(object),
+        db_kind: Some(kind),
+        table: sql_history_object_name_for_path(object, kind),
         identities: vec![RowIdentity { values }],
     })
 }
@@ -658,6 +675,7 @@ fn data_change_delete_rollback_snapshot(
     object: &ObjectPath,
     before_page: &DataPage,
     identity: &RowIdentity,
+    kind: DatabaseKind,
 ) -> Option<QueryRollbackSnapshot> {
     let row = page_row_for_identity(before_page, identity)?;
     let row = Row {
@@ -669,7 +687,8 @@ fn data_change_delete_rollback_snapshot(
             .collect(),
     };
     Some(QueryRollbackSnapshot::Delete(QueryDeleteRollbackSnapshot {
-        table: sql_history_object_name_for_path(object),
+        db_kind: Some(kind),
+        table: sql_history_object_name_for_path(object, kind),
         columns: before_page.columns.clone(),
         rows: vec![row],
     }))
@@ -698,6 +717,7 @@ fn query_history_rollback_sql(snapshot: &QueryRollbackSnapshot) -> Option<String
 }
 
 fn insert_rollback_sql(snapshot: &QueryInsertRollbackSnapshot) -> Option<String> {
+    let kind = snapshot.db_kind.unwrap_or(DatabaseKind::MySql);
     snapshot
         .identities
         .iter()
@@ -705,7 +725,7 @@ fn insert_rollback_sql(snapshot: &QueryInsertRollbackSnapshot) -> Option<String>
             Some(format!(
                 "DELETE FROM {} WHERE {};",
                 snapshot.table,
-                sql_history_row_identity_for_rollback(identity)?
+                sql_history_row_identity_for_rollback_in(identity, kind)?
             ))
         })
         .collect::<Option<Vec<_>>>()
@@ -714,6 +734,7 @@ fn insert_rollback_sql(snapshot: &QueryInsertRollbackSnapshot) -> Option<String>
 }
 
 fn update_rollback_sql(snapshot: &QueryUpdateRollbackSnapshot) -> Option<String> {
+    let kind = snapshot.db_kind.unwrap_or(DatabaseKind::MySql);
     let mut statements = Vec::new();
     for row in &snapshot.rows {
         let assignments = snapshot
@@ -721,10 +742,16 @@ fn update_rollback_sql(snapshot: &QueryUpdateRollbackSnapshot) -> Option<String>
             .iter()
             .filter_map(|column| {
                 row.values.get(column).map(|value| {
+                    // 列类型用于 PG 的精确十进制/JSON 字面量渲染。
+                    let column_type = snapshot
+                        .columns
+                        .iter()
+                        .find(|meta| meta.name == *column)
+                        .and_then(|meta| meta.type_name.as_deref());
                     Some(format!(
                         "{} = {}",
-                        sql_history_quote_ident(column),
-                        sql_history_value_literal_for_rollback(value)?
+                        sql_history_quote_ident_for(column, kind),
+                        sql_history_value_literal_for_rollback_with_type(value, kind, column_type)?
                     ))
                 })
             })
@@ -733,7 +760,7 @@ fn update_rollback_sql(snapshot: &QueryUpdateRollbackSnapshot) -> Option<String>
             continue;
         }
         let where_clause = if !row.identity.values.is_empty() {
-            sql_history_row_identity_for_rollback(&row.identity)?
+            sql_history_row_identity_for_rollback_in(&row.identity, kind)?
         } else if snapshot.rows.len() == 1 {
             snapshot.fallback_where.clone()?
         } else {
@@ -751,6 +778,7 @@ fn update_rollback_sql(snapshot: &QueryUpdateRollbackSnapshot) -> Option<String>
 }
 
 fn delete_rollback_sql(snapshot: &QueryDeleteRollbackSnapshot) -> Option<String> {
+    let kind = snapshot.db_kind.unwrap_or(DatabaseKind::MySql);
     snapshot
         .rows
         .iter()
@@ -762,8 +790,12 @@ fn delete_rollback_sql(snapshot: &QueryDeleteRollbackSnapshot) -> Option<String>
                 .filter(|(_, value)| !matches!(value, CellValue::Null))
                 .map(|(column, value)| {
                     Some((
-                        sql_history_quote_ident(&column.name),
-                        sql_history_value_literal_for_rollback(value)?,
+                        sql_history_quote_ident_for(&column.name, kind),
+                        sql_history_value_literal_for_rollback_with_type(
+                            value,
+                            kind,
+                            column.type_name.as_deref(),
+                        )?,
                     ))
                 })
                 .collect::<Option<Vec<_>>>()?;
@@ -932,36 +964,59 @@ fn sql_history_object_name(sql: &str) -> Option<String> {
     Some(token.trim_matches('`').trim_matches('"').to_string())
 }
 
-fn sql_history_object_name_for_path(object: &ObjectPath) -> String {
-    match object.database.as_deref() {
-        Some(database) if !database.is_empty() => format!(
+/// 补偿 SQL 里的限定对象名（按方言加引号）。
+///
+/// PG 的限定层级是 schema.table（不带库名，库由连接决定）；MySQL/TiDB/SQLite 是
+/// database.table。schema/database 未知时退化为裸表名，由连接的 search_path/默认库解析。
+fn sql_history_object_name_for_path(object: &ObjectPath, kind: DatabaseKind) -> String {
+    let qualifier = if kind == DatabaseKind::Postgres {
+        object.schema.as_deref()
+    } else {
+        object.database.as_deref()
+    };
+    match qualifier.filter(|value| !value.is_empty()) {
+        Some(qualifier) => format!(
             "{}.{}",
-            sql_history_quote_ident(database),
-            sql_history_quote_ident(&object.name)
+            sql_history_quote_ident_for(qualifier, kind),
+            sql_history_quote_ident_for(&object.name, kind)
         ),
-        _ => sql_history_quote_ident(&object.name),
+        None => sql_history_quote_ident_for(&object.name, kind),
     }
 }
 
 fn sql_history_row_identity(identity: &RowIdentity) -> String {
-    if identity.values.is_empty() {
-        return "1 = 0".to_string();
-    }
-    identity
-        .values
-        .iter()
+    sql_history_row_identity_for(identity.values.iter(), DatabaseKind::MySql)
+}
+
+/// 行身份 → WHERE 子句（按方言渲染，供历史条目展示的 SQL 使用）。
+fn sql_history_row_identity_for<'a>(
+    pairs: impl Iterator<Item = (&'a String, &'a CellValue)>,
+    kind: DatabaseKind,
+) -> String {
+    let clauses = pairs
         .map(|(column, value)| {
             format!(
                 "{} = {}",
-                sql_history_quote_ident(column),
-                sql_history_value_literal(value)
+                sql_history_quote_ident_for(column, kind),
+                sql_history_value_literal_for_type(value, kind, None)
             )
         })
-        .collect::<Vec<_>>()
-        .join(" AND ")
+        .collect::<Vec<_>>();
+    if clauses.is_empty() {
+        return "1 = 0".to_string();
+    }
+    clauses.join(" AND ")
 }
 
 fn sql_history_row_identity_for_rollback(identity: &RowIdentity) -> Option<String> {
+    sql_history_row_identity_for_rollback_in(identity, DatabaseKind::MySql)
+}
+
+/// 行身份 → WHERE 子句（按方言渲染标识符与字面量）。
+fn sql_history_row_identity_for_rollback_in(
+    identity: &RowIdentity,
+    kind: DatabaseKind,
+) -> Option<String> {
     if identity.values.is_empty() {
         return None;
     }
@@ -971,19 +1026,70 @@ fn sql_history_row_identity_for_rollback(identity: &RowIdentity) -> Option<Strin
         .map(|(column, value)| {
             Some(format!(
                 "{} = {}",
-                sql_history_quote_ident(column),
-                sql_history_value_literal_for_rollback(value)?
+                sql_history_quote_ident_for(column, kind),
+                sql_history_value_literal_for_rollback_with_type(value, kind, None)?
             ))
         })
         .collect::<Option<Vec<_>>>()
         .map(|parts| parts.join(" AND "))
 }
 
-fn sql_history_quote_ident(value: &str) -> String {
-    format!("`{}`", value.replace('`', "``"))
+/// 按方言给标识符加引号（PG 用双引号，MySQL/TiDB/SQLite 用反引号）。
+fn sql_history_quote_ident_for(value: &str, kind: DatabaseKind) -> String {
+    if kind == DatabaseKind::Postgres {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        format!("`{}`", value.replace('`', "``"))
+    }
 }
 
-fn sql_history_value_literal(value: &CellValue) -> String {
+fn sql_history_quote_ident(value: &str) -> String {
+    sql_history_quote_ident_for(value, DatabaseKind::MySql)
+}
+
+/// 十六进制字节序列（bytea/BLOB 共用）。
+fn sql_history_hex_bytes(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// 列类型是否属于需要按「裸数值字面量」渲染的精确十进制族。
+///
+/// PG 的 numeric/decimal/money 走文本保精度（见 postgres/values.rs），补偿 SQL 若把它
+/// 当字符串写回会引入隐式转换与格式差异，故按数值字面量原样输出（§8.4 decimal 不失真）。
+fn sql_history_numeric_type(type_name: Option<&str>) -> bool {
+    let Some(type_name) = type_name else {
+        return false;
+    };
+    let lower = type_name.trim().to_ascii_lowercase();
+    let base = lower.split('(').next().unwrap_or(&lower).trim();
+    matches!(
+        base,
+        "numeric" | "decimal" | "dec" | "money" | "smallmoney" | "int" | "integer" | "bigint"
+            | "smallint" | "tinyint" | "mediumint" | "int2" | "int4" | "int8" | "double"
+            | "double precision" | "real" | "float" | "float4" | "float8"
+    )
+}
+
+/// 十进制文本是否可安全作为裸数值字面量输出（拒绝 NaN/Infinity/含引号等异常文本）。
+fn sql_history_numeric_text(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+' | 'e' | 'E'))
+        && trimmed.chars().any(|ch| ch.is_ascii_digit())
+}
+
+fn sql_history_value_literal_for_type(
+    value: &CellValue,
+    kind: DatabaseKind,
+    type_name: Option<&str>,
+) -> String {
+    let postgres = kind == DatabaseKind::Postgres;
     match value {
         CellValue::Null => "NULL".to_string(),
         CellValue::Bool(value) => {
@@ -1001,20 +1107,50 @@ fn sql_history_value_literal(value: &CellValue) -> String {
                 "NULL".to_string()
             }
         }
-        CellValue::Text(value) | CellValue::Json(value) => {
-            format!("'{}'", value.replace('\'', "''"))
+        // PG：精确十进制文本按数值字面量输出；json/jsonb 用具名类型转换保留类型。
+        CellValue::Text(value) => {
+            if postgres && sql_history_numeric_type(type_name) && sql_history_numeric_text(value) {
+                value.trim().to_string()
+            } else if postgres
+                && type_name
+                    .map(|name| {
+                        let lower = name.trim().to_ascii_lowercase();
+                        lower == "json" || lower == "jsonb"
+                    })
+                    .unwrap_or(false)
+            {
+                format!("'{}'::{}", value.replace('\'', "''"), type_name.unwrap_or("jsonb").trim())
+            } else {
+                format!("'{}'", value.replace('\'', "''"))
+            }
         }
-        CellValue::Bytes(bytes) => format!(
-            "X'{}'",
-            bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<Vec<_>>()
-                .join("")
-        ),
+        CellValue::Json(value) => {
+            if postgres {
+                format!(
+                    "'{}'::{}",
+                    value.replace('\'', "''"),
+                    type_name.map(str::trim).unwrap_or("jsonb")
+                )
+            } else {
+                format!("'{}'", value.replace('\'', "''"))
+            }
+        }
+        CellValue::Bytes(bytes) => {
+            let hex = sql_history_hex_bytes(bytes);
+            if postgres {
+                // PG 十六进制 bytea 字面量，显式 ::bytea 防止被当作 text 写入。
+                format!("'\\x{hex}'::bytea")
+            } else {
+                format!("X'{hex}'")
+            }
+        }
         CellValue::BinarySummary(summary) if summary.is_null => "NULL".to_string(),
         CellValue::BinarySummary(_) => "NULL".to_string(),
     }
+}
+
+fn sql_history_value_literal(value: &CellValue) -> String {
+    sql_history_value_literal_for_type(value, DatabaseKind::MySql, None)
 }
 
 fn sql_history_value_literal_for_rollback(value: &CellValue) -> Option<String> {
@@ -1022,4 +1158,25 @@ fn sql_history_value_literal_for_rollback(value: &CellValue) -> Option<String> {
         CellValue::BinarySummary(summary) if !summary.is_null => None,
         value => Some(sql_history_value_literal(value)),
     }
+}
+
+fn sql_history_value_literal_for_rollback_with_type(
+    value: &CellValue,
+    kind: DatabaseKind,
+    type_name: Option<&str>,
+) -> Option<String> {
+    match value {
+        CellValue::BinarySummary(summary) if !summary.is_null => None,
+        value => Some(sql_history_value_literal_for_type(value, kind, type_name)),
+    }
+}
+
+/// 快照携带的方言；旧记录（None）按 MySQL 兼容渲染，保证既有历史可读可用。
+fn rollback_snapshot_kind(snapshot: &QueryRollbackSnapshot) -> DatabaseKind {
+    let kind = match snapshot {
+        QueryRollbackSnapshot::Insert(snapshot) => snapshot.db_kind,
+        QueryRollbackSnapshot::Update(snapshot) => snapshot.db_kind,
+        QueryRollbackSnapshot::Delete(snapshot) => snapshot.db_kind,
+    };
+    kind.unwrap_or(DatabaseKind::MySql)
 }

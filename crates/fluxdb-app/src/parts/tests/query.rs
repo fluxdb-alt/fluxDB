@@ -1918,6 +1918,130 @@
         assert!(editor.changes.is_none());
     }
 
+    /// §8.4 补偿 SQL 字面量：PG 用双引号标识符、hex bytea、精确十进制与 jsonb 具名转换；
+    /// MySQL 保持反引号与 X'..'，旧记录（db_kind=None）按 MySQL 渲染仍可读。
+    #[test]
+    fn pg_rollback_literals_use_dialect_quoting_and_types() {
+        // 十进制文本（PG numeric 走文本保精度）按数值字面量输出，不被引号包裹。
+        assert_eq!(
+            sql_history_value_literal_for_type(
+                &CellValue::Text("123.4500".to_string()),
+                DatabaseKind::Postgres,
+                Some("numeric(10,4)")
+            ),
+            "123.4500"
+        );
+        // 普通文本仍加引号并转义。
+        assert_eq!(
+            sql_history_value_literal_for_type(
+                &CellValue::Text("o'brien".to_string()),
+                DatabaseKind::Postgres,
+                Some("text")
+            ),
+            "'o''brien'"
+        );
+        // bytea：PG hex 转义 + 显式 ::bytea，避免被当作 text 写入。
+        assert_eq!(
+            sql_history_value_literal_for_type(
+                &CellValue::Bytes(vec![0xde, 0xad, 0xbe, 0xef]),
+                DatabaseKind::Postgres,
+                Some("bytea")
+            ),
+            "'\\xdeadbeef'::bytea"
+        );
+        assert_eq!(
+            sql_history_value_literal_for_type(
+                &CellValue::Bytes(vec![0x0a, 0xff]),
+                DatabaseKind::MySql,
+                Some("blob")
+            ),
+            "X'0aff'"
+        );
+        // jsonb 具名转换保留类型。
+        assert_eq!(
+            sql_history_value_literal_for_type(
+                &CellValue::Json("{\"a\":1}".to_string()),
+                DatabaseKind::Postgres,
+                Some("jsonb")
+            ),
+            "'{\"a\":1}'::jsonb"
+        );
+        assert_eq!(
+            sql_history_value_literal_for_type(
+                &CellValue::Bool(true),
+                DatabaseKind::Postgres,
+                None
+            ),
+            "TRUE"
+        );
+    }
+
+    /// §8.4 PG 补偿 SQL：标识符双引号、WHERE 用主键身份、UPDATE 用类型化字面量。
+    #[test]
+    fn pg_update_rollback_sql_quotes_identifiers_and_keeps_decimal() {
+        let snapshot = QueryUpdateRollbackSnapshot {
+            db_kind: Some(DatabaseKind::Postgres),
+            table: "\"sales\".\"orders\"".to_string(),
+            columns: vec![Column {
+                name: "amount".to_string(),
+                type_name: Some("numeric(10,2)".to_string()),
+                nullable: false,
+                primary_key: false,
+                comment: None,
+            }],
+            changed_columns: vec!["amount".to_string()],
+            rows: vec![QueryRollbackRowSnapshot {
+                identity: RowIdentity {
+                    values: BTreeMap::from([("id".to_string(), CellValue::I64(7))]),
+                },
+                values: BTreeMap::from([(
+                    "amount".to_string(),
+                    CellValue::Text("19.90".to_string()),
+                )]),
+            }],
+            fallback_where: None,
+        };
+        let sql = query_history_rollback_sql(&QueryRollbackSnapshot::Update(snapshot))
+            .expect("PG 补偿 SQL 应生成");
+        assert_eq!(
+            sql,
+            "UPDATE \"sales\".\"orders\" SET \"amount\" = 19.90 WHERE \"id\" = 7;"
+        );
+    }
+
+    /// 旧记录（无方言）仍按 MySQL 渲染：既有历史可读可用（验收项）。
+    #[test]
+    fn legacy_rollback_snapshot_without_dialect_renders_mysql() {
+        let snapshot = QueryUpdateRollbackSnapshot {
+            db_kind: None,
+            table: "`main`.`products`".to_string(),
+            columns: vec![Column {
+                name: "name".to_string(),
+                type_name: Some("varchar(64)".to_string()),
+                nullable: true,
+                primary_key: false,
+                comment: None,
+            }],
+            changed_columns: vec!["name".to_string()],
+            rows: vec![QueryRollbackRowSnapshot {
+                identity: RowIdentity {
+                    values: BTreeMap::from([("id".to_string(), CellValue::I64(1))]),
+                },
+                values: BTreeMap::from([(
+                    "name".to_string(),
+                    CellValue::Text("Road Bike".to_string()),
+                )]),
+            }],
+            fallback_where: None,
+        };
+        let sql = query_history_rollback_sql(&QueryRollbackSnapshot::Update(snapshot))
+            .expect("旧记录应仍能生成补偿 SQL");
+        assert_eq!(
+            sql,
+            "UPDATE `main`.`products` SET `name` = 'Road Bike' WHERE `id` = 1;"
+        );
+    }
+
     /// §8.4/R30：二段名按方言解释——PG 是 schema.table（不能写进 public），
     /// MySQL 仍是 database.table；引用名按方言引号解析并保留大小写，未加引号在 PG 折小写。
     #[test]

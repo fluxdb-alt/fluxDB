@@ -77,12 +77,20 @@ pub enum QueryRollbackSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QueryInsertRollbackSnapshot {
+    /// 生成该补偿 SQL 时使用的方言（§8.4）。旧记录缺省为 None，按 MySQL 兼容渲染，
+    /// 保证既有 MySQL 历史可读可用；新记录写入真实方言，PG 走双引号标识符与类型化字面量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_kind: Option<DatabaseKind>,
     pub table: String,
     pub identities: Vec<RowIdentity>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QueryUpdateRollbackSnapshot {
+    /// 生成该补偿 SQL 时使用的方言（§8.4）。旧记录缺省为 None，按 MySQL 兼容渲染，
+    /// 保证既有 MySQL 历史可读可用；新记录写入真实方言，PG 走双引号标识符与类型化字面量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_kind: Option<DatabaseKind>,
     pub table: String,
     pub columns: Vec<Column>,
     pub changed_columns: Vec<String>,
@@ -92,6 +100,10 @@ pub struct QueryUpdateRollbackSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QueryDeleteRollbackSnapshot {
+    /// 生成该补偿 SQL 时使用的方言（§8.4）。旧记录缺省为 None，按 MySQL 兼容渲染，
+    /// 保证既有 MySQL 历史可读可用；新记录写入真实方言，PG 走双引号标识符与类型化字面量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_kind: Option<DatabaseKind>,
     pub table: String,
     pub columns: Vec<Column>,
     pub rows: Vec<Row>,
