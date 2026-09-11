@@ -2357,7 +2357,9 @@ fn main() {
                             redis_workbench_panel_resize_start: None,
                             query_output_tabs: BTreeMap::new(),
                             collapsed_query_outputs: BTreeSet::new(),
-                            query_output_placement: QueryOutputPlacement::Bottom,
+                            // 启动时的结果区布局取自持久化设置（「查询结果默认布局」）；
+                            // 工具栏上的切换按钮只改这个运行时值，不回写设置。
+                            results_placement: settings_editor_draft.results_placement,
                             query_result_display_pages: BTreeMap::new(),
                             settings_panel_section: SettingsPanelSection::Editor,
                             settings_editor_draft,

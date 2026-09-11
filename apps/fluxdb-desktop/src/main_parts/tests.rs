@@ -865,16 +865,93 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
     #[test]
     fn query_output_layout_toggle_changes_icon() {
         assert_eq!(
-            query_output_layout_toggle_icon(QueryOutputPlacement::Bottom),
+            query_output_layout_toggle_icon(ResultsPlacement::Bottom),
             AppIcon::PanelBottom
         );
         assert_eq!(
-            query_output_layout_toggle_icon(QueryOutputPlacement::Right),
+            query_output_layout_toggle_icon(ResultsPlacement::Right),
             AppIcon::PanelRight
         );
         assert_eq!(
-            QueryOutputPlacement::Bottom.toggled(),
-            QueryOutputPlacement::Right
+            ResultsPlacement::Bottom.toggled(),
+            ResultsPlacement::Right
+        );
+    }
+
+    #[test]
+    fn results_placement_defaults_to_bottom_and_is_the_shared_value() {
+        // 默认「下方」，保证没设置过的用户看到的仍是上下分栏。
+        assert_eq!(ResultsPlacement::default(), ResultsPlacement::Bottom);
+        assert_eq!(ResultsPlacement::Right.toggled(), ResultsPlacement::Bottom);
+        // 设置面板用的下标映射必须可逆（否则面板会出现「没有任何按钮高亮」）。
+        for placement in [ResultsPlacement::Bottom, ResultsPlacement::Right] {
+            assert_eq!(
+                ResultsPlacement::from_index(placement.to_index()),
+                placement
+            );
+        }
+        // 越界回退到默认值，脏配置不该让面板空高亮。
+        assert_eq!(ResultsPlacement::from_index(99), ResultsPlacement::Bottom);
+    }
+
+    #[test]
+    fn redis_workbench_editor_width_clamps_to_min_and_leaves_room_for_results() {
+        let available = 1400.;
+        // 正常值原样通过。
+        assert!((redis_workbench_editor_width(700., available) - 700.).abs() < 1e-3);
+        // 过窄被抬到下限。
+        assert!((redis_workbench_editor_width(10., available) - REDIS_WB_EDITOR_MIN_WIDTH).abs() < 1e-3);
+        // 过宽被压到「可用宽 − 结果区下限」，结果区始终留得下。
+        let too_wide = redis_workbench_editor_width(9999., available);
+        assert!((too_wide - (available - REDIS_WB_RESULT_MIN_WIDTH)).abs() < 1e-3);
+        // 可用宽小到下限都放不下时不得 panic（clamp 的 min>max 会 panic）。
+        assert!(redis_workbench_editor_width(500., 10.) > 0.);
+    }
+
+    /// 源码结构断言：抹掉所有空白后再匹配，这样 `cargo fmt` 换行折行不会造成假失败。
+    fn normalized_source_snippet(anchor: &str) -> String {
+        include_str!("content_views.rs")
+            .split(anchor)
+            .nth(1)
+            .unwrap_or_else(|| panic!("源码里应存在锚点 {anchor}"))
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+
+    /// 下面两条守的是「看 diff 看不出来、纯函数也覆盖不到」的布局/方向错误。
+    /// 仓库已有 `include_str!` 源码结构断言的先例（见本文件顶部的面板结构断言）。
+    #[test]
+    fn redis_right_layout_gives_both_axes_a_definite_size() {
+        // 右侧布局下外层是行方向：编辑器容器若不带 h_full，高度只有内容高，撑不满整列。
+        let arm = normalized_source_snippet("fn redis_workbench_input_panel(");
+        let right_arm = arm
+            .split("ResultsPlacement::Right=>")
+            .nth(1)
+            .expect("输入面板应有 Right 分支");
+        assert!(right_arm.contains("h_full()"), "右侧输入面板必须 h_full");
+        assert!(right_arm.contains("min_w(px(0.))"), "右侧输入面板需可收缩");
+        assert!(right_arm.contains("border_r_1()"), "右侧布局分隔线应在右边");
+    }
+
+    #[test]
+    fn redis_right_drag_grows_editor_rightward() {
+        // 锚到拖拽处理本身：同一个函数里还有一个「手柄形状」的 match placement，
+        // 直接取第一个 Right 分支会抓到那一处（无 delta）。
+        let body = normalized_source_snippet("match start.placement {");
+        let right_arm = body
+            .split("ResultsPlacement::Right=>")
+            .nth(1)
+            .expect("拖拽处理应有 Right 分支");
+        // Redis 右侧布局的编辑器在**左**，向右拖是变宽：当前 X − 起点 X。
+        // SQL 结果面板在右侧、向左生长，那边是反的（start.x − current.x），不能照抄。
+        assert!(
+            right_arm.contains("position.x)-start.x"),
+            "Redis 右侧拖拽增量必须是 当前X − 起点X（编辑器在左，向右拖变宽）"
+        );
+        assert!(
+            !right_arm.contains("start.x-f32::from"),
+            "不要照抄 SQL 结果面板的反向增量"
         );
     }
 
@@ -2126,6 +2203,26 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         assert_eq!(parsed.limit, Some(250));
     }
 
+    /// 回归：数据页 SQL 面板里显示的 LIMIT 就是当前页大小，刷新（⌘R）会把它解析回来
+    /// 再夹一次。封顶一度写死 100，于是「默认分页行数」选 500/1000 的表一按刷新就掉回 100。
+    #[test]
+    fn data_editor_limit_survives_refresh_for_every_offered_page_size() {
+        for (label, size) in DATA_TABLE_PAGE_SIZE_CHOICES {
+            assert_eq!(
+                data_editor_effective_limit(size),
+                size,
+                "设置档位 {label} 的表刷新后不应被夹小"
+            );
+        }
+
+        // 手输超大 LIMIT 仍被夹到最大档（护栏保留）。
+        let max = data_table_page_size_max();
+        assert_eq!(data_editor_effective_limit(max + 1), max);
+        assert_eq!(data_editor_effective_limit(u64::MAX), max);
+        // 下限静默夹到 1。
+        assert_eq!(data_editor_effective_limit(0), 1);
+    }
+
     #[test]
     fn sql_selection_offset_returns_valid_byte_boundary() {
         let bounds = Bounds::new(point(px(10.), px(0.)), size(px(200.), px(20.)));
@@ -2466,9 +2563,23 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         assert_eq!(app_icon_path(AppIcon::FileSearch), "icons/file-search.svg");
         assert_eq!(app_icon_path(AppIcon::Workflow), "icons/workflow.svg");
         assert_eq!(app_icon_path(AppIcon::Bot), "icons/bot.svg");
+        assert_eq!(app_icon_path(AppIcon::Github), "icons/github.svg");
         assert_eq!(app_icon_path(AppIcon::Select), "icons/text-select.svg");
         assert_eq!(app_icon_path(AppIcon::Text), "icons/text.svg");
         assert_eq!(app_icon_path(AppIcon::WrapText), "icons/wrap-text.svg");
+    }
+
+    /// 顶部栏按钮引用的图标必须在资源目录里真实存在。
+    /// `Assets::load` 是运行时按路径读盘的，拼错文件名不会编译报错，只会在界面上静默缺图。
+    #[test]
+    fn topbar_icon_assets_exist_on_disk() {
+        for icon in [AppIcon::Github, AppIcon::Bot, AppIcon::CalendarClock, AppIcon::Settings] {
+            let relative = app_icon_path(icon);
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets")
+                .join(relative);
+            assert!(path.exists(), "缺少图标资源 {}", path.display());
+        }
     }
 
     #[test]

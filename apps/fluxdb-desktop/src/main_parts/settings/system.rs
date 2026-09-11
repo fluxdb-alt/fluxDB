@@ -9,26 +9,18 @@ fn settings_data_panel(
         .gap_3()
         .child(
             settings_panel_group("数据表", colors)
-                .child(settings_preference_row(
+                .child(settings_choice_row(
                     "默认分页行数",
-                    "后续用于控制新打开数据表的默认加载行数",
+                    "新打开数据表时默认每页加载的行数",
                     AppIcon::List,
-                    "待接入",
+                    settings.data_table_page_size,
+                    // 档位与《数据页 SQL 面板的 LIMIT 封顶》同源，见
+                    // `fluxdb_core::data_table_page_size_max` 的说明。
+                    &DATA_TABLE_PAGE_SIZE_CHOICES,
+                    |settings, value| settings.data_table_page_size = value,
                     colors,
-                ))
-                .child(settings_preference_row(
-                    "单元格内容显示",
-                    "后续支持在省略显示和自动换行之间选择",
-                    AppIcon::Table,
-                    "待接入",
-                    colors,
-                ))
-                .child(settings_preference_row(
-                    "查询结果默认布局",
-                    "后续用于设置查询结果默认显示在底部或右侧",
-                    AppIcon::PanelBottom,
-                    "待接入",
-                    colors,
+                    false,
+                    cx,
                 )),
         )
         .child(

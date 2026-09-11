@@ -11,14 +11,32 @@ const QUERY_OUTPUT_DEFAULT_WIDTH: f32 = 560.;
 const QUERY_OUTPUT_MIN_WIDTH: f32 = 320.;
 const SQL_EDITOR_MIN_WIDTH: f32 = 360.;
 const QUERY_TOOLBAR_HEIGHT: f32 = 40.;
-// Redis Workbench 上下分栏：编辑器区（上方）与结果区（下方）可拖动调整高度（同一结果区模型）。
+// Redis Workbench 分栏：编辑器区与结果区可拖动调整大小（同一结果区模型）。
+// 「下方」布局调整高度，「右侧」布局调整宽度，两种布局各自记住自己的尺寸。
 const REDIS_WB_TOOLBAR_HEIGHT: f32 = 40.;
+// 右侧布局下编辑器区宽度的夹取边界：编辑器不至窄到没法写命令，结果区也始终留得下。
+const REDIS_WB_EDITOR_MIN_WIDTH: f32 = 320.;
+const REDIS_WB_RESULT_MIN_WIDTH: f32 = 320.;
 // 单条执行记录卡片的结果区最大高度：超长 reply 在卡片内滚动，避免把整张卡片 / 外层列表撑高。
 const REDIS_WB_RECORD_BODY_MAX_HEIGHT: f32 = 320.;
 
 /// 垂直分栏（编辑器在结果区上方）可用高度估算：视口高度扣除顶部工具条。
 fn redis_workbench_split_height(window: &Window) -> f32 {
     (f32::from(window.viewport_size().height) - REDIS_WB_TOOLBAR_HEIGHT).max(0.)
+}
+
+/// 水平分栏（编辑器在结果区左侧）可用宽度估算：视口宽度扣除连接侧边栏。
+///
+/// 注意必须减掉侧边栏：它宽达 180-600px，在 1400px 窗口里最多占 43%。
+/// 若按视口宽直接算，渲染与实际可用宽会差出一整条侧边栏，
+/// 拖动时面板会每帧跳。收起侧边栏时不计入。
+fn redis_workbench_split_width(this: &NavicatMain, window: &Window) -> f32 {
+    let sidebar = if this.show_connection_browser {
+        clamp_connection_browser_width(this.connection_browser_width)
+    } else {
+        0.
+    };
+    (f32::from(window.viewport_size().width) - sidebar).max(0.)
 }
 
 /// 结果区高度（像素）夹到 [split/6, 0.70·split]（SQL）。
@@ -33,22 +51,32 @@ fn query_output_clamp_height(result_height: f32, split_height: f32) -> f32 {
     }
 }
 
-/// 把编辑器区高度（像素）夹到「结果区 ∈ [split/6, 0.80·split]」对应的范围（Workbench）。
+/// 把编辑器区尺寸（像素）夹到「结果区 ∈ [split/6, 0.80·split]」对应的范围（Workbench）。
 /// 结果最小 ⇒ editor 最大 = split − split/6 = 5·split/6；结果最大(0.80·split) ⇒ editor 最小 = 0.20·split。
-/// 可用高过小时退化为对半，避免 `clamp` 因 min>max 触发 panic。
-fn redis_workbench_clamp_editor_height(height: f32, split_height: f32) -> f32 {
-    let min_editor = split_height * (1. - REDIS_WB_RESULT_MAX_SPLIT_RATIO);
-    let max_editor = split_height * (1. - 1. / (1. + 1. / RESULT_MIN_EDITOR_RATIO));
+/// 可用空间过小时退化为对半，避免 `clamp` 因 min>max 触发 panic。
+/// 轴无关：`split` 传分栏可用高度即得高度约束，传可用宽度即得宽度约束。
+fn redis_workbench_clamp_editor_size(size: f32, split: f32) -> f32 {
+    let min_editor = split * (1. - REDIS_WB_RESULT_MAX_SPLIT_RATIO);
+    let max_editor = split * (1. - 1. / (1. + 1. / RESULT_MIN_EDITOR_RATIO));
     if min_editor >= max_editor {
-        split_height / 2.
+        split / 2.
     } else {
-        height.clamp(min_editor, max_editor)
+        size.clamp(min_editor, max_editor)
     }
 }
 
 /// 由全局分栏占比换算编辑器区高度（像素）。
 fn redis_workbench_editor_height(ratio: f32, split_height: f32) -> f32 {
-    redis_workbench_clamp_editor_height(split_height * ratio, split_height)
+    redis_workbench_clamp_editor_size(split_height * ratio, split_height)
+}
+
+/// 右侧布局下编辑器区宽度（像素）：取自设置，夹到
+/// `[REDIS_WB_EDITOR_MIN_WIDTH, available − REDIS_WB_RESULT_MIN_WIDTH]`。
+/// 两种布局的尺寸来源刻意不同 —— 高度是持久化占比，宽度是持久化像素；
+/// 宽度不用占比是因为它没有可信基准（见 `redis_workbench_split_width`）。
+fn redis_workbench_editor_width(width: f32, available: f32) -> f32 {
+    let max_width = (available - REDIS_WB_RESULT_MIN_WIDTH).max(REDIS_WB_EDITOR_MIN_WIDTH);
+    width.clamp(REDIS_WB_EDITOR_MIN_WIDTH, max_width)
 }
 
 fn content(
@@ -1065,9 +1093,9 @@ fn query_editor_content(
         .map(|connection| connection_config_color_hex(&connection.config.options))
         .map(connection_color_rgba)
         .unwrap_or_else(|| connection_color_rgba(DEFAULT_CONNECTION_COLOR));
-    let output_placement = this.query_output_placement;
+    let output_placement = this.results_placement;
     let workspace = match output_placement {
-        QueryOutputPlacement::Bottom => div()
+        ResultsPlacement::Bottom => div()
             .flex_1()
             .min_h(px(0.))
             .flex()
@@ -1082,7 +1110,7 @@ fn query_editor_content(
                 colors,
                 cx,
             )),
-        QueryOutputPlacement::Right => div()
+        ResultsPlacement::Right => div()
             .flex_1()
             .min_h(px(0.))
             .flex()
@@ -1162,11 +1190,56 @@ fn redis_workbench_content(
         .map(connection_color_rgba)
         .unwrap_or_else(|| connection_color_rgba(DEFAULT_CONNECTION_COLOR));
 
-    // 上下分栏：编辑器区高度 = 全局占比 × 可用高度（记住并恢复大小）；结果区占据剩余空间。
-    let split_height = redis_workbench_split_height(window);
-    let editor_ratio =
-        f32::from(this.controller.state().settings.redis_workbench_editor_ratio) / 100.0;
-    let editor_height = redis_workbench_editor_height(editor_ratio, split_height);
+    // 分栏尺寸按布局取：上下布局用持久化占比 × 可用高度；左右布局用持久化像素宽。
+    // 两者来源不同是刻意的 —— 各记各的，切换布局不会把另一种布局的尺寸带偏。
+    let placement = this.results_placement;
+    let editor_size = match placement {
+        ResultsPlacement::Bottom => {
+            let split_height = redis_workbench_split_height(window);
+            let ratio =
+                f32::from(this.controller.state().settings.redis_workbench_editor_ratio) / 100.0;
+            redis_workbench_editor_height(ratio, split_height)
+        }
+        ResultsPlacement::Right => {
+            let available = redis_workbench_split_width(this, window);
+            let width = f32::from(this.controller.state().settings.redis_workbench_editor_width);
+            redis_workbench_editor_width(width, available)
+        }
+    };
+    let input_panel = redis_workbench_input_panel(
+        input.clone(),
+        editor_size,
+        placement,
+        colors,
+        window,
+        cx,
+    );
+    let split_handle = redis_workbench_split_handle(editor_size, placement, colors, cx);
+    let results = redis_workbench_results(tab_id, workbench, this, colors, cx);
+
+    // 编辑器区与结果区的排布方向由布局决定；结果区始终 flex_1 吃掉剩余空间。
+    // 注意「右侧」分支刻意不调 `.flex_col()`（外层行方向已给出主轴），
+    // 且编辑器侧容器要 `.h_full()` 才能在行方向下撑满高度 —— 与 SQL 结果面板同一处理。
+    let split_area = match placement {
+        ResultsPlacement::Bottom => div()
+            .flex_1()
+            .min_h(px(0.))
+            .flex()
+            .flex_col()
+            .child(input_panel)
+            .child(split_handle)
+            .child(results),
+        ResultsPlacement::Right => div()
+            .flex_1()
+            .min_w(px(0.))
+            .min_h(px(0.))
+            .flex()
+            .overflow_hidden()
+            .child(input_panel)
+            .child(split_handle)
+            .child(results),
+    };
+
     div()
         .relative()
         .flex_1()
@@ -1179,25 +1252,11 @@ fn redis_workbench_content(
             connection,
             format!("DB {}", workbench.database),
             accent,
+            placement,
             colors,
             cx,
         ))
-        .child(
-            div()
-                .flex_1()
-                .min_h(px(0.))
-                .flex()
-                .flex_col()
-                .child(redis_workbench_input_panel(
-                    input.clone(),
-                    editor_height,
-                    colors,
-                    window,
-                    cx,
-                ))
-                .child(redis_workbench_split_handle(editor_height, colors, cx))
-                .child(redis_workbench_results(tab_id, workbench, this, colors, cx)),
-        )
+        .child(split_area)
 }
 
 /// Redis CLI 终端内容：一个真实 PTY 会话（redis-cli）的终端 surface。
@@ -1773,6 +1832,7 @@ fn redis_workbench_toolbar(
     connection: String,
     database: String,
     accent: gpui::Rgba,
+    placement: ResultsPlacement,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -1833,74 +1893,114 @@ fn redis_workbench_toolbar(
                 }),
             ),
         )
+        // 撑开左侧操作组，让结果区布局切换按钮单独贴最右（与 SQL 编辑器工具栏同一位置）。
+        // 这里原先还有一句「Redis 命令执行器」状态文字，已去掉：运行中状态由「运行」按钮
+        // 自身的 loading 态表达（见上），文字是重复信息。
         .child(div().flex_1())
         .child(
-            div()
-                .text_size(px(12.))
-                .text_color(colors.muted)
-                .child(if workbench.running { "执行中…" } else { "Redis 命令执行器" }),
+            // 结果区布局切换：与 SQL 编辑器工具栏右上角同一个按钮、同一套图标。
+            query_toolbar_icon_button(
+                query_output_layout_toggle_label(placement),
+                query_output_layout_toggle_icon(placement),
+                true,
+                false,
+                rgb(0x45a3ff),
+                colors,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    // 只改运行时值，不落盘：设置里的「查询结果默认布局」才是启动默认值。
+                    this.results_placement = this.results_placement.toggled();
+                    // 布局一变，旧拖拽起点记录的尺寸属于另一种轴（高/宽），必须丢弃，
+                    // 否则下一次拖动会把残留的高度当成宽度用。
+                    this.redis_workbench_panel_resize_start = None;
+                    cx.notify();
+                    cx.stop_propagation();
+                }),
+            ),
         )
 }
 
 
-/// 命令输入区：多行代码输入框，高度由分栏占比决定（可上下拖动调整）。
+/// 命令输入区：多行代码输入框。`下方`布局下由高度决定，`右侧`布局下由宽度决定，
+/// 两种布局都可用对应的分栏手柄拖动调整大小。
 ///
-/// 布局要点：这里不能只靠外层的 `h(px(height))` 撑高。gpui 的 `Input` 是多行时
-/// 默认 `h_auto()` 自动增长、按 `rows(N)` 取整行内容高度（见 input.rs render 的
-/// `.h_auto()` 分支），因此即使外层容器变大，输入框自身仍会缩成 `rows(8)` 的“小框”。
-/// 要让它真正填满可用高度，必须对 `Input` 显式 `.h_full()`（内部等价 `height =
-/// relative(1.)`，会覆盖自动增长，让编辑器随外层容器一起伸缩），并在外层容器
-/// `overflow_y_scrollbar()` 保证内容超长时可滚动、不会把结果区顶下去。这和三方 SQL
-/// 编辑器用自定义 Canvas + `.flex_1()` 填满的思路一致，只是复用内置 `Input`。
+/// 布局要点：外层容器必须在**流轴**上给出确定尺寸 —— `Editor::render` 的根节点是
+/// `.relative().size_full()`，其 `100%` 需要父级先有确定尺寸才能解算出像素值。
+/// 因此「下方」给 `.h(px(size))`，「右侧」给 `.w(px(size))` 并额外 `.h_full()`：
+/// 右侧布局下外层是行方向，不写 `.h_full()` 的话高度只有内容高，编辑器撑不满整列。
 fn redis_workbench_input_panel(
     editor: Entity<editor_component::Editor>,
-    height: f32,
+    size: f32,
+    placement: ResultsPlacement,
     colors: UiColors,
     _window: &mut Window,
     _cx: &mut Context<NavicatMain>,
-) -> impl IntoElement {
+) -> Div {
     // 键鼠/滚动/滚动条/动作分发已下沉到 Editor::render()；此处仅保留布局定位 + 配色。
-    div()
+    // 分隔线画在朝向结果区的那一侧：上下分栏画底边，左右分栏画右边。
+    // 返回具体 `Div` 而非 `impl IntoElement`：后者会捕获 `_cx` 的生命周期，
+    // 调用方一旦把结果存进局部变量就会与后续的 `cx` 借用冲突。
+    let panel = div()
         .flex_none()
-        .h(px(height))
-        .min_h(px(0.))
-        .border_b_1()
         .border_color(colors.border)
-        .bg(colors.input_bg)
-        .child(editor)
+        .bg(colors.input_bg);
+    let panel = match placement {
+        ResultsPlacement::Bottom => panel.h(px(size)).min_h(px(0.)).border_b_1(),
+        ResultsPlacement::Right => panel.w(px(size)).h_full().min_w(px(0.)).border_r_1(),
+    };
+    panel.child(editor)
 }
 
 /// Redis Workbench 上下分栏拖动手柄：居中一排 3 个圆点（对齐 RedisInsight 的 grip 观感）。
-/// 拖动改变全局分栏占比并即时写回持久化设置，重开 Workbench 仍可恢复。
+/// 拖动改变分栏大小并即时写回持久化设置，重开 Workbench 仍可恢复。
+/// 「下方」布局拖的是高度（写 `redis_workbench_editor_ratio`），
+/// 「右侧」布局拖的是宽度（写 `redis_workbench_editor_width`）。
 fn redis_workbench_split_handle(
-    editor_height: f32,
+    editor_size: f32,
+    placement: ResultsPlacement,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Stateful<Div> {
-    const HANDLE_H: f32 = 7.;
+    // 手柄粗细在两个轴向上相同，只是方向不同。
+    const SPLIT_HANDLE_THICKNESS: f32 = 7.;
     let dot = colors.muted;
-    div()
-        .id("redis-workbench-split-handle")
-        .flex_none()
-        .h(px(HANDLE_H))
-        .bg(colors.panel_bg)
-        .cursor_ns_resize()
+    // grip 三点在两个轴向上都要居中排布：上下分栏的条是横的（点横排），
+    // 左右分栏的条是竖的（点必须竖排，否则 7px 宽里三个点会横向溢出）。
+    let grip = div()
         .flex()
         .items_center()
         .justify_center()
         .gap_1()
-        // 3 个 grip 圆点：常态用弱色，手柄 hover 时整条高亮。
         .child(div().size(px(2.)).rounded_full().bg(dot))
         .child(div().size(px(2.)).rounded_full().bg(dot))
-        .child(div().size(px(2.)).rounded_full().bg(dot))
+        .child(div().size(px(2.)).rounded_full().bg(dot));
+    let handle = match placement {
+        ResultsPlacement::Bottom => div().h(px(SPLIT_HANDLE_THICKNESS)).cursor_ns_resize().child(grip),
+        ResultsPlacement::Right => div()
+            .w(px(SPLIT_HANDLE_THICKNESS))
+            .h_full()
+            .cursor_col_resize()
+            .child(grip.flex_col()),
+    };
+
+    handle
+        .id("redis-workbench-split-handle")
+        .flex_none()
+        .bg(colors.panel_bg)
         .hover(move |style| style.bg(colors.hover))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                // 起点记下布局与两个轴的坐标：布局可能在松手前被工具栏切走，
+                // 而 `on_mouse_up` 未必触发（见 `RedisWorkbenchPanelResizeStart` 的说明）。
                 this.redis_workbench_panel_resize_start =
                     Some(RedisWorkbenchPanelResizeStart {
+                        placement,
+                        x: f32::from(event.position.x),
                         y: f32::from(event.position.y),
-                        editor_height,
+                        size: editor_size,
                     });
                 cx.stop_propagation();
             }),
@@ -1914,27 +2014,52 @@ fn redis_workbench_split_handle(
                 let Some(start) = this.redis_workbench_panel_resize_start else {
                     return;
                 };
-                // 拖拽增量 = 当前鼠标 Y − 按下时 Y（与侧边栏/建表面板的
-                // `start.x + current.x - start.x` 换算方向一致）：
-                // 手柄向下拖动（鼠标 Y 增大）→ 编辑器区变高，向上拖动 → 变小。
-                let delta = f32::from(event.event.position.y) - start.y;
-                let current_split = redis_workbench_split_height(window);
-                let new_height =
-                    redis_workbench_clamp_editor_height(start.editor_height + delta, current_split);
-                // 换算回整数占比并写入内存设置，触发重渲染即时反馈；落盘推迟到松开鼠标。
-                let ratio_pct = (new_height / current_split * 100.0).round().clamp(0.0, 100.0) as u8;
+                // 一律按**起点记录的布局**换算，不读实时值：起点与轴必须配对。
                 let mut settings = this.controller.state().settings.clone();
-                settings.redis_workbench_editor_ratio = ratio_pct;
+                match start.placement {
+                    ResultsPlacement::Bottom => {
+                        // 增量 = 当前 Y − 按下 Y：手柄向下拖（Y 增大）→ 编辑器区变高。
+                        let delta = f32::from(event.event.position.y) - start.y;
+                        let split = redis_workbench_split_height(window);
+                        let new_size = redis_workbench_clamp_editor_size(start.size + delta, split);
+                        // 换算回整数占比写入内存设置，触发重渲染即时反馈；落盘推迟到松开鼠标。
+                        settings.redis_workbench_editor_ratio =
+                            (new_size / split * 100.0).round().clamp(0.0, 100.0) as u8;
+                    }
+                    ResultsPlacement::Right => {
+                        // 增量 = 当前 X − 按下 X：编辑器区在**左**，手柄向右拖 → 编辑器区变宽。
+                        // 注意这与 SQL 结果面板相反（那块面板在右侧、向左生长，
+                        // 所以那边是 `start.x - current.x`），别照抄。
+                        let delta = f32::from(event.event.position.x) - start.x;
+                        let available = redis_workbench_split_width(this, window);
+                        let new_size =
+                            redis_workbench_editor_width(start.size + delta, available);
+                        settings.redis_workbench_editor_width =
+                            new_size.round().clamp(0.0, f32::from(u16::MAX)) as u16;
+                    }
+                }
                 let _ = this.controller.dispatch(AppCommand::SaveSettings(settings));
                 cx.notify();
                 cx.stop_propagation();
             },
         ))
+        // 落盘只在松手时做。`on_mouse_up` 仅在指针仍悬停手柄上时触发，
+        // 而正常拖拽手势是在结果区松手，所以必须补一个 `on_mouse_up_out`
+        // （非悬停时触发）才真的落盘 —— 否则分栏大小拖完一重启就丢。
+        // 两处都用 `take().is_some()` 守卫，天然幂等，重复触发无副作用。
         .on_mouse_up(
             MouseButton::Left,
             cx.listener(move |this, _: &MouseUpEvent, _, cx| {
                 if this.redis_workbench_panel_resize_start.take().is_some() {
-                    // 松开时把最终占比落盘，重开 Workbench / 重启后仍能恢复。
+                    let _ = this.storage.save_settings(&this.controller.state().settings);
+                }
+                cx.stop_propagation();
+            }),
+        )
+        .on_mouse_up_out(
+            MouseButton::Left,
+            cx.listener(move |this, _: &MouseUpEvent, _, cx| {
+                if this.redis_workbench_panel_resize_start.take().is_some() {
                     let _ = this.storage.save_settings(&this.controller.state().settings);
                 }
                 cx.stop_propagation();
@@ -1977,13 +2102,28 @@ fn redis_workbench_results(
         redis_workbench_records(tab_id, workbench, this, colors, cx).into_any_element()
     };
 
-    div()
+    // 横向：右侧布局下结果区会变窄，`.min_w(px(0.))` 才能让它真正收缩
+    // （否则 min-width:auto 取内容最小宽，超宽内容会把结果区顶出去）。
+    // 注意 `.overflow_y_scrollbar()` 返回的 `Scrollable` 会按轴强制 overflow，
+    // 再把样式转发到外层 wrapper —— 横向裁剪必须由这层朴素容器承担。
+    let scroller = div()
         .flex_1()
+        .min_w(px(0.))
         .min_h(px(0.))
         .overflow_y_scrollbar()
         .flex()
         .flex_col()
-        .child(body)
+        .child(body);
+    // 外层必须是 flex 容器，内层的 `flex_1` 才会生效；否则滚动区高度退化成内容高，
+    // 超出部分会被这里的 `overflow_hidden` 直接裁掉且无法滚动。
+    div()
+        .flex_1()
+        .min_w(px(0.))
+        .min_h(px(0.))
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .child(scroller)
         .into_any_element()
 }
 
@@ -2770,7 +2910,7 @@ fn command_bulk_display(bulk: &CommandBulk) -> String {
 fn query_output_panel(
     tab_id: TabId,
     editor: &QueryEditorState,
-    placement: QueryOutputPlacement,
+    placement: ResultsPlacement,
     this: &mut NavicatMain,
     window: &mut Window,
     colors: UiColors,
@@ -2799,8 +2939,8 @@ fn query_output_panel(
             }
         });
     let size = match placement {
-        QueryOutputPlacement::Bottom => query_output_height(tab_id, this, window),
-        QueryOutputPlacement::Right => query_output_width(tab_id, this, window),
+        ResultsPlacement::Bottom => query_output_height(tab_id, this, window),
+        ResultsPlacement::Right => query_output_width(tab_id, this, window),
     };
     let body = if let Some(error) = editor.error.as_ref() {
         let retry = Button::new(("retry-query-output", tab_id.0))
@@ -2854,13 +2994,13 @@ fn query_output_panel(
         .bg(colors.panel_bg)
         .flex();
     match placement {
-        QueryOutputPlacement::Bottom => panel
+        ResultsPlacement::Bottom => panel
             .h(px(size))
             .border_t_1()
             .flex_col()
             .child(query_output_resize_handle(tab_id, placement, size, colors, cx))
             .child(content),
-        QueryOutputPlacement::Right => panel
+        ResultsPlacement::Right => panel
             .w(px(size))
             .h_full()
             .border_l_1()
@@ -2923,7 +3063,7 @@ fn query_output_max_width(window: &Window) -> f32 {
 
 fn query_output_resize_handle(
     tab_id: TabId,
-    placement: QueryOutputPlacement,
+    placement: ResultsPlacement,
     size: f32,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
@@ -2959,13 +3099,13 @@ fn query_output_resize_handle(
                     return;
                 }
                 match start.placement {
-                    QueryOutputPlacement::Bottom => {
+                    ResultsPlacement::Bottom => {
                         let delta = start.y - f32::from(event.event.position.y);
                         let split = query_split_height(window);
                         let height = query_output_clamp_height(start.size + delta, split);
                         this.query_output_heights.insert(tab_id, height);
                     }
-                    QueryOutputPlacement::Right => {
+                    ResultsPlacement::Right => {
                         let delta = start.x - f32::from(event.event.position.x);
                         let width = (start.size + delta)
                             .clamp(QUERY_OUTPUT_MIN_WIDTH, query_output_max_width(window));
@@ -2989,14 +3129,14 @@ fn query_output_resize_handle(
             }),
         );
     match placement {
-        QueryOutputPlacement::Bottom => handle.h(px(7.)).cursor_ns_resize(),
-        QueryOutputPlacement::Right => handle.w(px(7.)).h_full().cursor_col_resize(),
+        ResultsPlacement::Bottom => handle.h(px(7.)).cursor_ns_resize(),
+        ResultsPlacement::Right => handle.w(px(7.)).h_full().cursor_col_resize(),
     }
 }
 
 fn collapsed_query_output_button(
     tab_id: TabId,
-    placement: QueryOutputPlacement,
+    placement: ResultsPlacement,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -3034,8 +3174,8 @@ fn collapsed_query_output_button(
             }),
         );
     match placement {
-        QueryOutputPlacement::Bottom => container.h(px(0.)).child(button),
-        QueryOutputPlacement::Right => container.w(px(0.)).h_full().child(button),
+        ResultsPlacement::Bottom => container.h(px(0.)).child(button),
+        ResultsPlacement::Right => container.w(px(0.)).h_full().child(button),
     }
 }
 
@@ -4399,7 +4539,7 @@ fn query_toolbar(
     connection: String,
     database: String,
     accent: gpui::Rgba,
-    output_placement: QueryOutputPlacement,
+    output_placement: ResultsPlacement,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -4600,21 +4740,13 @@ fn query_toolbar(
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
-                    this.query_output_placement = this.query_output_placement.toggled();
+                    this.results_placement = this.results_placement.toggled();
                     this.query_output_resize_start = None;
                     cx.notify();
                     cx.stop_propagation();
                 }),
             ),
         )
-        .child(query_toolbar_icon_button(
-            "询问 AI",
-            AppIcon::Bot,
-            true,
-            false,
-            rgb(0xb26cff),
-            colors,
-        ))
 }
 
 fn query_editor_wrap_toggle_icon(soft_wrap: bool) -> AppIcon {
@@ -4633,17 +4765,17 @@ fn query_editor_wrap_toggle_label(soft_wrap: bool) -> &'static str {
     }
 }
 
-fn query_output_layout_toggle_icon(placement: QueryOutputPlacement) -> AppIcon {
+fn query_output_layout_toggle_icon(placement: ResultsPlacement) -> AppIcon {
     match placement {
-        QueryOutputPlacement::Bottom => AppIcon::PanelBottom,
-        QueryOutputPlacement::Right => AppIcon::PanelRight,
+        ResultsPlacement::Bottom => AppIcon::PanelBottom,
+        ResultsPlacement::Right => AppIcon::PanelRight,
     }
 }
 
-fn query_output_layout_toggle_label(placement: QueryOutputPlacement) -> &'static str {
+fn query_output_layout_toggle_label(placement: ResultsPlacement) -> &'static str {
     match placement {
-        QueryOutputPlacement::Bottom => "结果在下方",
-        QueryOutputPlacement::Right => "结果在右侧",
+        ResultsPlacement::Bottom => "结果在下方",
+        ResultsPlacement::Right => "结果在右侧",
     }
 }
 

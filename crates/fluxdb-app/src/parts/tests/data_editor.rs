@@ -15,6 +15,28 @@
         assert_eq!(controller.state().active_tab, Some(TabId(1)));
     }
 
+    /// 「设置-数据 → 默认分页行数」必须驱动新打开数据表的页大小。
+    /// 反证：查询结果的 `page_size` 与之独立，不能影响数据表。
+    #[test]
+    fn open_data_editor_uses_data_table_page_size_setting() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenConnection(ConnectionId(1)));
+        let database = controller.state().connections[0].objects[0].path.clone();
+        controller.dispatch(AppCommand::LoadObjectChildren(database));
+        let object = controller.state().connections[0].objects[1].path.clone();
+
+        let mut settings = controller.state().settings.clone();
+        settings.data_table_page_size = 500;
+        settings.page_size = 1000;
+        controller.dispatch(AppCommand::SaveSettings(settings));
+
+        controller.dispatch(AppCommand::OpenDataEditor(object));
+
+        let editor = active_editor(&controller);
+        assert_eq!(editor.pagination.offset, 0);
+        assert_eq!(editor.pagination.limit, 500);
+    }
+
     #[test]
     fn reset_data_page_for_reload_clears_current_page() {
         let mut controller = controller_with_data_editor();

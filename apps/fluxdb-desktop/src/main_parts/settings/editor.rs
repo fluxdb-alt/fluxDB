@@ -1,3 +1,9 @@
+/// 「结果布局」设置项的两个选项目标（显示文案, 下标）。顺序即面板按钮顺序。
+const RESULTS_PLACEMENT_CHOICES: &[(&str, u64)] = &[
+    ("下方", ResultsPlacement::Bottom.to_index()),
+    ("右侧", ResultsPlacement::Right.to_index()),
+];
+
 fn settings_editor_panel(
     settings: Settings,
     font_size_slider: Entity<SliderState>,
@@ -120,6 +126,22 @@ fn settings_editor_panel(
                         )
                     }))
                 }),
+        )
+        .child(
+            // 单独成组：该项同时作用于 SQL 查询结果面板与 Redis Workbench 结果区，
+            // 塞进「SQL 执行」或「Redis」任何一边都不贴切。
+            settings_panel_group("结果布局", colors)
+                .child(settings_choice_row(
+                    "查询结果默认布局",
+                    "查询结果与 Redis Workbench 结果区默认显示在下方或右侧",
+                    AppIcon::PanelBottom,
+                    settings.results_placement.to_index(),
+                    RESULTS_PLACEMENT_CHOICES,
+                    |settings, value| settings.results_placement = ResultsPlacement::from_index(value),
+                    colors,
+                    false,
+                    cx,
+                )),
         )
         .child(
             settings_panel_group("Redis", colors)

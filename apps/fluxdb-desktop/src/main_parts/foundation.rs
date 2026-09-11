@@ -22,6 +22,8 @@ fn rgba_with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
     color
 }
 
+/// 顶部栏 GitHub 按钮打开的项目地址。改仓库时只改这一处。
+const GITHUB_REPOSITORY_URL: &str = "https://github.com/fluxdb-alt/fluxDB";
 const DEFAULT_CONNECTION_COLOR: &str = "#202124";
 const CONNECTION_COLOR_OPTION: &str = "color";
 const VISIBLE_DATABASES_OPTION: &str = "visible_databases";
@@ -318,6 +320,7 @@ enum AppIcon {
     Folder,
     FolderInput,
     FolderUp,
+    Github,
     Home,
     List,
     Maximize,
@@ -377,6 +380,7 @@ fn app_icon_path(icon: AppIcon) -> &'static str {
         AppIcon::Folder => "icons/folder.svg",
         AppIcon::FolderInput => "icons/folder-input.svg",
         AppIcon::FolderUp => "icons/folder-up.svg",
+        AppIcon::Github => "icons/github.svg",
         AppIcon::Home => "icons/home.svg",
         AppIcon::List => "icons/list.svg",
         AppIcon::Maximize => "icons/maximize-2.svg",

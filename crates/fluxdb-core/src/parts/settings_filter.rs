@@ -27,6 +27,22 @@ impl Default for Pagination {
     }
 }
 
+/// 「默认分页行数」设置项的可选档位（升序）。数据表页大小只能取这些值。
+pub const DATA_TABLE_PAGE_SIZE_CHOICES: [(&str, u64); 3] = [("100", 100), ("500", 500), ("1000", 1000)];
+
+/// 数据表页大小 / 数据页 SQL 面板里 LIMIT 的封顶值 —— 取可选档位里最大的一档。
+///
+/// 刻意从档位表推导而不是另写一个数：这两处表达的是**同一个产品上限**。
+/// 历史上它们各写各的（档位到 1000，面板封顶却是写死的 100），导致「默认分页行数」
+/// 选了 500/1000 后，一按刷新（⌘R）就被面板的上限夹回 100。
+pub fn data_table_page_size_max() -> u64 {
+    DATA_TABLE_PAGE_SIZE_CHOICES
+        .iter()
+        .map(|(_, value)| *value)
+        .max()
+        .unwrap_or(Pagination::DEFAULT_LIMIT)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Theme {
     System,
@@ -64,6 +80,47 @@ pub enum UiDensity {
     Compact,
     Standard,
     Comfortable,
+}
+
+/// 查询结果区的停靠位置。SQL 编辑器的查询结果面板与 Redis Workbench 的结果区
+/// 共用同一个值，两处始终一致。
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResultsPlacement {
+    /// 结果区在编辑器下方（上下分栏）。
+    Bottom = 0,
+    /// 结果区在编辑器右侧（左右分栏）。
+    Right = 1,
+}
+
+impl ResultsPlacement {
+    /// 在两种布局之间翻转（工具栏切换按钮用）。
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Bottom => Self::Right,
+            Self::Right => Self::Bottom,
+        }
+    }
+
+    /// 设置面板的选择控件只吃 `u64`，这里给出稳定下标（等于上面的判别值）。
+    /// `const` 是为了让面板的 `&'static` 选项表能在编译期算出来。
+    pub const fn to_index(self) -> u64 {
+        self as u64
+    }
+
+    /// `to_index` 的逆运算；越界时回退到默认值，避免脏配置让面板无按钮高亮。
+    pub fn from_index(index: u64) -> Self {
+        match index {
+            1 => Self::Right,
+            _ => Self::Bottom,
+        }
+    }
+}
+
+impl Default for ResultsPlacement {
+    fn default() -> Self {
+        Self::Bottom
+    }
 }
 
 impl Default for UiDensity {
@@ -111,7 +168,13 @@ pub struct Settings {
     pub light_theme: String,
     #[serde(default = "default_dark_theme")]
     pub dark_theme: String,
+    /// SQL 查询结果的每页行数（0 表示不限制）。仅作用于查询编辑器执行结果，
+    /// 数据表浏览的页大小见 `data_table_page_size`。
     pub page_size: u64,
+    /// 新打开数据表时的默认每页加载行数。仅作用于数据表编辑器，与查询结果的
+    /// `page_size` 相互独立；取值经 `Pagination::new` 收敛到合法区间。
+    #[serde(default = "default_data_table_page_size")]
+    pub data_table_page_size: u64,
     pub show_sidebar: bool,
     pub show_inspector: bool,
     #[serde(default = "default_editor_font_size")]
@@ -137,6 +200,15 @@ pub struct Settings {
     /// 用整数百分比而非 f32，保持 `Settings` 结构体可派生 `Eq`。
     #[serde(default = "default_redis_workbench_editor_ratio")]
     pub redis_workbench_editor_ratio: u8,
+    /// 查询结果区的默认停靠位置（下方 / 右侧）。同时驱动 SQL 编辑器的查询结果面板
+    /// 与 Redis Workbench 的结果区；工具栏上的切换按钮只改运行时值，不改这里。
+    #[serde(default)]
+    pub results_placement: ResultsPlacement,
+    /// Redis Workbench 在「右侧」布局下编辑器区的宽度（像素）。
+    /// 与 `redis_workbench_editor_ratio` 相互独立：两种布局各自记住自己的分栏大小，
+    /// 切换布局不会把另一种布局的尺寸带偏。
+    #[serde(default = "default_redis_workbench_editor_width")]
+    pub redis_workbench_editor_width: u16,
     /// 用户自定义的应用级快捷键，键为稳定 action id，值为 GPUI keystroke 规范。
     #[serde(default)]
     pub custom_keybindings: BTreeMap<String, String>,
@@ -170,6 +242,7 @@ impl Default for Settings {
             light_theme: default_light_theme(),
             dark_theme: default_dark_theme(),
             page_size: Pagination::DEFAULT_LIMIT,
+            data_table_page_size: default_data_table_page_size(),
             show_sidebar: true,
             show_inspector: true,
             editor_font_size: default_editor_font_size(),
@@ -181,6 +254,8 @@ impl Default for Settings {
             dangerous_sql_actions: default_dangerous_sql_actions(),
             enable_completion_index: default_completion_index_enabled(),
             redis_workbench_editor_ratio: default_redis_workbench_editor_ratio(),
+            results_placement: ResultsPlacement::default(),
+            redis_workbench_editor_width: default_redis_workbench_editor_width(),
             custom_keybindings: BTreeMap::new(),
             backup_dir: String::new(),
             mysqldump_path: String::new(),
@@ -240,6 +315,12 @@ fn default_editor_font_size() -> u32 {
     12
 }
 
+/// 数据表默认页大小。默认与 `Pagination::DEFAULT_LIMIT` 对齐，
+/// 老配置文件缺该字段时按此值补齐。
+fn default_data_table_page_size() -> u64 {
+    Pagination::DEFAULT_LIMIT
+}
+
 fn default_editor_line_height() -> u32 {
     14
 }
@@ -277,6 +358,14 @@ fn default_dark_theme() -> String {
 fn default_redis_workbench_editor_ratio() -> u8 {
     // 结果区默认占分栏 37.5% ⇒ editor 占分栏 ≈ 62.5%。
     63
+}
+
+/// Redis Workbench 右侧布局下编辑器区的默认宽度（像素）。
+/// 取固定像素而非占比：宽度基准要减掉连接侧边栏（宽达 180-600px），
+/// 按视口宽算占比会整体偏，且拖拽会被百分比量化成十几像素一跳。
+/// 与 SQL 查询结果面板的 `QUERY_OUTPUT_DEFAULT_WIDTH` 同一套模型，行为保持一致。
+fn default_redis_workbench_editor_width() -> u16 {
+    720
 }
 
 fn default_button_radius() -> u8 {
