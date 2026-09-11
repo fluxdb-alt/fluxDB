@@ -62,7 +62,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T15 | 查询结果编辑、保存查询和历史补偿 | T11、T13、T14 | 已完成 / FluxDB |
 | T16 | DDL 读取和 PostgreSQL 新建表 provider | T08、T12、T13 | 已完成 / FluxDB |
 | T17 | 设计表差异计划和结构修改执行 | T16 | 已完成 / FluxDB |
-| T18 | 复制/重命名/清空/删除表 | T11、T16、T17 | 未开始 / — |
+| T18 | 复制/重命名/清空/删除表 | T11、T16、T17 | 已完成 / FluxDB |
 | T19 | PostgreSQL 连接对话框 | T02、T05 | 未开始 / — |
 | T20 | schema 树、数据库对话框和能力路由 | T06、T07、T19 | 未开始 / — |
 | T21 | 数据/查询/详情与历史 UI 接入 | T10–T16、T20 | 未开始 / — |
@@ -335,12 +335,12 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T18 — 表操作
 
-- [ ] 完成 T18
+- [x] 完成 T18
 - **开始前读**：设计 9.3；R08、R15、R16、R21、R22、R26。
 - **工作**：PG 重命名/复制/清空/删除 provider；全限定对象；复制结构/数据和独立序列；RESTRICT/CASCADE 与 restart identity；成功后更新对应缓存/标签。
 - **交付位置**：app/table_actions、postgres/ddl.rs、core 表动作选项。
 - **验收**：schema 同名表只操作指定对象；复制后源/目标自增独立；有数据 identity 不重复、generated 不手工写；默认 RESTRICT；拒绝以 session_replication_role 绕过 FK；对象 kind 对应正确 DDL；MySQL 表操作未变。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成；执行人 FluxDB（T18 增量一/二）；内容 — (一) 新增 `app/parts/table_actions_postgres.rs`：重命名（旧名 schema 限定、新名必须单段，带点号直接拒绝）、复制（`CREATE TABLE (LIKE ... INCLUDING ALL)` + 独立序列 + 可选数据）、删除（按 kind 分 `DROP TABLE` / `DROP VIEW`，默认 RESTRICT，不带 CASCADE）、清空（默认 `CONTINUE IDENTITY RESTRICT`，用户显式选择才 `RESTART IDENTITY`）。PG 明确拒绝 MySQL 的「禁用外键检查」，且不退化为 `session_replication_role`（语义不等价，会绕过触发器）。(二) 复制表自增独立性：`LIKE INCLUDING ALL` 会把 serial 默认值指向**源**序列，改为用 DO 块在目标 schema 内为每个 nextval 默认列新建 `OWNED BY` 目标列的序列并重绑；数据复制同样走 DO 块——按 `attgenerated = ''` 生成列清单（生成列不参与写入）、存在 identity 时附加 `OVERRIDING SYSTEM VALUE` 保留显式值，复制后用 `pg_get_serial_sequence` + `setval(max)` 校准各序列位置，使副本后续插入既不与已复制数据冲突也不推进源序列。(三) `TableActionSqlProvider` 增加 schema / kind / restart_identity 入参，MySQL/SQLite/Unsupported 实现保持原行为，桌面表操作表单与预览同步（清空表新增 restart_identity，默认 false）。(四) 表操作成功后失效补全缓存（重命名/复制/删除直接执行 SQL、不走历史记录路径，原先完全不失效），后台刷新在库级 dirty 时整批重取表清单，旧名/已删表不再被建议。验证 — 单测 `postgres_table_actions_are_schema_qualified_and_kind_aware`、`mysql_table_actions_unchanged_by_postgres_provider`、`table_actions_invalidate_completion_index`；真实 PG 冒烟 `postgres_copy_table_gets_independent_sequence`（`GENERATED ALWAYS AS IDENTITY` + 生成列 STORED + 两行数据：副本序列独立、源序列 last_value 仍为 3 未被推进、两表各自主键唯一、生成列由服务端重算）；工作区全量通过（app 390、connectors 133 等）。未完成项：无。CASCADE 的依赖范围展示沿用既有危险操作确认流程（与 MySQL 一致），PG 侧不额外生成 CASCADE。
 
 ### T19 — 连接 UI
 

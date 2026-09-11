@@ -408,6 +408,8 @@ PG 不显示 engine/charset/unsigned/zerofill/ON UPDATE 时间/索引前缀长�
 - 清空：默认 TRUNCATE ... CONTINUE IDENTITY RESTRICT；用户可明确选择 RESTART IDENTITY / CASCADE，预览受影响依赖。不能把 MySQL “禁用外键检查”转换成 `session_replication_role=replica`。
 - 删除：DROP TABLE/VIEW/MATERIALIZED VIEW 按 kind，默认 RESTRICT；CASCADE 必须显示依赖范围且由用户明确选择。普通错误（引用、权限、锁）不能被吞掉。
 
+实现记录（T18）：`app/parts/table_actions_postgres.rs` 提供 PG 表操作 SQL——重命名只接受单段新名、旧名 schema 限定；删除按 kind 选 `DROP TABLE`/`DROP VIEW` 且默认 RESTRICT；清空默认 `CONTINUE IDENTITY RESTRICT`，`RESTART IDENTITY` 需显式选择；「禁用外键检查」明确拒绝且不改为 `session_replication_role`。复制表用 `LIKE ... INCLUDING ALL` 保留结构，再用 DO 块在目标 schema 内重建每个 nextval 默认列的独立序列（`OWNED BY` 目标列）并重绑默认值；数据复制同样在 DO 块内按生成列清单执行（跳过 `attgenerated <> ''`、identity 存在时用 `OVERRIDING SYSTEM VALUE`），复制后 `setval` 到当前最大键值——副本后续插入不与已复制数据冲突、也不推进源序列。表操作成功后按 scope 失效补全缓存，库级刷新时整批重取表清单。
+
 ## 10. UI 与 gpui-component
 
 使用当前安装的 `gpui-component 0.6.0`，不升级控件库来完成接入；新增 PG 展示适配已有 `UiColors` 和 AppIcon。普通布局容器可以 div，操作控件必须复用组件。[R13–R17]
