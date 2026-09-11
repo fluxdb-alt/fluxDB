@@ -4,11 +4,23 @@ pub struct DataChangeSet {
     pub inserts: Vec<Row>,
     pub updates: Vec<RowUpdate>,
     pub deletes: Vec<RowIdentity>,
+    /// 插入行的写入意图，按 `inserts` 顺序与列序并行。
+    ///
+    /// `None` 表示旧语义（`non_null_insert_values`：NULL 视为省略 → DEFAULT），
+    /// 供 MySQL / 未升级的调用方沿用；`Some` 时逐行携带三态
+    /// `Default / Null / Value`，让 PG 能区分「写 DEFAULT」与「显式写 NULL」。
+    /// 缺省为 `None`，保持既有所有构造点可编译、行为不变。
+    pub insert_intents: Option<Vec<Vec<WriteValue>>>,
 }
 
 impl DataChangeSet {
     pub fn is_empty(&self) -> bool {
         self.inserts.is_empty() && self.updates.is_empty() && self.deletes.is_empty()
+    }
+
+    /// 返回第 `index` 行插入的写入意图；未提供 `insert_intents` 时退回「逐值写」。
+    pub fn insert_intents_for(&self, index: usize) -> Option<&[WriteValue]> {
+        self.insert_intents.as_ref().and_then(|rows| rows.get(index)).map(Vec::as_slice)
     }
 
     pub fn dirty_cell_count(&self) -> usize {

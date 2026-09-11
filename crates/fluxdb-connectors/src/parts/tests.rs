@@ -400,6 +400,7 @@ mod tests {
                     ],
                 }],
                 updates: Vec::new(),
+                insert_intents: None,
                 deletes: Vec::new(),
             })
             .unwrap();
@@ -417,6 +418,7 @@ mod tests {
                         value: CellValue::Text("600".to_string()),
                     }],
                 }],
+                insert_intents: None,
                 deletes: Vec::new(),
             })
             .unwrap();
@@ -472,6 +474,7 @@ mod tests {
                         value: CellValue::Text("after".to_string()),
                     }],
                 }],
+                insert_intents: None,
                 deletes: Vec::new(),
             })
             .unwrap();
@@ -934,6 +937,7 @@ mod tests {
                     object: object.clone(),
                     inserts: vec![row(key, kind, value, ttl)],
                     updates: Vec::new(),
+                    insert_intents: None,
                     deletes: Vec::new(),
                 })
                 .unwrap();
@@ -956,6 +960,7 @@ mod tests {
             object: object.clone(),
             inserts: vec![row(&cases[0].0, "string", "x", "")],
             updates: Vec::new(),
+            insert_intents: None,
             deletes: Vec::new(),
         });
         assert!(duplicate.is_err());
@@ -965,6 +970,7 @@ mod tests {
             object: object.clone(),
             inserts: vec![row(&format!("{prefix}:empty"), "list", "", "")],
             updates: Vec::new(),
+            insert_intents: None,
             deletes: Vec::new(),
         });
         assert!(empty_list.is_err());
@@ -2135,6 +2141,7 @@ mod tests {
                 deletes: vec![fluxdb_core::RowIdentity {
                     values: [("id".to_string(), CellValue::I64(2))].into(),
                 }],
+                insert_intents: None,
             })
             .unwrap();
 
@@ -2221,6 +2228,7 @@ mod tests {
                     values: vec![CellValue::Null, CellValue::Null],
                 }],
                 updates: Vec::new(),
+                insert_intents: None,
                 deletes: Vec::new(),
             })
             .unwrap();
@@ -2838,6 +2846,7 @@ SELECT item_id, name FROM audit_log;"
                     value: CellValue::Text("Touring Bike".to_string()),
                 }],
             }],
+            insert_intents: None,
             deletes: Vec::new(),
         });
 
@@ -3868,6 +3877,48 @@ SELECT item_id, name FROM audit_log;"
         assert!(params.is_empty());
     }
 
+    /// 三态意图下 `pg_insert_values`：Default 省略、Null 显式 NULL、Value 写值、生成列剔除。
+    #[test]
+    fn pg_insert_values_respects_three_state_intents() {
+        let mkcol = |name: &str, ty: &str| Column {
+            name: name.to_string(),
+            type_name: Some(ty.to_string()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        };
+        let c_id = mkcol("id", "int4");
+        let c_name = mkcol("name", "text");
+        let c_gen = mkcol("gen", "int4"); // 模拟服务端生成列
+        let columns = vec![c_id.clone(), c_name.clone(), c_gen.clone()];
+        let row = Row { values: vec![CellValue::Null, CellValue::Null, CellValue::Null] };
+
+        // Default / Value / 生成列 → 只写 name；Null 列省略由数据库默认值填充。
+        let intents = vec![
+            WriteValue::Default,
+            WriteValue::Value(CellValue::Text("alice".to_string())),
+            WriteValue::Null,
+        ];
+        let generated: std::collections::BTreeSet<String> =
+            ["gen".to_string()].into_iter().collect();
+
+        let built = pg_insert_values(&row, &columns, &generated, Some(&intents)).unwrap();
+        assert_eq!(built.len(), 1, "仅未生成列且非 Default 的列被写入，实际 {built:?}");
+        assert_eq!(built[0].0.name, "name");
+        assert_eq!(built[0].1, &CellValue::Text("alice".to_string()));
+
+        // 显式 Null 意图 → 写入 NULL（区别于 Default 省略）。
+        let intents_null = vec![
+            WriteValue::Null,
+            WriteValue::Default,
+            WriteValue::Null,
+        ];
+        let built_null = pg_insert_values(&row, &columns, &generated, Some(&intents_null)).unwrap();
+        assert_eq!(built_null.len(), 1);
+        assert_eq!(built_null[0].0.name, "id");
+        assert_eq!(built_null[0].1, &CellValue::Null);
+    }
+
     #[test]
     fn pg_identity_where_maps_null_value_to_is_null() {
         let id_val = CellValue::I64(7);
@@ -4139,6 +4190,7 @@ SELECT item_id, name FROM audit_log;"
                 ],
             }],
             deletes: vec![],
+            insert_intents: None,
         };
         connector.apply_changes(&changes).expect("插入+更新应成功");
 
@@ -4287,7 +4339,7 @@ SELECT item_id, name FROM audit_log;"
         let path = ObjectPath {
             connection_id: ConnectionId(1),
             kind: ObjectKind::Table,
-            database: Some(db_name),
+            database: Some(db_name.clone()),
             schema: Some("public".to_string()),
             name: "t11_edit".to_string(),
         };
@@ -4312,6 +4364,7 @@ SELECT item_id, name FROM audit_log;"
             }],
             updates: vec![],
             deletes: vec![],
+            insert_intents: None,
         };
         connector.apply_changes(&insert).expect("插入应成功且自动生成 id/doubled");
         let page = connector.load_data(&path, 0, 50, &[], &[]).expect("读取应成功");
@@ -4333,6 +4386,7 @@ SELECT item_id, name FROM audit_log;"
                 }],
             }],
             deletes: vec![],
+            insert_intents: None,
         };
         let err = connector.apply_changes(&bad_update).expect_err("更新生成列应报错");
         assert!(err.to_string().contains("生成列"), "应提示生成列不可改: {err}");
@@ -4353,6 +4407,7 @@ SELECT item_id, name FROM audit_log;"
                 }],
             }],
             deletes: vec![],
+            insert_intents: None,
         };
         assert!(
             connector.apply_changes(&rollback).is_err(),
@@ -4361,9 +4416,59 @@ SELECT item_id, name FROM audit_log;"
         let page = connector.load_data(&path, 0, 50, &[], &[]).expect("回滚后读取应成功");
         assert_eq!(page.rows.len(), 1, "回滚后新增行不应存在");
 
+        // 4) 三态写入意图：Default 不写列（DB 默认值填充）、Null 显式写 NULL、Value 写具体值。
+        let mut setup3 = pg_query_request(&config, None);
+        setup3.text = "\
+            DROP TABLE IF EXISTS t11_tristate CASCADE; \
+            CREATE TABLE t11_tristate( \
+                id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, \
+                note text DEFAULT 'n/a' \
+            ); \
+        "
+        .to_string();
+        connector.execute(&setup3).expect("建三态表应成功");
+        let path3 = ObjectPath {
+            connection_id: ConnectionId(1),
+            kind: ObjectKind::Table,
+            database: Some(db_name.clone()),
+            schema: Some("public".to_string()),
+            name: "t11_tristate".to_string(),
+        };
+        // 意图按表列序：id(Default 由 DB 生成), note(Default → 'n/a')。
+        let tri = DataChangeSet {
+            object: path3.clone(),
+            inserts: vec![Row {
+                values: vec![CellValue::Null, CellValue::Null],
+            }],
+            updates: vec![],
+            deletes: vec![],
+            insert_intents: Some(vec![
+                vec![
+                    WriteValue::Default,                    // id：不写
+                    WriteValue::Default,                    // note：不写 → DB 默认 'n/a'
+                ],
+                vec![
+                    WriteValue::Default,                    // id：不写
+                    WriteValue::Null,                       // note：显式写 NULL
+                ],
+                vec![
+                    WriteValue::Default,                    // id：不写
+                    WriteValue::Value(CellValue::Text("x".to_string())), // note：写具体值
+                ],
+            ]),
+        };
+        connector.apply_changes(&tri).expect("三态插入应成功");
+        let page3 = connector.load_data(&path3, 0, 50, &[], &[]).expect("三态读取应成功");
+        assert_eq!(page3.rows.len(), 3, "应插入 3 行");
+        // 行序按 id 自增：Default→'n/a'，Null→NULL，Value→'x'。
+        assert_eq!(page3.rows[0].values[1], CellValue::Text("n/a".to_string()), "Default 应落 DB 默认值");
+        assert_eq!(page3.rows[1].values[1], CellValue::Null, "Null 应显式写 NULL");
+        assert_eq!(page3.rows[2].values[1], CellValue::Text("x".to_string()), "Value 应写具体值");
+
         // 清理。
         let mut cleanup = pg_query_request(&config, None);
-        cleanup.text = "DROP TABLE IF EXISTS t11_edit CASCADE".to_string();
+        cleanup.text = "DROP TABLE IF EXISTS t11_edit CASCADE; DROP TABLE IF EXISTS t11_tristate CASCADE;"
+            .to_string();
         connector.execute(&cleanup).expect("清理临时结构应成功");
     }
 

@@ -256,6 +256,7 @@
                 }],
             }],
             deletes: Vec::new(),
+            insert_intents: None,
         };
 
         let result = apply_data_changes_for_connection(&config, &changes);

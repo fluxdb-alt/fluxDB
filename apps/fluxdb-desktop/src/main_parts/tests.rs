@@ -2433,6 +2433,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             deletes: vec![RowIdentity {
                 values: BTreeMap::from([("id".to_string(), CellValue::I64(3))]),
             }],
+            insert_intents: None,
         };
 
         let preview = data_change_sql_preview(&page, &changes);
@@ -2479,6 +2480,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             }],
             updates: Vec::new(),
             deletes: Vec::new(),
+            insert_intents: None,
         };
 
         let preview = data_change_sql_preview(&page, &changes);
@@ -2521,6 +2523,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             deletes: vec![RowIdentity {
                 values: BTreeMap::from([("id".to_string(), CellValue::I64(2))]),
             }],
+            insert_intents: None,
         };
 
         assert_eq!(

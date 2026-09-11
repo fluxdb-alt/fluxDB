@@ -85,6 +85,7 @@ fn edit_data_cell(
                 inserts: Vec::new(),
                 updates: Vec::new(),
                 deletes: Vec::new(),
+                insert_intents: None,
             }),
             identity,
             column_name,
@@ -299,6 +300,7 @@ fn insert_data_row(
             inserts: Vec::new(),
             updates: Vec::new(),
             deletes: Vec::new(),
+            insert_intents: None,
         })
         .inserts
         .push(row);
@@ -349,6 +351,7 @@ fn clone_data_row(
             inserts: Vec::new(),
             updates: Vec::new(),
             deletes: Vec::new(),
+            insert_intents: None,
         })
         .inserts
         .push(cloned);
@@ -404,6 +407,7 @@ fn delete_data_row(editor: &mut DataEditorState, row: usize) -> fluxdb_core::Res
         inserts: Vec::new(),
         updates: Vec::new(),
         deletes: Vec::new(),
+        insert_intents: None,
     });
     changes.updates.retain(|update| update.identity != identity);
     if !changes.deletes.contains(&identity) {

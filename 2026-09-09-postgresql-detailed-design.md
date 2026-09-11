@@ -316,6 +316,8 @@ CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不�
 - 经 `pg_generated_columns` 查询 `attgenerated`/`attidentity` 非空的生成列：新增行自动从插入列列表剔除（空表退化为 `DEFAULT VALUES`，值由数据库生成），更新对生成列 `SET` 显式拒绝。
 - 数据库断连发生在 COMMIT 周围 → COMMIT 失败即报错并要求刷新核实，不自动重放。[T11]
 
+**T11 实现（三态写入意图 DEFAULT/NULL/值）**：core 新增独立 `WriteValue = Default | Null | Value(CellValue)`（不污染只读 `Row.values`），`DataChangeSet` 增并行可选字段 `insert_intents: Option<Vec<Vec<WriteValue>>>`（缺省 `None` = 旧语义），PG 的 `pg_insert_values` 按表列序对齐三态落库：`Default` 省略列由数据库默认值填充、`Null` 显式写 NULL、`Value` 写具体值；服务端生成列一律剔除。MySQL/未升级调用方不设 `insert_intents`，插入语义回归不变。[T11]
+
 ## 8. SQL 编辑与执行
 
 ### 8.1 统一分句和参数

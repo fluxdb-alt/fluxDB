@@ -170,6 +170,7 @@ mod tests {
                 }],
             }],
             deletes: Vec::new(),
+            insert_intents: None,
         };
 
         assert!(!changes.is_empty());

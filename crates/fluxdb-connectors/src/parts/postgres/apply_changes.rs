@@ -80,6 +80,40 @@ async fn pg_generated_columns(
     Ok(rows.into_iter().map(|row| row.get(0)).collect())
 }
 
+/// 解析一行插入值：按表列序返回需写入的 `(列, 值)`。
+///
+/// 未提供三态意图时退回 `non_null_insert_values` 旧语义（NULL 视为省略 → DEFAULT）；
+/// 提供意图时按列对齐，`Default` 省略、`Null` 显式写 NULL、`Value` 写具体值，
+/// 从而能对带默认值/可空的列显式写 NULL。服务端生成列一律剔除。
+fn pg_insert_values<'a>(
+    row: &'a Row,
+    columns: &'a [Column],
+    generated: &std::collections::BTreeSet<String>,
+    intents: Option<&'a [WriteValue]>,
+) -> fluxdb_core::Result<Vec<(&'a Column, &'a CellValue)>> {
+    let Some(intents) = intents else {
+        return Ok(non_null_insert_values(row, columns)?
+            .into_iter()
+            .filter(|(column, _)| !generated.contains(&column.name))
+            .collect());
+    };
+    if intents.len() != columns.len() {
+        return Err(Error::new(ErrorKind::Internal, "插入写入意图与列数不匹配"));
+    }
+    let mut out = Vec::new();
+    for (column, intent) in columns.iter().zip(intents) {
+        if generated.contains(&column.name) {
+            continue; // 服务端生成列不可写
+        }
+        match intent {
+            WriteValue::Default => {} // 省略 → 数据库默认值填充
+            WriteValue::Null => out.push((column, &CellValue::Null)),
+            WriteValue::Value(value) => out.push((column, value)),
+        }
+    }
+    Ok(out)
+}
+
 async fn pg_apply_inserts(
     client: &tokio_postgres::Client,
     table: &str,
@@ -87,13 +121,10 @@ async fn pg_apply_inserts(
     columns: &[Column],
     generated: &std::collections::BTreeSet<String>,
 ) -> fluxdb_core::Result<()> {
-    for row in &changes.inserts {
-        // 剔除服务端生成列（其值由数据库产生，写入会被拒绝或覆盖用户输入）。
-        // 剔除后可能为空列表 → pg_insert_sql 自动退化为 `INSERT ... DEFAULT VALUES`。
-        let insert_values = non_null_insert_values(row, columns)?
-            .into_iter()
-            .filter(|(column, _)| !generated.contains(&column.name))
-            .collect::<Vec<_>>();
+    for (index, row) in changes.inserts.iter().enumerate() {
+        // 清除服务端生成列（其值由数据库产生）；意图三态时逐列对齐，
+        // 否则退回旧语义（NULL 视为省略 → DEFAULT）。
+        let insert_values = pg_insert_values(row, columns, generated, changes.insert_intents_for(index))?;
         let (sql, params) = pg_insert_sql(table, &insert_values)?;
         client
             .execute(&sql, &pg_params_refs(&params))

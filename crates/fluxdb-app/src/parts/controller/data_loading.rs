@@ -294,6 +294,7 @@ impl AppController {
                 cells,
             }],
             deletes: Vec::new(),
+            insert_intents: None,
         };
 
         match self.apply_data_changes(&object, &changes) {

@@ -272,12 +272,12 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T11 — 原子数据编辑与可靠行定位
 
-- [ ] 完成 T11（已交付连接器侧原子提交加固：行数检查+整批回滚、生成列保护；DEFAULT/NULL/值三态与无键表定位属核心/共享改造，另增增量推进）
+- [x] 完成 T11（连接器侧原子提交加固：行数检查+整批回滚、生成列保护；DEFAULT/NULL/值三态已落地。剩余：无键表安全定位与 RETURNING 身份捕获另增增量）
 - **开始前读**：设计 7.3、8.4；R02、R05、R06、R10、R11、R29、R30。
 - **工作**：DEFAULT/NULL/值三态贯穿草稿/提交；identity/generated 控制；主键/唯一键与无键表安全定位；锁定原始值、行数检查、整批事务与 RETURNING；失败保留草稿，COMMIT 异常结果待核实。
 - **交付位置**：core 写入意图/提交结果、app/data_editor、postgres/apply_changes.rs。
 - **验收**：新增/复制/修改/删除/撤销与多行混合；复合主键、主键修改、重复无键行拒绝、并发冲突；任一约束失败全批回滚；NULL 不意外触发 DEFAULT；断连不重试写入；MySQL 原有插入语义回归。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成；执行人 FluxDB（T11 增量二）；内容/验证 — 三态 WriteValue 落地（core `WriteValue` + `DataChangeSet.insert_intents` 并行意图，未污染只读 `Row.values`），PG 按列对齐 Default/Null/Value 落库；临时表三态冒烟验证 Default→DB 默认值、Null→NULL、Value→具体值。行数检查/生成列保护此前已交付。MySQL 沿用旧语义不受影响（`insert_intents=None`）。剩余：无键表安全定位与 RETURNING 身份捕获另增增量。
 
 ### T12 — PG 方言、分句与参数
 

@@ -18,6 +18,7 @@ include!("parts/data_page.rs");
 include!("parts/table_metadata.rs");
 include!("parts/user_admin.rs");
 include!("parts/changes.rs");
+include!("parts/write_value.rs");
 include!("parts/connector.rs");
 include!("parts/command_workbench.rs");
 include!("parts/workbench_history.rs");

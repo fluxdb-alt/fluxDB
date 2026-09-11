@@ -9,7 +9,7 @@ use fluxdb_core::{
     IndexMeta, ObjectKind, ObjectPath, ObjectSummary, Pagination, QueryExecutionResult,
     QueryExecutionSummary, QueryRequest, QuerySessionId, QueryStatementKind, RedisHashFieldTtl,
     RedisServerVersion, Row, RowUpdate, SortDirection, SortSpec, TableStructure, TriggerInfo,
-    TriggerMeta, UniqueKeyMeta, is_binary_type_name,
+    TriggerMeta, UniqueKeyMeta, WriteValue, is_binary_type_name,
     sqlite_attached_databases,
 };
 use sqlx::{
