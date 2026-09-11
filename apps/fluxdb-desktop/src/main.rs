@@ -24,7 +24,7 @@ use fluxdb_app::{
     CreateTableTriggerEvent, CreateTableTriggerField, DataEditorState, ForeignKeyCheckMode,
     LoadState, ObjectListState, QueryEditorState, QueryHistoryEntry, QueryHistoryKind, QueryOrigin,
     RedisAddKeyKind, RedisAddKeyRequest, RedisConnectionOverview, RedisListDirection,
-    RedisWorkbenchState, TabId, TabKind, TabState, TableInfoState, TableInfoTab,
+    RedisWorkbenchState, TabId, TabKind, TabState, TabWorkspace, TableInfoState, TableInfoTab,
     UserAdminDetailTab, UserAdminState, compress_sql_text, copy_table_sql_preview_with_source_ddl,
     create_table_provider, drop_table_sql_preview, format_sql_text_for_dialect,
     rename_table_sql_preview, truncate_table_sql_preview,

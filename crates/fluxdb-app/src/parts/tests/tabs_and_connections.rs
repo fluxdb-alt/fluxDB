@@ -1162,7 +1162,45 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         assert_eq!(first, AppEvent::TabOpened(TabId(1)));
         assert_eq!(second, AppEvent::TabActivated(TabId(1)));
         assert_eq!(controller.state().tabs.len(), 1);
-        assert!(matches!(controller.state().tabs[0].kind, TabKind::Settings));
+        assert!(matches!(controller.state().tabs[0].kind, TabKind::Settings(_)));
+    }
+
+    #[test]
+    fn settings_tab_keeps_the_workspace_where_it_was_first_opened() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
+            connection_id: ConnectionId(1),
+            database: Some("fluxdb_demo".to_string()),
+        });
+
+        assert_eq!(
+            controller.dispatch(AppCommand::OpenSettings),
+            AppEvent::TabOpened(TabId(2))
+        );
+        assert_eq!(
+            controller.state().tabs[1].workspace(),
+            Some(TabWorkspace {
+                connection_id: ConnectionId(1),
+                database: "fluxdb_demo".to_string(),
+            })
+        );
+
+        controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
+            connection_id: ConnectionId(1),
+            database: Some("community_test".to_string()),
+        });
+        assert_eq!(
+            controller.dispatch(AppCommand::OpenSettings),
+            AppEvent::TabActivated(TabId(2))
+        );
+        assert_eq!(controller.state().tabs.len(), 3);
+        assert_eq!(
+            controller.state().tabs[1].workspace(),
+            Some(TabWorkspace {
+                connection_id: ConnectionId(1),
+                database: "fluxdb_demo".to_string(),
+            })
+        );
     }
 
     #[test]

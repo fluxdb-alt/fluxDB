@@ -2357,6 +2357,74 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
     }
 
     #[test]
+    fn settings_tab_is_only_attached_to_its_current_database_workspace() {
+        let query_tab = |id, database: &str| TabState {
+            id: TabId(id),
+            title: format!("{database} query"),
+            kind: TabKind::QueryEditor(QueryEditorState {
+                connection_id: ConnectionId(1),
+                database: Some(database.to_string()),
+                text: String::new(),
+                origin: None,
+                saved_fingerprint: None,
+                running: false,
+                results: Vec::new(),
+                result_editors: BTreeMap::new(),
+                active_result_editor: None,
+                summaries: Vec::new(),
+                error: None,
+            }),
+            dirty: false,
+        };
+        let mut state = AppState::default();
+        state.tabs = vec![
+            query_tab(1, "community_test"),
+            query_tab(3, "fluxdb_demo"),
+            TabState {
+                id: TabId(2),
+                title: "设置".to_string(),
+                kind: TabKind::Settings(fluxdb_app::SettingsTabState {
+                    workspace: Some(WorkspaceScope {
+                        connection_id: ConnectionId(1),
+                        database: "fluxdb_demo".to_string(),
+                    }),
+                }),
+                dirty: false,
+            },
+            query_tab(4, "newly-opened"),
+        ];
+        state.active_tab = Some(TabId(2));
+
+        let active_scope = WorkspaceScope {
+            connection_id: ConnectionId(1),
+            database: "fluxdb_demo".to_string(),
+        };
+        assert_eq!(active_workspace_scope(&state), Some(active_scope.clone()));
+        assert_eq!(
+            table_tab_entries(&state, Some(&active_scope), "", &[], &BTreeSet::new())
+                .into_iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            vec![TabId(3), TabId(2)]
+        );
+
+        for (database, expected_tab_id) in [("community_test", TabId(1)), ("newly-opened", TabId(4))]
+        {
+            let scope = WorkspaceScope {
+                connection_id: ConnectionId(1),
+                database: database.to_string(),
+            };
+            assert_eq!(
+                table_tab_entries(&state, Some(&scope), "", &[], &BTreeSet::new())
+                    .into_iter()
+                    .map(|entry| entry.id)
+                    .collect::<Vec<_>>(),
+                vec![expected_tab_id]
+            );
+        }
+    }
+
+    #[test]
     fn app_icons_use_lucide_svg_assets() {
         assert_eq!(app_icon_path(AppIcon::Check), "icons/check.svg");
         assert_eq!(app_icon_path(AppIcon::Copy), "icons/copy-plus.svg");

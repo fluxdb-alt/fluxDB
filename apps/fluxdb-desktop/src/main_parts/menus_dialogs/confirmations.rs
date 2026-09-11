@@ -782,7 +782,7 @@ fn dirty_tab_close_modal(
         .tabs
         .iter()
         .find(|tab| tab.id == tab_id)
-        .is_some_and(|tab| matches!(&tab.kind, TabKind::Settings));
+        .is_some_and(|tab| matches!(&tab.kind, TabKind::Settings(_)));
     let tab_title = state
         .tabs
         .iter()

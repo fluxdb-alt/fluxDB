@@ -96,11 +96,7 @@ fn tabs(
     root.child(workspace)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct WorkspaceScope {
-    connection_id: ConnectionId,
-    database: String,
-}
+type WorkspaceScope = TabWorkspace;
 
 #[derive(Clone, Debug)]
 struct WorkspaceTabGroup {
@@ -141,10 +137,12 @@ fn workspace_tab_groups(state: &AppState) -> Vec<WorkspaceTabGroup> {
 }
 
 fn active_workspace_scope(state: &AppState) -> Option<WorkspaceScope> {
-    state
-        .active_tab()
-        .and_then(tab_workspace_scope)
-        .or_else(|| state.tabs.iter().find_map(tab_workspace_scope))
+    match state.active_tab() {
+        // 从首页打开的全局标签没有数据库归属；激活它们时不能回退到第一个库，
+        // 否则仍会被误画进某个库的二级标签栏。
+        Some(tab) => tab_workspace_scope(tab),
+        None => state.tabs.iter().find_map(tab_workspace_scope),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -452,21 +450,10 @@ fn table_tab_entries(
     pinned_tabs: &BTreeSet<TabId>,
 ) -> Vec<TabSwitcherEntry> {
     let query = normalized_sidebar_search(search);
-    let scoped = state
+    let tabs = state
         .tabs
         .iter()
-        .filter(|tab| match (active_scope, tab_workspace_scope(tab)) {
-            (Some(active_scope), Some(tab_scope)) => tab_scope == *active_scope,
-            (None, None) => true,
-            _ => false,
-        });
-    let unscoped = state
-        .tabs
-        .iter()
-        .filter(|tab| active_scope.is_some() && tab_workspace_scope(tab).is_none());
-
-    let tabs = scoped
-        .chain(unscoped)
+        .filter(|tab| tab_matches_workspace_scope(tab, active_scope))
         .filter(|tab| query.is_empty() || search_matches_text(&tab_title(tab, true), &query))
         .collect::<Vec<_>>();
     order_tab_refs(tabs, tab_order, pinned_tabs)
@@ -480,61 +467,16 @@ fn table_tab_entries(
         .collect()
 }
 
-fn tab_workspace_scope(tab: &TabState) -> Option<WorkspaceScope> {
-    match &tab.kind {
-        TabKind::DataEditor(editor) => Some(WorkspaceScope {
-            connection_id: editor.object.connection_id,
-            database: editor
-                .object
-                .database
-                .clone()
-                .unwrap_or_else(|| "main".to_string()),
-        }),
-        TabKind::QueryEditor(editor) => Some(WorkspaceScope {
-            connection_id: editor.connection_id,
-            database: editor
-                .database
-                .clone()
-                .unwrap_or_else(|| "默认库".to_string()),
-        }),
-        TabKind::RedisWorkbench(workbench) => Some(WorkspaceScope {
-            connection_id: workbench.connection_id,
-            database: workbench.database.to_string(),
-        }),
-        TabKind::RedisCli(cli) => Some(WorkspaceScope {
-            connection_id: cli.connection_id,
-            database: cli.database.to_string(),
-        }),
-        TabKind::RedisPubSub(pubsub) => Some(WorkspaceScope {
-            connection_id: pubsub.connection_id,
-            database: pubsub.database.to_string(),
-        }),
-        TabKind::CreateTable(create) => Some(WorkspaceScope {
-            connection_id: create.connection_id,
-            database: create
-                .database
-                .clone()
-                .unwrap_or_else(|| "默认库".to_string()),
-        }),
-
-        TabKind::ObjectList(list) => list.parent.as_ref().map(|parent| WorkspaceScope {
-            connection_id: parent.connection_id,
-            database: parent
-                .database
-                .clone()
-                .unwrap_or_else(|| parent.name.clone()),
-        }),
-        TabKind::UserAdmin(admin) => Some(WorkspaceScope {
-            connection_id: admin.connection_id,
-            database: "默认库".to_string(),
-        }),
-        // 备份列表 tab 归属其「连接 + 库」，用于按库批量关闭等 tab 操作。
-        TabKind::BackupList(list) => Some(WorkspaceScope {
-            connection_id: list.connection_id,
-            database: list.database.clone(),
-        }),
-        TabKind::Settings => None,
+fn tab_matches_workspace_scope(tab: &TabState, active_scope: Option<&WorkspaceScope>) -> bool {
+    match (active_scope, tab_workspace_scope(tab)) {
+        (Some(active_scope), Some(tab_scope)) => tab_scope == *active_scope,
+        (None, None) => true,
+        _ => false,
     }
+}
+
+fn tab_workspace_scope(tab: &TabState) -> Option<WorkspaceScope> {
+    tab.workspace()
 }
 
 fn tab_context_menu_close_targets<I>(scopes: I, tab_id: TabId, include_current: bool) -> Vec<TabId>
@@ -705,35 +647,21 @@ fn table_tab_row(
     let scoped_tabs = state
         .tabs
         .iter()
-        .filter(|tab| {
-            let same_scope = match (active_scope, tab_workspace_scope(tab)) {
-                (Some(active_scope), Some(tab_scope)) => tab_scope == *active_scope,
-                (None, None) => true,
-                _ => false,
-            };
-            same_scope || (active_scope.is_some() && tab_workspace_scope(tab).is_none())
-        })
+        .filter(|tab| tab_matches_workspace_scope(tab, active_scope))
         .collect::<Vec<_>>();
 
     for tab in order_tab_refs(scoped_tabs, tab_order, pinned_tabs) {
-        let same_scope = match (active_scope, tab_workspace_scope(tab)) {
-            (Some(active_scope), Some(tab_scope)) => tab_scope == *active_scope,
-            (None, None) => true,
-            _ => false,
-        };
-        if same_scope || (active_scope.is_some() && tab_workspace_scope(tab).is_none()) {
-            tab_strip = tab_strip.child(tab_view_with_context(
-                tab,
-                state.active_tab == Some(tab.id),
-                compact,
-                false,
-                tab_connection_color_hex(state, tab),
-                pinned_tabs.contains(&tab.id),
-                hovered_tab == Some(tab.id),
-                colors,
-                cx,
-            ));
-        }
+        tab_strip = tab_strip.child(tab_view_with_context(
+            tab,
+            state.active_tab == Some(tab.id),
+            compact,
+            false,
+            tab_connection_color_hex(state, tab),
+            pinned_tabs.contains(&tab.id),
+            hovered_tab == Some(tab.id),
+            colors,
+            cx,
+        ));
     }
 
     div()

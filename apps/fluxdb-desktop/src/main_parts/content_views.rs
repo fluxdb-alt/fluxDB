@@ -111,7 +111,7 @@ fn content(
             };
             user_admin_content(state, tab.id, admin, this, window, colors, cx)
         }
-        Some(tab) if matches!(tab.kind, TabKind::Settings) => {
+        Some(tab) if matches!(tab.kind, TabKind::Settings(_)) => {
             settings_content(
                 state,
                 this.theme_mode,

@@ -133,21 +133,24 @@ impl AppController {
     }
 
     fn open_settings(&mut self) -> AppEvent {
-        if let Some(tab) = self
+        if let Some(tab_id) = self
             .state
             .tabs
             .iter()
-            .find(|tab| matches!(tab.kind, TabKind::Settings))
+            .find(|tab| matches!(tab.kind, TabKind::Settings(_)))
+            .map(|tab| tab.id)
         {
-            self.state.active_tab = Some(tab.id);
-            return AppEvent::TabActivated(tab.id);
+            self.state.active_tab = Some(tab_id);
+            return AppEvent::TabActivated(tab_id);
         }
 
+        // 设置内容是全局单例；首次打开时固定归属到当前活动库，后续只激活该标签。
+        let workspace = self.state.active_tab().and_then(TabState::workspace);
         let tab_id = self.next_tab_id();
         self.push_tab(TabState {
             id: tab_id,
             title: "设置".to_string(),
-            kind: TabKind::Settings,
+            kind: TabKind::Settings(SettingsTabState { workspace }),
             dirty: false,
         });
         AppEvent::TabOpened(tab_id)
