@@ -53,17 +53,6 @@ pub(crate) fn postgres_is_integer_type(data_type: &str) -> bool {
     )
 }
 
-/// identity 列必须落在整数类型上，否则 PG 拒绝建表。
-pub(crate) fn postgres_identity_column_error(column: &CreateTableColumn) -> Option<String> {
-    if column.auto_increment && !postgres_is_integer_type(&column.data_type) {
-        return Some(format!(
-            "列 {} 使用 identity 时必须是整数类型（smallint/integer/bigint）",
-            column.name.trim()
-        ));
-    }
-    None
-}
-
 /// PG 触发器由「已存在的函数」驱动，不接受 MySQL 的 BEGIN…END 行内 body。
 ///
 /// body 空白时视为未填写；含分号或换行的文本按行内 body 处理并给出明确提示，

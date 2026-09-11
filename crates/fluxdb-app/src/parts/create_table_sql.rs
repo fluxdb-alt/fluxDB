@@ -182,6 +182,7 @@ fn create_table_design_sql_preview_for_provider(
 
 pub fn rename_table_sql_preview(
     database_kind: DatabaseKind,
+    schema: Option<&str>,
     old_name: &str,
     new_name: &str,
 ) -> Result<String, String> {
@@ -194,20 +195,29 @@ pub fn rename_table_sql_preview(
     if old_name == new_name {
         return Err("表名没有变化".to_string());
     }
-    provider.rename_table_sql(old_name, new_name)
+    provider.rename_table_sql(schema, old_name, new_name)
 }
 
 pub fn copy_table_sql_preview(
     database_kind: DatabaseKind,
+    schema: Option<&str>,
     source_name: &str,
     target_name: &str,
     copy_data: bool,
 ) -> Result<String, String> {
-    copy_table_sql_preview_with_source_ddl(database_kind, source_name, target_name, copy_data, None)
+    copy_table_sql_preview_with_source_ddl(
+        database_kind,
+        schema,
+        source_name,
+        target_name,
+        copy_data,
+        None,
+    )
 }
 
 pub fn copy_table_sql_preview_with_source_ddl(
     database_kind: DatabaseKind,
+    schema: Option<&str>,
     source_name: &str,
     target_name: &str,
     copy_data: bool,
@@ -222,7 +232,7 @@ pub fn copy_table_sql_preview_with_source_ddl(
     if source_name == target_name {
         return Err("新表名不能和原表相同".to_string());
     }
-    provider.copy_table_sql(source_name, target_name, copy_data, source_ddl)
+    provider.copy_table_sql(schema, source_name, target_name, copy_data, source_ddl)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -234,6 +244,8 @@ pub enum ForeignKeyCheckMode {
 
 pub fn drop_table_sql_preview(
     database_kind: DatabaseKind,
+    kind: ObjectKind,
+    schema: Option<&str>,
     table_name: &str,
     foreign_key_check: ForeignKeyCheckMode,
 ) -> Result<String, String> {
@@ -242,13 +254,15 @@ pub fn drop_table_sql_preview(
     if table_name.is_empty() {
         return Err("表名不能为空".to_string());
     }
-    let sql = provider.drop_table_sql(table_name)?;
+    let sql = provider.drop_table_sql(kind, schema, table_name)?;
     provider.with_foreign_key_check(sql, foreign_key_check)
 }
 
 pub fn truncate_table_sql_preview(
     database_kind: DatabaseKind,
+    schema: Option<&str>,
     table_name: &str,
+    restart_identity: bool,
     foreign_key_check: ForeignKeyCheckMode,
 ) -> Result<String, String> {
     let provider = table_action_sql_provider(database_kind);
@@ -256,21 +270,38 @@ pub fn truncate_table_sql_preview(
     if table_name.is_empty() {
         return Err("表名不能为空".to_string());
     }
-    let sql = provider.truncate_table_sql(table_name)?;
+    let sql = provider.truncate_table_sql(schema, table_name, restart_identity)?;
     provider.with_foreign_key_check(sql, foreign_key_check)
 }
 
 trait TableActionSqlProvider: Sync {
-    fn rename_table_sql(&self, old_name: &str, new_name: &str) -> Result<String, String>;
+    /// `schema` 仅 PG 使用：同名表必须只操作指定 schema 的对象。
+    fn rename_table_sql(
+        &self,
+        schema: Option<&str>,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<String, String>;
     fn copy_table_sql(
         &self,
+        schema: Option<&str>,
         source_name: &str,
         target_name: &str,
         copy_data: bool,
         source_ddl: Option<&str>,
     ) -> Result<String, String>;
-    fn drop_table_sql(&self, table_name: &str) -> Result<String, String>;
-    fn truncate_table_sql(&self, table_name: &str) -> Result<String, String>;
+    fn drop_table_sql(
+        &self,
+        kind: ObjectKind,
+        schema: Option<&str>,
+        table_name: &str,
+    ) -> Result<String, String>;
+    fn truncate_table_sql(
+        &self,
+        schema: Option<&str>,
+        table_name: &str,
+        restart_identity: bool,
+    ) -> Result<String, String>;
 
     fn with_foreign_key_check(
         &self,

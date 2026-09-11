@@ -521,11 +521,11 @@ SELECT $1, f();";
     #[test]
     fn rename_table_sql_preview_quotes_for_dialect() {
         assert_eq!(
-            rename_table_sql_preview(DatabaseKind::MySql, "orders", "orders_2026").unwrap(),
+            rename_table_sql_preview(DatabaseKind::MySql, None, "orders", "orders_2026").unwrap(),
             "ALTER TABLE `orders` RENAME TO `orders_2026`;"
         );
         assert_eq!(
-            rename_table_sql_preview(DatabaseKind::Sqlite, "order log", "order log old").unwrap(),
+            rename_table_sql_preview(DatabaseKind::Sqlite, None, "order log", "order log old").unwrap(),
             "ALTER TABLE \"order log\" RENAME TO \"order log old\";"
         );
     }
@@ -533,21 +533,22 @@ SELECT $1, f();";
     #[test]
     fn copy_table_sql_preview_uses_insert_select_when_copying_data() {
         assert_eq!(
-            copy_table_sql_preview(DatabaseKind::MySql, "orders", "orders_copy", false).unwrap(),
+            copy_table_sql_preview(DatabaseKind::MySql, None, "orders", "orders_copy", false).unwrap(),
             "CREATE TABLE `orders_copy` LIKE `orders`;"
         );
         assert_eq!(
-            copy_table_sql_preview(DatabaseKind::MySql, "orders", "orders_copy", true).unwrap(),
+            copy_table_sql_preview(DatabaseKind::MySql, None, "orders", "orders_copy", true).unwrap(),
             "CREATE TABLE `orders_copy` LIKE `orders`;\nINSERT INTO `orders_copy` SELECT * FROM `orders`;"
         );
         assert_eq!(
-            copy_table_sql_preview(DatabaseKind::Sqlite, "event log", "event log copy", true)
+            copy_table_sql_preview(DatabaseKind::Sqlite, None, "event log", "event log copy", true)
                 .unwrap(),
             "CREATE TABLE \"event log copy\" AS SELECT * FROM \"event log\" WHERE 0;\nINSERT INTO \"event log copy\" SELECT * FROM \"event log\";"
         );
         assert_eq!(
             copy_table_sql_preview_with_source_ddl(
                 DatabaseKind::Sqlite,
+                None,
                 "event log",
                 "event log copy",
                 true,
@@ -565,6 +566,8 @@ SELECT $1, f();";
         assert_eq!(
             drop_table_sql_preview(
                 DatabaseKind::MySql,
+                ObjectKind::Table,
+                None,
                 "3d_attachment",
                 ForeignKeyCheckMode::Default
             )
@@ -574,7 +577,9 @@ SELECT $1, f();";
         assert_eq!(
             truncate_table_sql_preview(
                 DatabaseKind::MySql,
+                None,
                 "3d_attachment",
+                false,
                 ForeignKeyCheckMode::Default
             )
             .unwrap(),
@@ -583,7 +588,9 @@ SELECT $1, f();";
         assert_eq!(
             truncate_table_sql_preview(
                 DatabaseKind::Sqlite,
+                None,
                 "event log",
+                false,
                 ForeignKeyCheckMode::Default
             )
             .unwrap(),
@@ -592,6 +599,8 @@ SELECT $1, f();";
         assert_eq!(
             drop_table_sql_preview(
                 DatabaseKind::MySql,
+                ObjectKind::Table,
+                None,
                 "3d_attachment",
                 ForeignKeyCheckMode::Disable
             )

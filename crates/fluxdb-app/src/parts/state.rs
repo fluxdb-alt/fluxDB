@@ -881,6 +881,8 @@ pub enum AppCommand {
     TruncateTable {
         object: ObjectPath,
         foreign_key_check: ForeignKeyCheckMode,
+        /// PG：是否 RESTART IDENTITY（默认 false = CONTINUE IDENTITY）。
+        restart_identity: bool,
     },
     LoadDataPage(TabId),
     SetDataPagePagination {

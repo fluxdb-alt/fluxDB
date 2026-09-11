@@ -3,7 +3,12 @@ struct SqliteTableActionSqlProvider;
 struct UnsupportedTableActionSqlProvider;
 
 impl TableActionSqlProvider for MySqlTableActionSqlProvider {
-    fn rename_table_sql(&self, old_name: &str, new_name: &str) -> Result<String, String> {
+    fn rename_table_sql(
+        &self,
+        _: Option<&str>,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<String, String> {
         Ok(format!(
             "ALTER TABLE {} RENAME TO {};",
             quote_mysql_identifier(old_name),
@@ -13,6 +18,7 @@ impl TableActionSqlProvider for MySqlTableActionSqlProvider {
 
     fn copy_table_sql(
         &self,
+        _: Option<&str>,
         source_name: &str,
         target_name: &str,
         copy_data: bool,
@@ -27,11 +33,21 @@ impl TableActionSqlProvider for MySqlTableActionSqlProvider {
         Ok(statements.join("\n"))
     }
 
-    fn drop_table_sql(&self, table_name: &str) -> Result<String, String> {
+    fn drop_table_sql(
+        &self,
+        _: ObjectKind,
+        _: Option<&str>,
+        table_name: &str,
+    ) -> Result<String, String> {
         Ok(format!("DROP TABLE {};", quote_mysql_identifier(table_name)))
     }
 
-    fn truncate_table_sql(&self, table_name: &str) -> Result<String, String> {
+    fn truncate_table_sql(
+        &self,
+        _: Option<&str>,
+        table_name: &str,
+        _: bool,
+    ) -> Result<String, String> {
         Ok(format!(
             "TRUNCATE TABLE {};",
             quote_mysql_identifier(table_name)
@@ -52,7 +68,12 @@ impl TableActionSqlProvider for MySqlTableActionSqlProvider {
 }
 
 impl TableActionSqlProvider for SqliteTableActionSqlProvider {
-    fn rename_table_sql(&self, old_name: &str, new_name: &str) -> Result<String, String> {
+    fn rename_table_sql(
+        &self,
+        _: Option<&str>,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<String, String> {
         Ok(format!(
             "ALTER TABLE {} RENAME TO {};",
             quote_sqlite_identifier(old_name),
@@ -62,6 +83,7 @@ impl TableActionSqlProvider for SqliteTableActionSqlProvider {
 
     fn copy_table_sql(
         &self,
+        _: Option<&str>,
         source_name: &str,
         target_name: &str,
         copy_data: bool,
@@ -80,22 +102,33 @@ impl TableActionSqlProvider for SqliteTableActionSqlProvider {
         Ok(statements.join("\n"))
     }
 
-    fn drop_table_sql(&self, table_name: &str) -> Result<String, String> {
+    fn drop_table_sql(
+        &self,
+        _: ObjectKind,
+        _: Option<&str>,
+        table_name: &str,
+    ) -> Result<String, String> {
         Ok(format!("DROP TABLE {};", quote_sqlite_identifier(table_name)))
     }
 
-    fn truncate_table_sql(&self, table_name: &str) -> Result<String, String> {
+    fn truncate_table_sql(
+        &self,
+        _: Option<&str>,
+        table_name: &str,
+        _: bool,
+    ) -> Result<String, String> {
         Ok(format!("DELETE FROM {};", quote_sqlite_identifier(table_name)))
     }
 }
 
 impl TableActionSqlProvider for UnsupportedTableActionSqlProvider {
-    fn rename_table_sql(&self, _: &str, _: &str) -> Result<String, String> {
+    fn rename_table_sql(&self, _: Option<&str>, _: &str, _: &str) -> Result<String, String> {
         Err("当前连接类型暂不支持重命名表".to_string())
     }
 
     fn copy_table_sql(
         &self,
+        _: Option<&str>,
         _: &str,
         _: &str,
         _: bool,
@@ -104,11 +137,21 @@ impl TableActionSqlProvider for UnsupportedTableActionSqlProvider {
         Err("当前连接类型暂不支持复制表".to_string())
     }
 
-    fn drop_table_sql(&self, _: &str) -> Result<String, String> {
+    fn drop_table_sql(
+        &self,
+        _: ObjectKind,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<String, String> {
         Err("当前连接类型暂不支持删除表".to_string())
     }
 
-    fn truncate_table_sql(&self, _: &str) -> Result<String, String> {
+    fn truncate_table_sql(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: bool,
+    ) -> Result<String, String> {
         Err("当前连接类型暂不支持清空表".to_string())
     }
 }
@@ -205,6 +248,8 @@ fn quoted_identifier_end(bytes: &[u8], start: usize, quote: u8) -> Result<usize,
 static MYSQL_TABLE_ACTION_SQL_PROVIDER: MySqlTableActionSqlProvider = MySqlTableActionSqlProvider;
 static SQLITE_TABLE_ACTION_SQL_PROVIDER: SqliteTableActionSqlProvider =
     SqliteTableActionSqlProvider;
+static POSTGRES_TABLE_ACTION_SQL_PROVIDER: PostgresTableActionSqlProvider =
+    PostgresTableActionSqlProvider;
 static UNSUPPORTED_TABLE_ACTION_SQL_PROVIDER: UnsupportedTableActionSqlProvider =
     UnsupportedTableActionSqlProvider;
 
@@ -212,9 +257,8 @@ fn table_action_sql_provider(database_kind: DatabaseKind) -> &'static dyn TableA
     match database_kind {
         DatabaseKind::MySql | DatabaseKind::TiDb => &MYSQL_TABLE_ACTION_SQL_PROVIDER,
         DatabaseKind::Sqlite => &SQLITE_TABLE_ACTION_SQL_PROVIDER,
-        DatabaseKind::MongoDb | DatabaseKind::Redis | DatabaseKind::Postgres => {
-            &UNSUPPORTED_TABLE_ACTION_SQL_PROVIDER
-        }
+        DatabaseKind::Postgres => &POSTGRES_TABLE_ACTION_SQL_PROVIDER,
+        DatabaseKind::MongoDb | DatabaseKind::Redis => &UNSUPPORTED_TABLE_ACTION_SQL_PROVIDER,
     }
 }
 

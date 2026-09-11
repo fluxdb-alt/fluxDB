@@ -1630,6 +1630,8 @@ struct PendingDangerTableAction {
     object_path: ObjectPath,
     action: DangerTableAction,
     foreign_key_check: ForeignKeyCheckMode,
+    /// PG 清空表：是否 RESTART IDENTITY（默认 CONTINUE IDENTITY）。
+    restart_identity: bool,
     acknowledged: bool,
     error: Option<String>,
 }

@@ -472,3 +472,110 @@ fn postgres_design_drops_constraints_and_triggers() {
         "约束与触发器删除应按 PG 语法生成：{statements:#?}"
     );
 }
+
+/// §9.3：PG 表操作按 schema 限定、按 kind 选 DDL、默认 RESTRICT/CONTINUE IDENTITY。
+#[test]
+fn postgres_table_actions_are_schema_qualified_and_kind_aware() {
+    // 重命名：旧名带 schema，新名是单段。
+    assert_eq!(
+        rename_table_sql_preview(DatabaseKind::Postgres, Some("sales"), "orders", "orders_2026")
+            .unwrap(),
+        "ALTER TABLE \"sales\".\"orders\" RENAME TO \"orders_2026\";"
+    );
+    // 新名带点号会被误当成限定名，必须拒绝。
+    assert!(
+        rename_table_sql_preview(DatabaseKind::Postgres, Some("sales"), "orders", "a.b").is_err()
+    );
+
+    // 复制：LIKE INCLUDING ALL + 序列重绑 + 可选数据。
+    let copy = copy_table_sql_preview(DatabaseKind::Postgres, Some("sales"), "orders", "copy", true)
+        .unwrap();
+    assert!(
+        copy.starts_with("CREATE TABLE \"sales\".\"copy\" (LIKE \"sales\".\"orders\" INCLUDING ALL);"),
+        "{copy}"
+    );
+    assert!(copy.contains("CREATE SEQUENCE"), "复制必须重建独立序列：{copy}");
+    // 数据复制走 DO 块：跳过生成列、identity 用 OVERRIDING SYSTEM VALUE、复制后校准序列位置。
+    assert!(copy.contains("OVERRIDING SYSTEM VALUE"), "{copy}");
+    assert!(copy.contains("setval("), "复制后应校准序列位置：{copy}");
+    assert!(!copy.contains("SELECT * FROM"), "生成列不能参与写入：{copy}");
+
+    // 删除：表/视图对应不同 DDL，默认 RESTRICT（不带 CASCADE）。
+    assert_eq!(
+        drop_table_sql_preview(DatabaseKind::Postgres, ObjectKind::Table, Some("sales"), "orders", ForeignKeyCheckMode::Default)
+            .unwrap(),
+        "DROP TABLE \"sales\".\"orders\";"
+    );
+    assert_eq!(
+        drop_table_sql_preview(DatabaseKind::Postgres, ObjectKind::View, Some("sales"), "orders_v", ForeignKeyCheckMode::Default)
+            .unwrap(),
+        "DROP VIEW \"sales\".\"orders_v\";"
+    );
+
+    // 清空：默认 CONTINUE IDENTITY RESTRICT，显式选择才 RESTART IDENTITY。
+    assert_eq!(
+        truncate_table_sql_preview(
+            DatabaseKind::Postgres,
+            Some("sales"),
+            "orders",
+            false,
+            ForeignKeyCheckMode::Default
+        )
+        .unwrap(),
+        "TRUNCATE TABLE \"sales\".\"orders\" CONTINUE IDENTITY RESTRICT;"
+    );
+    assert_eq!(
+        truncate_table_sql_preview(
+            DatabaseKind::Postgres,
+            Some("sales"),
+            "orders",
+            true,
+            ForeignKeyCheckMode::Default
+        )
+        .unwrap(),
+        "TRUNCATE TABLE \"sales\".\"orders\" RESTART IDENTITY RESTRICT;"
+    );
+
+    // PG 不提供「禁用外键检查」，且不得退化成 session_replication_role。
+    let error = drop_table_sql_preview(
+        DatabaseKind::Postgres,
+        ObjectKind::Table,
+        Some("sales"),
+        "orders",
+        ForeignKeyCheckMode::Disable,
+    )
+    .unwrap_err();
+    assert!(error.contains("不支持禁用外键检查"), "{error}");
+    assert!(!error.contains("session_replication_role"), "{error}");
+}
+
+/// MySQL 表操作 SQL 未变（回归）。
+#[test]
+fn mysql_table_actions_unchanged_by_postgres_provider() {
+    assert_eq!(
+        rename_table_sql_preview(DatabaseKind::MySql, None, "orders", "orders_2026").unwrap(),
+        "ALTER TABLE `orders` RENAME TO `orders_2026`;"
+    );
+    assert_eq!(
+        truncate_table_sql_preview(
+            DatabaseKind::MySql,
+            None,
+            "orders",
+            true,
+            ForeignKeyCheckMode::Default
+        )
+        .unwrap(),
+        "TRUNCATE TABLE `orders`;"
+    );
+    assert_eq!(
+        drop_table_sql_preview(
+            DatabaseKind::MySql,
+            ObjectKind::Table,
+            None,
+            "orders",
+            ForeignKeyCheckMode::Disable
+        )
+        .unwrap(),
+        "SET FOREIGN_KEY_CHECKS = 0;\nDROP TABLE `orders`;"
+    );
+}

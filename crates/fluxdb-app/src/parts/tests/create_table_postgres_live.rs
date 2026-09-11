@@ -316,7 +316,7 @@ fn postgres_design_diff_applies_atomically_and_blocks_stale_snapshot() {
     )) else {
         panic!("注册 PG 连接应成功");
     };
-    let mut connector = PostgresConnector::with_config(registered.clone());
+    let connector = PostgresConnector::with_config(registered.clone());
     let database = params.4.clone();
 
     let mut request = QueryRequest {
@@ -529,5 +529,152 @@ fn postgres_design_diff_applies_atomically_and_blocks_stale_snapshot() {
 
     request.text = "DROP SCHEMA IF EXISTS t17_smoke CASCADE; DROP SCHEMA IF EXISTS t17_rollback CASCADE;"
         .to_string();
+    connector.execute(&request).expect("清理隔离 schema 应成功");
+}
+
+/// T18 验收：PG 复制表后源/目标自增独立，数据可复制，且不复制源序列。
+#[test]
+fn postgres_copy_table_gets_independent_sequence() {
+    let Some(params) = postgres_create_table_smoke_params() else {
+        tracing::warn!(target: "fluxdb_app", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T18 冒烟");
+        return;
+    };
+    let config = postgres_create_table_smoke_config(&params);
+    let connector = PostgresConnector::with_config(config.clone());
+    let database = params.4.clone();
+
+    let mut request = QueryRequest {
+        connection_id: config.id,
+        database: Some(database.clone()),
+        session_id: None,
+        schema: None,
+        text: "\
+            DROP SCHEMA IF EXISTS t18_smoke CASCADE; \
+            CREATE SCHEMA t18_smoke; \
+            CREATE TABLE t18_smoke.orders( \
+                id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, \
+                note text, \
+                upper_note text GENERATED ALWAYS AS (upper(note)) STORED \
+            ); \
+            INSERT INTO t18_smoke.orders(note) VALUES ('a'), ('b'); \
+        "
+        .to_string(),
+        mode: fluxdb_core::QueryMode::All,
+        options: QueryExecutionOptions::default(),
+    };
+    let setup = connector.execute(&request).expect("准备隔离 schema 应成功");
+    assert!(setup.summaries.iter().all(|summary| summary.success));
+
+    // 复制（结构 + 数据）：provider 生成 SQL，逐条事务执行。
+    let copy = copy_table_sql_preview(
+        DatabaseKind::Postgres,
+        Some("t18_smoke"),
+        "orders",
+        "orders_copy",
+        true,
+    )
+    .expect("复制预览应成功");
+    let mut copy_request = request.clone();
+    copy_request.text = format!("BEGIN;\n{copy}\nCOMMIT;");
+    let copied = connector.execute(&copy_request).expect("复制应执行成功");
+    let failed = copied
+        .summaries
+        .iter()
+        .filter(|summary| !summary.success)
+        .collect::<Vec<_>>();
+    assert!(failed.is_empty(), "复制语句应全部成功：{failed:#?}\n{copy}");
+
+    // 数据被复制。
+    let page = connector
+        .load_data(
+            &ObjectPath {
+                connection_id: config.id,
+                database: Some(database.clone()),
+                schema: Some("t18_smoke".to_string()),
+                name: "orders_copy".to_string(),
+                kind: ObjectKind::Table,
+            },
+            0,
+            10,
+            &[],
+            &[],
+        )
+        .expect("读取副本应成功");
+    assert_eq!(page.rows.len(), 2, "副本应含 2 行数据");
+
+    // 源/目标序列独立：向副本插入 2 行不应推进源序列，再向源插入也不与副本冲突。
+    request.text = "\
+        INSERT INTO t18_smoke.orders_copy(note) VALUES ('c'), ('d'); \
+        INSERT INTO t18_smoke.orders(note) VALUES ('e'); \
+    "
+    .to_string();
+    let inserted = connector.execute(&request).expect("插入应成功");
+    assert!(
+        inserted.summaries.iter().all(|summary| summary.success),
+        "源/目标自增应互不干扰：{inserted:#?}"
+    );
+
+    // 各表内部主键唯一（副本后续插入不与已复制数据冲突）。
+    request.text = "SELECT (SELECT count(*) FROM t18_smoke.orders) AS src_rows, \
+                            (SELECT count(DISTINCT id) FROM t18_smoke.orders) AS src_ids, \
+                            (SELECT count(*) FROM t18_smoke.orders_copy) AS dst_rows, \
+                            (SELECT count(DISTINCT id) FROM t18_smoke.orders_copy) AS dst_ids;"
+        .to_string();
+    let counted = connector.execute(&request).expect("统计应成功");
+    let counts = counted
+        .results
+        .last()
+        .and_then(|page| page.rows.first())
+        .map(|row| row.values.clone())
+        .unwrap_or_default();
+    assert_eq!(
+        counts,
+        vec![
+            CellValue::I64(3),
+            CellValue::I64(3),
+            CellValue::I64(4),
+            CellValue::I64(4)
+        ],
+        "源 3 行、副本 4 行且各自主键唯一：{counts:?}"
+    );
+
+    // 序列独立：副本的默认序列不是源序列，且源序列位置未被副本插入推进（仍为 3）。
+    // 生成列由服务端重算（复制时不写入）：副本的 upper_note 有值且等于 note 大写。
+    request.text = "SELECT count(*) FROM t18_smoke.orders_copy \
+                            WHERE upper_note IS DISTINCT FROM upper(note);"
+        .to_string();
+    let generated = connector.execute(&request).expect("读取生成列应成功");
+    let mismatched = generated
+        .results
+        .last()
+        .and_then(|page| page.rows.first())
+        .map(|row| row.values.clone())
+        .unwrap_or_default();
+    assert_eq!(
+        mismatched,
+        vec![CellValue::I64(0)],
+        "生成列应由服务端重算且不参与写入：{mismatched:?}"
+    );
+
+    request.text = "SELECT pg_get_serial_sequence('t18_smoke.orders_copy', 'id') <> \
+                            pg_get_serial_sequence('t18_smoke.orders', 'id') AS independent, \
+                            (SELECT last_value FROM pg_sequences \
+                              WHERE schemaname = 't18_smoke' AND sequencename = 'orders_id_seq') AS source_seq;"
+        .to_string();
+    let sequence = connector.execute(&request).expect("读取序列应成功");
+    let values = sequence
+        .results
+        .last()
+        .and_then(|page| page.rows.first())
+        .map(|row| row.values.clone())
+        .unwrap_or_default();
+    assert_eq!(
+        values,
+        vec![CellValue::Bool(true), CellValue::I64(3)],
+        "副本必须使用独立序列，源序列不应被副本插入推进：{values:?}"
+    );
+
+    request.text =
+        "DROP SCHEMA IF EXISTS t18_smoke CASCADE;".to_string();
     connector.execute(&request).expect("清理隔离 schema 应成功");
 }

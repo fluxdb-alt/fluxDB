@@ -90,7 +90,12 @@ impl AppController {
                     return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
                 };
                 let new_name = new_name.trim().to_string();
-                let sql = match rename_table_sql_preview(config.kind, &object.name, &new_name) {
+                let sql = match rename_table_sql_preview(
+                    config.kind,
+                    object.schema.as_deref(),
+                    &object.name,
+                    &new_name,
+                ) {
                     Ok(sql) => sql,
                     Err(message) => return self.fail(Error::new(ErrorKind::Query, message)),
                 };
@@ -165,6 +170,7 @@ impl AppController {
                 };
                 let sql = match copy_table_sql_preview_with_source_ddl(
                     config.kind,
+                    object.schema.as_deref(),
                     &object.name,
                     &new_name,
                     copy_data,
@@ -223,8 +229,13 @@ impl AppController {
                 let Some(config) = self.connection_config(object.connection_id).cloned() else {
                     return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
                 };
-                let sql = match drop_table_sql_preview(config.kind, &object.name, foreign_key_check)
-                {
+                let sql = match drop_table_sql_preview(
+                    config.kind,
+                    object.kind,
+                    object.schema.as_deref(),
+                    &object.name,
+                    foreign_key_check,
+                ) {
                     Ok(sql) => sql,
                     Err(message) => return self.fail(Error::new(ErrorKind::Query, message)),
                 };
@@ -280,13 +291,18 @@ impl AppController {
             AppCommand::TruncateTable {
                 object,
                 foreign_key_check,
+                restart_identity,
             } => {
                 let Some(config) = self.connection_config(object.connection_id).cloned() else {
                     return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
                 };
-                let sql =
-                    match truncate_table_sql_preview(config.kind, &object.name, foreign_key_check)
-                    {
+                let sql = match truncate_table_sql_preview(
+                    config.kind,
+                    object.schema.as_deref(),
+                    &object.name,
+                    restart_identity,
+                    foreign_key_check,
+                ) {
                     Ok(sql) => sql,
                     Err(message) => return self.fail(Error::new(ErrorKind::Query, message)),
                     };
