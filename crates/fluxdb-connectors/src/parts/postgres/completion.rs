@@ -342,11 +342,16 @@ fn pg_list_completion_tables(
     schema: Option<&str>,
     filter: &str,
     limit: u64,
+    should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<CompletionTable>> {
     let physical_db = pg_completion_database(config, database)?;
     pg_runtime().block_on(async {
         let session = pg_connect(config, &physical_db).await?;
         let schemas = pg_completion_schemas_async(session.client.as_ref(), config, schema).await;
+        // 取消检查：建连/search_path 取完之后、主 catalog 查询之前（§8.4 列表可取消）。
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
         pg_list_completion_tables_async(
             session.client.as_ref(),
             &physical_db,
@@ -363,11 +368,15 @@ fn pg_list_completion_columns(
     database: Option<&str>,
     schema: Option<&str>,
     table: &str,
+    should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<CompletionColumn>> {
     let physical_db = pg_completion_database(config, database)?;
     pg_runtime().block_on(async {
         let session = pg_connect(config, &physical_db).await?;
         let schemas = pg_completion_schemas_async(session.client.as_ref(), config, schema).await;
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
         pg_list_completion_columns_async(
             session.client.as_ref(),
             &physical_db,
@@ -383,12 +392,16 @@ fn pg_list_completion_columns_for_tables(
     database: Option<&str>,
     schema: Option<&str>,
     tables: &[String],
+    should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<CompletionColumn>> {
     let physical_db = pg_completion_database(config, database)?;
     let table_refs: Vec<&str> = tables.iter().map(String::as_str).collect();
     pg_runtime().block_on(async {
         let session = pg_connect(config, &physical_db).await?;
         let schemas = pg_completion_schemas_async(session.client.as_ref(), config, schema).await;
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
         pg_list_completion_columns_async(session.client.as_ref(), &physical_db, &schemas, &table_refs)
             .await
     })
@@ -400,11 +413,15 @@ fn pg_list_completion_routines(
     schema: Option<&str>,
     filter: &str,
     limit: u64,
+    should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<CompletionRoutine>> {
     let physical_db = pg_completion_database(config, database)?;
     pg_runtime().block_on(async {
         let session = pg_connect(config, &physical_db).await?;
         let schemas = pg_completion_schemas_async(session.client.as_ref(), config, schema).await;
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
         pg_list_completion_routines_async(session.client.as_ref(), &schemas, filter, limit).await
     })
 }
@@ -415,11 +432,15 @@ fn pg_list_completion_triggers(
     schema: Option<&str>,
     filter: &str,
     limit: u64,
+    should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<CompletionTrigger>> {
     let physical_db = pg_completion_database(config, database)?;
     pg_runtime().block_on(async {
         let session = pg_connect(config, &physical_db).await?;
         let schemas = pg_completion_schemas_async(session.client.as_ref(), config, schema).await;
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
         pg_list_completion_triggers_async(session.client.as_ref(), &schemas, filter, limit).await
     })
 }

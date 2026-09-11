@@ -4716,6 +4716,66 @@ SELECT item_id, name FROM audit_log;"
         connector.execute(&cleanup).expect("清理临时结构应成功");
     }
 
+    /// T14 验收「列表支持取消」：取消标记生效时补全各列表返回空结果且不报错，
+    /// 不阻塞编辑（不发起无意义往返）。
+    #[test]
+    fn pg_live_smoke_completion_cancel_returns_empty() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T14 冒烟");
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config);
+        let cancelled = || true;
+
+        assert!(
+            connector
+                .list_completion_tables_with_cancel(Some(&db_name), Some("public"), "", 50, &cancelled)
+                .expect("取消不应报错")
+                .is_empty(),
+            "取消后的表补全应为空"
+        );
+        assert!(
+            connector
+                .list_completion_columns_with_cancel(
+                    Some(&db_name),
+                    Some("public"),
+                    "t14_absent",
+                    &cancelled
+                )
+                .expect("取消不应报错")
+                .is_empty(),
+            "取消后的列补全应为空"
+        );
+        assert!(
+            connector
+                .list_completion_columns_for_tables_with_cancel(
+                    Some(&db_name),
+                    Some("public"),
+                    &["t14_absent".to_string()],
+                    &cancelled
+                )
+                .expect("取消不应报错")
+                .is_empty(),
+            "取消后的批量列补全应为空"
+        );
+        assert!(
+            connector
+                .list_completion_routines_with_cancel(Some(&db_name), Some("public"), "", 50, &cancelled)
+                .expect("取消不应报错")
+                .is_empty(),
+            "取消后的例程补全应为空"
+        );
+        assert!(
+            connector
+                .list_completion_triggers_with_cancel(Some(&db_name), Some("public"), "", 50, &cancelled)
+                .expect("取消不应报错")
+                .is_empty(),
+            "取消后的触发器补全应为空"
+        );
+    }
+
     /// T14 验收「元数据会话不影响用户事务」：补全元数据走独立会话（pg_connect 新拨），
     /// 用户会话里的未提交事务在补全期间保持原状，不被提交也不被回滚。
     #[test]

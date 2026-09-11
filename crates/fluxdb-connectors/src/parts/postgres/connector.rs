@@ -100,7 +100,7 @@ impl Connector for PostgresConnector {
         limit: u64,
     ) -> fluxdb_core::Result<Vec<CompletionTable>> {
         let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
-        pg_list_completion_tables(config, database, schema, filter, limit)
+        pg_list_completion_tables(config, database, schema, filter, limit, &|| false)
     }
 
     fn list_completion_columns(
@@ -110,7 +110,7 @@ impl Connector for PostgresConnector {
         table: &str,
     ) -> fluxdb_core::Result<Vec<CompletionColumn>> {
         let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
-        pg_list_completion_columns(config, database, schema, table)
+        pg_list_completion_columns(config, database, schema, table, &|| false)
     }
 
     fn list_completion_columns_for_tables(
@@ -120,7 +120,7 @@ impl Connector for PostgresConnector {
         tables: &[String],
     ) -> fluxdb_core::Result<Vec<CompletionColumn>> {
         let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
-        pg_list_completion_columns_for_tables(config, database, schema, tables)
+        pg_list_completion_columns_for_tables(config, database, schema, tables, &|| false)
     }
 
     fn list_completion_routines(
@@ -131,7 +131,7 @@ impl Connector for PostgresConnector {
         limit: u64,
     ) -> fluxdb_core::Result<Vec<CompletionRoutine>> {
         let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
-        pg_list_completion_routines(config, database, schema, filter, limit)
+        pg_list_completion_routines(config, database, schema, filter, limit, &|| false)
     }
 
     fn list_completion_triggers(
@@ -142,7 +142,83 @@ impl Connector for PostgresConnector {
         limit: u64,
     ) -> fluxdb_core::Result<Vec<CompletionTrigger>> {
         let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
-        pg_list_completion_triggers(config, database, schema, filter, limit)
+        pg_list_completion_triggers(config, database, schema, filter, limit, &|| false)
+    }
+
+    // 取消支持：PG 补全的每次调用含「建连 + search_path + 主 catalog 查询」多段往返，
+    // 仅靠 trait 默认的「调用前后各查一次」无法在往返之间中断，故这里显式下传 should_cancel，
+    // 在每段往返之间提前返回空结果（§8.4 列表支持取消；不中断已发出的单条查询）。
+    fn list_completion_tables_with_cancel(
+        &self,
+        database: Option<&str>,
+        schema: Option<&str>,
+        filter: &str,
+        limit: u64,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<Vec<CompletionTable>> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
+        pg_list_completion_tables(config, database, schema, filter, limit, should_cancel)
+    }
+
+    fn list_completion_columns_with_cancel(
+        &self,
+        database: Option<&str>,
+        schema: Option<&str>,
+        table: &str,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<Vec<CompletionColumn>> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
+        pg_list_completion_columns(config, database, schema, table, should_cancel)
+    }
+
+    fn list_completion_columns_for_tables_with_cancel(
+        &self,
+        database: Option<&str>,
+        schema: Option<&str>,
+        tables: &[String],
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<Vec<CompletionColumn>> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
+        pg_list_completion_columns_for_tables(config, database, schema, tables, should_cancel)
+    }
+
+    fn list_completion_routines_with_cancel(
+        &self,
+        database: Option<&str>,
+        schema: Option<&str>,
+        filter: &str,
+        limit: u64,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<Vec<CompletionRoutine>> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
+        pg_list_completion_routines(config, database, schema, filter, limit, should_cancel)
+    }
+
+    fn list_completion_triggers_with_cancel(
+        &self,
+        database: Option<&str>,
+        schema: Option<&str>,
+        filter: &str,
+        limit: u64,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<Vec<CompletionTrigger>> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
+        pg_list_completion_triggers(config, database, schema, filter, limit, should_cancel)
     }
 
     fn table_ddl(&self, path: &ObjectPath) -> fluxdb_core::Result<String> {
