@@ -303,6 +303,12 @@ impl NavicatMain {
             ConnectionField::SshPassword => form.ssh_password = value,
             ConnectionField::SshPrivateKey => form.ssh_private_key = value,
             ConnectionField::SshPassphrase => form.ssh_passphrase = value,
+            // —— PostgreSQL 专用 ——
+            ConnectionField::PgTlsSslMode => form.pg_tls_ssl_mode = value,
+            ConnectionField::PgDefaultSchema => form.pg_default_schema = value,
+            ConnectionField::PgApplicationName => form.pg_application_name = value,
+            ConnectionField::PgConnectTimeoutSecs => form.pg_connect_timeout_secs = value,
+            ConnectionField::PgQueryTimeoutSecs => form.pg_query_timeout_secs = value,
             // —— MySQL / TiDB 专用 ——
             ConnectionField::MysqlTlsSslMode => form.mysql_tls_ssl_mode = value,
             ConnectionField::MysqlCharset => form.mysql_charset = value,
@@ -342,6 +348,7 @@ impl NavicatMain {
             ConnectionToggleField::ClusterAllowReadonly => form.cluster_allow_readonly = value,
             ConnectionToggleField::MysqlProxyEnabled => form.mysql_proxy_enabled = value,
             ConnectionToggleField::MysqlTcpKeepalive => form.mysql_tcp_keepalive = value,
+            ConnectionToggleField::PgTcpKeepalive => form.pg_tcp_keepalive = value,
         }
         cx.notify();
     }
@@ -595,6 +602,13 @@ impl NavicatMain {
             None
         };
 
+        // PostgreSQL 专用：组装结构化档案——缺它 PG 连接无法拨号（连接器要求 profile）。
+        let postgres_profile = if kind == DatabaseKind::Postgres {
+            Some(form.build_postgres_profile())
+        } else {
+            None
+        };
+
         ConnectionDraft {
             name: form.name.trim().to_string(),
             kind,
@@ -603,7 +617,7 @@ impl NavicatMain {
             options,
             redis_profile,
             mysql_profile,
-            postgres_profile: None,
+            postgres_profile,
         }
     }
 

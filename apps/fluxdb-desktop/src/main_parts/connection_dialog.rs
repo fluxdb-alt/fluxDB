@@ -291,6 +291,14 @@ fn new_connection_modal(
                                         .flex()
                                         .gap_3()
                                         .child(kind_tile(
+                                            "PostgreSQL",
+                                            DatabaseKind::Postgres,
+                                            kind,
+                                            editing,
+                                            colors,
+                                            cx,
+                                        ))
+                                        .child(kind_tile(
                                             "Redis",
                                             DatabaseKind::Redis,
                                             kind,
@@ -561,19 +569,24 @@ fn new_connection_tab_content(
         NewConnectionTab::Connection => connection_form(kind, form, inputs, colors, window, cx),
         // TLS / SSH / Advanced：Redis 与 MySQL/TiDB 都有实际表单，其余类型显示提示占位。
         NewConnectionTab::Tls => match kind {
-            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Redis => {
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Redis | DatabaseKind::Postgres => {
                 tls_form(kind, form, inputs, colors, window, cx)
             }
             _ => redis_only_settings_hint(colors),
         },
         NewConnectionTab::Ssh => match kind {
-            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Redis => {
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Redis | DatabaseKind::Postgres => {
                 ssh_form(kind, form, inputs, colors, window, cx)
             }
             _ => redis_only_settings_hint(colors),
         },
         NewConnectionTab::Advanced => match kind {
-            DatabaseKind::MySql | DatabaseKind::TiDb => mysql_advanced_form(form, inputs, colors, window, cx),
+            DatabaseKind::MySql | DatabaseKind::TiDb => {
+                mysql_advanced_form(form, inputs, colors, window, cx)
+            }
+            DatabaseKind::Postgres => {
+                postgres_advanced_form(form, inputs, colors, window, cx)
+            }
             DatabaseKind::Redis => advanced_form(form, inputs, colors, window, cx),
             _ => redis_only_settings_hint(colors),
         },
@@ -614,7 +627,6 @@ fn tls_form(
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let enabled = form.tls_enabled;
-    let is_mysql = matches!(kind, DatabaseKind::MySql | DatabaseKind::TiDb);
     div()
         .flex()
         .flex_col()
@@ -633,34 +645,34 @@ fn tls_form(
         )
         // TLS 参数明细：启用时正常显示，未启用时整体置灰。
         .when(enabled, |this| {
-            this.child(tls_parameters_block(
-                is_mysql, form, inputs, colors, window, cx,
-            ))
+            this.child(tls_parameters_block(kind, form, inputs, colors, window, cx))
         })
         .when(!enabled, |this| {
-            this.child(tls_parameters_block(
-                is_mysql, form, inputs, colors, window, cx,
-            )
-            .opacity(0.45))
+            this.child(tls_parameters_block(kind, form, inputs, colors, window, cx).opacity(0.45))
         })
 }
 
 /// TLS 参数明细块：CA 证书 / 客户端证书 / 客户端密钥 / SNI / 校验证书。
-/// MySQL/TiDB 额外渲染 ssl_mode 与字符集。
+/// MySQL/TiDB 额外渲染 ssl_mode 与字符集；PostgreSQL 渲染 PG 的 ssl_mode。
 fn tls_parameters_block(
-    is_mysql: bool,
+    kind: DatabaseKind,
     form: &NewConnectionForm,
     inputs: &NewConnectionInputs,
     colors: UiColors,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
+    let is_mysql = matches!(kind, DatabaseKind::MySql | DatabaseKind::TiDb);
+    let is_postgres = kind == DatabaseKind::Postgres;
     div()
         .flex()
         .flex_col()
         .gap_4()
         .when(is_mysql, |this| {
             this.child(mysql_tls_mode_block(form, inputs, colors, window, cx))
+        })
+        .when(is_postgres, |this| {
+            this.child(postgres_tls_mode_block(inputs, colors, window, cx))
         })
         .child(
             h_form()
@@ -743,6 +755,91 @@ fn mysql_tls_mode_block(
                     window,
                     cx,
                 )),
+        )
+}
+
+/// PostgreSQL 的 TLS 模式（disable/prefer/require/verify-ca/verify-full）。
+fn postgres_tls_mode_block(
+    inputs: &NewConnectionInputs,
+    colors: UiColors,
+    window: &mut Window,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    div().w_full().child(
+        h_form()
+            .label_width(px(112.))
+            .child(field_row_light(
+                "SSL 模式",
+                ConnectionField::PgTlsSslMode,
+                inputs,
+                false,
+                colors,
+                window,
+                cx,
+            )),
+    )
+}
+
+/// PostgreSQL 高级页签：建连/查询超时、应用名、默认 schema。
+fn postgres_advanced_form(
+    form: &NewConnectionForm,
+    inputs: &NewConnectionInputs,
+    colors: UiColors,
+    window: &mut Window,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_4()
+        .child(
+            h_form()
+                .label_width(px(112.))
+                .child(field_row_light(
+                    "建连超时(秒)",
+                    ConnectionField::PgConnectTimeoutSecs,
+                    inputs,
+                    false,
+                    colors,
+                    window,
+                    cx,
+                ))
+                .child(field_row_light(
+                    "查询超时(秒)",
+                    ConnectionField::PgQueryTimeoutSecs,
+                    inputs,
+                    false,
+                    colors,
+                    window,
+                    cx,
+                ))
+                .child(field_row_light(
+                    "应用名",
+                    ConnectionField::PgApplicationName,
+                    inputs,
+                    false,
+                    colors,
+                    window,
+                    cx,
+                ))
+                .child(field_row_light(
+                    "默认 schema",
+                    ConnectionField::PgDefaultSchema,
+                    inputs,
+                    false,
+                    colors,
+                    window,
+                    cx,
+                )),
+        )
+        .child(
+            h_form().label_width(px(112.)).child(toggle_row_light(
+                "TCP 保活",
+                ConnectionToggleField::PgTcpKeepalive,
+                form.pg_tcp_keepalive,
+                colors,
+                cx,
+            )),
         )
 }
 
@@ -1362,6 +1459,7 @@ fn connection_toggle_id(field: ConnectionToggleField) -> &'static str {
         ConnectionToggleField::ClusterAllowReadonly => "new-connection-toggle-cluster-readonly",
         ConnectionToggleField::MysqlProxyEnabled => "new-connection-toggle-mysql-proxy",
         ConnectionToggleField::MysqlTcpKeepalive => "new-connection-toggle-mysql-tcp-keepalive",
+        ConnectionToggleField::PgTcpKeepalive => "new-connection-toggle-pg-tcp-keepalive",
     }
 }
 

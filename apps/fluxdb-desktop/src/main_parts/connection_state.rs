@@ -282,6 +282,17 @@ enum ConnectionField {
     CloudResource,
     /// 连接串导入框
     DiscoveryUri,
+    // —— PostgreSQL 专用文本字段 ——
+    /// TLS 模式："disable" / "prefer" / "require" / "verify-ca" / "verify-full"
+    PgTlsSslMode,
+    /// 默认 schema（search_path 首段）
+    PgDefaultSchema,
+    /// 应用名
+    PgApplicationName,
+    /// 建连超时（秒）
+    PgConnectTimeoutSecs,
+    /// 查询超时（秒）
+    PgQueryTimeoutSecs,
     // —— MySQL / TiDB 专用文本字段 ——
     /// TLS 模式："disabled" / "preferred" / "required"
     MysqlTlsSslMode,
@@ -324,6 +335,8 @@ enum ConnectionToggleField {
     MysqlProxyEnabled,
     /// 是否启用 MySQL/TiDB TCP 长连接保活
     MysqlTcpKeepalive,
+    /// 是否启用 PostgreSQL TCP 保活
+    PgTcpKeepalive,
 }
 
 #[derive(Clone, Debug)]
@@ -381,6 +394,19 @@ struct NewConnectionForm {
     mysql_idle_ttl_secs: String,
     /// 是否启用 TCP 长连接保活
     mysql_tcp_keepalive: bool,
+    // —— PostgreSQL 专用编辑值 ——
+    /// TLS 模式："disable" / "prefer" / "require" / "verify-ca" / "verify-full"
+    pg_tls_ssl_mode: String,
+    /// 默认 schema 作用域（search_path 首段），空表示库默认
+    pg_default_schema: String,
+    /// 应用名（服务端 pg_stat_activity.application_name 显示）
+    pg_application_name: String,
+    /// 建连超时（秒），0 表示不限
+    pg_connect_timeout_secs: String,
+    /// 查询/语句超时（秒），0 表示不设限
+    pg_query_timeout_secs: String,
+    /// TCP 保活
+    pg_tcp_keepalive: bool,
     sentinel_master_name: String,
     /// Sentinel 节点列表，换行分隔
     sentinel_endpoints: String,
@@ -417,6 +443,12 @@ struct NewConnectionInputs {
     ssh_private_key: Entity<InputState>,
     ssh_passphrase: Entity<InputState>,
     mysql_tls_ssl_mode: Entity<InputState>,
+    /// —— PostgreSQL 专用 ——
+    pg_tls_ssl_mode: Entity<InputState>,
+    pg_default_schema: Entity<InputState>,
+    pg_application_name: Entity<InputState>,
+    pg_connect_timeout: Entity<InputState>,
+    pg_query_timeout: Entity<InputState>,
     mysql_charset: Entity<InputState>,
     mysql_proxy_type: Entity<InputState>,
     mysql_ssh_connect_timeout: Entity<InputState>,
@@ -492,6 +524,12 @@ impl NewConnectionForm {
             mysql_query_timeout_secs: "0".to_string(),
             mysql_idle_ttl_secs: "0".to_string(),
             mysql_tcp_keepalive: true,
+            pg_tls_ssl_mode: "prefer".to_string(),
+            pg_default_schema: String::new(),
+            pg_application_name: String::new(),
+            pg_connect_timeout_secs: "5".to_string(),
+            pg_query_timeout_secs: "0".to_string(),
+            pg_tcp_keepalive: false,
             sentinel_master_name: String::new(),
             sentinel_endpoints: String::new(),
             cluster_start_nodes: String::new(),
@@ -616,7 +654,79 @@ impl NewConnectionForm {
             }
         }
 
+        // PostgreSQL 档案回填：结构化档案优先，缺省时用历史扁平参数迁移。
+        if config.kind == DatabaseKind::Postgres {
+            let profile = config.postgres_profile.clone().or_else(|| {
+                Some(fluxdb_core::PostgresConnectionProfile::from_options(
+                    &config.options,
+                ))
+            });
+            if let Some(profile) = profile {
+                form.apply_postgres_profile(&profile);
+            }
+        }
+
         form
+    }
+
+    /// 用一份 PostgreSQL 档案回填表单的 PG 专用编辑值。
+    fn apply_postgres_profile(&mut self, profile: &fluxdb_core::PostgresConnectionProfile) {
+        self.pg_tls_ssl_mode = match profile.tls.ssl_mode {
+            fluxdb_core::PostgresSslMode::Disabled => "disable".to_string(),
+            fluxdb_core::PostgresSslMode::Prefer => "prefer".to_string(),
+            fluxdb_core::PostgresSslMode::Require => "require".to_string(),
+            fluxdb_core::PostgresSslMode::VerifyCa => "verify-ca".to_string(),
+            fluxdb_core::PostgresSslMode::VerifyFull => "verify-full".to_string(),
+        };
+        self.pg_default_schema = profile.scope.default_schema.clone();
+        self.pg_application_name = profile.advanced.application_name.clone();
+        self.pg_connect_timeout_secs = profile.advanced.connect_timeout_secs.to_string();
+        self.pg_query_timeout_secs = profile.advanced.query_timeout_secs.to_string();
+        self.pg_tcp_keepalive = profile.advanced.tcp_keepalive;
+        // 维护库回填「数据库」输入框（表单与档案保持同一事实来源）。
+        if !profile.basic.maintenance_database.is_empty() {
+            self.database = profile.basic.maintenance_database.clone();
+        }
+
+        // 传输层：SSH / 代理复用共享字段（与 MySQL 表单一致的编辑位置）。
+        if let Some(ssh) = profile.transport.iter().find_map(|layer| match layer {
+            fluxdb_core::PostgresTransportLayer::Ssh(ssh) => Some(ssh),
+            _ => None,
+        }) {
+            self.ssh_enabled = ssh.enabled;
+            self.ssh_host = ssh.host.clone();
+            self.ssh_port = ssh.port.to_string();
+            self.ssh_username = ssh.username.clone();
+            self.ssh_auth = match ssh.auth {
+                fluxdb_core::PostgresSshAuth::Password => "password".to_string(),
+                fluxdb_core::PostgresSshAuth::PrivateKey => "private_key".to_string(),
+            };
+            if let Some(password) = ssh.password.value() {
+                self.ssh_password = password.to_string();
+            }
+            self.ssh_private_key = ssh.private_key.key.clone();
+            if let Some(passphrase) = ssh.passphrase.value() {
+                self.ssh_passphrase = passphrase.to_string();
+            }
+            self.mysql_ssh_connect_timeout_secs = ssh.connect_timeout_secs.to_string();
+            self.mysql_ssh_keepalive_secs = ssh.keepalive_interval_secs.to_string();
+        }
+        if let Some(proxy) = profile.transport.iter().find_map(|layer| match layer {
+            fluxdb_core::PostgresTransportLayer::Proxy(proxy) => Some(proxy),
+            _ => None,
+        }) {
+            self.mysql_proxy_enabled = proxy.enabled;
+            self.mysql_proxy_type = match proxy.proxy_type {
+                fluxdb_core::PostgresProxyType::Socks5 => "socks5".to_string(),
+                fluxdb_core::PostgresProxyType::HttpConnect => "http_connect".to_string(),
+            };
+            self.mysql_proxy_host = proxy.host.clone();
+            self.mysql_proxy_port = proxy.port.to_string();
+            self.mysql_proxy_username = proxy.username.clone();
+            if let Some(password) = proxy.password.value() {
+                self.mysql_proxy_password = password.to_string();
+            }
+        }
     }
 
     /// 用一份 Redis 档案（结构化或历史扁平迁移而来）回填表单的所有编辑值。
@@ -910,6 +1020,122 @@ impl NewConnectionForm {
             },
         }
     }
+
+    /// PostgreSQL 结构化档案：表单里的主机/账号 + TLS 模式 + SSH/代理 + scope/advanced。
+    ///
+    /// SecretRef 约定与 redis/mysql 一致：密码类放 inline（存储层写 Keychain），
+    /// 证书/私钥以文件路径作 key（非密码语义）。
+    fn build_postgres_profile(&self) -> fluxdb_core::PostgresConnectionProfile {
+        use fluxdb_core::{
+            PostgresAdvancedOptions, PostgresBasicOptions, PostgresProxy, PostgresProxyType,
+            PostgresScopeOptions, PostgresSshAuth,
+            PostgresSshOptions, PostgresSslMode, PostgresTlsOptions, PostgresTransportLayer,
+            SecretRef,
+        };
+        let file_ref = |path: &str| SecretRef::ref_key(path.trim().to_string());
+        let inline_secret = |value: &str| SecretRef::inline(value.trim().to_string());
+
+        let tls = PostgresTlsOptions {
+            enabled: self.tls_enabled,
+            ssl_mode: match self.pg_tls_ssl_mode.trim().to_ascii_lowercase().as_str() {
+                "disable" | "disabled" => PostgresSslMode::Disabled,
+                "require" | "required" => PostgresSslMode::Require,
+                "verify-ca" => PostgresSslMode::VerifyCa,
+                "verify-full" => PostgresSslMode::VerifyFull,
+                // 缺省/非法值按 Prefer（本地/内网默认，兼容无 TLS 部署）。
+                _ => PostgresSslMode::Prefer,
+            },
+            ca: file_ref(&self.tls_ca),
+            client_cert: file_ref(&self.tls_client_cert),
+            client_key: file_ref(&self.tls_client_key),
+            server_name: self.tls_sni.trim().to_string(),
+        };
+
+        // 传输层：SSH 隧道 / 代理按开关压入，缺省直连。
+        let mut transport = vec![PostgresTransportLayer::Direct];
+        if self.ssh_enabled {
+            transport.insert(
+                0,
+                PostgresTransportLayer::Ssh(PostgresSshOptions {
+                    enabled: true,
+                    host: self.ssh_host.trim().to_string(),
+                    port: self.ssh_port.trim().parse::<u16>().unwrap_or(22),
+                    username: self.ssh_username.trim().to_string(),
+                    auth: if self.ssh_auth == "private_key" {
+                        PostgresSshAuth::PrivateKey
+                    } else {
+                        PostgresSshAuth::Password
+                    },
+                    password: inline_secret(&self.ssh_password),
+                    private_key: file_ref(&self.ssh_private_key),
+                    passphrase: inline_secret(&self.ssh_passphrase),
+                    connect_timeout_secs: self
+                        .mysql_ssh_connect_timeout_secs
+                        .trim()
+                        .parse()
+                        .unwrap_or(0),
+                    keepalive_interval_secs: self
+                        .mysql_ssh_keepalive_secs
+                        .trim()
+                        .parse()
+                        .unwrap_or(0),
+                }),
+            );
+        }
+        if self.mysql_proxy_enabled {
+            transport.insert(
+                0,
+                PostgresTransportLayer::Proxy(PostgresProxy {
+                    enabled: true,
+                    proxy_type: if self.mysql_proxy_type.trim() == "http_connect" {
+                        PostgresProxyType::HttpConnect
+                    } else {
+                        PostgresProxyType::Socks5
+                    },
+                    host: self.mysql_proxy_host.trim().to_string(),
+                    port: self.mysql_proxy_port.trim().parse::<u16>().unwrap_or(1080),
+                    username: self.mysql_proxy_username.trim().to_string(),
+                    password: inline_secret(&self.mysql_proxy_password),
+                }),
+            );
+        }
+
+        fluxdb_core::PostgresConnectionProfile {
+            basic: PostgresBasicOptions {
+                host: self.host.trim().to_string(),
+                port: self
+                    .port
+                    .trim()
+                    .parse::<u16>()
+                    .unwrap_or_else(|_| database_default_port_u16(DatabaseKind::Postgres)),
+                // 维护库：表单「数据库」为空时回退 postgres（服务端默认维护库）。
+                maintenance_database: {
+                    let database = self.database.trim();
+                    if database.is_empty() {
+                        "postgres".to_string()
+                    } else {
+                        database.to_string()
+                    }
+                },
+                username: self.username.trim().to_string(),
+                password: inline_secret(&self.password),
+            },
+            scope: PostgresScopeOptions {
+                default_schema: self.pg_default_schema.trim().to_string(),
+                ..PostgresScopeOptions::default()
+            },
+            tls,
+            transport,
+            advanced: PostgresAdvancedOptions {
+                connect_timeout_secs: self.pg_connect_timeout_secs.trim().parse().unwrap_or(5),
+                query_timeout_secs: self.pg_query_timeout_secs.trim().parse().unwrap_or(0),
+                idle_ttl_secs: self.mysql_idle_ttl_secs.trim().parse().unwrap_or(0),
+                tcp_keepalive: self.pg_tcp_keepalive,
+                application_name: self.pg_application_name.trim().to_string(),
+                timezone: String::new(),
+            },
+        }
+    }
 }
 
 impl NewConnectionInputs {
@@ -966,6 +1192,17 @@ impl NewConnectionInputs {
             input_state(ConnectionField::SshPrivateKey, false, window, cx);
         let (ssh_passphrase, ssh_passphrase_subscription) =
             input_state(ConnectionField::SshPassphrase, true, window, cx);
+        // —— PostgreSQL 专用文本输入 ——
+        let (pg_tls_ssl_mode, pg_tls_ssl_mode_subscription) =
+            input_state(ConnectionField::PgTlsSslMode, false, window, cx);
+        let (pg_default_schema, pg_default_schema_subscription) =
+            input_state(ConnectionField::PgDefaultSchema, false, window, cx);
+        let (pg_application_name, pg_application_name_subscription) =
+            input_state(ConnectionField::PgApplicationName, false, window, cx);
+        let (pg_connect_timeout, pg_connect_timeout_subscription) =
+            input_state(ConnectionField::PgConnectTimeoutSecs, false, window, cx);
+        let (pg_query_timeout, pg_query_timeout_subscription) =
+            input_state(ConnectionField::PgQueryTimeoutSecs, false, window, cx);
         // —— MySQL / TiDB 专用文本输入 ——
         let (mysql_tls_ssl_mode, mysql_tls_ssl_mode_subscription) =
             input_state(ConnectionField::MysqlTlsSslMode, false, window, cx);
@@ -1082,6 +1319,11 @@ impl NewConnectionInputs {
             ssh_password,
             ssh_private_key,
             ssh_passphrase,
+            pg_tls_ssl_mode,
+            pg_default_schema,
+            pg_application_name,
+            pg_connect_timeout,
+            pg_query_timeout,
             mysql_tls_ssl_mode,
             mysql_charset,
             mysql_proxy_type,
@@ -1122,6 +1364,11 @@ impl NewConnectionInputs {
                 ssh_password_subscription,
                 ssh_private_key_subscription,
                 ssh_passphrase_subscription,
+                pg_tls_ssl_mode_subscription,
+                pg_default_schema_subscription,
+                pg_application_name_subscription,
+                pg_connect_timeout_subscription,
+                pg_query_timeout_subscription,
                 mysql_tls_ssl_mode_subscription,
                 mysql_charset_subscription,
                 mysql_proxy_type_subscription,
@@ -1167,6 +1414,11 @@ impl NewConnectionInputs {
             ConnectionField::SshPassword => &self.ssh_password,
             ConnectionField::SshPrivateKey => &self.ssh_private_key,
             ConnectionField::SshPassphrase => &self.ssh_passphrase,
+            ConnectionField::PgTlsSslMode => &self.pg_tls_ssl_mode,
+            ConnectionField::PgDefaultSchema => &self.pg_default_schema,
+            ConnectionField::PgApplicationName => &self.pg_application_name,
+            ConnectionField::PgConnectTimeoutSecs => &self.pg_connect_timeout,
+            ConnectionField::PgQueryTimeoutSecs => &self.pg_query_timeout,
             ConnectionField::MysqlTlsSslMode => &self.mysql_tls_ssl_mode,
             ConnectionField::MysqlCharset => &self.mysql_charset,
             ConnectionField::MysqlProxyType => &self.mysql_proxy_type,
