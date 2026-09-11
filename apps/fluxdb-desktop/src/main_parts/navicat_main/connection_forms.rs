@@ -521,6 +521,13 @@ impl NavicatMain {
                     return Err(message);
                 }
             }
+            // PostgreSQL 同样走结构化档案校验（TLS 模式与证书、SSH/代理、超时）。
+            DatabaseKind::Postgres => {
+                let profile = form.build_postgres_profile();
+                if let Some(message) = profile.validate() {
+                    return Err(message);
+                }
+            }
             _ => {
                 if form.host.trim().is_empty() {
                     return Err("请填写主机".to_string());

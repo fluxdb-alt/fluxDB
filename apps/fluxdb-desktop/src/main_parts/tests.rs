@@ -3525,3 +3525,44 @@ fn mysql_connection_form_defaults_unchanged_by_postgres_fields() {
     assert_eq!(form.mysql_tls_ssl_mode, "preferred");
     assert_eq!(form.mysql_charset, "utf8mb4");
 }
+
+/// T19：PG 表单校验走结构化档案（TLS 模式/SSH 等），不是只看主机端口。
+#[test]
+fn postgres_form_validation_uses_profile_rules() {
+    let mut form = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
+    form.name = "PG".to_string();
+    form.host = "127.0.0.1".to_string();
+    form.port = "5432".to_string();
+    let profile = form.build_postgres_profile();
+    assert_eq!(profile.validate(), None);
+
+    // verify-full 未启用 TLS：档案校验应拒绝。
+    form.pg_tls_ssl_mode = "verify-full".to_string();
+    form.tls_enabled = false;
+    assert!(
+        form.build_postgres_profile()
+            .validate()
+            .is_some_and(|message| message.contains("需先启用 TLS")),
+        "verify-full 未启用 TLS 应被拒绝"
+    );
+
+    // 启用 TLS 后通过；verify-full 用纯 IP 且无 server_name 仍应提示。
+    form.tls_enabled = true;
+    assert!(
+        form.build_postgres_profile()
+            .validate()
+            .is_some_and(|message| message.contains("server_name")),
+        "verify-full 纯 IP 应要求主机名或 server_name"
+    );
+    form.tls_sni = "db.example.com".to_string();
+    assert_eq!(form.build_postgres_profile().validate(), None);
+
+    // SSH 启用但缺主机：应报错而不是静默用直连。
+    form.ssh_enabled = true;
+    assert!(
+        form.build_postgres_profile()
+            .validate()
+            .is_some_and(|message| message.contains("SSH")),
+        "启用 SSH 但缺主机应被拒绝"
+    );
+}
