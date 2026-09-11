@@ -4437,9 +4437,11 @@ SELECT item_id, name FROM audit_log;"
         // 意图按表列序：id(Default 由 DB 生成), note(Default → 'n/a')。
         let tri = DataChangeSet {
             object: path3.clone(),
-            inserts: vec![Row {
-                values: vec![CellValue::Null, CellValue::Null],
-            }],
+            inserts: vec![
+                Row { values: vec![CellValue::Null, CellValue::Null] },
+                Row { values: vec![CellValue::Null, CellValue::Null] },
+                Row { values: vec![CellValue::Null, CellValue::Null] },
+            ],
             updates: vec![],
             deletes: vec![],
             insert_intents: Some(vec![

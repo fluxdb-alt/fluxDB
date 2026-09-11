@@ -326,6 +326,8 @@ CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不�
 
 必须识别 `'...'`、`E'...'`、双引号标识符、`$$...$$`/`$tag$...$tag$`、行注释、嵌套块注释，以及函数/DO 块内部的分号。美元标签区分大小写，UTF-8 光标范围准确。参数识别不能误把 PG `::type` 的冒号、`$1` 与 snippet tabstop 或 dollar quote 混淆。SQL 文件、当前语句、选区执行、格式化、历史拆分采用一致语义；格式化遇到不支持语法保留原文并提示，不破坏函数体。
 
+> **实现记录（T12 增量二）**：分句入口已分三处补齐 PG dollar-quote —— desktop 执行路径字节版 `split_statements` 与 snapshot 版 `split_statement_ranges_snapshot`、app 历史分句 `sql_statement_ranges`（`sql_format.rs`）。三者都识别 `$$...$$` 与 `$tag$...$tag$` 并跳过体内分号/引号；`$1` 参数、`$name` 以及 `::` 冒号因不满足开启符条件不计入。`E'...'` 由既有全局反斜杠转义覆盖无需特判。新建测试：desktop 3（字节、命名标签+参数、snapshot）+ app 2（`sql_text_statement_ranges` 函数体与命名标签+参数）。剩余增量：`::`/`$n` 与 snippet tabstop 消歧、复杂格式化保持函数体。
+
 ### 8.2 执行与结果协议
 
 用户查询单次执行只在一个独占会话中运行。语句模式用真实准备描述/结果消息判断返回集，支持 SELECT/VALUES/TABLE/SHOW/EXPLAIN、WITH DML、INSERT/UPDATE/DELETE RETURNING、CALL 返回参数、无行结果。空行结果仍有列头，同名列按 ordinal 读取，不按名字取错列。

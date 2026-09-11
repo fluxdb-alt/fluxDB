@@ -56,7 +56,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T09 | PostgreSQL 值转换、参数编码和 bytea | T08 | 未开始 / — |
 | T10 | 数据分页、排序、筛选与预览 | T09 | 未开始 / — |
 | T11 | 数据编辑、可靠定位、原子提交和冲突处理 | T10 | 未开始 / — |
-| T12 | 统一 PG 方言、分句和参数解析 | T03 | 未开始 / — |
+| T12 | 统一 PG 方言、分句和参数解析 | T03 | 进行中 |
 | T13 | SQL 执行、多结果、会话事务、进度和取消 | T05、T09、T12 | 未开始 / — |
 | T14 | PostgreSQL 补全、元数据索引和语义提示 | T08、T12、T13 | 未开始 / — |
 | T15 | 查询结果编辑、保存查询和历史补偿 | T11、T13、T14 | 未开始 / — |
@@ -281,12 +281,12 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T12 — PG 方言、分句与参数
 
-- [ ] 完成 T12
+- [x] 完成 T12（分句增量：desktop 执行路径字节分句 + snapshot 分句、app 历史分句三处均支持 PG dollar-quote `$$`/`$tag$`，`$1` 参数与 `$name` 不计为开启符；E 字符串沿用全局反斜杠转义无需特判。剩余：`::`/`$n` 与 snippet tabstop 消歧、复杂格式化保持函数体，另增增量）
 - **开始前读**：设计 8.1；R02、R06、R10–R12、R14、R27。
 - **工作**：统一 app/connector/editor 分句规则；Postgres DatabaseKind/AST/SqlDialect 映射；dollar quote、E 字符串、嵌套注释、Unicode 范围；参数 ::/$n 与 snippet 分离；格式化保持函数体。
 - **交付位置**：core 公共 SQL 词法职责、app/sql_format/query_completion、sql_editor_adapter/dialect/statements/execution。
 - **验收**：DO/函数含分号、嵌套注释、带引号标识符、选区/当前/全部一致；$1、$tag$、::、字符串冒号；不支持语法不被破坏；MySQL delimiter/SQLite trigger 既有行为不回退。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：进行中；执行人 FluxDB（T12 增量二：dollar-quote 分句）；内容 — desktop `split_statements`（字节）+ `split_statement_ranges_snapshot`（snapshot）+ app `sql_statement_ranges` 均识别 PG `$$...$$` 与 `$tag$...$tag$` 并跳过体内分号/引号，`$1` 参数与 `$name` 识别失败不计开启（`::` 冒号本来就不触发）；`E'...'` 由既有全局反斜杠转义覆盖无需特判。验证 — 新增 desktop 3 测（字节/m命名标签+参数/snapshot）+ app 2 测（`sql_text_statement_ranges`），工作区全量通过（359+126+81+366+231…）；PG 实时冒烟 10 通过（顺带修正 T11 冒烟测试 `inserts` 1 行 vs 意图 3 行的测试数据口径）。剩余：`::`/`$n` 与 snippet tabstop 消歧、格式化保持函数体，另增增量。
 
 ### T13 — SQL 执行、事务与取消
 

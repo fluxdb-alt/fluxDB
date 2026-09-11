@@ -189,6 +189,39 @@
     }
 
     #[test]
+    fn statement_ranges_split_via_dollar_quote_preserves_function_body() {
+        let sql = "CREATE FUNCTION add(a int, b int) RETURNS int AS $$\n\
+                   BEGIN\n\
+                   RETURN a + b;\n\
+                   END;\n\
+                   $$ LANGUAGE plpgsql;\n\
+                   SELECT add(1,2);";
+        let ranges = sql_text_statement_ranges(sql);
+        assert_eq!(ranges.len(), 2, "ranges = {ranges:?}");
+        let first = &sql[ranges[0].clone()];
+        assert!(first.starts_with("CREATE FUNCTION"), "first = {first}");
+        assert!(!first.contains("SELECT add"), "dollar-quote body split: {first}");
+        let second = &sql[ranges[1].clone()];
+        assert!(second.starts_with("SELECT add"), "second = {second}");
+    }
+
+    #[test]
+    fn statement_ranges_split_dollar_quote_with_named_tag_and_params() {
+        let sql = "\
+CREATE FUNCTION f() RETURNS void AS $fn$\n\
+DECLARE x int := 1;\n\
+BEGIN\n\
+  x := x + 1; -- inner semicolon\n\
+END;\n\
+$fn$ LANGUAGE plpgsql;\n\
+SELECT $1, f();";
+        let ranges = sql_text_statement_ranges(sql);
+        assert_eq!(ranges.len(), 2, "ranges = {ranges:?}");
+        assert!(sql[ranges[0].clone()].starts_with("CREATE FUNCTION"));
+        assert!(sql[ranges[1].clone()].starts_with("SELECT $1"));
+    }
+
+    #[test]
     fn format_sql_text_keeps_create_table_suffix_readable() {
         let formatted = format_sql_text_for_dialect(
             "create table users(id int primary key) engine=InnoDB default charset=utf8mb4",
