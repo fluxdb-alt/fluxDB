@@ -2564,9 +2564,11 @@ fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<Que
         .collect()
 }
 
-/// 将 routines 中指定 kind 的候选生成为补全项（P1.7）。
+/// 将 routines 中指定 kind 的候选生成为补全项（P1.7 + §8.4 函数重载）。
 ///
 /// 函数无参数 metadata 时插入 `name()`，方便继续输入参数；procedure 插入裸名。
+/// 同名重载（同 schema、同 kind、签名不同）分别成条：detail/文档展示签名便于区分，
+/// insert_text 仍为可调用的 `name()`，不把重载合并成一个候选。
 fn routine_completion_items(
     routines: Vec<CompletionRoutine>,
     kind: CompletionRoutineKind,
@@ -2577,24 +2579,51 @@ fn routine_completion_items(
         .filter_map(|routine| {
             (routine.kind == kind
                 && matches_completion_prefix(&routine.name, prefix))
-            .then(|| QueryCompletionItem {
-                label: routine.name.clone(),
-                insert_text: match kind {
-                    CompletionRoutineKind::Function => format!("{}()", routine.name),
-                    CompletionRoutineKind::Procedure => routine.name,
-                },
-                kind: match kind {
-                    CompletionRoutineKind::Function => QueryCompletionKind::Function,
-                    CompletionRoutineKind::Procedure => QueryCompletionKind::Procedure,
-                },
-                detail: match kind {
-                    CompletionRoutineKind::Function => Some("function".to_string()),
-                    CompletionRoutineKind::Procedure => Some("procedure".to_string()),
-                },
-                documentation: None,
-                filter_text: None,
-                sort_text: None,
-                insert_text_format: InsertTextFormat::PlainText,
+            .then(|| {
+                let label = match routine.signature.as_deref() {
+                    Some(signature) if !signature.is_empty() => {
+                        format!("{}({signature})", routine.name)
+                    }
+                    _ => routine.name.clone(),
+                };
+                let detail = match (kind, routine.signature.as_deref()) {
+                    (CompletionRoutineKind::Function, Some(signature)) if !signature.is_empty() => {
+                        Some(format!("function({signature})"))
+                    }
+                    (CompletionRoutineKind::Procedure, Some(signature)) if !signature.is_empty() => {
+                        Some(format!("procedure({signature})"))
+                    }
+                    (CompletionRoutineKind::Function, _) => Some("function".to_string()),
+                    (CompletionRoutineKind::Procedure, _) => Some("procedure".to_string()),
+                };
+                let name = routine.name.clone();
+                QueryCompletionItem {
+                    label,
+                    insert_text: match kind {
+                        CompletionRoutineKind::Function => format!("{name}()"),
+                        CompletionRoutineKind::Procedure => name,
+                    },
+                    kind: match kind {
+                        CompletionRoutineKind::Function => QueryCompletionKind::Function,
+                        CompletionRoutineKind::Procedure => QueryCompletionKind::Procedure,
+                    },
+                    detail,
+                    documentation: routine.signature.as_deref().map(|signature| {
+                        let role = match kind {
+                            CompletionRoutineKind::Function => "函数",
+                            CompletionRoutineKind::Procedure => "过程",
+                        };
+                        match routine.schema.as_deref() {
+                            Some(schema) if !schema.is_empty() => {
+                                format!("{role} {}（schema {schema}）\n参数：{signature}", routine.name)
+                            }
+                            _ => format!("{role} {}\n参数：{signature}", routine.name),
+                        }
+                    }),
+                    filter_text: None,
+                    sort_text: None,
+                    insert_text_format: InsertTextFormat::PlainText,
+                }
             })
         })
         .collect()

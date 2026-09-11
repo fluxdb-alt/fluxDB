@@ -336,6 +336,109 @@
         assert_eq!(context.replace_start, sql.len() - "`Cam".len());
     }
 
+    /// §8.4 函数重载：同 schema 同名但签名不同的例程是不同候选，不得合并；
+    /// 文档展示签名，apply 文本仍是可调用的 `name()`。
+    #[test]
+    fn routine_completion_items_keeps_overloads_distinct() {
+        let routines = vec![
+            CompletionRoutine {
+                schema: Some("public".into()),
+                name: "calc_total".into(),
+                kind: CompletionRoutineKind::Function,
+                signature: Some("integer".into()),
+            },
+            CompletionRoutine {
+                schema: Some("public".into()),
+                name: "calc_total".into(),
+                kind: CompletionRoutineKind::Function,
+                signature: Some("integer, text".into()),
+            },
+        ];
+        let items = routine_completion_items(routines, CompletionRoutineKind::Function, "");
+        assert_eq!(items.len(), 2, "两个重载应分别成条：{items:#?}");
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+        assert!(
+            labels.contains(&"calc_total(integer)")
+                && labels.contains(&"calc_total(integer, text)"),
+            "label 应带签名区分重载：{labels:?}"
+        );
+        assert!(
+            items.iter().all(|item| item.insert_text == "calc_total()"),
+            "重载的 apply 文本都应为可调用形式：{items:#?}"
+        );
+        let documentation = items[0].documentation.as_deref().unwrap_or_default();
+        assert!(
+            documentation.contains("参数：integer"),
+            "文档应展示签名：{documentation}"
+        );
+    }
+
+    /// §8.4 缓存/持久化：例程（含签名）与触发器进索引并随快照往返，
+    /// 否则重开应用后重载信息丢失、同名重载被合并。
+    #[test]
+    fn completion_index_roundtrips_routines_with_signature_and_triggers() {
+        let controller = AppController::with_mock_data();
+        let mut index = controller.completion_index.lock().unwrap();
+        index.insert_routines(
+            ConnectionId(1),
+            Some("db"),
+            Some("public"),
+            vec![
+                CompletionRoutine {
+                    schema: Some("public".into()),
+                    name: "calc_total".into(),
+                    kind: CompletionRoutineKind::Function,
+                    signature: Some("integer".into()),
+                },
+                CompletionRoutine {
+                    schema: Some("public".into()),
+                    name: "calc_total".into(),
+                    kind: CompletionRoutineKind::Function,
+                    signature: Some("integer, text".into()),
+                },
+            ],
+            DatabaseKind::Postgres,
+        );
+        index.insert_triggers(
+            ConnectionId(1),
+            Some("db"),
+            Some("public"),
+            vec![CompletionTrigger {
+                schema: Some("public".into()),
+                name: "t14_trg".into(),
+                table: Some("t14_completion".into()),
+            }],
+            DatabaseKind::Postgres,
+        );
+
+        let snapshot = index.snapshot(
+            ConnectionId(1),
+            Some("db"),
+            Some("public"),
+            DatabaseKind::Postgres,
+        );
+        assert_eq!(snapshot.routines.len(), 2, "两个重载都应进快照");
+        assert_eq!(snapshot.meta.app_index_version, COMPLETION_INDEX_VERSION);
+        assert_eq!(snapshot.triggers.len(), 1);
+
+        // 快照往返（模拟持久化后重开）：签名与触发器都保留。
+        let mut restored = CompletionIndex::default();
+        restored.insert_snapshot(snapshot);
+        let routines = restored.database_routines(ConnectionId(1), Some("db"), Some("public"));
+        let signatures: BTreeSet<&str> = routines
+            .iter()
+            .filter_map(|routine| routine.signature.as_deref())
+            .collect();
+        assert_eq!(
+            signatures,
+            BTreeSet::from(["integer", "integer, text"]),
+            "重载签名应完整保留：{signatures:?}"
+        );
+        let triggers = restored.database_triggers(ConnectionId(1), Some("db"), Some("public"));
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(triggers[0].name, "t14_trg");
+    }
+
     #[test]
     fn table_completion_items_qualifies_cross_schema_duplicates() {
         let tables = vec![

@@ -496,7 +496,7 @@ impl AppController {
                 });
             }
             let routines = self
-                .completion_routines_with_cancel(
+                .indexed_completion_routines_with_cancel(
                     config,
                     editor.connection_id,
                     database,
@@ -528,7 +528,7 @@ impl AppController {
                 });
             }
             let routines = self
-                .completion_routines_with_cancel(
+                .indexed_completion_routines_with_cancel(
                     config,
                     editor.connection_id,
                     database,
@@ -595,7 +595,7 @@ impl AppController {
                 });
             }
             let triggers = self
-                .completion_triggers_with_cancel(
+                .indexed_completion_triggers_with_cancel(
                     config,
                     editor.connection_id,
                     database,
@@ -1632,6 +1632,81 @@ impl AppController {
             elapsed_us = started.elapsed().as_micros() as u64,
         );
         Ok(columns)
+    }
+
+    /// 例程候选：索引优先（含签名，随快照持久化），未命中再走连接器并写回索引。
+    ///
+    /// 与 tables/columns 同一形态：索引里已有该 scope 的例程就直接复用，避免每次补全
+    /// 重新拉 catalog；写入后同步持久化，重开应用无需重建。
+    fn indexed_completion_routines_with_cancel(
+        &self,
+        config: &ConnectionConfig,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<Vec<CompletionRoutine>> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(index) = self.completion_index.lock() {
+            let routines = index.database_routines(connection_id, database, schema);
+            if !routines.is_empty() {
+                return Ok(routines);
+            }
+        }
+        let routines =
+            self.completion_routines_with_cancel(config, connection_id, database, schema, should_cancel)?;
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(mut index) = self.completion_index.lock() {
+            index.insert_routines(
+                connection_id,
+                database,
+                schema,
+                routines.clone(),
+                config.kind,
+            );
+        }
+        self.save_persisted_completion_index(config, connection_id, database, schema);
+        Ok(routines)
+    }
+
+    /// 触发器候选：索引优先，未命中再走连接器并写回索引（同例程形态）。
+    fn indexed_completion_triggers_with_cancel(
+        &self,
+        config: &ConnectionConfig,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<Vec<CompletionTrigger>> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(index) = self.completion_index.lock() {
+            let triggers = index.database_triggers(connection_id, database, schema);
+            if !triggers.is_empty() {
+                return Ok(triggers);
+            }
+        }
+        let triggers =
+            self.completion_triggers_with_cancel(config, connection_id, database, schema, should_cancel)?;
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(mut index) = self.completion_index.lock() {
+            index.insert_triggers(
+                connection_id,
+                database,
+                schema,
+                triggers.clone(),
+                config.kind,
+            );
+        }
+        self.save_persisted_completion_index(config, connection_id, database, schema);
+        Ok(triggers)
     }
 
     fn completion_routines_with_cancel(

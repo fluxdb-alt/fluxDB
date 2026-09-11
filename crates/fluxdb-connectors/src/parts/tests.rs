@@ -4647,6 +4647,41 @@ SELECT item_id, name FROM audit_log;"
             .execute(&camel_cleanup)
             .expect("清理混合大小写表应成功");
 
+        // 函数重载（§8.4）：同名不同 identity arguments 的两个函数都返回，且签名不同，
+        // 供上层按签名分条，不合并成一个候选。
+        let mut overload = pg_query_request(&config, None);
+        overload.text = "\
+            DROP FUNCTION IF EXISTS t14_ovl(int); \
+            DROP FUNCTION IF EXISTS t14_ovl(int, text); \
+            CREATE FUNCTION t14_ovl(a int) RETURNS int AS $$ SELECT a $$ LANGUAGE sql; \
+            CREATE FUNCTION t14_ovl(a int, b text) RETURNS int AS $$ SELECT a $$ LANGUAGE sql; \
+        "
+        .to_string();
+        connector.execute(&overload).expect("建重载函数应成功");
+
+        let overloads = connector
+            .list_completion_routines(Some(&db_name), Some("public"), "t14_ovl", 50)
+            .expect("重载例程补全应成功");
+        let signatures: Vec<&str> = overloads
+            .iter()
+            .filter(|routine| routine.name == "t14_ovl")
+            .filter_map(|routine| routine.signature.as_deref())
+            .collect();
+        // pg_get_function_identity_arguments 带参数名（"a integer"），原样保留即可区分重载。
+        assert_eq!(
+            signatures,
+            vec!["a integer", "a integer, b text"],
+            "两个重载都应按签名返回：{overloads:#?}"
+        );
+
+        let mut overload_cleanup = pg_query_request(&config, None);
+        overload_cleanup.text =
+            "DROP FUNCTION IF EXISTS t14_ovl(int); DROP FUNCTION IF EXISTS t14_ovl(int, text);"
+                .to_string();
+        connector
+            .execute(&overload_cleanup)
+            .expect("清理重载函数应成功");
+
         // 触发器补全：t14_trg 关联表 t14_completion。
         let triggers = connector
             .list_completion_triggers(Some(&db_name), Some("public"), "t14_trg", 50)

@@ -139,7 +139,10 @@ pub enum QueryMode {
     Selection,
 }
 
-pub const COMPLETION_INDEX_VERSION: u32 = 2;
+/// 补全索引快照结构版本。变更快照结构（字段含义/新增集合）时必须递增：
+/// 旧缓存因版本不匹配被安全拒绝并重建，但连接、查询与历史不受影响（§8.4）。
+/// 3：快照新增 routines（含签名）/triggers，用于函数重载索引与触发器持久化。
+pub const COMPLETION_INDEX_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueryCompletionResult {
