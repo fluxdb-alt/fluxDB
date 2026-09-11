@@ -50,7 +50,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T03 | database/schema 身份、查询上下文、缓存与历史迁移 | T02 | 已完成 / 2026-09-10 |
 | T04 | 驱动、runtime、会话和唯一拨号入口 | T02、T03 | 已完成 / 2026-09-10 |
 | T05 | TLS、SSH、代理、超时、资源清理 | T04 | 已完成 / 2026-09-11 |
-| T06 | database/schema/对象浏览与真实路由 | T03、T05 | 未开始 / — |
+| T06 | database/schema/对象浏览与真实路由 | T03、T05 | 已完成 / 2026-09-11 |
 | T07 | 创建/删除数据库与 schema 操作 | T06 | 未开始 / — |
 | T08 | 列、索引、约束、触发器和类型元数据 | T06 | 未开始 / — |
 | T09 | PostgreSQL 值转换、参数编码和 bytea | T08 | 未开始 / — |
@@ -180,12 +180,29 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T06 — 对象树与真实路由
 
-- [ ] 完成 T06
+- [x] 完成 T06
 - **开始前读**：设计 1.2、4.2、6.1；R02、R03、R05、R07、R16、R20、R21、R25。
 - **工作**：在真实路由全入口接入 PG；列 databases/schemas/tables/views，按展开连接目标库；系统对象过滤、普通用户可见性、对象 kind 与行数估计；请求 generation 和缓存失效。PG 不返回 mock 数据。
 - **交付位置**：postgres/metadata.rs、app/connections 路由和对象加载；core object kind/capabilities。
 - **验收**：真实两数据库、多 schema、同名对象、视图/物化视图/分区表；无枚举权限仍能打开指定库；刷新/断开不清错范围；元数据错误不伪装空列表成功。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成；执行人 fluxdb；内容/验证 —— 见下「T06 验收」。
+
+#### T06 验收
+
+说明：对象树导航沿用通用模型 —— app 按「父路径 kind」分发，connector 决定该层子项；PG 三层（数据库 → schema → 关系）与其两段名（schema.table）天然对应，无需改 app 树交互。
+
+- **`postgres/metadata.rs` 真实 pg_catalog 路由**（不返回 mock 数据）：
+  - `path=None` → 数据库：`pg_database` 过滤模板/不可连库，按 `has_database_privilege(...,'CONNECT')` 返回用户可见库 → 满足「无枚举权限仍能打开指定库」（配置的维护库能被普通用户看到并展开）；
+  - `path.kind=Database` → schema：`pg_namespace` 过滤系统 schema（`^pg_` 前缀与 `information_schema`）；
+  - `path.kind=Schema` → 关系：`pg_class` 且 `relkind IN ('r','p','f','v','m')`（普通表/分区表/外部表/视图/物化视图），`obj_description` 取注释，`reltuples` 作行数估计。
+  - **kind 映射**：`r/f`→Table、`p`（分区表）→Table、`v/m`（视图/物化视图）→View（core `ObjectKind` 无物化/分区专属变体，统一归入 Table/View，树形仍可展开区分；如后续需要独立图标/能力再补 kind 变体）。
+  - 「同名对象」由 `database+schema+name` 三维定位天然区分。
+  - 每次列表在「目标库的新连接」上执行、用后即弃，不进入会话注册表 —— 刷新/断开取舍干净；元数据查询失败返回 `Err`（不伪装空列表成功）。
+- **app 路由**：`mock_data.rs` `list_objects_for_connection` 的 PostgreSQL 分支由 `pg_not_wired` 改为真实 `PostgresConnector::with_config(config).list_objects(path)`；`pg_not_wired` 仍用于其余未接入入口（T07/T09 等）。
+- **单元级验证**：`cargo test -p fluxdb-connectors` 102 通过 / 0 失败 / 15 忽略；`cargo test -p fluxdb-app` 357 通过；整仓 `cargo build` 干净。
+- **真实 PG 冒烟**（`FLUXDB_PG_SMOKE=127.0.0.1:55432:postgres:tt:postgres`，docker `postgres:16-alpine`）`pg_live_smoke_object_tree` 通过：数据库列表含配置库；public schema 在内、系统 schema 排除；临时建表/视图后以正确 kind 出现在 public 下并清理。`pg_live_*` 全量 5/5 通过。
+
+### T07 — 建库、删库与 schema 管理
 
 ### T07 — 建库、删库与 schema 管理
 

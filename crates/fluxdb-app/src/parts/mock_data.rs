@@ -138,7 +138,7 @@ fn list_objects_for_connection(
             MySqlConnector::with_config(config.clone()).list_objects(path)
         }
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).list_objects(path),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => PostgresConnector::with_config(config.clone()).list_objects(path),
         DatabaseKind::MongoDb => MockConnector::new(config.kind).list_objects(path),
         DatabaseKind::Redis => RedisConnector::with_config(config.clone()).list_objects(path),
     }

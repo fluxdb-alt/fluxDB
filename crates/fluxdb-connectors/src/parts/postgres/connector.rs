@@ -25,12 +25,14 @@ impl Connector for PostgresConnector {
         DatabaseKind::Postgres
     }
 
-    fn list_objects(&self, _path: Option<&ObjectPath>) -> fluxdb_core::Result<Vec<ObjectSummary>> {
-        // 对象浏览接入在 T06；此处显式失败，不返回假数据。
-        Err(Error::new(
-            ErrorKind::Unsupported,
-            "PostgreSQL 对象浏览尚未接入（T06）",
-        ))
+    fn list_objects(&self, path: Option<&ObjectPath>) -> fluxdb_core::Result<Vec<ObjectSummary>> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 对象浏览需要连接配置上下文",
+            ));
+        };
+        pg_list_objects(config, path)
     }
 
     fn load_data(

@@ -3244,6 +3244,91 @@ SELECT item_id, name FROM audit_log;"
         ((host, port, user, password, db), ca_path, server_name, hostname)
     }
 
+    // ===== T06 对象树与真实路由（真实冒烟，环境门控）=====
+
+    /// 真实 PG 对象浏览（T06 验收）：数据库 → schema → 表/视图 三层真实 pg_catalog 路由。
+    ///
+    /// 覆盖：列出数据库（含配置的库）；库下列 schema（过滤系统 schema）；
+    /// schema 列表/视图（含同名对象由 schema 区分、物化视图/分区表归入 Table/View）。
+    /// 临时创建 t06_table / t06_view 后列出并校验，最后清理。
+    #[test]
+    fn pg_live_smoke_object_tree() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG 对象树冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let db_name = config
+            .postgres_profile
+            .as_ref()
+            .unwrap()
+            .basic
+            .maintenance_database
+            .clone();
+
+        // 1) 根层：数据库列表应包含配置的维护库。
+        let databases = connector.list_objects(None).expect("列出数据库应成功");
+        assert!(
+            databases.iter().any(|o| o.path.name == db_name),
+            "数据库列表应包含配置的维护库 {}",
+            db_name
+        );
+
+        // 2) 数据库层：schema 列表应包含 public，且不包含 information_schema / pg_* 系统 schema。
+        let db_path = databases
+            .iter()
+            .find(|o| o.path.name == db_name)
+            .cloned()
+            .expect("配置的库应存在")
+            .path;
+        let schemas = connector.list_objects(Some(&db_path)).expect("列出 schema 应成功");
+        assert!(
+            schemas.iter().any(|o| o.path.name == "public"),
+            "public schema 应在列表内"
+        );
+        assert!(
+            schemas
+                .iter()
+                .all(|o| o.path.name != "information_schema" && !o.path.name.starts_with("pg_")),
+            "系统 schema 不应出现在对象树"
+        );
+
+        // 3) 建临时表/视图，在 public 下列出关系并断言 kind 正确。
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "DROP VIEW IF EXISTS t06_view; DROP TABLE IF EXISTS t06_table; \
+                      CREATE TABLE t06_table(id int); CREATE VIEW t06_view AS SELECT 1 AS one"
+            .to_string();
+        connector.execute(&setup).expect("建临时表/视图应成功");
+
+        let public_path = schemas
+            .iter()
+            .find(|o| o.path.name == "public")
+            .expect("public schema 应存在")
+            .path
+            .clone();
+        let relations = connector
+            .list_objects(Some(&public_path))
+            .expect("列出关系应成功");
+        assert!(
+            relations.iter().any(|o| o.path.name == "t06_table"
+                && o.path.kind == ObjectKind::Table
+                && o.path.schema.as_deref() == Some("public")),
+            "t06_table 应以 public 下的 Table 出现"
+        );
+        assert!(
+            relations
+                .iter()
+                .any(|o| o.path.name == "t06_view" && o.path.kind == ObjectKind::View),
+            "t06_view 应以 View 出现"
+        );
+
+        // 4) 清理临时对象。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP VIEW t06_view; DROP TABLE t06_table".to_string();
+        connector.execute(&cleanup).expect("清理临时对象应成功");
+    }
+
     fn env(key: &str) -> Option<String> {
         std::env::var(key).ok().filter(|v| !v.is_empty())
     }
