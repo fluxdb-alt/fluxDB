@@ -239,6 +239,19 @@ fn postgres_create_table_ddl_rebuilds_equivalent_metadata() {
     connector.execute(&cleanup).expect("清理隔离 schema 应成功");
 }
 
+/// 直接把设计状态挂成一个 tab（测试内构造状态，等价于 UI 里已打开的设计器）。
+fn push_create_table_tab(controller: &mut AppController, create: CreateTableState) -> TabId {
+    let tab_id = TabId(900 + controller.state.tabs.len() as u64);
+    controller.state.tabs.push(TabState {
+        id: tab_id,
+        title: "设计表".to_string(),
+        kind: TabKind::CreateTable(create),
+        dirty: true,
+    });
+    controller.state.active_tab = Some(tab_id);
+    tab_id
+}
+
 /// 解析 `FLUXDB_PG_SMOKE=host:port:user:password:db`。
 fn postgres_create_table_smoke_params() -> Option<(String, u16, String, String, String)> {
     let value = std::env::var("FLUXDB_PG_SMOKE").ok()?;
@@ -278,4 +291,243 @@ fn postgres_create_table_smoke_config(
             ..Default::default()
         }),
     }
+}
+
+/// T17 验收：PG 设计差异在真实库执行（同一事务），外部 DDL 后拒绝应用过期快照。
+#[test]
+fn postgres_design_diff_applies_atomically_and_blocks_stale_snapshot() {
+    let Some(params) = postgres_create_table_smoke_params() else {
+        tracing::warn!(target: "fluxdb_app", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T17 冒烟");
+        return;
+    };
+    let config = postgres_create_table_smoke_config(&params);
+    let mut controller = AppController::with_mock_data();
+    let AppEvent::ConnectionCreated(registered) = controller.dispatch(AppCommand::CreateConnection(
+        ConnectionDraft {
+            name: "PG T17 Smoke".to_string(),
+            kind: DatabaseKind::Postgres,
+            endpoint: config.endpoint.clone(),
+            credential_ref: None,
+            options: Default::default(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: config.postgres_profile.clone(),
+        },
+    )) else {
+        panic!("注册 PG 连接应成功");
+    };
+    let mut connector = PostgresConnector::with_config(registered.clone());
+    let database = params.4.clone();
+
+    let mut request = QueryRequest {
+        connection_id: registered.id,
+        database: Some(database.clone()),
+        session_id: None,
+        schema: None,
+        text: "\
+            DROP SCHEMA IF EXISTS t17_smoke CASCADE; \
+            CREATE SCHEMA t17_smoke; \
+            CREATE TABLE t17_smoke.orders(id integer PRIMARY KEY, note text); \
+            CREATE INDEX idx_t17_orders_note ON t17_smoke.orders(note); \
+        "
+        .to_string(),
+        mode: fluxdb_core::QueryMode::All,
+        options: QueryExecutionOptions::default(),
+    };
+    connector.execute(&request).expect("准备隔离 schema 应成功");
+
+    // 打开设计器：元数据 + DDL 作为原始快照。
+    let object = ObjectPath {
+        connection_id: registered.id,
+        database: Some(database.clone()),
+        schema: Some("t17_smoke".to_string()),
+        name: "orders".to_string(),
+        kind: ObjectKind::Table,
+    };
+    let columns = connector
+        .list_completion_columns(Some(&database), Some("t17_smoke"), "orders")
+        .expect("读取列元数据应成功");
+    let ddl = connector.table_ddl(&object).expect("读取 DDL 应成功");
+    let indexes = connector.list_indexes(&object).expect("读取索引应成功");
+    let mut create = CreateTableState::design(
+        object.clone(),
+        DatabaseKind::Postgres,
+        columns,
+        indexes,
+        Vec::new(),
+        Vec::new(),
+        Some(ddl.clone()),
+    );
+    assert!(
+        create.sql_preview().is_err(),
+        "未修改的设计不应产生 SQL：{:?}",
+        create.sql_preview()
+    );
+
+    // 追加一列 + 改表注释 + 新增唯一索引 → 预览为差异动作。
+    let mut quantity = CreateTableColumn::new(3, create_table_provider(DatabaseKind::Postgres));
+    quantity.name = "quantity".to_string();
+    quantity.data_type = "integer".to_string();
+    quantity.nullable = false;
+    quantity.default_value = "1".to_string();
+    create.columns.push(quantity);
+    create.comment = "订单表".to_string();
+    create.indexes.push(CreateTableIndex {
+        id: 99,
+        name: "uq_t17_orders_note".to_string(),
+        columns: vec![CreateTableIndexColumn {
+            name: "note".to_string(),
+            sub_part: String::new(),
+            sort_order: String::new(),
+        }],
+        index_type: "UNIQUE".to_string(),
+        index_method: String::new(),
+        comment: String::new(),
+    });
+
+    let preview = create.sql_preview().expect("设计预览应成功");
+    assert!(
+        preview.contains("ADD COLUMN \"quantity\" integer NOT NULL DEFAULT 1;"),
+        "{preview}"
+    );
+    assert!(preview.contains("CREATE UNIQUE INDEX"), "{preview}");
+
+    // 先把设计挂成 tab（等价于 UI 里已打开的设计器），再模拟外部 DDL 改动结构。
+    let design_tab = push_create_table_tab(&mut controller, create.clone());
+
+    request.text = "ALTER TABLE t17_smoke.orders ADD COLUMN external_col text;".to_string();
+    let external = connector.execute(&request).expect("外部 DDL 应成功");
+    assert!(external.summaries.iter().all(|summary| summary.success));
+
+    let AppEvent::Failed(error) = controller.dispatch(AppCommand::ApplyCreateTable(design_tab))
+    else {
+        panic!("过期设计应被拒绝");
+    };
+    assert!(
+        error.message.contains("结构已在外部变化"),
+        "错误应说明结构已变化：{error:?}"
+    );
+
+    // 刷新后（按最新 DDL 重建基线）可以正常保存，差异在事务内执行。
+    let refreshed_ddl = connector.table_ddl(&object).expect("重新读取 DDL 应成功");
+    let mut refreshed = create.clone();
+    if let CreateTableMode::Design {
+        original_ddl,
+        original,
+        ..
+    } = &mut refreshed.mode
+    {
+        *original_ddl = Some(refreshed_ddl);
+        // 外部新增的列并入基线，避免被当成「用户要删除的列」。
+        let mut external_column =
+            CreateTableColumn::new(77, create_table_provider(DatabaseKind::Postgres));
+        external_column.name = "external_col".to_string();
+        external_column.data_type = "text".to_string();
+        external_column.nullable = true;
+        original.columns.push(external_column.clone());
+        refreshed.columns.push(external_column);
+    }
+    if let Some(tab) = controller.state.tabs.iter_mut().find(|tab| tab.id == design_tab)
+        && let TabKind::CreateTable(state) = &mut tab.kind
+    {
+        *state = refreshed;
+    }
+    assert!(
+        matches!(
+            controller.dispatch(AppCommand::ApplyCreateTable(design_tab)),
+            AppEvent::CreateTableApplied(_)
+        ),
+        "刷新后的设计应可保存"
+    );
+
+    // 落库校验：新列与注释生效，索引建立。
+    let page = connector
+        .load_data(&object, 0, 10, &[], &[])
+        .expect("读取数据应成功");
+    let names = page
+        .columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"quantity"), "新列应落库：{names:?}");
+    assert!(names.contains(&"external_col"), "外部列不应被删除：{names:?}");
+    let indexes = connector.list_indexes(&object).expect("读取索引应成功");
+    assert!(
+        indexes
+            .iter()
+            .any(|index| index.name == "uq_t17_orders_note" && index.is_unique),
+        "新唯一索引应落库：{indexes:#?}"
+    );
+    assert!(
+        connector
+            .table_ddl(&object)
+            .expect("读取 DDL 应成功")
+            .contains("订单表"),
+        "表注释应落库"
+    );
+
+    // 失败整体回滚：第二条语句非法时，前面的 ADD COLUMN 也不应留下。
+    request.text = "DROP SCHEMA IF EXISTS t17_rollback CASCADE; CREATE SCHEMA t17_rollback; \
+                    CREATE TABLE t17_rollback.t(id integer PRIMARY KEY);"
+        .to_string();
+    connector.execute(&request).expect("准备回滚验证表应成功");
+    let rollback_object = ObjectPath {
+        schema: Some("t17_rollback".to_string()),
+        name: "t".to_string(),
+        ..object.clone()
+    };
+    let rollback_columns = connector
+        .list_completion_columns(Some(&database), Some("t17_rollback"), "t")
+        .expect("读取列元数据应成功");
+    let mut failing = CreateTableState::design(
+        rollback_object.clone(),
+        DatabaseKind::Postgres,
+        rollback_columns,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Some(
+            connector
+                .table_ddl(&rollback_object)
+                .expect("读取 DDL 应成功"),
+        ),
+    );
+    let mut ok_column = CreateTableColumn::new(2, create_table_provider(DatabaseKind::Postgres));
+    ok_column.name = "added_ok".to_string();
+    ok_column.data_type = "integer".to_string();
+    ok_column.nullable = true;
+    let mut broken_column = CreateTableColumn::new(3, create_table_provider(DatabaseKind::Postgres));
+    broken_column.name = "added_bad".to_string();
+    broken_column.data_type = "integer".to_string();
+    broken_column.nullable = true;
+    broken_column.default_value = "not_a_number".to_string();
+    failing.columns = vec![
+        failing.columns[0].clone(),
+        ok_column,
+        broken_column,
+    ];
+    let tab_id = push_create_table_tab(&mut controller, failing);
+    assert!(
+        matches!(
+            controller.dispatch(AppCommand::ApplyCreateTable(tab_id)),
+            AppEvent::Failed(_)
+        ),
+        "非法默认值应导致失败"
+    );
+    let after = connector
+        .list_completion_columns(Some(&database), Some("t17_rollback"), "t")
+        .expect("读取列元数据应成功");
+    let after_names = after
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        after_names,
+        vec!["id"],
+        "失败应整体回滚，不留半套结构：{after_names:?}"
+    );
+
+    request.text = "DROP SCHEMA IF EXISTS t17_smoke CASCADE; DROP SCHEMA IF EXISTS t17_rollback CASCADE;"
+        .to_string();
+    connector.execute(&request).expect("清理隔离 schema 应成功");
 }

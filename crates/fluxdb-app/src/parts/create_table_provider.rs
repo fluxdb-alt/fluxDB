@@ -112,8 +112,7 @@ impl CreateTableProvider for PostgresCreateTableProvider {
     }
 
     fn design_statements(&self, create: &CreateTableState) -> Result<Vec<String>, String> {
-        // 设计/差异执行（T17）单独实现；未落地前明确报不支持，不生成半套 ALTER。
-        Err("PostgreSQL 设计表差异执行尚未开放".to_string())
+        create_table_postgres_design_statements(create)
     }
 }
 

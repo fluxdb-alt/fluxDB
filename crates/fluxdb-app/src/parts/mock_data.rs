@@ -808,6 +808,24 @@ fn load_table_info_for_connection(
     })
 }
 
+/// 取表的展示 DDL（PG 用；MySQL/SQLite 走各自方言）。设计器保存前的结构指纹校验用。
+fn table_ddl_for_connection(
+    config: &ConnectionConfig,
+    object: &ObjectPath,
+) -> fluxdb_core::Result<String> {
+    let connector: Box<dyn Connector> = match config.kind {
+        DatabaseKind::MySql | DatabaseKind::TiDb => {
+            Box::new(MySqlConnector::with_config(config.clone()))
+        }
+        DatabaseKind::Sqlite => Box::new(SqliteConnector::with_config(config.clone())),
+        DatabaseKind::Postgres => Box::new(PostgresConnector::with_config(config.clone())),
+        DatabaseKind::MongoDb | DatabaseKind::Redis => {
+            return Err(Error::new(ErrorKind::Unsupported, "该连接类型不支持表 DDL"))
+        }
+    };
+    connector.table_ddl(object)
+}
+
 fn load_table_info_from_connector(
     connector: &dyn Connector,
     object: &ObjectPath,

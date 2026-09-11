@@ -2600,29 +2600,16 @@ impl AppController {
         if let Some(message) = create.validation_error() {
             return Err(Error::new(ErrorKind::Query, message));
         }
-        if create.is_design() {
+        // PG 的 CREATE TABLE / ALTER 计划是同批事务性语句：走单批路径（与设计模式一致），
+        // 不套用 MySQL/SQLite 的「建表 SQL + 单独触发器」拆分（那会丢掉 PG 触发器）。
+        if create.is_design() || create.database_kind == DatabaseKind::Postgres {
+            if create.database_kind == DatabaseKind::Postgres {
+                self.ensure_postgres_design_not_stale(&create)?;
+            }
             let sql = create
                 .sql_preview()
                 .map_err(|message| Error::new(ErrorKind::Query, message))?;
-            let request = QueryRequest {
-                connection_id: create.connection_id,
-                database: create.database.clone(),
-                session_id: None,
-                // 建表向导暂未携带 schema 作用域；PG 建表请走编辑器 SQL 文本（editor.schema 贯穿）。
-                schema: None,
-                text: sql,
-                mode: fluxdb_core::QueryMode::All,
-                options: QueryExecutionOptions {
-                    continue_on_error: false,
-                    split_statements: true,
-                    ..QueryExecutionOptions::default()
-                },
-            };
-            let execution = self.execute_query(&request)?;
-            if let Some(summary) = execution.summaries.iter().find(|summary| !summary.success) {
-                return Err(Error::new(ErrorKind::Query, summary.message.clone()));
-            }
-            return Ok(());
+            return self.apply_postgres_or_design_sql(&create, &sql);
         }
         let mut base_create = create.clone();
         base_create.triggers.clear();
@@ -2643,8 +2630,13 @@ impl AppController {
                 connection_id: create.connection_id,
                 database: create.database.clone(),
                 session_id: None,
-                // 建表向导暂未携带 schema 作用域；PG 建表请走编辑器 SQL 文本（editor.schema 贯穿）。
-                schema: None,
+                // 建表向导的 schema 作用域随状态下传（PG 显式 schema 时与会话 search_path 对齐）。
+                schema: create
+                    .schema
+                    .trim()
+                    .is_empty()
+                    .then_some(None)
+                    .unwrap_or_else(|| Some(create.schema.trim().to_string())),
                 text: sql,
                 mode: fluxdb_core::QueryMode::All,
                 options: QueryExecutionOptions {
@@ -2657,6 +2649,74 @@ impl AppController {
             if let Some(summary) = execution.summaries.iter().find(|summary| !summary.success) {
                 return Err(Error::new(ErrorKind::Query, summary.message.clone()));
             }
+        }
+        Ok(())
+    }
+
+    /// 执行 PG 建表/设计 SQL：同一事务内提交，失败整体回滚（§9.2）。
+    ///
+    /// 生成的语句都是事务性 DDL（不含 CREATE INDEX CONCURRENTLY 等），因此统一包裹
+    /// `BEGIN … COMMIT`；任一条失败时不执行 COMMIT，连接释放即回滚，不会留下半套结构。
+    fn apply_postgres_or_design_sql(
+        &self,
+        create: &CreateTableState,
+        sql: &str,
+    ) -> fluxdb_core::Result<()> {
+        let text = format!("BEGIN;
+{sql}
+COMMIT;");
+        let request = QueryRequest {
+            connection_id: create.connection_id,
+            database: create.database.clone(),
+            session_id: None,
+            schema: create
+                .schema
+                .trim()
+                .is_empty()
+                .then_some(None)
+                .unwrap_or_else(|| Some(create.schema.trim().to_string())),
+            text,
+            mode: fluxdb_core::QueryMode::All,
+            options: QueryExecutionOptions {
+                continue_on_error: false,
+                split_statements: true,
+                ..QueryExecutionOptions::default()
+            },
+        };
+        let execution = self.execute_query(&request)?;
+        if let Some(summary) = execution.summaries.iter().find(|summary| !summary.success) {
+            return Err(Error::new(ErrorKind::Query, summary.message.clone()));
+        }
+        Ok(())
+    }
+
+    /// 外部 DDL 保护：保存前重查表结构，与打开设计器时的 DDL 不一致就拒绝应用（§9.2）。
+    ///
+    /// 不拿过期快照覆盖别人的改动；用户刷新后重新预览即可继续。
+    fn ensure_postgres_design_not_stale(&self, create: &CreateTableState) -> fluxdb_core::Result<()> {
+        let CreateTableMode::Design {
+            object,
+            original_ddl: Some(original_ddl),
+            ..
+        } = &create.mode
+        else {
+            return Ok(());
+        };
+        let config = self
+            .connection_config(create.connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        let current = table_ddl_for_connection(config, object)?;
+        if current.trim() != original_ddl.trim() {
+            tracing::warn!(
+                target: "gdb_create_table",
+                connection_id = ?create.connection_id,
+                table = %object.name,
+                "表结构已在外部变化，拒绝应用过期设计"
+            );
+            return Err(Error::new(
+                ErrorKind::Query,
+                "表结构已在外部变化，请重新打开设计器并确认预览后再保存",
+            ));
         }
         Ok(())
     }
