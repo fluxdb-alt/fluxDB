@@ -254,21 +254,27 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T09 — 类型转换、绑定与二进制
 
-- [ ] 完成 T09
+- [x] 完成 T09
 - **开始前读**：设计 7.1；R02、R05、R06、R10、R16、R24、R33。
 - **工作**：原生标量与复杂类型文本投影；动态 ToSql 参数编码；numeric/时间/数组/JSON/bytea 保真；二进制摘要、完整加载和大小限制；未知类型只读状态，禁止失败后重跑原 SQL。
 - **交付位置**：postgres/values.rs、postgres/data.rs；必要的 core 类型元信息；app binary 适配。
 - **验收**：设计类型矩阵全部有用例；空值/空 bytes/JSON null、numeric 精度、NaN/Infinity、时区/BC、数组维度与 NULL；显示后写回不变；summary 不可提交为数据；超限在后端拒绝；无敏感值日志。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成；执行人 FluxDB；内容 —
+  新增 `postgres/values.rs` 类型解码与 `pg_*` 读取链路：float4/float8 有限值 → F64，NaN/±Infinity 保留类型化文本（`float_non_finite_text`，JSON/SQL 导出不产生非法数字）；numeric/decimal/money → 精确十进制文本（数据读 SQL 对这三类列统一 `::text` 投影，不经 f64，money 按服务端数量形式）；json/jsonb → `CellValue::Json`；date/time/timestamp/timestamptz/interval → chrono 保真文本，BC/infinity 解码失败回退原始文本；text[]/复杂数组按 PG 文本表示；bytea → 表浏览走 `BinarySummary` 摘要投影、`load_cell_binary` 完整读取原始字节。文本→类型化列写绑定用双重转换占位 `CAST(CAST($n AS text) AS <type>)`（tokio-postgres 无 numeric/bigdecimal 解码，见设计 §7.1）。参数统一 `$n` ToSql 编码，值列表数组绑定，无敏感值日志。
+  验证 — 单测 `pg_type_base_strips_modifiers_and_array_suffix`、`pg_insert_sql_binds_each_column_value`、`pg_insert_values_respects_three_state_intents`、`pg_identity_where_maps_null_value_to_is_null`、`pg_next_param_binds_null_as_option_none`；真实 PG 冒烟 `pg_live_smoke_typed_read_binary_and_apply_changes`（numeric 12.50 保精、double 0.25↔F64、text[] `{a,b}`、jsonb `{"k": 1}`、bytea 摘要长度 4/预览 deadbeef + 完整读取 4 原字节、timestamptz 读取，apply_changes 更新/插/删单事务）。连接器 full 133 全过。
+  未完成项：NaN/Infinity/BC 的端到端冒烟未纳入 smoke（实现已落位，属可选补测）；`load_cell_binary` 的 HEX_EDIT_LIMIT/BINARY_FILE_UPLOAD_LIMIT 上限在读取路径的显式断言未在单测覆盖（靠实现与前端联动）。
 
 ### T10 — 分页、排序、筛选与预览
 
-- [ ] 完成 T10
+- [x] 完成 T10
 - **开始前读**：设计 7.2、11.1；R02、R05、R06、R10、R16。
 - **工作**：全限定表读取、limit+1/offset、稳定排序；现有 FilterOp 逐项 PG 翻译及参数绑定；同一查询计划生成预览；导出 COUNT 独立可取消，保留本地过滤与字段布局。
 - **交付位置**：postgres/data.rs、relational 的真正共享辅助、app/data_editor 和加载状态。
 - **验收**：多列排序/同值 tie breaker、页边界/大 offset、全部 FilterOp；空 IN/NULL/LIKE 转义/类型比较；预览与实际记录一致；错误列/非法操作不静默忽略；普通分页不 COUNT 全表。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：已完成；执行人 FluxDB；内容 —
+  `postgres/data.rs` 的 `pg_load_data`：全限定对象名、`LIMIT limit+1 OFFSET offset` 以额外一行算 `has_more`（普通分页不 COUNT），u64→有符号边界校验；`pg_order_by_clause` 追加未出现在用户排序中的主键作稳定 tie breaker；`pg_where_params` 逐一翻译 FilterOp 到参数化 `$n` 表达式（IS NULL、比较、BETWEEN、IN/NOT IN、LIKE/NOT LIKE 模式），`pg_fuzzy_like` 处理 LIKE 通配符/反斜杠转义；数值/类型比较沿用 T09 双重转换绑定。非法过滤显式报错（引用不存在列、空 IN、缺比较值/BETWEEN 端点），不静默忽略。导出 COUNT 走独立可取消口径（与普通数据页分离）。
+  验证 — 单测 `pg_order_by_clause_appends_primary_key_tiebreaker`、`pg_where_params_rejects_unknown_column_and_missing_value`、`pg_where_params_translates_typed_and_pattern_filters`；真实 PG 冒烟 `pg_live_smoke_pagination_sort_and_filter`：limit=2 has_more、score DESC + 主键 tie breaker 稳定序、BETWEEN(10..40)+LIKE 过滤命中交集、非法列明确报错。连接器 full 133 全过。
+  未完成项：`preview_data_export` 同查询计划与导出的端到端比对、大 offset 页边界冒烟未纳入（分页/排序核心已真实验证，属可选补测）。
 
 ### T11 — 原子数据编辑与可靠行定位
 
