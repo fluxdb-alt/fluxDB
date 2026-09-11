@@ -1,14 +1,3 @@
-/// PostgreSQL 连接驱动尚未接入（T04）时的统一错误。
-///
-/// T02 仅落地连接档案/配置与凭据；真实拨号由后续任务实现。此错误保证
-/// 任何在 T04 之前的 PG 操作都显式失败，而不是被静默路由到 Mock 或假数据。
-fn pg_not_wired() -> fluxdb_core::Error {
-    fluxdb_core::Error::new(
-        fluxdb_core::ErrorKind::Connection,
-        "PostgreSQL 连接驱动尚未接入，暂不支持该操作",
-    )
-}
-
 fn mock_connections() -> Vec<ConnectionConfig> {
     vec![
         ConnectionConfig {
@@ -301,7 +290,8 @@ fn list_completion_tables_for_connection_with_cancel(
             .list_completion_tables_with_cancel(database, schema, filter, limit, should_cancel),
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
             .list_completion_tables_with_cancel(database, schema, filter, limit, should_cancel),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => PostgresConnector::with_config(config.clone())
+            .list_completion_tables_with_cancel(database, schema, filter, limit, should_cancel),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind)
                 .list_completion_tables_with_cancel(database, schema, filter, limit, should_cancel)
@@ -421,7 +411,8 @@ fn list_completion_columns_for_connection_with_cancel(
             .list_completion_columns_with_cancel(database, schema, table, should_cancel),
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
             .list_completion_columns_with_cancel(database, schema, table, should_cancel),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => PostgresConnector::with_config(config.clone())
+            .list_completion_columns_with_cancel(database, schema, table, should_cancel),
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind)
                 .list_completion_columns_with_cancel(database, schema, table, should_cancel)
@@ -450,7 +441,8 @@ fn list_completion_columns_for_tables_for_connection_with_cancel(
             .list_completion_columns_for_tables_with_cancel(database, schema, tables, should_cancel),
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
             .list_completion_columns_for_tables_with_cancel(database, schema, tables, should_cancel),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => PostgresConnector::with_config(config.clone())
+            .list_completion_columns_for_tables_with_cancel(database, schema, tables, should_cancel),
         DatabaseKind::MongoDb | DatabaseKind::Redis => MockConnector::new(config.kind)
             .list_completion_columns_for_tables_with_cancel(database, schema, tables, should_cancel),
     }
@@ -478,7 +470,8 @@ fn list_completion_routines_for_connection_with_cancel(
             .list_completion_routines_with_cancel(database, schema, filter, limit, should_cancel),
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
             .list_completion_routines_with_cancel(database, schema, filter, limit, should_cancel),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => PostgresConnector::with_config(config.clone())
+            .list_completion_routines_with_cancel(database, schema, filter, limit, should_cancel),
         DatabaseKind::MongoDb | DatabaseKind::Redis => MockConnector::new(config.kind)
             .list_completion_routines_with_cancel(database, schema, filter, limit, should_cancel),
     }
@@ -523,7 +516,9 @@ fn list_foreign_keys_for_connection_with_cancel(
         DatabaseKind::Sqlite => {
             SqliteConnector::with_config(config.clone()).list_foreign_keys_with_cancel(&path, should_cancel)
         }
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => {
+            PostgresConnector::with_config(config.clone()).list_foreign_keys_with_cancel(&path, should_cancel)
+        }
         DatabaseKind::MongoDb | DatabaseKind::Redis => {
             MockConnector::new(config.kind).list_foreign_keys_with_cancel(&path, should_cancel)
         }
@@ -552,7 +547,8 @@ fn list_completion_triggers_for_connection_with_cancel(
             .list_completion_triggers_with_cancel(database, schema, filter, limit, should_cancel),
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
             .list_completion_triggers_with_cancel(database, schema, filter, limit, should_cancel),
-        DatabaseKind::Postgres => Err(pg_not_wired()),
+        DatabaseKind::Postgres => PostgresConnector::with_config(config.clone())
+            .list_completion_triggers_with_cancel(database, schema, filter, limit, should_cancel),
         DatabaseKind::MongoDb | DatabaseKind::Redis => MockConnector::new(config.kind)
             .list_completion_triggers_with_cancel(database, schema, filter, limit, should_cancel),
     }
