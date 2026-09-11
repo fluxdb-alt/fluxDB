@@ -18,6 +18,13 @@ impl PostgresConnector {
             config: Some(config),
         }
     }
+
+    /// 取连接配置；缺失时按指定说明报「需连接配置上下文」错误。
+    fn as_config(&self, message: &str) -> fluxdb_core::Result<&ConnectionConfig> {
+        self.config
+            .as_ref()
+            .ok_or_else(|| Error::new(ErrorKind::Connection, message))
+    }
 }
 
 impl Connector for PostgresConnector {
@@ -83,6 +90,59 @@ impl Connector for PostgresConnector {
             ));
         };
         pg_list_triggers(config, path)
+    }
+
+    fn list_completion_tables(
+        &self,
+        database: Option<&str>,
+        schema: Option<&str>,
+        filter: &str,
+        limit: u64,
+    ) -> fluxdb_core::Result<Vec<CompletionTable>> {
+        let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
+        pg_list_completion_tables(config, database, schema, filter, limit)
+    }
+
+    fn list_completion_columns(
+        &self,
+        database: Option<&str>,
+        schema: Option<&str>,
+        table: &str,
+    ) -> fluxdb_core::Result<Vec<CompletionColumn>> {
+        let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
+        pg_list_completion_columns(config, database, schema, table)
+    }
+
+    fn list_completion_columns_for_tables(
+        &self,
+        database: Option<&str>,
+        schema: Option<&str>,
+        tables: &[String],
+    ) -> fluxdb_core::Result<Vec<CompletionColumn>> {
+        let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
+        pg_list_completion_columns_for_tables(config, database, schema, tables)
+    }
+
+    fn list_completion_routines(
+        &self,
+        database: Option<&str>,
+        schema: Option<&str>,
+        filter: &str,
+        limit: u64,
+    ) -> fluxdb_core::Result<Vec<CompletionRoutine>> {
+        let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
+        pg_list_completion_routines(config, database, schema, filter, limit)
+    }
+
+    fn list_completion_triggers(
+        &self,
+        database: Option<&str>,
+        schema: Option<&str>,
+        filter: &str,
+        limit: u64,
+    ) -> fluxdb_core::Result<Vec<CompletionTrigger>> {
+        let config = self.as_config("PostgreSQL 补全需要连接配置上下文")?;
+        pg_list_completion_triggers(config, database, schema, filter, limit)
     }
 
     fn table_ddl(&self, path: &ObjectPath) -> fluxdb_core::Result<String> {

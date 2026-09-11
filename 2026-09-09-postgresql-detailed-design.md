@@ -352,6 +352,8 @@ CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不�
 
 接通 `DatabaseKind::Postgres → SqlDialect::Postgres → PostgreSqlDialect` 的 AST/语义链路。保留 CompletionIndex 的排序、模糊匹配、分页和 TTL；schema/quoted case/search_path/函数重载必须贯穿查询、缓存、持久化和插入文本。批量 columns 使用一次 catalog 查询（按真实范围分组），不能逐表 N+1；所有列表支持限量和取消。元数据来自独立会话，不影响用户事务。
 
+实现记录（T14 增量一）：`postgres/completion.rs` 从 pg_catalog 提供真实补全 — tables 按 `relkind IN ('r','v','m','p','f')` 的常数 IN 列表（不绑定数组避免 `char[]` 类型推断失败）、`nspname = $1` 精确 schema、`relname ILIKE $2 ESCAPE '\'` 模糊匹配（ESCAPE 单反斜杠，避免 PG「invalid escape string」），LIMIT 限量；columns 一次批量查询按 `c.relname = ANY($2::text[])` 取真实表范围（非逐表 N+1），`pg_attribute.attnum > 0 AND NOT attisdropped` 排序列、`format_type` 得首参 schema/长度类型名、`col_description` 取注释、`EXISTS(pg_index … indisprimary AND attnum = ANY(indkey))` 判断主键、`attnotnull` 反推 nullable；routines 用 `pg_proc.prokind` 区分 f/p（a/w 按函数）；triggers 过滤 `NOT tgisinternal`。物理库缺省回退档案维护库，schema 显式 > 档案默认 > `public`。这些查询元数据取独立会话（`pg_connect` 新拨），不干扰用户事务；值一律 `$n` 参数化，值列表 `text[]` 数组绑定。
+
 结果编辑仅开放可证明来自一个基础表的直接列投影，含完整可靠行身份。JOIN、聚合、DISTINCT、窗口/计算列、CTE 复杂派生和不确定来源结果只读；可保留部分直接列编辑，但必须有明确来源证明。二段名称按 PG schema.table；引用标识符用解析器，不能靠现有反引号简易 parser。[R10、R30]
 
 查询/数据修改历史沿用现有页面、保存和补偿入口。PG 历史保存完整对象身份、schema、方言；补偿 SQL 用 PG 双引号、布尔、bytea decode 和类型化字面量。对已有 MySQL 支持的简单单表 UPDATE/DELETE，在同一拥有的事务/连接读取并锁定前像；INSERT 及数据提交用 RETURNING 捕获真实身份。用户显式事务的历史先标未提交，COMMIT 后才可作为成功修改，ROLLBACK 后标已回滚；复杂语句不能生成可靠补偿时明确说明，不能生成猜测 SQL。补偿是需要用户检查并执行的新语句，不是保证能恢复任意并发后的数据库状态。[R11]

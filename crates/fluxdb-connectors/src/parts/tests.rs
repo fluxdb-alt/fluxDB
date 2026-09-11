@@ -4554,4 +4554,83 @@ SELECT item_id, name FROM audit_log;"
         assert_eq!(second.rows.len(), 1, "应有 1 行");
         assert_eq!(second.rows[0].values[1], CellValue::I64(1), "按 ordinal 取 a2 应得 1");
     }
+
+    #[test]
+    fn pg_live_smoke_completion_metadata() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T14 冒烟");
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t14_completion CASCADE; \
+            DROP FUNCTION IF EXISTS t14_fn() CASCADE; \
+            CREATE TABLE t14_completion(id int PRIMARY KEY, note text); \
+            CREATE FUNCTION t14_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql; \
+            CREATE TRIGGER t14_trg BEFORE INSERT ON t14_completion FOR EACH ROW EXECUTE FUNCTION t14_fn(); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建表/函数/触发器应成功");
+
+        // 表补全：按 filter 命中 t14_completion。
+        let tables = connector
+            .list_completion_tables(Some(&db_name), Some("public"), "t14_comp", 50)
+            .expect("表补全应成功");
+        assert!(
+            tables.iter().any(|t| t.name == "t14_completion"),
+            "表补全应含 t14_completion：{:#?}",
+            tables
+        );
+
+        // 列补全：含主键列与 comment。
+        let columns = connector
+            .list_completion_columns(Some(&db_name), Some("public"), "t14_completion")
+            .expect("列补全应成功");
+        let names: Vec<_> = columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["id", "note"], "列补全应按 attnum 排序：{names:?}");
+        let pk = columns.iter().find(|c| c.name == "id").unwrap();
+        assert!(pk.primary_key, "id 应为主键列");
+
+        // 批量列：单次 catalog 查询取多表列，避免逐表 N+1。
+        let batch = connector
+            .list_completion_columns_for_tables(
+                Some(&db_name),
+                Some("public"),
+                &["t14_completion".to_string()],
+            )
+            .expect("批量列补全应成功");
+        assert!(batch.len() >= 2, "批量列应取到列：{:#?}", batch);
+
+        // 例程补全：t14_fn 为函数。
+        let routines = connector
+            .list_completion_routines(Some(&db_name), Some("public"), "t14_fn", 50)
+            .expect("例程补全应成功");
+        assert!(
+            routines.iter().any(|r| r.name == "t14_fn"),
+            "例程补全应含 t14_fn：{:#?}",
+            routines
+        );
+
+        // 触发器补全：t14_trg 关联表 t14_completion。
+        let triggers = connector
+            .list_completion_triggers(Some(&db_name), Some("public"), "t14_trg", 50)
+            .expect("触发器补全应成功");
+        assert!(
+            triggers
+                .iter()
+                .any(|t| t.name == "t14_trg" && t.table.as_deref() == Some("t14_completion")),
+            "触发器补全应含 t14_trg：{:#?}",
+            triggers
+        );
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t14_completion CASCADE; DROP FUNCTION IF EXISTS t14_fn() CASCADE;"
+            .to_string();
+        connector.execute(&cleanup).expect("清理临时结构应成功");
+    }
 }

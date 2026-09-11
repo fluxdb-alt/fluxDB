@@ -304,7 +304,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 - **工作**：tables/columns/routines/triggers/FK 补全真实实现；schema/search_path/quoted case/签名索引；批量加载、取消、TTL/失效和持久化；插入文本引用与文档提示。
 - **交付位置**：postgres/completion.rs；app/completion_index/controller/query_completion；UI resolver 适配。
 - **验收**：同名跨 schema、别名、CTE、函数重载、未知 qualifier 不泄漏列；批量列非 N+1；DDL 后刷新；无权限/超时不阻塞编辑；元数据会话不影响用户事务；MySQL 补全原测试通过。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：进行中；执行人 FluxDB（T14 增量一）；内容 — 新增 `postgres/completion.rs` 从 pg_catalog 真实实现 tables/columns/columns_for_tables/routines/triggers 五类补全（core `Connector` trait 默认 `Vec::new()`，PG 直到此增量才返回真实数据）。tables/columns/routines/triggers 均 `$n` 参数化 + LIMIT 限量；columns 一次批量查询按真实表范围 `ANY($2::text[])` 非 N+1。关键坑：`relkind` 用常数 IN 列表内联而非数组绑定（否则 PG 报类型推断错误）；`ESCAPE` 需单反斜杠（Rust 源 `'\\'`），双反斜杠会报 invalid escape string；批量 schema 缺省回退档案维护库/默认 schema/public。验证 — 新增 `pg_live_smoke_completion_metadata`；真实 PG 冒烟 129 全过、工作区全部通过。剩余：app CompletionIndex 接入、search_path 读取、quoted case/签名索引、插入文本与文档提示，另增增量。
 
 ### T15 — 结果编辑、查询保存与历史补偿
 
