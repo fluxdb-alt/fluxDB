@@ -3241,7 +3241,10 @@ fn data_editor_content(
         .changes
         .as_ref()
         .filter(|changes| !changes.is_empty())
-        .map(|changes| data_change_sql_preview(page, changes));
+        .map(|changes| {
+            let db_kind = this.connection_database_kind(changes.object.connection_id);
+            data_change_sql_preview(page, changes, db_kind)
+        });
     let change_sql_preview_open = this.data_change_sql_preview_tabs.contains(&tab_id);
     // min_h(0)：flex 项默认最小尺寸为内容高度，缺这行时整列会被内容撑出窗口，
     // 下游（如 Redis Set 成员列表）拿到的永远是内容高度而非可用高度，滚动区因此永不溢出
@@ -6392,7 +6395,10 @@ fn query_result_view(
     let change_sql_preview = result_editor
         .and_then(|_| change_count)
         .and_then(|_| result_editor.and_then(|editor| editor.changes.as_ref()))
-        .map(|changes| data_change_sql_preview(result_page, changes));
+        .map(|changes| {
+            let db_kind = this.connection_database_kind(changes.object.connection_id);
+            data_change_sql_preview(result_page, changes, db_kind)
+        });
     let change_sql_preview_open = this.data_change_sql_preview_tabs.contains(&tab_id);
     let cell_detail_drawer = result_editor
         .filter(|editor| editor.cell_detail_panel.open)

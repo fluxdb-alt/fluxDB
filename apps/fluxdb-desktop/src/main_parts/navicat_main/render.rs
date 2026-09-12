@@ -31,11 +31,12 @@ impl Render for NavicatMain {
         let pending_apply_preview = self.pending_apply_data_changes.and_then(|tab_id| {
             self.data_change_preview_for_tab(tab_id)
                 .map(|(page, changes)| {
+                    let db_kind = self.connection_database_kind(changes.object.connection_id);
                     (
                         tab_id,
                         data_change_item_count(&changes),
                         data_change_statement_count(&changes),
-                        data_change_sql_preview(&page, &changes),
+                        data_change_sql_preview(&page, &changes, db_kind),
                     )
                 })
         });

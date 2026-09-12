@@ -1,9 +1,10 @@
 fn data_filter_rule_sql(rule: &DataFilterRule) -> Option<String> {
+    let db_kind = DatabaseKind::MySql;
     if !rule.enabled {
         return None;
     }
     let field = rule.field.as_deref()?;
-    let field = sql_quote_ident(field);
+    let field = sql_quote_ident(field, db_kind);
     let normalized_values = rule
         .values
         .iter()
@@ -917,13 +918,14 @@ fn data_sort_rules_after_header_sort(
 }
 
 fn data_sort_rules_text(rules: &[DataSortRule]) -> String {
+    let db_kind = DatabaseKind::MySql;
     rules
         .iter()
         .filter(|rule| rule.enabled)
         .map(|rule| {
             format!(
                 "{} {}",
-                sql_quote_ident(&rule.field),
+                sql_quote_ident(&rule.field, db_kind),
                 if rule.ascending { "ASC" } else { "DESC" }
             )
         })
@@ -1026,20 +1028,33 @@ fn data_filter_like_sql(
         .join(format!(" {joiner} ").as_str())
 }
 
-fn sql_qualified_object_name(object: &ObjectPath) -> String {
+/// 按方言限定对象名：PG 为 `"schema"."name"`（不生成跨库三段名，设计 §4.2）；其余 `db`.`schema`.`name`。
+fn sql_qualified_object_name(object: &ObjectPath, db_kind: DatabaseKind) -> String {
     let mut parts = Vec::new();
+    if db_kind == DatabaseKind::Postgres {
+        if let Some(schema) = object.schema.as_deref().filter(|s| !s.is_empty()) {
+            parts.push(sql_quote_ident(schema, db_kind));
+        }
+        parts.push(sql_quote_ident(&object.name, db_kind));
+        return parts.join(".");
+    }
     if let Some(database) = object.database.as_deref() {
-        parts.push(sql_quote_ident(database));
+        parts.push(sql_quote_ident(database, db_kind));
     }
     if let Some(schema) = object.schema.as_deref() {
-        parts.push(sql_quote_ident(schema));
+        parts.push(sql_quote_ident(schema, db_kind));
     }
-    parts.push(sql_quote_ident(&object.name));
+    parts.push(sql_quote_ident(&object.name, db_kind));
     parts.join(".")
 }
 
-fn sql_quote_ident(value: &str) -> String {
-    format!("`{}`", value.replace('`', "``"))
+/// 按方言引用标识符：PG 双引号（内部 `"`→`""`）；其余反引号。
+fn sql_quote_ident(value: &str, db_kind: DatabaseKind) -> String {
+    if db_kind == DatabaseKind::Postgres {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        format!("`{}`", value.replace('`', "``"))
+    }
 }
 
 fn sql_quote_literal(value: &str) -> String {
@@ -1069,8 +1084,12 @@ fn data_change_item_count(changes: &DataChangeSet) -> usize {
     changes.dirty_cell_count() + changes.deletes.len()
 }
 
-fn data_change_sql_preview(page: &DataPage, changes: &DataChangeSet) -> String {
-    let table = sql_qualified_object_name(&changes.object);
+fn data_change_sql_preview(
+    page: &DataPage,
+    changes: &DataChangeSet,
+    db_kind: DatabaseKind,
+) -> String {
+    let table = sql_qualified_object_name(&changes.object, db_kind);
     let mut statements = Vec::new();
 
     for update in &changes.updates {
@@ -1083,13 +1102,13 @@ fn data_change_sql_preview(page: &DataPage, changes: &DataChangeSet) -> String {
             .map(|cell| {
                 format!(
                     "{} = {}",
-                    sql_quote_ident(&cell.column),
-                    sql_preview_cell_literal(&cell.value)
+                    sql_quote_ident(&cell.column, db_kind),
+                    sql_preview_cell_literal(&cell.value, db_kind)
                 )
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let where_clause = row_identity_sql(&update.identity);
+        let where_clause = row_identity_sql(&update.identity, db_kind);
         statements.push(format!(
             "UPDATE {table} SET {assignments} WHERE {where_clause};"
         ));
@@ -1108,11 +1127,11 @@ fn data_change_sql_preview(page: &DataPage, changes: &DataChangeSet) -> String {
         }
         let column_names = insert_values
             .iter()
-            .map(|(column, _)| sql_quote_ident(&column.name))
+            .map(|(column, _)| sql_quote_ident(&column.name, db_kind))
             .collect::<Vec<_>>();
         let values = insert_values
             .iter()
-            .map(|(_, value)| sql_preview_cell_literal(value))
+            .map(|(_, value)| sql_preview_cell_literal(value, db_kind))
             .collect::<Vec<_>>();
         statements.push(format!(
             "INSERT INTO {table} ({}) VALUES ({});",
@@ -1124,7 +1143,7 @@ fn data_change_sql_preview(page: &DataPage, changes: &DataChangeSet) -> String {
     for identity in &changes.deletes {
         statements.push(format!(
             "DELETE FROM {table} WHERE {};",
-            row_identity_sql(identity)
+            row_identity_sql(identity, db_kind)
         ));
     }
 
@@ -1227,38 +1246,39 @@ fn row_insert_sql(
     object: &ObjectPath,
     fields: &[RowFieldSnapshot],
     skip_primary_key: bool,
+    db_kind: DatabaseKind,
 ) -> String {
     let values = fields
         .iter()
         .filter(|field| !(skip_primary_key && field.primary_key))
         .filter(|field| !matches!(field.value, CellValue::Null))
         .collect::<Vec<_>>();
-    let table = sql_qualified_object_name(object);
+    let table = sql_qualified_object_name(object, db_kind);
     if values.is_empty() {
         return format!("INSERT INTO {table} DEFAULT VALUES;");
     }
     let columns = values
         .iter()
-        .map(|field| sql_quote_ident(&field.name))
+        .map(|field| sql_quote_ident(&field.name, db_kind))
         .collect::<Vec<_>>()
         .join(", ");
     let literals = values
         .iter()
-        .map(|field| sql_preview_cell_literal(&field.value))
+        .map(|field| sql_preview_cell_literal(&field.value, db_kind))
         .collect::<Vec<_>>()
         .join(", ");
     format!("INSERT INTO {table} ({columns}) VALUES ({literals});")
 }
 
-fn row_update_sql(object: &ObjectPath, fields: &[RowFieldSnapshot]) -> String {
+fn row_update_sql(object: &ObjectPath, fields: &[RowFieldSnapshot], db_kind: DatabaseKind) -> String {
     let assignments = fields
         .iter()
         .filter(|field| !field.primary_key)
         .map(|field| {
             format!(
                 "{} = {}",
-                sql_quote_ident(&field.name),
-                sql_preview_cell_literal(&field.value)
+                sql_quote_ident(&field.name, db_kind),
+                sql_preview_cell_literal(&field.value, db_kind)
             )
         })
         .collect::<Vec<_>>()
@@ -1269,8 +1289,8 @@ fn row_update_sql(object: &ObjectPath, fields: &[RowFieldSnapshot]) -> String {
         .map(|field| {
             format!(
                 "{} = {}",
-                sql_quote_ident(&field.name),
-                sql_preview_cell_literal(&field.value)
+                sql_quote_ident(&field.name, db_kind),
+                sql_preview_cell_literal(&field.value, db_kind)
             )
         })
         .collect::<Vec<_>>()
@@ -1282,13 +1302,13 @@ fn row_update_sql(object: &ObjectPath, fields: &[RowFieldSnapshot]) -> String {
     };
     format!(
         "UPDATE {} SET {} WHERE {};",
-        sql_qualified_object_name(object),
+        sql_qualified_object_name(object, db_kind),
         assignments,
         where_clause
     )
 }
 
-fn row_identity_sql(identity: &RowIdentity) -> String {
+fn row_identity_sql(identity: &RowIdentity, db_kind: DatabaseKind) -> String {
     if identity.values.is_empty() {
         return "1 = 0".to_string();
     }
@@ -1298,29 +1318,45 @@ fn row_identity_sql(identity: &RowIdentity) -> String {
         .map(|(column, value)| {
             format!(
                 "{} = {}",
-                sql_quote_ident(column),
-                sql_preview_cell_literal(value)
+                sql_quote_ident(column, db_kind),
+                sql_preview_cell_literal(value, db_kind)
             )
         })
         .collect::<Vec<_>>()
         .join(" AND ")
 }
 
-fn sql_preview_cell_literal(value: &CellValue) -> String {
+/// 单元格 SQL 字面量（按方言）：PG bytea 用 `'\x..'::bytea`（`X'..'` 非法）、jsonb 用 `::jsonb`；
+/// MySQL/SQLite 保持 `X'..'`、裸文本。
+fn sql_preview_cell_literal(value: &CellValue, db_kind: DatabaseKind) -> String {
+    let is_pg = db_kind == DatabaseKind::Postgres;
     match value {
         CellValue::Null => "NULL".to_string(),
         CellValue::Bool(true) => "TRUE".to_string(),
         CellValue::Bool(false) => "FALSE".to_string(),
         CellValue::I64(value) => value.to_string(),
         CellValue::F64(value) => value.to_string(),
-        CellValue::Text(value) | CellValue::Json(value) => sql_quote_literal(value),
+        // JSON 在 PG 需显式转 jsonb（文本字面量对 jsonb 列可隐式，但显式更稳且语义明确）。
+        CellValue::Json(value) => {
+            if is_pg {
+                format!("{}::jsonb", sql_quote_literal(value))
+            } else {
+                sql_quote_literal(value)
+            }
+        }
+        CellValue::Text(value) => sql_quote_literal(value),
         CellValue::BinarySummary(_) => "NULL".to_string(),
         CellValue::Bytes(value) => {
             let hex = value
                 .iter()
-                .map(|byte| format!("{byte:02X}"))
+                .map(|byte| format!("{byte:02x}"))
                 .collect::<String>();
-            format!("X'{hex}'")
+            if is_pg {
+                // PG hex bytea 字面量：'\xDEADBEEF'::bytea。
+                format!("'\\x{hex}'::bytea")
+            } else {
+                format!("X'{}'", hex.to_uppercase())
+            }
         }
     }
 }

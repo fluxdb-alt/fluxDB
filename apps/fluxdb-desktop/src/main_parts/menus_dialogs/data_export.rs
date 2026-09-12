@@ -623,6 +623,14 @@ fn run_table_data_export(
     cancel_flag: Arc<AtomicBool>,
     sender: mpsc::Sender<TableDataExportProgress>,
 ) -> anyhow::Result<TableDataExportResult> {
+    // 导出 SQL 字面量/标识符按连接方言渲染（PG 双引号 + `'\x..'::bytea`）。
+    let db_kind = controller
+        .state()
+        .connections
+        .iter()
+        .find(|c| c.config.id == form.object.connection_id)
+        .map(|c| c.config.kind)
+        .unwrap_or(DatabaseKind::MySql);
     let sort = match form.scope {
         TableDataExportScope::CurrentConditions => form.sort,
         TableDataExportScope::AllRows => Vec::new(),
@@ -636,7 +644,7 @@ fn run_table_data_export(
         TableDataExportScope::CustomRules => data_filter_specs_from_rules(&form.custom_filter_rules),
     };
     let mut writer =
-        TableDataExportWriter::create(&path, form.format, form.object.clone(), fields)?;
+        TableDataExportWriter::create(&path, form.format, form.object.clone(), fields, db_kind)?;
     let mut offset = 0;
     let mut exported = 0;
     let started_at = Instant::now();

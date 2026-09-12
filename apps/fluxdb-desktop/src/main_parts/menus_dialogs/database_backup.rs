@@ -956,7 +956,7 @@ fn run_logic_backup(
                     break;
                 }
             };
-            let written_rows = write_page_rows(&mut writer, &object.path, &page)?;
+            let written_rows = write_page_rows(&mut writer, &object.path, &page, config.kind)?;
             if written_rows > 0 {
                 let _ = sender.send(BackupTaskProgress {
                     stage: "数据".to_string(),
@@ -995,6 +995,7 @@ fn write_page_rows<W: Write>(
     writer: &mut W,
     object: &ObjectPath,
     page: &fluxdb_core::DataPage,
+    db_kind: DatabaseKind,
 ) -> io::Result<u64> {
     let indexes = page
         .columns
@@ -1022,7 +1023,7 @@ fn write_page_rows<W: Write>(
                 }
             })
             .collect::<Vec<_>>();
-        writeln!(writer, "{}", row_insert_sql(object, fields.as_slice(), false))?;
+        writeln!(writer, "{}", row_insert_sql(object, fields.as_slice(), false, db_kind))?;
         written += 1;
     }
     Ok(written)

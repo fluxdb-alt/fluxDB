@@ -1563,6 +1563,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             DataRowExportFormat::Csv,
             Some(&object),
             rows.as_slice(),
+            DatabaseKind::MySql,
         )
         .unwrap();
 
@@ -1589,6 +1590,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             DataRowExportFormat::Csv,
             None,
             rows.as_slice(),
+            DatabaseKind::MySql,
         )
         .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "id\n7\n");
@@ -1599,6 +1601,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             DataRowExportFormat::SqlInsert,
             None,
             rows.as_slice(),
+            DatabaseKind::MySql,
         )
         .is_err());
     }
@@ -1637,6 +1640,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             DataRowExportFormat::Markdown,
             Some(&object),
             rows.as_slice(),
+            DatabaseKind::MySql,
         )
         .unwrap();
 
@@ -1680,6 +1684,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             DataRowExportFormat::SqlInsert,
             Some(&object),
             rows.as_slice(),
+            DatabaseKind::MySql,
         )
         .unwrap();
 
@@ -1734,6 +1739,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             TableDataExportFormat::Csv,
             object.clone(),
             vec!["name".to_string()],
+            DatabaseKind::MySql,
         )
         .unwrap();
         assert_eq!(csv.write_page(&page).unwrap(), 1);
@@ -1744,6 +1750,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             TableDataExportFormat::Xml,
             object,
             vec!["name".to_string()],
+            DatabaseKind::MySql,
         )
         .unwrap();
         assert_eq!(xml.write_page(&page).unwrap(), 1);
@@ -1845,12 +1852,62 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         ];
 
         assert_eq!(
-            row_insert_sql(&object, fields.as_slice(), false),
+            row_insert_sql(&object, fields.as_slice(), false, DatabaseKind::MySql),
             "INSERT INTO `shop`.`users` (`id`, `name`) VALUES (7, 'Alice');"
         );
         assert_eq!(
-            row_insert_sql(&object, fields.as_slice(), true),
+            row_insert_sql(&object, fields.as_slice(), true, DatabaseKind::MySql),
             "INSERT INTO `shop`.`users` (`name`) VALUES ('Alice');"
+        );
+
+        // PG：双引号标识符 + schema.table 限定（不生成跨库三段名）。
+        let mut pg_object = object.clone();
+        pg_object.kind = ObjectKind::Table;
+        pg_object.schema = Some("public".to_string());
+        assert_eq!(
+            row_insert_sql(&pg_object, fields.as_slice(), false, DatabaseKind::Postgres),
+            "INSERT INTO \"public\".\"users\" (\"id\", \"name\") VALUES (7, 'Alice');"
+        );
+    }
+
+    /// PG 导出/预览字面量：bytea 用 `'\x..'::bytea`（非 MySQL `X'..'`）、jsonb 显式转换。
+    #[test]
+    fn postgres_export_literals_use_pg_bytea_and_jsonb() {
+        let object = ObjectPath {
+            connection_id: ConnectionId(1),
+            database: Some("appdb".to_string()),
+            schema: Some("public".to_string()),
+            name: "blobs".to_string(),
+            kind: ObjectKind::Table,
+        };
+        let fields = vec![
+            RowFieldSnapshot {
+                index: 1,
+                name: "payload".to_string(),
+                type_name: "bytea".to_string(),
+                primary_key: false,
+                comment: None,
+                value: CellValue::Bytes(vec![0xde, 0xad, 0xbe, 0xef]),
+            },
+            RowFieldSnapshot {
+                index: 2,
+                name: "meta".to_string(),
+                type_name: "jsonb".to_string(),
+                primary_key: false,
+                comment: None,
+                value: CellValue::Json("{\"k\": 1}".to_string()),
+            },
+        ];
+        assert_eq!(
+            row_insert_sql(&object, fields.as_slice(), false, DatabaseKind::Postgres),
+            "INSERT INTO \"public\".\"blobs\" (\"payload\", \"meta\") \
+             VALUES ('\\xdeadbeef'::bytea, '{\"k\": 1}'::jsonb);"
+        );
+        // MySQL 保持 X'..' 十六进制 + 裸 JSON 文本。
+        assert_eq!(
+            row_insert_sql(&object, fields.as_slice(), false, DatabaseKind::MySql),
+            "INSERT INTO `appdb`.`public`.`blobs` (`payload`, `meta`) \
+             VALUES (X'DEADBEEF', '{\"k\": 1}');"
         );
     }
 
@@ -2437,7 +2494,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             insert_intents: None,
         };
 
-        let preview = data_change_sql_preview(&page, &changes);
+        let preview = data_change_sql_preview(&page, &changes, DatabaseKind::MySql);
 
         assert_eq!(data_change_statement_count(&changes), 3);
         assert!(
@@ -2484,7 +2541,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             insert_intents: None,
         };
 
-        let preview = data_change_sql_preview(&page, &changes);
+        let preview = data_change_sql_preview(&page, &changes, DatabaseKind::MySql);
 
         assert_eq!(preview, "INSERT INTO `shop-db`.`orders` DEFAULT VALUES;");
     }
