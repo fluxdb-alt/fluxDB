@@ -71,7 +71,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 进行中（增量一/二：原生检测+psql 参数+桌面接入）/ FluxDB |
 | T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一：PG 原生 pg_dump + 真库恢复验证）/ FluxDB |
 | T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 进行中（增量一~四：对象权限 + 敏感隔离 + ACL 语义/有效权限；T27 UI 待续）/ FluxDB |
-| T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 进行中（增量一/二：app 数据接入 + desktop 角色面板；CRUD/权限渲染待续）/ FluxDB |
+| T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 进行中（增量一~三：app 数据+CRUD 支撑 + desktop 只读角色面板；桌面表单/权限渲染待视觉验收）/ FluxDB |
 | T28 | 全矩阵联调、MySQL 回归与交付审查 | T01–T27 | 未开始 / — |
 
 ## 4. 可执行任务
@@ -509,7 +509,8 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   **范围决策（2026-09-12）**：现有 `DatabaseUserAdminProvider`/desktop user_admin 是 MySQL 外形（user@host、SHOW GRANTS 文本解析、auth_plugin、每小时资源限制），把 PG role 塞进该 provider 会产生**误导性 UI**（host/plugin 空列、MySQL 资源限制、无法表达成员/对象 ACL）。因此 T27 **不应**通过给现有 provider 加 Postgres branch 实现，而应做独立 PG 角色管理接口，复用 T26 已就绪的数据源。**不引入 `UserAdminDialect::Postgres`**（避免强开 19 个 MySQL SQL 生成器分支编译雪崩），只加 `PrivilegeScope::Postgres`。
   **增量一（app 层，`860e39e`）**：core `PrivilegeScope::Postgres` + `supports_database_user_admin(Postgres)=true`（菜单/入口放行）；app `open_user_admin` 对 Postgres 放行；`load_user_admin_users` 对 PG 经连接器 `list_roles` 读取（role→user 映射）；`load_user_admin_grants` 对 PG 经 `list_role_membership` 返回该 role 所在组角色；新增 `list_pg_roles_for_connection`/`list_pg_memberships_for_connection` 复用 `role_operation_for_connection` 路由；纯函数 `pg_groups_for_member`（可测试）。验证：`pg_groups_for_member` 单测 + 工作区全绿。
   **增量二（desktop，`1bb4416`）**：`user_admin_content` 对 Postgres 连接分支到新增 `pg_user_admin.rs` 的 `pg_role_admin_content`（不再显示 MySQL/TiDB-only 占位）；左侧复用 `user_admin_user_list`（PG 角色经 app 层 list_roles 装载为 admin.users），右侧展示选中角色的组角色成员关系（admin.grants ← pg_auth_members）；集群级角色语义提示。MySQL user_admin 全保留。build/test 全绿。
-  **剩余（desktop 渲染）**：现有 desktop user_admin 走 MySQL SQL-preview-apply 流程（`provider.create_user_sql` 等），对 PG provider 为 None，无法复用。PG 角色 CRUD/成员/对象权限需走独立交互路径：经 AppCommand 调连接器（CreatePgRole/DropPgRole/AlterPgRolePassword/GrantObjectPrivilege/…）而非 SQL 文本；MySQL-only 字段（host/plugin/资源限制/ssl）对 PG 隐藏；Members/Grants 渲染 T26 数据（list_object_grants/role_effective_grants）。CRUD 按钮/弹框与对象权限渲染是该 desktop 增量的主体，属人工视觉验收范畴，可按本清单继续。
+  **增量三（app 层 CRUD 支撑，`f57490c`）**：`UserAdminState` 增 `pg_can_login`（default true）；新增 AppCommand `EndUserAdminCreateUser` / `SetUserAdminPgCanLogin`（桌面不直接改 app 状态）；render 快照补字段；单测 `user_admin_pg_can_login_defaults_and_reflects`。
+  **剩余（desktop 渲染，视觉验收范畴）**：现有 desktop user_admin 走 MySQL SQL-preview-apply 流程（`provider.create_user_sql` 等），对 PG provider 为 None，无法复用 SQL 预览。PG 角色 CRUD/成员/对象权限桌面绑定需走独立交互路径：经 AppCommand（CreatePgRole/DropPgRole/AlterPgRolePassword/EndUserAdminCreateUser/SetUserAdminPgCanLogin + start_user_admin_users_load 刷新）而非 SQL 文本；MySQL-only 字段（host/plugin/资源限制/ssl）对 PG 隐藏；Members/Grants 渲染 T26 数据（list_object_grants/role_effective_grants）。数据/app 支撑（增量一~三）已齐，仅剩桌面表单/按钮绑定与对象权限面板，属人工视觉验收增量。
 
 ### T28 — 全量对齐与交付审查
 
