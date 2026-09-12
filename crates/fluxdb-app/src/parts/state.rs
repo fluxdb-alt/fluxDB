@@ -184,6 +184,8 @@ pub struct UserAdminState {
     pub role_membership_edits: Vec<UserRoleMembership>,
     pub member_grant_edits: Vec<UserRoleMember>,
     pub pending_sql: Option<UserAdminPendingSql>,
+    /// PostgreSQL：新建角色是否可登录（LOGIN）/组角色（NOLOGIN）。仅 PG 场景使用。
+    pub pg_can_login: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -252,6 +254,7 @@ impl UserAdminState {
             role_membership_edits: Vec::new(),
             member_grant_edits: Vec::new(),
             pending_sql: None,
+            pg_can_login: true,
         }
     }
 
@@ -1629,6 +1632,13 @@ pub enum AppCommand {
         user: DatabaseUserIdentity,
     },
     BeginUserAdminCreateUser(TabId),
+    /// 结束「新建」态（取消新建或提交完成），回到选中既有对象。
+    EndUserAdminCreateUser(TabId),
+    /// PostgreSQL：新建角色是否可登录（LOGIN/NOLOGIN）切换。
+    SetUserAdminPgCanLogin {
+        tab_id: TabId,
+        can_login: bool,
+    },
     SelectUserAdminDetailTab {
         tab_id: TabId,
         detail_tab: UserAdminDetailTab,

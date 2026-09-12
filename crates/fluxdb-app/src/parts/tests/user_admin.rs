@@ -171,3 +171,12 @@ fn pg_groups_for_member_filters_and_returns_groups() {
     assert_eq!(pg_groups_for_member(&memberships, "bob"), vec!["reader"]);
     assert!(pg_groups_for_member(&memberships, "eve").is_empty());
 }
+
+/// PG：UserAdminState 的 pg_can_login（新建角色可登录）默认与切换。
+#[test]
+fn user_admin_pg_can_login_defaults_and_reflects() {
+    let mut admin = UserAdminState::new(ConnectionId(1), None, PrivilegeScope::Postgres);
+    assert!(admin.pg_can_login, "PG 新建角色默认可登录 LOGIN");
+    admin.pg_can_login = false;
+    assert!(!admin.pg_can_login, "切换为 NOLOGIN 组角色应生效");
+}

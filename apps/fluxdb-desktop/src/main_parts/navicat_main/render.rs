@@ -748,6 +748,7 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
             role_membership_edits: admin.role_membership_edits.clone(),
             member_grant_edits: admin.member_grant_edits.clone(),
             pending_sql: admin.pending_sql.clone(),
+            pg_can_login: admin.pg_can_login,
         }),
         TabKind::Settings => TabKind::Settings,
     }

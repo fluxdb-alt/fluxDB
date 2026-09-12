@@ -2142,6 +2142,24 @@ impl AppController {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
                 }
             }
+            AppCommand::EndUserAdminCreateUser(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.creating_user = false;
+                    admin.grants.clear();
+                    admin.grants_loaded_user = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetUserAdminPgCanLogin { tab_id, can_login } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_can_login = can_login;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
             AppCommand::SelectUserAdminDetailTab { tab_id, detail_tab } => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
                     admin.active_detail_tab = detail_tab;
