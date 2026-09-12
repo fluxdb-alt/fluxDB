@@ -94,7 +94,7 @@
 | F4 | 原生脚本中途失败 | ON_ERROR_STOP 停止并提示失败；勾选「继续错误」则跳过继续 |
 | F5 | 主机无 psql/pg_dump | 启动报「启动 psql/pg_dump 失败」清晰错误，不假成功 |
 | F6 | TLS 连接（ssl_mode 非 prefer）执行原生备份/脚本 | psql/pg_dump 经 PGSSLMODE 以与连接器一致强度加密；不加密时明确报连接失败 |
-| F7 | SSH 隧道连接执行原生备份/脚本 | 待验证：当前原生子进程只按直连 host/port 生成，未建子进程隧道；需确认或补实现后标注结果 |
+| F7 | SSH 隧道连接执行原生备份/脚本 | 机制已实现并真库验证：`ssh -N -L 15432:<pg>:5432` 后 pg_dump(schema-only) 退出 0、psql 查询返回 1；备份/脚本路径均起隧道子进程并经 127.0.0.1:local 拨号（PGHOSTADDR），结束/取消 kill+wait 回收。桌面完整链路（真实 SSH 连接配置）待人工确认 |
 
 ---
 
