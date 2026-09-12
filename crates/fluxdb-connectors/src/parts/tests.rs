@@ -3190,6 +3190,53 @@ SELECT item_id, name FROM audit_log;"
         }
     }
 
+    /// 读 `FLUXDB_MYSQL_SMOKE=host:port:user:password:db`（T28 真库回归，环境门控）。
+    fn mysql_smoke_params() -> Option<(String, u16, String, String, String)> {
+        let value = std::env::var("FLUXDB_MYSQL_SMOKE").ok()?;
+        let mut parts = value.split(':');
+        let host = parts.next()?.to_string();
+        let port: u16 = parts.next()?.parse().ok()?;
+        let user = parts.next()?.to_string();
+        let password = parts.next()?.to_string();
+        let db = parts.next()?.to_string();
+        Some((host, port, user, password, db))
+    }
+
+    fn mysql_smoke_config((host, port, user, password, db): (String, u16, String, String, String)) -> ConnectionConfig {
+        let mut options = std::collections::BTreeMap::new();
+        options.insert("username".to_string(), user);
+        options.insert("password".to_string(), password);
+        options.insert("database".to_string(), db.clone());
+        ConnectionConfig {
+            id: ConnectionId(10),
+            name: "MySQL Smoke".to_string(),
+            kind: DatabaseKind::MySql,
+            endpoint: Endpoint::Tcp {
+                host: host.clone(),
+                port,
+                database: Some(db),
+            },
+            credential_ref: None,
+            options,
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+        }
+    }
+
+    /// T28 真库回归：MySQL `test_connection` 在 PG 接入后仍应成功（隔离库，环境门控）。
+    #[test]
+    fn mysql_live_smoke_test_connection_regressed_by_postgres() {
+        let Some(params) = mysql_smoke_params() else {
+            return;
+        };
+        let config = mysql_smoke_config(params);
+        let connector = MySqlConnector::with_config(config.clone());
+        connector
+            .test_connection(&config)
+            .expect("MySQL 连接在 PG 接入后应仍成功（T28 回归）");
+    }
+
     // ===== T05 传输、安全策略与生命周期（真实冒烟，环境门控）=====
 
     /// 读 `FLUXDB_PG_SMOKE_TLS=host:port:user:password:db:ca_path:server_name:hostname`、
