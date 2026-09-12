@@ -3237,6 +3237,130 @@ SELECT item_id, name FROM audit_log;"
             .expect("MySQL 连接在 PG 接入后应仍成功（T28 回归）");
     }
 
+    /// T28 MySQL 真库功能回归：连接/DDL/写/读/查询/补全/结构/导出/清理全链路。
+    /// 覆盖 PG 接入可能共享影响的分层（shared 数据读写、补全、结构、导出）。
+    #[test]
+    fn mysql_live_smoke_full_regression() {
+        let Some(params) = mysql_smoke_params() else {
+            return;
+        };
+        let (_, _, _, _, db) = params.clone();
+        let config = mysql_smoke_config(params);
+        let connector = MySqlConnector::with_config(config.clone());
+        connector.test_connection(&config).expect("test_connection");
+
+        let run = |sql: &str| {
+            let mut request = mysql_query_request(&config);
+            request.text = sql.to_string();
+            connector.execute(&request).expect("execute");
+        };
+        run("DROP TABLE IF EXISTS t28_reg");
+        run("CREATE TABLE t28_reg (id INT PRIMARY KEY, name VARCHAR(50), score INT)");
+        run("INSERT INTO t28_reg (id, name, score) VALUES (1,'alice',10),(2,'bob',20),(3,'carol',30)");
+
+        let path = ObjectPath {
+            connection_id: config.id,
+            kind: ObjectKind::Table,
+            database: Some(db.clone()),
+            schema: None,
+            name: "t28_reg".to_string(),
+        };
+
+        // 读（load_data）
+        let page = connector
+            .load_data(&path, 0, 100, &[], &[])
+            .expect("load_data");
+        assert_eq!(page.rows.len(), 3, "应读到 3 行");
+
+        // 查询（execute SELECT 返回结果集）
+        let mut q = mysql_query_request(&config);
+        q.text = "SELECT count(*) AS c FROM t28_reg".to_string();
+        let result = connector.execute(&q).expect("execute select");
+        assert!(
+            result.results.first().is_some_and(|p| !p.rows.is_empty()),
+            "查询应返回结果集"
+        );
+
+        // 写（apply_changes：更新）
+        let change = DataChangeSet {
+            object: path.clone(),
+            inserts: Vec::new(),
+            updates: vec![RowUpdate {
+                identity: RowIdentity {
+                    values: std::collections::BTreeMap::from([(
+                        "id".to_string(),
+                        CellValue::I64(1),
+                    )]),
+                },
+                cells: vec![CellUpdate {
+                    column: "score".to_string(),
+                    value: CellValue::I64(99),
+                }],
+            }],
+            deletes: Vec::new(),
+            insert_intents: None,
+        };
+        connector.apply_changes(&change).expect("apply_changes 更新");
+        let mut check = mysql_query_request(&config);
+        check.text = "SELECT score FROM t28_reg WHERE id = 1".to_string();
+        let checked = connector.execute(&check).expect("execute check");
+        let updated = checked
+            .results
+            .first()
+            .and_then(|p| p.rows.first())
+            .and_then(|row| row.values.first())
+            .map(CellValue::display_label)
+            .unwrap_or_default();
+        assert_eq!(updated, "99", "更新后 id=1 的 score 应为 99，实际 {updated:?}");
+
+        // 补全（表/列）
+        let tables = connector
+            .list_completion_tables(Some(&db), None, "t28_reg", 50)
+            .expect("completion tables");
+        assert!(
+            tables.iter().any(|t| t.name == "t28_reg"),
+            "补全应含 t28_reg：{tables:?}"
+        );
+        let columns = connector
+            .list_completion_columns(Some(&db), None, "t28_reg")
+            .expect("completion columns");
+        assert!(
+            columns.iter().any(|c| c.name == "score"),
+            "列补全应含 score"
+        );
+
+        // 结构（索引 + DDL）
+        let indexes = connector.list_indexes(&path).expect("list_indexes");
+        assert!(
+            indexes.iter().any(|i| i.name.contains("PRIMARY") || i.is_primary),
+            "结构应含主键索引：{indexes:?}"
+        );
+        let ddl = connector.table_ddl(&path).expect("table_ddl");
+        assert!(ddl.contains("t28_reg"), "DDL 应含表名：{ddl}");
+
+        // 导出（计数预览）
+        let preview = connector
+            .preview_data_export(&path, &["id".to_string(), "name".to_string()], &[], &[])
+            .expect("preview_data_export");
+        assert_eq!(preview.row_count, 3, "导出计数应为 3");
+
+        // 清理
+        run("DROP TABLE IF EXISTS t28_reg");
+    }
+
+    /// 构造 MySQL QueryRequest（复用 smoke config 的连接与库）。
+    fn mysql_query_request(config: &ConnectionConfig) -> QueryRequest {
+        QueryRequest {
+            connection_id: config.id,
+            database: config.options.get("database").cloned(),
+            session_id: None,
+            schema: None,
+            text: String::new(),
+            mode: QueryMode::All,
+            options: QueryExecutionOptions::default(),
+        }
+    }
+
     // ===== T05 传输、安全策略与生命周期（真实冒烟，环境门控）=====
 
     /// 读 `FLUXDB_PG_SMOKE_TLS=host:port:user:password:db:ca_path:server_name:hostname`、
