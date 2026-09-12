@@ -505,6 +505,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             ..AppState::default()
         };
         state.query_history.push(fluxdb_app::QueryHistoryEntry {
+            session_id: None,
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
             schema: None,

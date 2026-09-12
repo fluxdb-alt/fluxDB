@@ -154,7 +154,7 @@ async fn pg_apply_inserts(
         }
         let returning = primary_keys
             .iter()
-            .map(|(name, _)| pg_quote_identifier(name))
+            .map(|(name, _)| format!("{}::text", pg_quote_identifier(name)))
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!("{sql} RETURNING {returning}");
@@ -197,7 +197,9 @@ async fn pg_apply_updates(
         }
         validate_identity(&update.identity, columns)?;
 
-        let (sql, params) = pg_update_sql(table, &update.cells, &update.identity, columns)?;
+        let location = pg_lock_original_row(client, table, &update.identity, columns).await?;
+        let (mut sql, mut params) = pg_update_sql(table, &update.cells, &update.identity, columns)?;
+        pg_append_row_location(&mut sql, &mut params, location);
         // 行数检查：期望恰好 1 行。0 行=目标消失/并发冲突，>1=身份不唯一；均回滚。
         let affected = client
             .execute(&sql, &pg_params_refs(&params))
@@ -218,8 +220,10 @@ async fn pg_apply_deletes(
 ) -> fluxdb_core::Result<()> {
     for identity in &changes.deletes {
         validate_identity(identity, columns)?;
-        let (where_sql, params) = pg_identity_params(identity, columns)?;
-        let sql = format!("DELETE FROM {table}{where_sql}");
+        let location = pg_lock_original_row(client, table, identity, columns).await?;
+        let (where_sql, mut params) = pg_identity_params(identity, columns)?;
+        let mut sql = format!("DELETE FROM {table}{where_sql}");
+        pg_append_row_location(&mut sql, &mut params, location);
         // 行数检查：期望恰好 1 行，0/>1 均视为并发冲突或身份不唯一，整体回滚。
         let affected = client
             .execute(&sql, &pg_params_refs(&params))
@@ -314,11 +318,28 @@ fn pg_identity_where(
         if matches!(value, CellValue::Null) {
             clauses.push(format!("{quoted} IS NULL"));
         } else {
-            clauses.push(format!("{quoted} = {}", pg_bind_sql(params, col, value)));
+            let bound = pg_bind_sql(params, col, value);
+            // json 等没有相等运算符的类型按服务器文本比较，原始投影也来自服务器。
+            clauses.push(format!("{quoted}::text IS NOT DISTINCT FROM ({bound})::text"));
         }
     }
     if clauses.is_empty() {
         return Err(Error::new(ErrorKind::Query, "缺少行身份条件，已取消提交"));
     }
     Ok(format!(" WHERE {}", clauses.join(" AND ")))
+}
+
+/// 锁定并确认唯一候选后才执行写入；物理位置仅用于本事务，不进入历史或跨页身份。
+async fn pg_lock_original_row(client: &tokio_postgres::Client, table: &str, identity: &RowIdentity, columns: &[Column]) -> fluxdb_core::Result<(u32, String)> {
+    let mut params = Vec::new();
+    let where_sql = pg_identity_where(&mut params, identity, columns)?;
+    let rows = client.query(&format!("SELECT tableoid, ctid::text FROM {table}{where_sql} LIMIT 2 FOR UPDATE"), &pg_params_refs(&params)).await.map_err(pg_error)?;
+    if rows.len() != 1 { return Err(update_conflict_error(rows.len() as u64)); }
+    Ok((rows[0].get(0), rows[0].get(1)))
+}
+
+fn pg_append_row_location(sql: &mut String, params: &mut Vec<Box<dyn ToSql + Sync>>, location: (u32, String)) {
+    params.push(Box::new(location.0)); let oid = params.len();
+    params.push(Box::new(location.1)); let tid = params.len();
+    sql.push_str(&format!(" AND tableoid = ${oid}::oid AND ctid = CAST(${tid}::text AS tid)"));
 }

@@ -107,17 +107,8 @@ fn pg_select_list_and_positions(columns: &[Column]) -> (String, Vec<(Vec<usize>,
 /// numeric/decimal/money 走文本保精度（tokio-postgres 无本地 decimal 解码），interval/xml 及
 /// 数组/未知类型同样以服务端文本为唯一保真路径（数组须在剥 `[]` 前判定）。
 fn pg_server_text_type(type_name: &Option<String>) -> bool {
-    type_name
-        .as_deref()
-        .map(|t| {
-            t.contains('[')
-                || t.starts_with('_')
-                || matches!(
-                    pg_type_base(t),
-                    "numeric" | "decimal" | "money" | "interval" | "xml" | "json" | "jsonb"
-                )
-        })
-        .unwrap_or(false)
+    // 除 bytea 的摘要专用投影外，统一服务端文本输出；覆盖 domain/enum/网络/时间/扩展类型。
+    type_name.as_deref() != Some("bytea")
 }
 
 /// 把查询行按投影位置回填为 DataPage；`positions` 描述了每个真实列（下标 → SELECT 投影下标）。

@@ -24,6 +24,7 @@ fn query_history_record_to_entry(record: QueryHistoryRecord) -> QueryHistoryEntr
     let success = record.success;
     let text = record.text;
     QueryHistoryEntry {
+        session_id: None,
         connection_id: record.connection_id,
         database: record.database,
         schema: record.schema,

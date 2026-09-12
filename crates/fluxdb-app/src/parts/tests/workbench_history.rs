@@ -41,6 +41,7 @@ fn seed_history(controller: &mut AppController) -> Vec<WorkbenchHistoryScope> {
     controller.record_redis_workbench_history_execution(&redis_execution(2, 0, "GET c", 0));
     // SQL 历史：应完全独立于 Redis scope（直接构造条目标注为 SQL 查询）。
     controller.state.query_history.push(QueryHistoryEntry {
+        session_id: None,
         connection_id: ConnectionId(1),
         database: Some("main".to_string()),
         schema: None,

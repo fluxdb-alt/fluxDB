@@ -585,6 +585,8 @@ impl Render for NavicatMain {
                     &self.new_connection_form,
                     &self.new_connection_inputs,
                     self.editing_connection_id.is_some(),
+                    self._test_connection_task.is_some(),
+                    self.saving_connection,
                     colors,
                     window,
                     cx,

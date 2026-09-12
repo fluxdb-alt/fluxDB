@@ -110,6 +110,7 @@ impl AppController {
                     connection.config = config.clone();
                     // 配置已变更：旧会话按旧档案建立，一律释放（含仅改密码/TLS 的情况）。
                     fluxdb_connectors::pg_close_connection_sessions(config.id);
+                    settle_closed_query_history(&mut self.state.query_history, config.id, None);
                     if endpoint_changed {
                         connection.connected = false;
                         connection.expanded = false;
@@ -295,6 +296,7 @@ impl AppController {
                 // 断开即释放该连接的全部 PG 会话：连接驱动、SSH 桥线程随会话 drop 收敛，
                 // 不再挂到空闲 TTL（设计 §3.3）。
                 fluxdb_connectors::pg_close_connection_sessions(connection_id);
+                settle_closed_query_history(&mut self.state.query_history, connection_id, None);
                 self.state
                     .tabs
                     .retain(|tab| !tab_belongs_to_connection(tab, connection_id));
@@ -354,6 +356,7 @@ impl AppController {
             }
             AppCommand::DeleteConnection(connection_id) => {
                 fluxdb_connectors::pg_close_connection_sessions(connection_id);
+                settle_closed_query_history(&mut self.state.query_history, connection_id, None);
                 let original_len = self.state.connections.len();
                 self.state
                     .connections
@@ -2768,7 +2771,7 @@ impl AppController {
     ///
     /// 标签的查询会话 id 就是 `tab_id`（见各 `QueryRequest` 构造点）；标签关闭后连接由
     /// 服务端回收，未提交事务随之回滚——不这样做，连接会一直挂到空闲 TTL 才消失。
-    fn release_tab_query_sessions(&self, tab_ids: &[TabId]) {
+    fn release_tab_query_sessions(&mut self, tab_ids: &[TabId]) {
         for tab in &self.state.tabs {
             if !tab_ids.contains(&tab.id) {
                 continue;
@@ -2778,6 +2781,7 @@ impl AppController {
                     editor.connection_id,
                     fluxdb_core::QuerySessionId(tab.id.0),
                 );
+                settle_closed_query_history(&mut self.state.query_history, editor.connection_id, Some(fluxdb_core::QuerySessionId(tab.id.0)));
             }
         }
     }

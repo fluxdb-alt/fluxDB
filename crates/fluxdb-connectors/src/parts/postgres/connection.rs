@@ -7,13 +7,6 @@
 // - 显式查询会话（带 `session_id`）复用同一连接，会话内事务/状态跨查询保持；
 //   无 `session_id` 的请求走隔离短连接（每请求新建、用后即弃），保证互不串事务。
 
-/// 会话空闲淘汰兜底 TTL：档案未配 `idle_ttl_secs` 时使用。
-///
-/// 取 30 分钟而非早期的 60 秒：查询会话可能持有用户显式事务/临时表/SET，秒级淘汰会
-/// 在用户毫无察觉时回滚未提交事务（设计 §8.3 禁止偷偷回滚）。正常回收靠显式关闭
-/// （关标签/断开/改配置/删连接，见 `pg_close_sessions_where`），TTL 只兜底异常路径。
-const PG_SESSION_IDLE_TTL: Duration = Duration::from_secs(1800);
-
 /// 会话用途：决定复用策略与事务隔离语义。
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum PgSessionPurpose {
@@ -47,12 +40,13 @@ struct PgSession {
     client: std::sync::Arc<tokio_postgres::Client>,
     /// SSH 隧道句柄（直连 / 代理路径为 None）。持有即保活。
     _tunnel: Option<std::sync::Arc<SshTunnel>>,
-    /// 最近使用时刻。命中缓存时回写——否则一条持续在用的会话会在创建满 TTL 后被
-    /// 空闲淘汰，把用户未提交的事务悄悄回滚。
-    last_used: std::sync::Arc<Mutex<std::time::Instant>>,
-    /// 当前会话已生效的 schema 作用域（建连时 `SET search_path` 的结果）。
-    /// 会话被复用而请求 schema 变了时据此补发 SET，既不丢事务也能切作用域。
+    /// 执行锁覆盖整个批次与取消收尾，不能在同一连接上交错事务。
+    execution: std::sync::Arc<tokio::sync::Mutex<()>>,
+    driver: std::sync::Arc<PgDriver>,
     applied_schema: std::sync::Arc<Mutex<Option<String>>>,
+    /// 短连接持有额度至请求结束；查询标签会话不占元数据额度。
+    _permit: Option<std::sync::Arc<tokio::sync::OwnedSemaphorePermit>>,
+
 }
 
 /// 共享 runtime：全进程唯一，避免每个请求重建。
@@ -71,42 +65,11 @@ fn pg_sessions() -> &'static Mutex<HashMap<PgSessionKey, PgSession>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// 惰性淘汰空闲会话：取用前顺手清理躺太久的连接，避免只进不出。
-///
-/// 仅兜底异常路径（进程长期运行、UI 未走关闭链路）；正常回收走显式关闭。
-fn pg_sweep_idle(now: std::time::Instant, ttl: Duration) {
-    let Ok(mut sessions) = pg_sessions().lock() else {
-        return;
-    };
-    let Some(deadline) = now.checked_sub(ttl) else {
-        return;
-    };
-    let idle_before = sessions.len();
-    sessions.retain(|_, session| {
-        session
-            .last_used
-            .lock()
-            .map(|last_used| *last_used >= deadline)
-            .unwrap_or(false)
-    });
-    if sessions.len() != idle_before {
-        tracing::debug!(
-            target: "fluxdb_connectors",
-            evicted = (idle_before - sessions.len()),
-            "PostgreSQL 空闲会话已淘汰"
-        );
-    }
-}
+/// 查询标签拥有事务、临时表和 SET 状态，只能显式关闭，不能作为普通 TTL 缓存淘汰。
+struct PgDriver(tokio::task::JoinHandle<()>);
 
-/// 会话空闲 TTL：档案显式配了 `idle_ttl_secs` 就用它，否则用兜底常量。
-fn pg_session_idle_ttl(config: &ConnectionConfig) -> Duration {
-    config
-        .postgres_profile
-        .as_ref()
-        .map(|profile| profile.advanced.idle_ttl_secs)
-        .filter(|secs| *secs > 0)
-        .map(|secs| Duration::from_secs(u64::from(secs)))
-        .unwrap_or(PG_SESSION_IDLE_TTL)
+impl Drop for PgDriver {
+    fn drop(&mut self) { self.0.abort(); }
 }
 
 /// 按谓词关闭并移除会话：`Client` 与 SSH 隧道随之 drop，连接 future 与桥线程收敛。
@@ -116,7 +79,12 @@ fn pg_close_sessions_where(predicate: impl Fn(&PgSessionKey) -> bool) -> usize {
         return 0;
     };
     let before = sessions.len();
-    sessions.retain(|key, _| !predicate(key));
+    sessions.retain(|key, session| {
+        if predicate(key) {
+            session.driver.0.abort();
+            false
+        } else { true }
+    });
     before - sessions.len()
 }
 
@@ -188,6 +156,12 @@ fn pg_config(
     let mut pg = tokio_postgres::Config::new();
     pg.host(&host);
     pg.port(port);
+    pg.ssl_mode(match (profile.tls.enabled, profile.tls.ssl_mode) {
+        (false, _) | (_, fluxdb_core::PostgresSslMode::Disabled) => tokio_postgres::config::SslMode::Disable,
+        (_, fluxdb_core::PostgresSslMode::Prefer) => tokio_postgres::config::SslMode::Prefer,
+        _ => tokio_postgres::config::SslMode::Require,
+    });
+    pg.keepalives(profile.advanced.tcp_keepalive);
     pg.user(&profile.basic.username);
     if let Some(password) = profile.password() {
         pg.password(password);
@@ -231,27 +205,40 @@ fn pg_request_database(config: &ConnectionConfig, request_database: Option<&str>
 /// TLS 身份仍取真实主机）/ 代理（拨代理拿裸流后 `connect_raw`）。TLS 由 `pg_tls_connect` 决定。
 /// 整体（传输握手 + TLS 握手 + 启动）统一受 `connect_timeout` 约束。
 async fn pg_connect(config: &ConnectionConfig, database: &str) -> fluxdb_core::Result<PgSession> {
-    let profile = config
-        .postgres_profile
-        .as_ref()
+    pg_connect_session(config, database, true).await
+}
+
+async fn pg_connect_session(config: &ConnectionConfig, database: &str, limited: bool) -> fluxdb_core::Result<PgSession> {
+    static METADATA_SLOTS: OnceLock<std::sync::Arc<tokio::sync::Semaphore>> = OnceLock::new();
+    let permit = if limited {
+        Some(std::sync::Arc::new(METADATA_SLOTS.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)))
+            .clone().acquire_owned().await.map_err(|_| Error::new(ErrorKind::Connection, "元数据服务已关闭"))?))
+    } else { None };
+    let profile = config.postgres_profile.as_ref()
         .ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 连接档案缺失"))?;
     let pg = pg_config(config, database)?;
     // 建连先落档案默认 schema（空则保留服务器 search_path）；请求级 schema 由会话层按需补 SET。
     let wanted_schema = profile.scope.default_schema.clone();
     let connect_timeout = profile.connect_timeout();
 
-    let (client, tunnel) = tokio::time::timeout(connect_timeout, pg_connect_transport(profile, pg))
+    let (client, tunnel, driver) = tokio::time::timeout(connect_timeout, pg_connect_transport(profile, pg))
         .await
         .map_err(|_| {
             Error::new(ErrorKind::Timeout, "PostgreSQL 建连超时（含传输与 TLS 握手）")
         })??;
 
     let applied_schema = pg_apply_search_path(&client, &wanted_schema).await?;
+    if !profile.advanced.timezone.trim().is_empty() {
+        client.query_one("SELECT set_config('TimeZone', $1, false)", &[&profile.advanced.timezone])
+            .await.map_err(pg_error)?;
+    }
 
     Ok(PgSession {
         client: std::sync::Arc::new(client),
         _tunnel: tunnel.map(std::sync::Arc::new),
-        last_used: std::sync::Arc::new(Mutex::new(std::time::Instant::now())),
+        execution: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        driver,
+        _permit: permit,
         applied_schema: std::sync::Arc::new(Mutex::new(applied_schema)),
     })
 }
@@ -282,96 +269,64 @@ async fn pg_apply_search_path(
     Ok(Some(schema.to_string()))
 }
 
-/// 按传输层建连并 spawn 连接 future，返回 `Client` 与隧道句柄。
-async fn pg_connect_transport(
+/// 拨号和取消共用裸传输，TLS 名称与实际 TCP 地址独立。
+async fn pg_transport_stream(
     profile: &fluxdb_core::PostgresConnectionProfile,
-    mut pg: tokio_postgres::Config,
-) -> fluxdb_core::Result<(tokio_postgres::Client, Option<SshTunnel>)> {
-    let tls = pg_tls_connect(profile)?;
-    let connect_timeout = profile.connect_timeout();
-
+    tunnel: Option<&SshTunnel>,
+) -> fluxdb_core::Result<tokio::net::TcpStream> {
+    let (host, port) = profile.dial_endpoint();
+    if let Some(tunnel) = tunnel {
+        return tokio::net::TcpStream::connect(("127.0.0.1", tunnel.local_port)).await
+            .map_err(|e| Error::new(ErrorKind::Connection, e.to_string()));
+    }
     match profile.transport_layer() {
-        // SSH：先建带 hostkey 校验的隧道，再向 `127.0.0.1:<local_port>` 拨号；
-        // 保持 `host` 为真实主机，TLS 校验仍针对真实远端（hostaddr 分离，R33）。
-        fluxdb_core::PostgresTransportLayer::Ssh(ssh) => {
-            let auth = pg_ssh_auth(&ssh);
-            let (host, port) = profile.dial_endpoint();
-            let options = SshTunnelOptions {
-                connect_timeout_secs: if ssh.connect_timeout_secs > 0 {
-                    ssh.connect_timeout_secs
-                } else {
-                    profile.connect_timeout_secs()
-                },
-                keepalive_interval_secs: ssh.keepalive_interval_secs,
-                verify_host_key: true, // PG 传输路径强制校验已知主机（错误 hostkey 直接拒绝）。
-            };
-            let tunnel = open_tunnel_with((ssh.host.as_str(), ssh.port), &auth, (&host, port), options)?;
-            pg.hostaddr(std::net::IpAddr::from(std::net::Ipv4Addr::LOCALHOST));
-            pg.port(tunnel.local_port);
-            let client = match tls {
-                Some(t) => pg_connect_spawn(&pg, t).await?,
-                None => pg_connect_spawn(&pg, tokio_postgres::NoTls).await?,
-            };
-            Ok((client, Some(tunnel)))
-        }
-        // 代理：拨代理（SOCKS5 / HTTP CONNECT）拿裸流，再 `connect_raw`；TLS 校验主机名取 profile。
-        fluxdb_core::PostgresTransportLayer::Proxy(proxy) => {
-            let (host, port) = profile.dial_endpoint();
-            let stream = pg_proxy_connect(&proxy, (&host, port), connect_timeout).await?;
-            let client = match tls {
-                Some(mut t) => {
-                    let server_name = pg_server_name(profile);
-                    let ready = tokio_postgres::tls::MakeTlsConnect::<tokio::net::TcpStream>::make_tls_connect(&mut t, server_name)
-                        .map_err(|e| {
-                            Error::new(ErrorKind::Connection, format!("TLS 连接器构建失败: {e}"))
-                        })?;
-                    pg_connect_raw_spawn(&pg, stream, ready).await?
-                }
-                None => pg_connect_raw_spawn(&pg, stream, tokio_postgres::NoTls).await?,
-            };
-            Ok((client, None))
-        }
-        // 直连：`connect` 走 host/hostaddr，TLS 身份即配置主机。
-        fluxdb_core::PostgresTransportLayer::Direct => {
-            let client = match tls {
-                Some(t) => pg_connect_spawn(&pg, t).await?,
-                None => pg_connect_spawn(&pg, tokio_postgres::NoTls).await?,
-            };
-            Ok((client, None))
-        }
+        fluxdb_core::PostgresTransportLayer::Proxy(proxy) => pg_proxy_connect(&proxy, (&host, port), profile.connect_timeout()).await,
+        _ => tokio::net::TcpStream::connect((host.as_str(), port)).await
+            .map_err(|e| Error::new(ErrorKind::Connection, e.to_string())),
     }
 }
 
-/// `connect` 建连并 spawn 连接 future，返回 `Client`。
-/// `C::Stream` 需为 `Send` 才能被 tokio runtime 的独立任务驱动。
-async fn pg_connect_spawn<C>(
-    pg: &tokio_postgres::Config,
-    tls: C,
-) -> fluxdb_core::Result<tokio_postgres::Client>
-where
-    C: tokio_postgres::tls::MakeTlsConnect<tokio_postgres::Socket>,
-    C::Stream: Send + 'static,
-{
-    let (client, connection) = pg.connect(tls).await.map_err(pg_error)?;
-    pg_runtime().spawn(connection);
-    Ok(client)
+async fn pg_connect_transport(
+    profile: &fluxdb_core::PostgresConnectionProfile,
+    pg: tokio_postgres::Config,
+) -> fluxdb_core::Result<(tokio_postgres::Client, Option<SshTunnel>, std::sync::Arc<PgDriver>)> {
+    let tunnel = if let fluxdb_core::PostgresTransportLayer::Ssh(ssh) = profile.transport_layer() {
+        let auth = pg_ssh_auth(&ssh);
+        let (host, port) = profile.dial_endpoint();
+        let options = SshTunnelOptions {
+            connect_timeout_secs: if ssh.connect_timeout_secs > 0 { ssh.connect_timeout_secs } else { profile.connect_timeout_secs() },
+            keepalive_interval_secs: ssh.keepalive_interval_secs,
+            verify_host_key: true,
+        };
+        Some(tokio::task::spawn_blocking(move || open_tunnel_with((ssh.host.as_str(), ssh.port), &auth, (&host, port), options))
+            .await.map_err(|e| Error::new(ErrorKind::Connection, format!("SSH 任务失败: {e}")))??)
+    } else { None };
+    let stream = pg_transport_stream(profile, tunnel.as_ref()).await?;
+    let (client, driver) = match pg_tls_connect(profile)? {
+        Some(mut tls) => {
+            let ready = tokio_postgres::tls::MakeTlsConnect::<tokio::net::TcpStream>::make_tls_connect(&mut tls, pg_server_name(profile))
+                .map_err(|e| Error::new(ErrorKind::Connection, format!("TLS 配置失败: {e}")))?;
+            pg_connect_raw_spawn(&pg, stream, ready).await?
+        }
+        None => pg_connect_raw_spawn(&pg, stream, tokio_postgres::NoTls).await?,
+    };
+    Ok((client, tunnel, driver))
 }
 
-/// `connect_raw`（代理裸流）建连并 spawn 连接 future，返回 `Client`。
-/// 连接 future 需 `Send` 才能 spawn 到共享 runtime，故要求流与 TLS 结果流均 `Send + 'static`。
 async fn pg_connect_raw_spawn<C, S>(
-    pg: &tokio_postgres::Config,
-    stream: S,
-    tls: C,
-) -> fluxdb_core::Result<tokio_postgres::Client>
+    pg: &tokio_postgres::Config, stream: S, tls: C,
+) -> fluxdb_core::Result<(tokio_postgres::Client, std::sync::Arc<PgDriver>)>
 where
-    C: tokio_postgres::tls::TlsConnect<S>,
-    C::Stream: Send + 'static,
+    C: tokio_postgres::tls::TlsConnect<S>, C::Stream: Send + 'static,
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let (client, connection) = pg.connect_raw(stream, tls).await.map_err(pg_error)?;
-    pg_runtime().spawn(connection);
-    Ok(client)
+    let driver = pg_runtime().spawn(async move {
+        if let Err(error) = connection.await {
+            tracing::warn!(target: "fluxdb_connectors", error = %error, "PostgreSQL 会话驱动退出");
+        }
+    });
+    Ok((client, std::sync::Arc::new(PgDriver(driver))))
 }
 
 /// 由 SSH options 组装认证参数：密码或私钥任一存在即用，空字段自动忽略。
@@ -417,47 +372,31 @@ async fn pg_session_acquire(
     database: &str,
 ) -> fluxdb_core::Result<PgSession> {
     let mut key = pg_session_key_for(request, database);
-    // 作用域 schema：建连时优先带它（首次拨号即落在正确 search_path）。
-    let schema = request
-        .schema
-        .clone()
-        .map(|schema| schema.trim().to_string())
-        .filter(|schema| !schema.is_empty());
-
     if matches!(key.purpose, PgSessionPurpose::Transient) {
-        // 隔离执行：新拨一条，不进入注册表，天然互不串事务。
-        let session = pg_connect(config, database).await?;
-        pg_ensure_search_path(&session, schema.as_deref()).await?;
-        return Ok(session);
+        return pg_connect(config, database).await;
     }
 
     key.config_generation = pg_config_generation(config);
-
-    // 惰性清除全局空闲会话（只兜底异常路径）。
-    let now = std::time::Instant::now();
-    pg_sweep_idle(now, pg_session_idle_ttl(config));
 
     let existing = {
         let sessions = pg_sessions().lock().map_err(pg_lock_error)?;
         sessions.get(&key).cloned()
     };
     if let Some(session) = existing {
-        // 命中即回写活跃时间，避免在用的会话被空闲淘汰回滚未提交事务。
-        if let Ok(mut last_used) = session.last_used.lock() {
-            *last_used = now;
-        }
-        pg_ensure_search_path(&session, schema.as_deref()).await?;
         return Ok(session);
     }
 
     // 未命中：在锁外拨号，避免持 std Mutex 跨 await；随后回填。
-    let session = pg_connect(config, database).await?;
-    pg_ensure_search_path(&session, schema.as_deref()).await?;
+    let session = pg_connect_session(config, database, false).await?;
     let mut sessions = pg_sessions().lock().map_err(pg_lock_error)?;
     match sessions.get(&key) {
         // 并发竞态：期间他人已插入可用会话，优先复用他人。
         Some(existing) => Ok(existing.clone()),
         None => {
+            // 显式会话有硬上限，避免长期打开标签造成无限连接增长；不偷偷淘汰已有事务。
+            if sessions.len() >= 128 {
+                return Err(Error::new(ErrorKind::Connection, "PostgreSQL 查询会话已达上限，请关闭不使用的查询标签"));
+            }
             sessions.insert(key, session.clone());
             Ok(session)
         }
@@ -498,16 +437,6 @@ fn pg_lock_error(
     Error::new(ErrorKind::Internal, "PostgreSQL 会话注册表锁失效")
 }
 
-/// 该错误是否使当前会话进入 aborted 事务态（`25P02 in_failed_sql_transaction`）。
-/// 显式事务内任意语句失败后，后续语句在 ROLLBACK 前都不可执行；用于停止 continue_on_error。
-fn pg_error_aborts_transaction(error: &tokio_postgres::Error) -> bool {
-    use tokio_postgres::error::SqlState;
-    matches!(
-        error.code(),
-        Some(&SqlState::IN_FAILED_SQL_TRANSACTION)
-    )
-}
-
 /// 把 tokio-postgres 错误统一映射为 fluxdb 错误（认证 / 连接 / 查询分类）。
 fn pg_error(error: tokio_postgres::Error) -> Error {
     use tokio_postgres::error::SqlState;
@@ -527,7 +456,7 @@ fn pg_error(error: tokio_postgres::Error) -> Error {
             return Error::new(ErrorKind::Authentication, error.to_string());
         }
         // 连接层（08/09/0A/0B …）视为连接失败，其余为查询失败。
-        let class_is_connection = code_str.starts_with('8') || code_str.starts_with("0A0");
+        let class_is_connection = code_str.starts_with("08");
         return Error::new(
             if class_is_connection {
                 ErrorKind::Connection

@@ -84,6 +84,12 @@ pub(crate) fn pg_projected_cell_value(
     index: usize,
     column: &Column,
 ) -> CellValue {
+    if let Ok(value) = row.try_get::<_, Option<String>>(index) {
+        return pg_text_value(value.as_deref(), column).unwrap_or_else(|error| {
+            tracing::error!(target: "fluxdb_connectors", column = %column.name, "PostgreSQL 值转换失败");
+            CellValue::Text(format!("[{}]", error.message))
+        });
+    }
     let type_name = column.type_name.as_deref().unwrap_or("");
     // 数组/未知类型：按文本投影（数据读 SQL 已 ::text）。须在剥 `[]` 之前判断。
     if type_name.contains('[') || type_name.starts_with('_') {
@@ -158,7 +164,10 @@ pub(crate) fn pg_projected_cell_value(
 fn text_cell(row: &tokio_postgres::Row, index: usize) -> CellValue {
     row.try_get::<_, Option<String>>(index)
         .map(|v| v.map(CellValue::Text).unwrap_or(CellValue::Null))
-        .unwrap_or(CellValue::Null)
+        .unwrap_or_else(|_| {
+            tracing::error!(target: "fluxdb_connectors", index, "PostgreSQL 未支持的二进制解码，禁止伪装 NULL");
+            CellValue::Text("[无法解码，请刷新后重试]".to_string())
+        })
 }
 
 fn int_cell(row: &tokio_postgres::Row, index: usize) -> CellValue {
@@ -192,4 +201,48 @@ where
         },
         None => CellValue::Null,
     }
+}
+
+/// 文本协议与显式 ::text 投影共用转换；精确小数、时间、数组等保留服务器原文。
+fn pg_text_value(value: Option<&str>, column: &Column) -> fluxdb_core::Result<CellValue> {
+    let Some(value) = value else { return Ok(CellValue::Null); };
+    let type_name = column.type_name.as_deref().unwrap_or("");
+    let invalid = || Error::new(ErrorKind::Query, format!("列 {} 的 {} 值无法解码", column.name, type_name));
+    if type_name.starts_with('_') || type_name.contains('[') {
+        return Ok(CellValue::Text(value.to_string()));
+    }
+    Ok(match pg_type_base(type_name) {
+        "int2" | "int4" | "int8" | "smallint" | "integer" | "bigint" | "serial" | "bigserial" | "smallserial" => CellValue::I64(value.parse().map_err(|_| invalid())?),
+        "bool" | "boolean" => CellValue::Bool(match value { "t" | "true" => true, "f" | "false" => false, _ => return Err(invalid()) }),
+        "float4" | "float8" | "real" | "double precision" => {
+            let number: f64 = value.parse().map_err(|_| invalid())?;
+            if number.is_finite() { CellValue::F64(number) } else { CellValue::Text(value.to_string()) }
+        }
+        "json" | "jsonb" => CellValue::Json(value.to_string()),
+        "bytea" => CellValue::Bytes(pg_decode_bytea(value).ok_or_else(invalid)?),
+        _ => CellValue::Text(value.to_string()),
+    })
+}
+
+fn pg_decode_bytea(value: &str) -> Option<Vec<u8>> {
+    if let Some(hex) = value.strip_prefix("\\x") {
+        if hex.len() % 2 != 0 { return None; }
+        return hex.as_bytes().chunks_exact(2).map(|pair| {
+            let hi = (pair[0] as char).to_digit(16)?;
+            let lo = (pair[1] as char).to_digit(16)?;
+            Some((hi * 16 + lo) as u8)
+        }).collect();
+    }
+    // bytea_output=escape：支持双反斜杠与三位八进制，不把客户端设置当固定常量。
+    let bytes = value.as_bytes(); let mut out = Vec::new(); let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' { out.push(bytes[i]); i += 1; }
+        else if bytes.get(i+1) == Some(&b'\\') { out.push(b'\\'); i += 2; }
+        else {
+            let digits = bytes.get(i+1..i+4)?;
+            if !(b'0'..=b'3').contains(&digits[0]) || !digits[1..].iter().all(|d| (b'0'..=b'7').contains(d)) { return None; }
+            out.push((digits[0]-b'0') * 64 + (digits[1]-b'0') * 8 + (digits[2]-b'0')); i += 4;
+        }
+    }
+    Some(out)
 }

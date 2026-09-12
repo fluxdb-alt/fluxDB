@@ -17,7 +17,7 @@ use rustls::DigitallySignedStruct;
 fn pg_tls_connect(
     profile: &fluxdb_core::PostgresConnectionProfile,
 ) -> fluxdb_core::Result<Option<tokio_postgres_rustls::MakeRustlsConnect>> {
-    if !profile.tls.enabled {
+    if !profile.tls.enabled || profile.tls.ssl_mode == fluxdb_core::PostgresSslMode::Disabled {
         return Ok(None);
     }
     let client_config = pg_tls_client_config(profile)?;
@@ -51,7 +51,7 @@ fn pg_tls_client_config(
 
     // require：仅加密不做任何证书校验。
     let accepts_invalid_certs =
-        matches!(profile.tls.ssl_mode, fluxdb_core::PostgresSslMode::Require);
+        matches!(profile.tls.ssl_mode, fluxdb_core::PostgresSslMode::Require | fluxdb_core::PostgresSslMode::Prefer);
 
     if accepts_invalid_certs {
         let builder = rustls::ClientConfig::builder()

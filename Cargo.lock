@@ -2098,6 +2098,7 @@ dependencies = [
  "base64",
  "chrono",
  "fluxdb-core",
+ "futures-util",
  "rustls",
  "rustls-pemfile",
  "rustls-pki-types",

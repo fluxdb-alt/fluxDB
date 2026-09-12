@@ -9,6 +9,7 @@ sqlx = { version = "0.8.6", default-features = false, features = ["bigdecimal", 
 ssh2 = "0.9"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "time", "macros", "sync"] }
 tokio-postgres = { version = "0.7.18", default-features = false, features = ["runtime", "with-uuid-1", "with-time-0_3", "with-chrono-0_4"] }
+futures-util = "0.3"
 tokio-postgres-rustls = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2"

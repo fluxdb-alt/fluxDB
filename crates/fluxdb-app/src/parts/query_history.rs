@@ -5,11 +5,16 @@ impl AppController {
         execution: &QueryExecutionResult,
     ) {
         let executed_at_unix_secs = current_unix_secs();
-        // 一次执行内的多条语句共用同一连接，显式事务因此在批次内有效（§8.4/R11）：
-        // COMMIT 前的写入先标「未提交」，COMMIT 后转「已提交」，ROLLBACK 转「已回滚」；
-        // 批次结束时事务仍未提交（连接释放即被服务端回滚）也按「已回滚」标注，不谎报已提交。
-        let mut transaction_open = false;
-        let mut recorded_in_run = Vec::new();
+        let persistent = request.session_id.is_some() && self.connection_config(request.connection_id)
+            .is_some_and(|config| config.kind == DatabaseKind::Postgres);
+        let mut recorded_in_run: Vec<usize> = if persistent {
+            self.state.query_history.iter().enumerate().filter(|(_, entry)|
+                entry.connection_id == request.connection_id && entry.session_id == request.session_id
+                && entry.transaction_state == QueryHistoryTransactionState::Uncommitted)
+                .map(|(index, _)| index).collect()
+        } else { Vec::new() };
+        let mut transaction_open = !recorded_in_run.is_empty();
+        let mut transaction_failed = recorded_in_run.iter().any(|index| !self.state.query_history[*index].success);
         for (index, summary) in execution.summaries.iter().enumerate() {
             if history_statement_is_sensitive(&summary.sql) {
                 // 敏感语句（口令/授权）不记录历史，也不留可回放的文本。
@@ -24,20 +29,14 @@ impl AppController {
             }
             self.mark_query_history_completion_dirty(request, &summary.sql);
             let kind = query_history_kind(&summary.sql);
-            let control = history_transaction_control(&summary.sql);
+            let control = if summary.success { history_transaction_control(&summary.sql) } else { HistoryTransactionControl::None };
             if control == HistoryTransactionControl::Begin {
                 transaction_open = true;
             }
-            let transaction_state = if matches!(
-                kind,
-                QueryHistoryKind::DataChange | QueryHistoryKind::SchemaChange
-            ) && transaction_open
-                && control == HistoryTransactionControl::None
-            {
+            let transaction_state = if transaction_open {
                 QueryHistoryTransactionState::Uncommitted
-            } else {
-                QueryHistoryTransactionState::Committed
-            };
+            } else { QueryHistoryTransactionState::Committed };
+            if transaction_open && !summary.success { transaction_failed = true; }
             let rollback_snapshot = execution
                 .rollback_snapshots
                 .get(index)
@@ -45,6 +44,7 @@ impl AppController {
                 .flatten()
                 .filter(|_| summary.success);
             self.state.query_history.push(QueryHistoryEntry {
+                session_id: if persistent { request.session_id } else { None },
                 connection_id: request.connection_id,
                 database: request.database.clone(),
                 schema: request.schema.clone(),
@@ -60,21 +60,48 @@ impl AppController {
             });
             recorded_in_run.push(self.state.query_history.len() - 1);
 
+            if summary.message.contains("结果待核实") {
+                for index in &recorded_in_run {
+                    self.state.query_history[*index].transaction_state = QueryHistoryTransactionState::Unknown;
+                }
+                transaction_open = false;
+                recorded_in_run.clear();
+            }
+            if summary.success && transaction_open {
+                let tokens = sql_identifier_tokens(&summary.sql);
+                if tokens.first().is_some_and(|s| s.eq_ignore_ascii_case("rollback")) && tokens.iter().take(3).any(|s| s.eq_ignore_ascii_case("to")) {
+                    if let Some(savepoint) = tokens.last() {
+                        let boundary = recorded_in_run.iter().rev().copied().find(|index| {
+                            let previous = sql_identifier_tokens(&self.state.query_history[*index].text);
+                            previous.first().is_some_and(|s| s.eq_ignore_ascii_case("savepoint")) && previous.get(1) == Some(savepoint)
+                        });
+                        if let Some(boundary) = boundary {
+                            for index in recorded_in_run.iter().copied().filter(|i| *i > boundary && *i + 1 < self.state.query_history.len()).collect::<Vec<_>>() {
+                                self.state.query_history[index].transaction_state = QueryHistoryTransactionState::RolledBack;
+                            }
+                            recorded_in_run.retain(|index| *index <= boundary);
+                        }
+                    }
+                    transaction_failed = false;
+                }
+            }
             match control {
                 HistoryTransactionControl::Commit => {
                     transaction_open = false;
-                    self.settle_history_transaction(&recorded_in_run, true);
+                    self.settle_history_transaction(&recorded_in_run, !transaction_failed);
+                    transaction_failed = false;
                     recorded_in_run.clear();
                 }
                 HistoryTransactionControl::Rollback => {
                     transaction_open = false;
                     self.settle_history_transaction(&recorded_in_run, false);
                     recorded_in_run.clear();
+                    transaction_failed = false;
                 }
                 HistoryTransactionControl::Begin | HistoryTransactionControl::None => {}
             }
         }
-        if transaction_open {
+        if transaction_open && !persistent {
             // 未 COMMIT：连接释放时服务端回滚未提交事务，历史必须如实标注，不显示为已提交。
             self.settle_history_transaction(&recorded_in_run, false);
         }
@@ -185,6 +212,7 @@ impl AppController {
     fn record_failed_query_history(&mut self, request: &QueryRequest) {
         self.mark_query_history_completion_dirty(request, &request.text);
         self.state.query_history.push(QueryHistoryEntry {
+            session_id: None,
             connection_id: request.connection_id,
             database: request.database.clone(),
             schema: request.schema.clone(),
@@ -569,10 +597,10 @@ fn history_transaction_control(sql: &str) -> HistoryTransactionControl {
         Some("start") if tokens.get(1).is_some_and(|token| token == "transaction") => {
             HistoryTransactionControl::Begin
         }
-        Some("commit") => HistoryTransactionControl::Commit,
-        Some("rollback") => {
+        Some("commit" | "end") => HistoryTransactionControl::Commit,
+        Some("rollback" | "abort") => {
             // `ROLLBACK TO [SAVEPOINT] x` 只回退到保存点，事务继续。
-            if tokens.get(1).is_some_and(|token| token == "to") {
+            if tokens.iter().take(3).any(|token| token == "to") {
                 HistoryTransactionControl::None
             } else {
                 HistoryTransactionControl::Rollback
@@ -714,6 +742,7 @@ fn data_change_history_entry(
     executed_at_unix_secs: u64,
 ) -> QueryHistoryEntry {
     QueryHistoryEntry {
+        session_id: None,
         connection_id: object.connection_id,
         database: object.database.clone(),
         schema: object.schema.clone(),
@@ -851,7 +880,7 @@ fn data_change_delete_rollback_snapshot(
 impl QueryHistoryEntry {
     pub fn rollback_sql(&self) -> Option<String> {
         // 已回滚的写入没有留下任何变更：不提供补偿 SQL，避免把从未生效的改动再写一遍（§8.4/R11）。
-        if self.transaction_state == QueryHistoryTransactionState::RolledBack {
+        if self.transaction_state != QueryHistoryTransactionState::Committed {
             return None;
         }
         self.rollback_snapshot
@@ -871,6 +900,7 @@ impl QueryHistoryEntry {
             QueryHistoryTransactionState::Committed => None,
             QueryHistoryTransactionState::Uncommitted => Some("未提交（事务进行中）"),
             QueryHistoryTransactionState::RolledBack => Some("已回滚（未提交或显式 ROLLBACK）"),
+            QueryHistoryTransactionState::Unknown => Some("结果待核实"),
         }
     }
 }
@@ -1315,3 +1345,13 @@ fn sql_history_value_literal_for_rollback_with_type(
     }
 }
 
+
+/// 显式关闭连接/标签后，只有确认未提交的记录可结算为回滚；Unknown 必须留待用户核实。
+fn settle_closed_query_history(history: &mut [QueryHistoryEntry], connection_id: ConnectionId, session_id: Option<fluxdb_core::QuerySessionId>) {
+    for entry in history {
+        if entry.connection_id == connection_id && session_id.is_none_or(|session| entry.session_id == Some(session))
+            && entry.transaction_state == QueryHistoryTransactionState::Uncommitted {
+            entry.transaction_state = QueryHistoryTransactionState::RolledBack;
+        }
+    }
+}

@@ -142,6 +142,8 @@ fn new_connection_modal(
     form: &NewConnectionForm,
     inputs: &NewConnectionInputs,
     editing: bool,
+    test_busy: bool,
+    saving: bool,
     colors: UiColors,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
@@ -361,7 +363,7 @@ fn new_connection_modal(
                         .child(
                             Button::new("new-connection-test")
                                 .label("测试")
-                                .disabled(cx.entity().read(cx)._test_connection_task.is_some())
+                                .disabled(test_busy)
                                 .on_click({
                                     let view = view.clone();
                                     move |_, _, cx| {
@@ -377,10 +379,7 @@ fn new_connection_modal(
                                 .label("保存并连接")
                                 .primary()
                                 .w(px(116.))
-                                .disabled({
-                                    let state = cx.entity().read(cx);
-                                    state.saving_connection || state._test_connection_task.is_some()
-                                })
+                                .disabled(saving || test_busy)
                                 .on_click({
                                     let view = view.clone();
                                     move |_, _, cx| {
