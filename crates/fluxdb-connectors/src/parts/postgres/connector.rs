@@ -203,9 +203,19 @@ impl Connector for PostgresConnector {
         &self,
         _: ConnectionId,
         scope: &fluxdb_core::PgObjectGrantScope,
-    ) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
+    ) -> fluxdb_core::Result<fluxdb_core::PgObjectGrants> {
         let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 对象权限需要连接配置上下文"))?;
         pg_list_object_grants(config, scope)
+    }
+
+    fn role_effective_grants(
+        &self,
+        _: ConnectionId,
+        scope: &fluxdb_core::PgObjectGrantScope,
+        role: &str,
+    ) -> fluxdb_core::Result<Vec<fluxdb_core::PgEffectivePrivilege>> {
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色有效权限需要连接配置上下文"))?;
+        pg_role_effective_grants(config, scope, role)
     }
 
     fn list_indexes(&self, path: &ObjectPath) -> fluxdb_core::Result<Vec<IndexInfo>> {

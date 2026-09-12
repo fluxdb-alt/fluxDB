@@ -3664,7 +3664,7 @@ SELECT item_id, name FROM audit_log;"
         );
         connector.execute(&setup).expect("建对象+授权应成功");
 
-        // 表 SELECT。
+        // 表 SELECT：显式条目命中；owner 标记正确；ACL 非 NULL。
         let table = connector
             .list_object_grants(
                 config.id,
@@ -3675,11 +3675,21 @@ SELECT item_id, name FROM audit_log;"
                 },
             )
             .expect("列表权限应成功");
+        assert_eq!(table.owner, "postgres", "表 owner 应为 postgres");
+        assert!(!table.acl_is_null, "被授权后 ACL 不应为 NULL");
         assert!(
             table
+                .entries
                 .iter()
-                .any(|(grantee, privilege, _)| grantee == &role && privilege == "SELECT"),
-            "表应含 {role} 的 SELECT：{table:?}"
+                .any(|e| e.grantee == role && e.privilege == "SELECT" && !e.is_owner),
+            "表应含 {role} 的 SELECT（非 owner 标记）：{:?}",
+            table.entries
+        );
+        // owner 的权限来自属主身份而非 ACL：owner 自己的 DEFAULT 条目不因显式授权而被误当可撤销的直接授权。
+        assert!(
+            table.entries.iter().any(|e| e.is_owner),
+            "owner 应有 is_owner 标记：{:?}",
+            table.entries
         );
         // 序列 USAGE。
         let seq_grants = connector
@@ -3694,9 +3704,11 @@ SELECT item_id, name FROM audit_log;"
             .expect("列序列权限应成功");
         assert!(
             seq_grants
+                .entries
                 .iter()
-                .any(|(grantee, privilege, _)| grantee == &role && privilege == "USAGE"),
-            "序列应含 {role} 的 USAGE：{seq_grants:?}"
+                .any(|e| e.grantee == role && e.privilege == "USAGE"),
+            "序列应含 {role} 的 USAGE：{:?}",
+            seq_grants.entries
         );
         // 函数 EXECUTE（按签名区分重载）。签名即 pg_get_function_identity_arguments 输出
         // （`a integer` 含参数名），T27 从补全/元数据侧取同源字符串。
@@ -3712,11 +3724,14 @@ SELECT item_id, name FROM audit_log;"
             .expect("列函数权限应成功");
         assert!(
             fn_grants
+                .entries
                 .iter()
-                .any(|(grantee, privilege, _)| grantee == &role && privilege == "EXECUTE"),
-            "函数应含 {role} 的 EXECUTE：{fn_grants:?}"
+                .any(|e| e.grantee == role && e.privilege == "EXECUTE"),
+            "函数应含 {role} 的 EXECUTE：{:?}",
+            fn_grants.entries
         );
-        // schema：未显式授权时返回空（默认权限由 UI 明示），列表读取本身不报错。
+        // schema：未显式授权时 ACL 为 NULL = 默认权限（owner 全权），**不等于没有权限**——
+        // 断言 acl_is_null=true 且 owner 正确，供 UI 明示「默认权限」而非空表。
         let schema_grants = connector
             .list_object_grants(
                 config.id,
@@ -3724,7 +3739,32 @@ SELECT item_id, name FROM audit_log;"
                     schema: "t26_sco".into(),
                 },
             )
-            .expect("列 schema 权限应成功（可能为空）");
+            .expect("列 schema 权限应成功");
+        assert!(schema_grants.acl_is_null, "schema 未授权应为默认（NULL ACL）");
+        assert_eq!(schema_grants.owner, "postgres", "schema owner 应为 postgres");
+        assert!(schema_grants.entries.is_empty(), "NULL ACL 无显式条目");
+        // PUBLIC 授权（表）：grant PUBLIC SELECT 后显式条目含空 grantee。
+        let mut pub_setup = pg_query_request(&config, None);
+        pub_setup.text = "GRANT SELECT ON t26_sco.tbl TO PUBLIC".to_string();
+        connector.execute(&pub_setup).expect("PUBLIC 授权应成功");
+        let table_public = connector
+            .list_object_grants(
+                config.id,
+                &fluxdb_core::PgObjectGrantScope::Relation {
+                    schema: "t26_sco".into(),
+                    name: "tbl".into(),
+                    kind: fluxdb_core::PgRelationKind::Table,
+                },
+            )
+            .expect("列表权限应成功");
+        assert!(
+            table_public
+                .entries
+                .iter()
+                .any(|e| e.grantee.is_empty() && e.privilege == "SELECT"),
+            "PUBLIC 授权应以空 grantee 呈现：{:?}",
+            table_public.entries
+        );
 
         // 清理对象与角色。
         let mut cleanup = pg_query_request(&config, None);
@@ -3733,9 +3773,89 @@ SELECT item_id, name FROM audit_log;"
         connector
             .drop_role(config.id, &role)
             .expect("清理角色应成功");
+    }
 
-        // schema 空列表不算失败（默认权限），这里仅断言该读取可用。
-        let _ = schema_grants;
+    /// T26：角色**有效**权限——区分直接授权与经成员关系继承（+PUBLIC/owner），防止把继承误当可直接撤销。
+    #[test]
+    fn pg_live_smoke_role_effective_grants() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let direct_role = format!("t26_direct_{suffix}");
+        let inherit_role = format!("t26_inherit_{suffix}");
+        let none_role = format!("t26_none_{suffix}");
+        let group = format!("t26_group_{suffix}");
+        for r in [&direct_role, &inherit_role, &none_role] {
+            connector.create_role(config.id, r, true, None).expect("建登录角色应成功");
+        }
+        connector
+            .create_role(config.id, &group, false, None)
+            .expect("建组角色应成功");
+        // direct_role 直接授权 SELECT；group 授权 SELECT，inherit_role 仅是 group 成员 → 继承。
+        connector
+            .grant_role_membership(config.id, &group, &inherit_role, false)
+            .expect("inherit_role 加入 group 应成功");
+        let mut setup = pg_query_request(&config, None);
+        setup.text = format!(
+            "CREATE TABLE t26_eff(id int); \
+             GRANT SELECT ON t26_eff TO \"{direct_role}\"; \
+             GRANT SELECT ON t26_eff TO \"{group}\";"
+        );
+        connector.execute(&setup).expect("建表+授权应成功");
+
+        let scope = fluxdb_core::PgObjectGrantScope::Relation {
+            schema: "public".into(),
+            name: "t26_eff".into(),
+            kind: fluxdb_core::PgRelationKind::Table,
+        };
+        let direct = connector
+            .role_effective_grants(config.id, &scope, &direct_role)
+            .expect("读取直接角色有效权限应成功");
+        let d = direct
+            .iter()
+            .find(|g| g.privilege == "SELECT")
+            .expect("SELECT 应在有效权限列表中");
+        assert!(d.effective && d.direct, "直接授权：effective 且 direct");
+
+        // 继承角色：effective SELECT=true（经 group），但 direct=false（未对该角色显式授权）——
+        // 不可直接撤销，撤销应作用于 group。
+        let inherited = connector
+            .role_effective_grants(config.id, &scope, &inherit_role)
+            .expect("读取继承角色有效权限应成功");
+        let i = inherited
+            .iter()
+            .find(|g| g.privilege == "SELECT")
+            .expect("SELECT 应在有效权限列表中");
+        assert!(
+            i.effective && !i.direct,
+            "继承角色：effective=true 但 direct=false（不可直接撤销）：{:?}",
+            inherited
+        );
+
+        // 无授权角色：effective=false。
+        let none = connector
+            .role_effective_grants(config.id, &scope, &none_role)
+            .expect("读取无权限角色应成功");
+        let n = none
+            .iter()
+            .find(|g| g.privilege == "SELECT")
+            .expect("SELECT 应在列表中");
+        assert!(!n.effective && !n.direct, "无权限角色应 effective=false");
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t26_eff CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理表应成功");
+        connector.drop_role(config.id, &group).expect("清理组角色应成功");
+        for r in [&direct_role, &inherit_role, &none_role] {
+            connector.drop_role(config.id, r).expect("清理角色应成功");
+        }
     }
 
     #[test]

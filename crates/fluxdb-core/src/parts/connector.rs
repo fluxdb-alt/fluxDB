@@ -85,16 +85,31 @@ pub trait Connector {
     ) -> Result<Vec<(String, String, bool)>> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持读取对象权限"))
     }
-    /// 列 PG 对象权限（数据库/schema/表·视图·序列/函数），返回 (grantee, privilege, grant_option)；
-    /// grantee 空表示 PUBLIC。为 T27 的对象权限展示提供数据源。
+    /// 列 PG 对象权限（数据库/schema/表·视图·序列/函数），返回完整读模型
+    /// （owner、ACL 是否默认、显式条目含 PUBLIC 与 owner 标记）。为 T27 的对象权限展示提供数据源，
+    /// 使 UI 能区分默认权限/直接授权/owner，避免据不完整视图误删未展示的授权。
     fn list_object_grants(
         &self,
         _: ConnectionId,
         _: &PgObjectGrantScope,
-    ) -> Result<Vec<(String, String, bool)>> {
+    ) -> Result<PgObjectGrants> {
         Err(Error::new(
             ErrorKind::Unsupported,
             "暂不支持读取该对象的权限",
+        ))
+    }
+    /// 某角色对某对象的**有效**权限（owner/直接/PUBLIC/继承统一经 PG 判定）。
+    ///
+    /// 供 T27 展示直接授权与继承/PUBLIC/owner 的差异，避免把继承/owner 误当可直接撤销的直接授权。
+    fn role_effective_grants(
+        &self,
+        _: ConnectionId,
+        _: &PgObjectGrantScope,
+        _: &str,
+    ) -> Result<Vec<PgEffectivePrivilege>> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "暂不支持读取角色有效权限",
         ))
     }
     fn delete_database(&self, _: ConnectionId, _: &str) -> Result<()> {

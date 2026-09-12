@@ -6,7 +6,10 @@
 // 密码走专属转义（`quote_pg_string_literal`），不做字符串拼接进参数（PG role DDL 不支持
 // 全参数绑定，需明确的字符串引用逻辑，设计 §12）。
 
-use fluxdb_core::{PgObjectGrantScope, PgRole};
+use fluxdb_core::{
+    PgEffectivePrivilege, PgGrantEntry, PgObjectGrantScope, PgObjectGrants, PgRelationKind,
+    PgRole,
+};
 
 /// 列出全部角色（pg_roles 自带有效连接数/SUPERUSER 等列，无需逐角色二次查询）。
 async fn pg_list_roles_async(
@@ -359,66 +362,103 @@ fn pg_list_relation_grants(
     })
 }
 
-/// 按 scope 定位对象并 `aclexplode(ACL列)` 列出 (grantee, privilege, grant_option)。
-///
-/// 覆盖数据库(datacl)/schema(nspacl)/表·视图·序列(relacl)/函数(proacl)；grantee 空视为 PUBLIC。
-/// 函数用 `pg_get_function_identity_arguments` 的签名区分重载。无显式 ACL（NULL）时表示
-/// owner 全权、其余无默认权限，此处返回空交由 UI 明示「默认权限」。
-async fn pg_list_object_grants_async(
-    client: &tokio_postgres::Client,
-    scope: &PgObjectGrantScope,
-) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
-    // 各对象类型返回 (acl_column_ref, 标识行的 WHERE)，统一由 aclexplode 展开。
-    struct Target {
-        sql: &'static str,
-        args: Vec<String>,
-    }
-    let target: Target = match scope {
-        PgObjectGrantScope::Database { database } => Target {
-            sql: "SELECT COALESCE(grantee.rolname, '') AS grantee, acl.privilege_type, \
-                  acl.is_grantable FROM pg_database d \
-                  CROSS JOIN LATERAL aclexplode(d.datacl) AS acl \
-                  LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee \
-                  WHERE d.datname = $1 ORDER BY grantee, acl.privilege_type",
+/// 定位对象并返回 (owner, acl 是否 NULL) 的元数据 SQL 段（由各 scope 提供 catalog 表别名与过滤）。
+struct ObjectGrantSql {
+    /// 返回 owner 与 acl_is_null 的查询（固定两列 AS owner, acl_is_null）；`{ACL}` 占位替换为 ACL 列。
+    meta_sql: &'static str,
+    /// 返回显式 ACL 条目的 aclexplode 查询（固定三列 grantee, privilege_type, is_grantable）。
+    entries_sql: &'static str,
+    args: Vec<String>,
+}
+
+/// 各对象类型对应的 owner/ACL 列与定位过滤。函数用 `pg_get_function_identity_arguments` 签名区分重载。
+fn pg_object_grant_sql(scope: &PgObjectGrantScope) -> ObjectGrantSql {
+    match scope {
+        PgObjectGrantScope::Database { database } => ObjectGrantSql {
+            meta_sql: "SELECT d.datdba::regrole::text AS owner, (d.datacl IS NULL) AS acl_is_null \
+                       FROM pg_database d WHERE d.datname = $1",
+            entries_sql: "SELECT COALESCE(grantee.rolname, '') AS grantee, acl.privilege_type, \
+                          acl.is_grantable FROM pg_database d \
+                          CROSS JOIN LATERAL aclexplode(d.datacl) AS acl \
+                          LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee \
+                          WHERE d.datname = $1 ORDER BY grantee, acl.privilege_type",
             args: vec![database.clone()],
         },
-        PgObjectGrantScope::Schema { schema } => Target {
-            sql: "SELECT COALESCE(grantee.rolname, '') AS grantee, acl.privilege_type, \
-                  acl.is_grantable FROM pg_namespace n \
-                  CROSS JOIN LATERAL aclexplode(n.nspacl) AS acl \
-                  LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee \
-                  WHERE n.nspname = $1 ORDER BY grantee, acl.privilege_type",
+        PgObjectGrantScope::Schema { schema } => ObjectGrantSql {
+            meta_sql: "SELECT n.nspowner::regrole::text AS owner, (n.nspacl IS NULL) AS acl_is_null \
+                       FROM pg_namespace n WHERE n.nspname = $1",
+            entries_sql: "SELECT COALESCE(grantee.rolname, '') AS grantee, acl.privilege_type, \
+                          acl.is_grantable FROM pg_namespace n \
+                          CROSS JOIN LATERAL aclexplode(n.nspacl) AS acl \
+                          LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee \
+                          WHERE n.nspname = $1 ORDER BY grantee, acl.privilege_type",
             args: vec![schema.clone()],
         },
-        PgObjectGrantScope::Relation { schema, name, .. } => Target {
-            // relkind 由调用方以常数内联（relkind_list），不作为参数绑定（避免 int2/char 类型推断问题）。
-            sql: "SELECT COALESCE(grantee.rolname, '') AS grantee, acl.privilege_type, \
-                  acl.is_grantable FROM pg_class c \
-                  JOIN pg_namespace n ON n.oid = c.relnamespace \
-                  CROSS JOIN LATERAL aclexplode(c.relacl) AS acl \
-                  LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee \
-                  WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN (REPLACE) \
-                  ORDER BY grantee, acl.privilege_type",
-            args: vec![schema.clone(), name.clone()],
-        },
-        PgObjectGrantScope::Routine { schema, name, signature } => Target {
-            sql: "SELECT COALESCE(grantee.rolname, '') AS grantee, acl.privilege_type, \
-                  acl.is_grantable FROM pg_proc p \
-                  JOIN pg_namespace n ON n.oid = p.pronamespace \
-                  CROSS JOIN LATERAL aclexplode(p.proacl) AS acl \
-                  LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee \
-                  WHERE n.nspname = $1 AND p.proname = $2 \
-                    AND pg_get_function_identity_arguments(p.oid) = $3 \
-                  ORDER BY grantee, acl.privilege_type",
+        PgObjectGrantScope::Relation { schema, name, .. } => {
+            // relkind 由调用方以内联常数替换（relkind_list），不作为参数绑定（避免 char[] 类型推断问题）。
+            ObjectGrantSql {
+                meta_sql: "SELECT c.relowner::regrole::text AS owner, (c.relacl IS NULL) AS acl_is_null \
+                           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+                           WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN (REPLACE)",
+                entries_sql: "SELECT COALESCE(grantee.rolname, '') AS grantee, acl.privilege_type, \
+                              acl.is_grantable FROM pg_class c \
+                              JOIN pg_namespace n ON n.oid = c.relnamespace \
+                              CROSS JOIN LATERAL aclexplode(c.relacl) AS acl \
+                              LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee \
+                              WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN (REPLACE) \
+                              ORDER BY grantee, acl.privilege_type",
+                args: vec![schema.clone(), name.clone()],
+            }
+        }
+        PgObjectGrantScope::Routine { schema, name, signature } => ObjectGrantSql {
+            meta_sql: "SELECT p.proowner::regrole::text AS owner, (p.proacl IS NULL) AS acl_is_null \
+                       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
+                       WHERE n.nspname = $1 AND p.proname = $2 \
+                         AND pg_get_function_identity_arguments(p.oid) = $3",
+            entries_sql: "SELECT COALESCE(grantee.rolname, '') AS grantee, acl.privilege_type, \
+                          acl.is_grantable FROM pg_proc p \
+                          JOIN pg_namespace n ON n.oid = p.pronamespace \
+                          CROSS JOIN LATERAL aclexplode(p.proacl) AS acl \
+                          LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee \
+                          WHERE n.nspname = $1 AND p.proname = $2 \
+                            AND pg_get_function_identity_arguments(p.oid) = $3 \
+                          ORDER BY grantee, acl.privilege_type",
             args: vec![schema.clone(), name.clone(), signature.clone()],
         },
-    };
-    let sql = target.sql.replace("REPLACE", match scope {
-        PgObjectGrantScope::Relation { kind, .. } => kind.relkind_list(),
-        _ => "",
-    });
-    // &String 实现 ToSql；显式 cast 为 trait 对象数组供 tokio-postgres query 参数绑定。
-    let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = target
+    }
+}
+
+/// 把带 `{ACL}` 占位的 meta_sql 内联 relkind 常数并执行，取 owner 与 ACL 是否 NULL。
+async fn pg_object_grants_meta(
+    client: &tokio_postgres::Client,
+    sqlgen: &ObjectGrantSql,
+    relkind_inline: &str,
+) -> fluxdb_core::Result<(String, bool)> {
+    let sql = sqlgen.meta_sql.replace("REPLACE", relkind_inline);
+    let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = sqlgen
+        .args
+        .iter()
+        .map(|arg| arg as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
+    let rows = client.query(&sql, &params).await.map_err(pg_error)?;
+    let row = rows.first().ok_or_else(|| {
+        Error::new(
+            ErrorKind::Query,
+            "未找到该对象（可能已被删除或不在当前 schema）",
+        )
+    })?;
+    Ok((row.get(0), row.get(1)))
+}
+
+/// 执行 `aclexplode` 条目查询，返回显式 ACL 条目（grantee 空=PUBLIC）。
+async fn pg_object_grants_entries(
+    client: &tokio_postgres::Client,
+    sqlgen: &ObjectGrantSql,
+    relkind_inline: &str,
+    owner: &str,
+) -> fluxdb_core::Result<Vec<PgGrantEntry>> {
+    let sql = sqlgen.entries_sql.replace("REPLACE", relkind_inline);
+    let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = sqlgen
         .args
         .iter()
         .map(|arg| arg as &(dyn tokio_postgres::types::ToSql + Sync))
@@ -426,23 +466,156 @@ async fn pg_list_object_grants_async(
     let rows = client.query(&sql, &params).await.map_err(pg_error)?;
     Ok(rows
         .into_iter()
-        .map(|row| {
-            let grant_option: bool = row.get(2);
-            (row.get(0), row.get(1), grant_option)
+        .map(|row| PgGrantEntry {
+            grantee: row.get(0),
+            privilege: row.get(1),
+            grant_option: row.get(2),
+            is_owner: {
+                let grantee: String = row.get(0);
+                !grantee.is_empty() && grantee == owner
+            },
         })
         .collect())
 }
 
-/// 列 PG 对象权限（同步入口）。
+/// 列 PG 对象权限（同步入口）。返回 owner / ACL 是否默认 / 显式条目（直接授权 + PUBLIC + owner 标记）。
 pub fn pg_list_object_grants(
     config: &ConnectionConfig,
     scope: &PgObjectGrantScope,
-) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
+) -> fluxdb_core::Result<PgObjectGrants> {
     if config.kind != DatabaseKind::Postgres {
         return Err(Error::new(ErrorKind::Connection, "连接类型不支持对象权限"));
     }
+    let relkind_inline = match scope {
+        PgObjectGrantScope::Relation { kind, .. } => kind.relkind_list(),
+        _ => "",
+    };
     pg_runtime().block_on(async {
         let session = pg_connect(config, &pg_request_database(config, None)).await?;
-        pg_list_object_grants_async(session.client.as_ref(), scope).await
+        let client = session.client.as_ref();
+        let sqlgen = pg_object_grant_sql(scope);
+        let (owner, acl_is_null) = pg_object_grants_meta(client, &sqlgen, relkind_inline).await?;
+        let entries = pg_object_grants_entries(client, &sqlgen, relkind_inline, &owner).await?;
+        Ok(PgObjectGrants {
+            owner,
+            acl_is_null,
+            entries,
+        })
+    })
+}
+
+/// 各对象类型候选权限关键字与 PG `has_*_privilege` 检查函数。函数对象字符串取
+/// `schema.name(类型列表)`（经 identity 签名剥去参数名），供 `has_function_privilege`。
+struct EffectiveQuery {
+    /// SQL 片段：`has_<obj>_privilege($1, <obj_expr>, p.priv)`。`$1` 为角色，`$2` 系列为定位参数。
+    check_sql: String,
+    /// 定位参数（角色之后）。obj_expr 用 $2/$3…
+    args: Vec<String>,
+}
+
+/// 构建某 scope 的 `has_*_privilege` 检查（角色为 $1，后续为对象定位参数）。
+fn pg_effective_query(sqlgen: &ObjectGrantSql, scope: &PgObjectGrantScope) -> fluxdb_core::Result<EffectiveQuery> {
+    let params = &sqlgen.args;
+    // 定位参数从 $2 开始依次对应 sqlgen.args 的顺序与对象过滤列一致。
+    match scope {
+        PgObjectGrantScope::Database { .. } => Ok(EffectiveQuery {
+            check_sql: "SELECT p.priv, has_database_privilege($1, $2, p.priv) FROM \
+                        (VALUES ('CONNECT'),('CREATE'),('TEMP')) AS p(priv)"
+                .to_string(),
+            args: params.clone(),
+        }),
+        PgObjectGrantScope::Schema { .. } => Ok(EffectiveQuery {
+            check_sql: "SELECT p.priv, has_schema_privilege($1, $2, p.priv) FROM \
+                        (VALUES ('USAGE'),('CREATE')) AS p(priv)"
+                .to_string(),
+            args: params.clone(),
+        }),
+        PgObjectGrantScope::Relation { kind, .. } => {
+            let has_fn = match kind {
+                PgRelationKind::Sequence => "has_sequence_privilege($1, $2 || '.' || $3, p.priv)",
+                PgRelationKind::Table | PgRelationKind::View => {
+                    "has_table_privilege($1, $2 || '.' || $3, p.priv)"
+                }
+            };
+            let privs = kind
+                .effective_privileges()
+                .iter()
+                .map(|p| format!("('{p}')"))
+                .collect::<Vec<_>>()
+                .join(",");
+            Ok(EffectiveQuery {
+                check_sql: format!("SELECT p.priv, {has_fn} FROM (VALUES {privs}) AS p(priv)"),
+                args: params.clone(),
+            })
+        }
+        PgObjectGrantScope::Routine { schema, name, signature } => Ok(EffectiveQuery {
+            check_sql: "SELECT p.priv, has_function_privilege($1, $2 || '.' || $3 || '(' || $4 || ')', p.priv) FROM (VALUES ('EXECUTE')) AS p(priv)".to_string(),
+            args: vec![
+                schema.clone(),
+                name.clone(),
+                pg_routine_type_list(signature),
+            ],
+        }),
+    }
+}
+
+/// 剥去 `pg_get_function_identity_arguments` 输出的参数名，得到类型列表串（用于 has_function_privilege）。
+fn pg_routine_type_list(signature: &str) -> String {
+    // 形如 `a integer, b text` → 每段取最后一个空白后的类型 → `integer, text`。
+    signature
+        .split(',')
+        .map(|seg| {
+            let seg = seg.trim();
+            seg.rsplit_once(' ').map(|(_, ty)| ty).unwrap_or(seg)
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// 某角色对某对象的有效权限（owner/直接/PUBLIC/继承统一经 PG 判定）——供 T27 区分直接与继承。
+pub fn pg_role_effective_grants(
+    config: &ConnectionConfig,
+    scope: &PgObjectGrantScope,
+    role: &str,
+) -> fluxdb_core::Result<Vec<PgEffectivePrivilege>> {
+    if config.kind != DatabaseKind::Postgres {
+        return Err(Error::new(ErrorKind::Connection, "连接类型不支持角色有效权限"));
+    }
+    let relkind_inline = match scope {
+        PgObjectGrantScope::Relation { kind, .. } => kind.relkind_list(),
+        _ => "",
+    };
+    pg_runtime().block_on(async {
+        let session = pg_connect(config, &pg_request_database(config, None)).await?;
+        let client = session.client.as_ref();
+        let sqlgen = pg_object_grant_sql(scope);
+        let (owner, _) = pg_object_grants_meta(client, &sqlgen, relkind_inline).await?;
+        // 直接授权（该角色的显式 ACL 条目）。
+        let direct = pg_object_grants_entries(client, &sqlgen, relkind_inline, &owner)
+            .await?
+            .into_iter()
+            .filter(|e| e.grantee == role)
+            .collect::<Vec<_>>();
+        let q = pg_effective_query(&sqlgen, scope).map_err(Error::from)?;
+        let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+            vec![&role as &(dyn tokio_postgres::types::ToSql + Sync)];
+        for arg in &q.args {
+            params.push(arg as &(dyn tokio_postgres::types::ToSql + Sync));
+        }
+        let rows = client.query(q.check_sql.as_str(), &params).await.map_err(pg_error)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let privilege: String = row.get(0);
+            let effective: bool = row.get(1);
+            let direct_entry = direct.iter().find(|e| e.privilege == privilege);
+            out.push(PgEffectivePrivilege {
+                privilege,
+                effective,
+                direct: direct_entry.is_some(),
+                grant_option: direct_entry.is_some_and(|e| e.grant_option),
+            });
+        }
+        // 若 role 即 owner，owner 对其对象类型拥有全部权限（has_*_privilege 已含，无需叠加）。
+        Ok(out)
     })
 }

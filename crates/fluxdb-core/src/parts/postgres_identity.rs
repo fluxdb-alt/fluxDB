@@ -57,6 +57,16 @@ impl PgRelationKind {
             PgRelationKind::Sequence => "'S'",
         }
     }
+
+    /// 该关系种类的候选权限关键字（与 PG 各对象的 effective-acl 权限一致）。
+    pub fn effective_privileges(self) -> &'static [&'static str] {
+        match self {
+            PgRelationKind::Table | PgRelationKind::View => &[
+                "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER",
+            ],
+            PgRelationKind::Sequence => &["USAGE", "SELECT", "UPDATE"],
+        }
+    }
 }
 
 /// PG 对象授权目标（设计 §12）：数据库 / schema / 表·视图·序列 / 函数（含签名区分重载）。
@@ -82,4 +92,53 @@ pub enum PgObjectGrantScope {
         name: String,
         signature: String,
     },
+}
+
+/// 一条显式 ACL 展开条目。`grantee` 为空表示 PUBLIC。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PgGrantEntry {
+    /// 授权对象（角色名）；空串即 PUBLIC（非普通角色）。
+    pub grantee: String,
+    /// 权限关键字（SELECT/USAGE/EXECUTE…）。
+    pub privilege: String,
+    /// 是否带 GRANT OPTION（可再授权）。
+    pub grant_option: bool,
+    /// 该授权对象是否就是对象 owner（owner 的权限来自属主身份而非 ACL）。
+    pub is_owner: bool,
+}
+
+/// PG 对象权限的完整读模型（区分默认权限/owner/直接授权/PUBLIC/继承）。
+///
+/// `acl_is_null=true` 表示对象 ACL 为 NULL，即「默认权限」：owner 全权、其余无显式授权——
+/// 这**不等于**「没有任何有效权限」，UI 须明示为默认权限而非空表。`owner` 为对象属主角色。
+/// `entries` 只含显式 ACL 条目（直接授权 + PUBLIC），不含纯继承（未显式记录）；继承关系的
+/// 推导由更高层基于角色成员关系叠加，避免把继承误当可直接撤销的直接授权。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PgObjectGrants {
+    /// 对象属主角色名。
+    pub owner: String,
+    /// ACL 是否为 NULL（默认权限语义：owner 全权、其余无显式授权）。
+    pub acl_is_null: bool,
+    /// 显式 ACL 条目（直接授权 + PUBLIC）。
+    pub entries: Vec<PgGrantEntry>,
+}
+
+/// 某角色对某对象的一种权限的**有效**状态（经 PG 原生 has_*_privilege 判定，天然含 owner/继承/PUBLIC）。
+///
+/// `effective` 表示该角色实际拥有该权限；`direct` 表示该角色在显式 ACL 中有本条直接授权。
+/// 语义组合：
+/// - `effective && direct`：直接授权（可直接撤销）；
+/// - `effective && !direct`：来自 owner / 继承(PUBLIC 或成员角色) —— 只读展示，**不可直接撤销**，
+///   撤销应到来源处（owner 不可撤销；PUBLIC 单独 revoke；继承来自成员角色）；
+/// - `!effective`：无权限。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PgEffectivePrivilege {
+    /// 权限关键字（SELECT/USAGE/EXECUTE…）。
+    pub privilege: String,
+    /// 该角色实际是否拥有该权限（含 owner/继承/PUBLIC）。
+    pub effective: bool,
+    /// 该角色是否在显式 ACL 中直接持有此权限（可直接撤销）。
+    pub direct: bool,
+    /// 显式 ACL 中该条是否带 GRANT OPTION。
+    pub grant_option: bool,
 }
