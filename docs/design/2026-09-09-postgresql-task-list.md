@@ -67,7 +67,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T20 | schema 树、数据库对话框和能力路由 | T06、T07、T19 | 进行中 / FluxDB |
 | T21 | 数据/查询/详情与历史 UI 接入 | T10–T16、T20 | 实现完成，待人工验收 / FluxDB |
 | T22 | 新建/设计表及危险操作 UI | T17、T18、T21 | 实现完成，待人工验收 / FluxDB |
-| T23 | 所有现有数据导出格式与范围 | T10、T11、T13、T21 | 进行中（增量一：方言字面量）/ FluxDB |
+| T23 | 所有现有数据导出格式与范围 | T10、T11、T13、T21 | 进行中（增量一/二：方言字面量 + 一致快照导出分页）/ FluxDB |
 | T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 进行中（增量一/二：原生检测+psql 参数+桌面接入）/ FluxDB |
 | T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一：PG 原生 pg_dump + 真库恢复验证）/ FluxDB |
 | T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 进行中（增量一~四：对象权限 + 敏感隔离 + ACL 语义/有效权限；T27 UI 待续）/ FluxDB |
@@ -441,7 +441,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T23 — 数据导出
 
-- [ ] 完成 T23（实现增量一：方言字面量）
+- [ ] 完成 T23（实现增量一/二：方言字面量 + 一致快照导出分页）
 - **开始前读**：设计 7.1、7.2、11.1；R02、R06、R10、R15、R16、R25、R26。
 - **工作**：从 UI 搬出共享编码/文件写入；PG 全表一致快照批量流；表 SQL/TXT/CSV/JSON/XML、行/选区 CSV/JSON/Markdown/INSERT；字段选择/条件/计数预览/进度/取消/临时文件。
 - **交付位置**：app/transfer、storage 文件服务、PG export provider、data_export UI 适配。
@@ -449,7 +449,8 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 - **完成记录**：进行中（FluxDB，2026-09-12）。
   增量一（`218c549`，方言字面量）：`sql_parser` 的 `sql_quote_ident`/`sql_qualified_object_name`/`sql_preview_cell_literal` 按 `DatabaseKind` 渲染——PG 双引号标识符、`"schema"."name"` 限定（不生成跨库三段名）、bytea `'\x..'::bytea`（替换 MySQL `X'..'`）、jsonb 显式 `::jsonb`；线程化到 `row_insert_sql`/`row_update_sql`/`data_change_sql_preview` + 导出（`TableDataExportWriter`/`write_data_row_export_file`/`write_data_row_insert_export`）+ 「复制为 INSERT/UPDATE」菜单 + 备份写行（`write_page_rows`）+ 数据变更预览（render/content_views 按连接类型解析方言）。过滤/排序预览文字保留 MySQL 引用（展示串，执行走连接器参数化 SQL）。
   验证：新增 `postgres_export_literals_use_pg_bytea_and_jsonb`（PG `'\xdeadbeef'::bytea`/`'{}'::jsonb`/`"public"."blobs"` + MySQL `X'DEADBEEF'`/反引号回归）；desktop 371、app 395 全过。
-  未完成项：PG 全表一致快照批量流与内存有界、取消临时文件语义、XML/TXT 等全部格式的 PG 真库往返验证、行/选区各格式 PG 用例、导出的字段/条件/计数预览端到端、MySQL 导出格式回归手测（→ 集中人工清单）。
+  增量二（`9d299a5`，一致快照导出分页）：`postgres/data.rs` 新增 `pg_export_pages`——在**单个** REPEATABLE READ 事务内分页读取整表（`LIMIT..OFFSET` + 主键 tie-breaker 稳定序），逐页 `on_page` 回调写出，一次只持一页（内存有界）；每页前检测 cancel 提前终止，结束/取消连接释放即回滚。解决现有桌面导出逐页每开新会话、并发写让行在页间漂移的不一致。真库验证 `pg_live_smoke_export_pages_snapshot`：建 10000 行表 → 快照导出页码齐全、id 无重漏（seen=10000、pages≥3）、on_page 提前停止生效；清理完整。
+  未完成项：桌面导出驱动切换为 `pg_export_pages`（现有按 `load_data` 逐页驱动保持，切换属桌面接线增量）、取消临时文件语义、XML/TXT/CSV/JSON/INSERT 等全部格式的 PG 真库往返验证、行/选区各格式 PG 用例、导出的字段/条件/计数预览端到端、MySQL 导出格式回归手测（→ 集中人工清单）。
 
 ### T24 — SQL 文件与原生脚本
 
