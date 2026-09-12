@@ -139,6 +139,7 @@ include!("main_parts/tabs_workspace.rs");
 include!("main_parts/sidebar.rs");
 include!("main_parts/menus_dialogs.rs");
 include!("main_parts/user_admin.rs");
+include!("main_parts/pg_user_admin.rs");
 include!("main_parts/user_admin_privileges.rs");
 include!("main_parts/create_table.rs");
 include!("main_parts/content_views.rs");
