@@ -3651,23 +3651,38 @@ SELECT item_id, name FROM audit_log;"
                 .any(|m| m.grantee == group && m.member == role && m.admin_option),
             "应含带 ADMIN OPTION 的成员关系：{members:?}"
         );
-        // PG16 成员级 INHERIT/SET 选项贯通：非默认 inherit=false 写回并读回一致。
+        // 成员级 INHERIT/SET 选项（PG16+）：非默认 inherit=false 写回并读回一致。
+        // PG≤14 无 inherit_option/set_option 列（回填默认 true），无法表达非默认，跳过该断言。
+        let supports_member_options = pg_server_major_version(&config)
+            .ok()
+            .flatten()
+            .is_some_and(|major| major >= 16);
         connector
             .grant_role_membership(config.id, &group, &role, false, false, true)
             .expect("成员授权(INHERIT FALSE)应成功");
         let members2 = connector
             .list_role_membership(config.id)
             .expect("列成员关系应成功");
-        assert!(
-            members2
-                .iter()
-                .any(|m| m.grantee == group
-                    && m.member == role
-                    && !m.admin_option
-                    && !m.inherit_option
-                    && m.set_option),
-            "INHERIT FALSE/SET TRUE 应读回一致：{members2:?}"
-        );
+        if supports_member_options {
+            assert!(
+                members2
+                    .iter()
+                    .any(|m| m.grantee == group
+                        && m.member == role
+                        && !m.admin_option
+                        && !m.inherit_option
+                        && m.set_option),
+                "INHERIT FALSE/SET TRUE 应读回一致：{members2:?}"
+            );
+        } else {
+            // PG≤14：成员选项恒默认（inherit/set=true），仅断言成员关系存在且无 ADMIN。
+            assert!(
+                members2
+                    .iter()
+                    .any(|m| m.grantee == group && m.member == role && m.inherit_option),
+                "PG≤14 成员关系应存在且回填默认选项：{members2:?}"
+            );
+        }
         connector
             .revoke_role_membership(config.id, &group, &role)
             .expect("撤销成员关系应成功");

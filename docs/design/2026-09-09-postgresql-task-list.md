@@ -72,7 +72,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一~四：pg_dump + 恢复验证 + 应用调用链/owner/ACL/版本 + SSH 隧道）/ FluxDB |
 | T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 进行中（增量一~四：对象权限 + 敏感隔离 + ACL 语义/有效权限；T27 UI 待续）/ FluxDB |
 | T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 实现完成，待人工验收（增量一~五：角色 CRUD 表单 + 成员 + 对象权限面板）/ FluxDB |
-| T28 | 全矩阵联调、MySQL 回归与交付审查 | T01–T27 | 进行中（增量一：MySQL 真库回归测试 + 资源审查；剩余矩阵/手测待续）/ FluxDB |
+| T28 | 全矩阵联调、MySQL 回归与交付审查 | T01–T27 | 进行中（增量一~三：MySQL 全链路回归 + 资源审查 + PG14–18 矩阵全过；剩余 F 登记/手测）/ FluxDB |
 
 ## 4. 可执行任务
 
@@ -532,7 +532,9 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 - **最终标准**：T01–T27 全部有有效完成记录；F01–F20 每行通过；无必须功能残留或以 mock/仅 SQL 替代图形能力；MySQL 正常功能保持；文档与代码一致。
 - **完成记录**：进行中（FluxDB，2026-09-12）。
   增量一（真库回归 + 资源审查）：新增 `mysql_live_smoke_test_connection_regressed_by_postgres`（`FLUXDB_MYSQL_SMOKE` 环境门控）——对隔离真实 MySQL 8.0.34 容器 `test_connection` 通过，证明 PG/T23/T24/T25/T27 改动未回归 MySQL 连接。资源审查（代码走查）：`run_pg_native_psql`/`run_native_pg_dump` 取消路径 kill+wait 防僵尸、stdout/stderr 后台线程随管道 EOF 自收敛（进程被杀→管道关闭→线程退出，不泄漏）；`pg_export_pages` 单事务结束/取消统一 ROLLBACK 释放会话，连接随 session drop 回收。`cargo check --workspace` + `cargo test --workspace` 全绿。
-  剩余：`cargo run -p fluxdb-desktop` 明暗主题手测、F01–F20 逐项登记到 §5 表、PG14–18 真库矩阵（现有 16.x 单点，其余版本待环境）、MySQL 共享手续测（→ 人工）、T01–T27 全部有效完成记录复核。
+  增量二（MySQL 深度回归）：新增 `mysql_live_smoke_full_regression`——隔离真实 MySQL 8.0.34 上覆盖 test_connection → DDL → `load_data` 读 → `execute` 查询结果集 → `apply_changes` 更新并回读 → `list_completion_tables`/`list_completion_columns` 补全 → `list_indexes`/`table_ddl` 结构 → `preview_data_export` 计数 → 清理；证明 PG 接入（shared 读写/补全/结构/导出/凭据）未回归 MySQL。
+  增量三（PG14–18 真库矩阵）：对 `postgres:{14,15,16,17,18}-alpine` 各起隔离容器跑全量 `pg_live_smoke`（23 项）——**14.24/15.19/16.15/17.11/18.6 全 23/23 通过**。矩阵发现并修复版本差异真 bug：`WITH ADMIN FALSE` 仅 PG16+ 有效，PG≤14 无该语法（原「总是显式下发关闭态」在 PG14 报错）——改为 ADMIN false 只在支持成员选项的版本下发（PG≤14 仅 `WITH ADMIN OPTION`）；成员选项断言按版本分支（PG≤14 无 inherit/set 列，回填默认）。
+  剩余：`cargo run -p fluxdb-desktop` 明暗主题手测、F01–F20 逐项登记到 §5 表、非超级用户/TLS/取消异常延伸、T01–T27 全部有效完成记录复核。
 
 ## 5. 最终功能验收证据
 

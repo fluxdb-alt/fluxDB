@@ -231,12 +231,17 @@ fn pg_grant_role_membership(
     }
     let role_q = pg_quote_identifier(role);
     let member_q = pg_quote_identifier(member);
-    // 每次 GRANT 一个 WITH 子句；按调用方请求的选项值**显式**下发（含关闭态，保证可从既有
-    // 开启态切回），先确立成员关系再逐项设置。
+    // 每次 GRANT 只能带一个 WITH 子句；先确立成员关系（幂等），再按版本下发选项。
     let mut stmts = vec![format!("GRANT {role_q} TO {member_q};")];
-    let admin_clause = if admin_option { "OPTION" } else { "FALSE" };
-    stmts.push(format!("GRANT {role_q} TO {member_q} WITH ADMIN {admin_clause};"));
-    if pg_supports_member_options(config)? {
+    let supports_options = pg_supports_member_options(config)?;
+    // ADMIN：true 用 `WITH ADMIN OPTION`（各版本可）；false 仅在 PG16+ 用 `WITH ADMIN FALSE`
+    // 显式关闭（PG≤14 无 FALSE 语法，且旧版无法通过 GRANT 关闭既有 ADMIN——需先 REVOKE）。
+    if admin_option {
+        stmts.push(format!("GRANT {role_q} TO {member_q} WITH ADMIN OPTION;"));
+    } else if supports_options {
+        stmts.push(format!("GRANT {role_q} TO {member_q} WITH ADMIN FALSE;"));
+    }
+    if supports_options {
         let inherit_clause = if inherit_option { "TRUE" } else { "FALSE" };
         stmts.push(format!("GRANT {role_q} TO {member_q} WITH INHERIT {inherit_clause};"));
         let set_clause = if set_option { "TRUE" } else { "FALSE" };
