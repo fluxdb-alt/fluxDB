@@ -1,4 +1,12 @@
 impl AppController {
+    /// 经连接器列出 PG 角色（集群级主体）。复用 `role_operation_for_connection` 统一路由。
+    fn list_pg_roles_for_connection(&self, connection_id: ConnectionId) -> fluxdb_core::Result<Vec<fluxdb_core::PgRole>> {
+        let config = self
+            .connection_config(connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        role_operation_for_connection(&config, |connector| connector.list_roles(connection_id))
+    }
+
     fn user_admin_state(&self, tab_id: TabId) -> Option<&UserAdminState> {
         self.find_tab(tab_id).and_then(|tab| match &tab.kind {
             TabKind::UserAdmin(admin) => Some(admin),
@@ -31,6 +39,22 @@ impl AppController {
         let admin = self
             .user_admin_state(tab_id)
             .ok_or_else(|| Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))?;
+        // PG：角色是集群级身份，直接经连接器 list_roles 读取（不用 user@host SQL 文字），
+        // 映射为 DatabaseUserIdentity[user=role, host="", plugin=None] 以复用现有用户列表承载。
+        if self.connection_kind(admin.connection_id) == Some(DatabaseKind::Postgres) {
+            let roles = self.list_pg_roles_for_connection(admin.connection_id)?;
+            let role_identities: Vec<DatabaseUserIdentity> = roles
+                .into_iter()
+                .map(|role| DatabaseUserIdentity {
+                    user: role.name,
+                    host: String::new(),
+                    plugin: None,
+                })
+                .collect();
+            if !role_identities.is_empty() {
+                return Ok(role_identities);
+            }
+        }
         let provider = self.user_admin_provider_for_tab(tab_id)?;
         let request = QueryRequest {
             connection_id: admin.connection_id,
@@ -109,6 +133,14 @@ impl AppController {
         let admin = self
             .user_admin_state(tab_id)
             .ok_or_else(|| Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))?;
+        // PG：角色「授权」= 其所在的组角色（成员关系），经连接器读取，非 SHOW GRANTS 文本解析。
+        if self.connection_kind(admin.connection_id) == Some(DatabaseKind::Postgres) {
+            let memberships = self.list_pg_memberships_for_connection(admin.connection_id)?;
+            let groups = pg_groups_for_member(&memberships, &user.user);
+            if !groups.is_empty() || user.user.is_empty() {
+                return Ok(groups);
+            }
+        }
         let provider = self.user_admin_provider_for_tab(tab_id)?;
         let request = QueryRequest {
             connection_id: admin.connection_id,
@@ -121,6 +153,17 @@ impl AppController {
         };
         self.execute_query_raw(&request)
             .map(|execution| grants_from_query_result(&execution))
+    }
+
+    /// 经连接器读取 PG 成员关系：(grantee, member, admin_option)。
+    fn list_pg_memberships_for_connection(
+        &self,
+        connection_id: ConnectionId,
+    ) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
+        let config = self
+            .connection_config(connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        role_operation_for_connection(&config, |connector| connector.list_role_membership(connection_id))
     }
 
     fn load_user_admin_member_grants(
@@ -193,4 +236,14 @@ impl AppController {
         admin.role_membership_edits.clear();
         admin.reset_advanced_defaults();
     }
+}
+
+/// PG 成员关系中某角色直接所在的组角色名列表：(grantee, member, admin_option) → grantee。
+/// 供 PG 用户/权限 UI 展示「该 role 是哪些组角色的成员」（MemberOf 语义），纯函数便于测试。
+pub fn pg_groups_for_member(memberships: &[(String, String, bool)], member: &str) -> Vec<String> {
+    memberships
+        .iter()
+        .filter(|(_, m, _)| m == member)
+        .map(|(grantee, _, _)| grantee.clone())
+        .collect()
 }

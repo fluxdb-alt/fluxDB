@@ -158,3 +158,16 @@ fn user_admin_loaded_privileges_are_not_dirty_until_changed() {
 
     assert!(admin.privileges_dirty());
 }
+
+/// PG：成员关系 → 某角色所在组角色，纯函数过滤逻辑。
+#[test]
+fn pg_groups_for_member_filters_and_returns_groups() {
+    let memberships = vec![
+        ("analyst_group".to_string(), "alice".to_string(), true),
+        ("reader".to_string(), "alice".to_string(), false),
+        ("reader".to_string(), "bob".to_string(), false),
+    ];
+    assert_eq!(pg_groups_for_member(&memberships, "alice"), vec!["analyst_group", "reader"]);
+    assert_eq!(pg_groups_for_member(&memberships, "bob"), vec!["reader"]);
+    assert!(pg_groups_for_member(&memberships, "eve").is_empty());
+}
