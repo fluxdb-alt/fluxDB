@@ -20,7 +20,7 @@ fn refresh_index_columns_in_background(
 ) -> fluxdb_core::Result<(usize, usize)> {
     // T052：按影响范围限制刷新对象。库级 dirty → 刷新整库；
     // 仅部分表 dirty（非库级）→ 只刷新那些表，避免每次 DDL 都重刷整库。
-    let table_names: Vec<String> = {
+    let (table_names, database_wide): (Vec<String>, bool) = {
         let Ok(guard) = index.lock() else {
             return Ok((0, 0));
         };
@@ -29,20 +29,50 @@ fn refresh_index_columns_in_background(
             .dirty_table_names(connection_id, database, schema)
             .into_iter()
             .collect::<BTreeSet<_>>();
-        guard
+        let table_names = guard
             .database_tables(connection_id, database, schema)
             .into_iter()
             .filter(|table| matches!(table.kind, ObjectKind::Table | ObjectKind::View))
+            // 存储键按 catalog 原名（§8.4 不折叠、不合并），而 dirty 标记来自 DDL 文本，
+            // 各方言对未加引号标识符的折叠规则不同，故这里按忽略大小写匹配：多刷可接受，漏刷不行。
             .filter(|table| {
                 database_wide
                     || dirty_tables.is_empty()
-                    || dirty_tables.contains(&table.name.to_ascii_lowercase())
+                    || dirty_tables
+                        .iter()
+                        .any(|dirty| dirty.eq_ignore_ascii_case(&table.name))
             })
             .map(|table| table.name)
-            .collect()
+            .collect::<Vec<_>>();
+        (table_names, database_wide)
     };
+    // 触发后台刷新即说明该 scope 的元数据整体已过期（dirty 或 TTL）：例程/触发器不像列那样
+    // 能按表名精确刷新，直接失效该 scope 的例程/触发器索引，下次补全按需重新拉取并写回（§8.4）。
+    if let Ok(mut guard) = index.lock() {
+        guard.clear_routines_and_triggers(connection_id, database, schema);
+    }
     if table_names.is_empty() {
+        // 无匹配表的 dirty（对象已 DROP，或名称与 catalog 对不上）不会因刷新自动消失，
+        // 在此清掉，避免该 scope 永久 dirty、每次补全都触发后台刷新。
+        if let Ok(mut guard) = index.lock() {
+            guard.clear_dirty_tables(connection_id, database, schema);
+        }
         return Ok((0, 0));
+    }
+    // 库级失效（DDL / 表操作）时同时重取表清单：新建、重命名、删除的表才能及时进出候选，
+    // 否则索引里的表名只在冷启动时建立，删掉的表会一直被建议（§8.4 DDL 后刷新）。
+    if database_wide
+        && let Ok(tables) = list_completion_tables_for_connection_with_cancel(
+            config,
+            database,
+            schema,
+            "",
+            COMPLETION_METADATA_LIMIT,
+            &|| false,
+        )
+        && let Ok(mut guard) = index.lock()
+    {
+        guard.insert_tables(connection_id, database, schema, tables, config.kind);
     }
     let columns = list_completion_columns_for_tables_for_connection_with_cancel(
         config,
@@ -52,18 +82,18 @@ fn refresh_index_columns_in_background(
         &|| false,
     )?;
     let refreshed_columns = columns.len();
+    // 按表名精确分组（不折叠大小写）：同一批次内，PG 端已按 search_path 只返回每个表名
+    // 首个可见 schema 的列，故表名在批内唯一；折叠会让 `"Foo"` 与 `"foo"` 互相覆盖列（§8.4）。
     let mut by_table: BTreeMap<String, Vec<CompletionColumn>> = BTreeMap::new();
     for column in columns {
         by_table
-            .entry(column.table.to_ascii_lowercase())
+            .entry(column.table.clone())
             .or_default()
             .push(column);
     }
     if let Ok(mut guard) = index.lock() {
         for table in &table_names {
-            let table_columns = by_table
-                .remove(&table.to_ascii_lowercase())
-                .unwrap_or_default();
+            let table_columns = by_table.remove(table).unwrap_or_default();
             // replace_table_columns 内部 touch_meta → 更新 last_verified_at 并清 dirty，索引转为 fresh。
             guard.replace_table_columns(
                 connection_id,
@@ -183,6 +213,8 @@ impl AppController {
             TabKind::QueryEditor(editor) => Some(QueryRequest {
                 connection_id: editor.connection_id,
                 database: editor.database.clone(),
+                session_id: None,
+                schema: editor.schema.clone(),
                 text: sql_text_for_execution(&text, fluxdb_core::Pagination::DEFAULT_LIMIT),
                 mode: fluxdb_core::QueryMode::Selection,
                 options,
@@ -207,6 +239,7 @@ impl AppController {
         &self,
         connection_id: ConnectionId,
         database: Option<String>,
+        schema: Option<String>,
         text: String,
         options: QueryExecutionOptions,
         on_summary: &mut dyn FnMut(QueryExecutionSummary),
@@ -215,6 +248,8 @@ impl AppController {
         let request = QueryRequest {
             connection_id,
             database,
+            schema,
+            session_id: None,
             text: sql_text_for_execution(&text, fluxdb_core::Pagination::DEFAULT_LIMIT),
             mode: fluxdb_core::QueryMode::Selection,
             options,
@@ -482,7 +517,7 @@ impl AppController {
                 });
             }
             let routines = self
-                .completion_routines_with_cancel(
+                .indexed_completion_routines_with_cancel(
                     config,
                     editor.connection_id,
                     database,
@@ -514,7 +549,7 @@ impl AppController {
                 });
             }
             let routines = self
-                .completion_routines_with_cancel(
+                .indexed_completion_routines_with_cancel(
                     config,
                     editor.connection_id,
                     database,
@@ -581,7 +616,7 @@ impl AppController {
                 });
             }
             let triggers = self
-                .completion_triggers_with_cancel(
+                .indexed_completion_triggers_with_cancel(
                     config,
                     editor.connection_id,
                     database,
@@ -601,8 +636,14 @@ impl AppController {
                     label: trigger.name.clone(),
                     insert_text: trigger.name,
                     kind: QueryCompletionKind::Trigger,
-                    detail: trigger.table,
-                    documentation: None,
+                    detail: trigger.table.clone(),
+                    // 文档提示：触发器所属 schema 与表，便于确认作用于哪个对象（§8.4）。
+                    documentation: match (trigger.schema.as_deref(), trigger.table.as_deref()) {
+                        (Some(schema), Some(table)) => Some(format!("触发器（schema {schema}）\n表：{table}")),
+                        (None, Some(table)) => Some(format!("触发器\n表：{table}")),
+                        (Some(schema), None) => Some(format!("触发器（schema {schema}）")),
+                        (None, None) => None,
+                    },
                     filter_text: None,
                     sort_text: None,
                                     ..Default::default()
@@ -1618,6 +1659,91 @@ impl AppController {
             elapsed_us = started.elapsed().as_micros() as u64,
         );
         Ok(columns)
+    }
+
+    /// 例程候选：索引优先（含签名，随快照持久化），未命中再走连接器并写回索引。
+    ///
+    /// 与 tables/columns 同一形态：索引里已有该 scope 的例程就直接复用，避免每次补全
+    /// 重新拉 catalog；写入后同步持久化，重开应用无需重建。
+    /// 表操作（重命名/复制/删除）成功后失效该 scope 的补全缓存。
+    ///
+    /// 表操作直接执行 SQL、不走查询历史记录路径，故不会经过 `mark_query_history_completion_dirty`；
+    /// 这里按 scope 标脏，后台刷薪触发时会重取表清单与列，旧名/已删表不再被建议（§9.3）。
+    fn mark_table_action_completion_dirty(&self, object: &ObjectPath) {
+        if let Ok(mut index) = self.completion_index.lock() {
+            index.mark_dirty(object.connection_id, object.database.as_deref(), object.schema.as_deref());
+        }
+    }
+
+    fn indexed_completion_routines_with_cancel(
+        &self,
+        config: &ConnectionConfig,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<Vec<CompletionRoutine>> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(index) = self.completion_index.lock() {
+            let routines = index.database_routines(connection_id, database, schema);
+            if !routines.is_empty() {
+                return Ok(routines);
+            }
+        }
+        let routines =
+            self.completion_routines_with_cancel(config, connection_id, database, schema, should_cancel)?;
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(mut index) = self.completion_index.lock() {
+            index.insert_routines(
+                connection_id,
+                database,
+                schema,
+                routines.clone(),
+                config.kind,
+            );
+        }
+        self.save_persisted_completion_index(config, connection_id, database, schema);
+        Ok(routines)
+    }
+
+    /// 触发器候选：索引优先，未命中再走连接器并写回索引（同例程形态）。
+    fn indexed_completion_triggers_with_cancel(
+        &self,
+        config: &ConnectionConfig,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<Vec<CompletionTrigger>> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(index) = self.completion_index.lock() {
+            let triggers = index.database_triggers(connection_id, database, schema);
+            if !triggers.is_empty() {
+                return Ok(triggers);
+            }
+        }
+        let triggers =
+            self.completion_triggers_with_cancel(config, connection_id, database, schema, should_cancel)?;
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(mut index) = self.completion_index.lock() {
+            index.insert_triggers(
+                connection_id,
+                database,
+                schema,
+                triggers.clone(),
+                config.kind,
+            );
+        }
+        self.save_persisted_completion_index(config, connection_id, database, schema);
+        Ok(triggers)
     }
 
     fn completion_routines_with_cancel(

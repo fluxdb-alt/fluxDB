@@ -16,10 +16,12 @@
 /// 的历史互不串台。
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkbenchHistoryScope {
-    /// SQL 工作台：连接 + 可选 database / schema 字符串。
+    /// SQL 工作台：连接 + 可选 database + 可选 schema 字符串。
     Sql {
         connection_id: ConnectionId,
         database: Option<String>,
+        /// schema 作用域（PG）；MySQL/TiDB/Redis 恒为 None。
+        schema: Option<String>,
     },
     /// Redis 工作台：连接 + 逻辑数据库编号（0-15）。
     Redis {

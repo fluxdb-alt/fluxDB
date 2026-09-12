@@ -278,6 +278,8 @@ fn object_name_text(name: &ObjectName) -> Option<String> {
 const COMPLETION_CONTEXT_WINDOW_BYTES: usize = 64 * 1024;
 
 fn sql_completion_context(sql: &str, cursor: usize, dialect: DatabaseKind) -> SqlCompletionContext {
+    // 保留原始方言判定（标识符引号字符随方言不同），再换成 AST 方言适配器。
+    let kind = dialect;
     let dialect = sql_completion_dialect(dialect);
     let cursor = cursor.min(sql.len());
     // 补全只需要当前 statement 和光标前的局部语境。窗口上限避免 1MB 文档每次按键
@@ -286,10 +288,13 @@ fn sql_completion_context(sql: &str, cursor: usize, dialect: DatabaseKind) -> Sq
     let context_end = completion_context_end(sql, cursor);
     let context_sql = &sql[context_start..context_end];
     let before = &context_sql[..cursor - context_start];
-    let trailing = trailing_identifier(before);
+    let trailing = trailing_identifier(before, kind);
     let replace_start = context_start + trailing.start;
     let replace_end = if trailing.quoted_identifier
-        && sql.as_bytes().get(cursor).is_some_and(|byte| *byte == b'`')
+        && sql
+            .as_bytes()
+            .get(cursor)
+            .is_some_and(|byte| *byte == dialect_identifier_quote(kind))
     {
         cursor + 1
     } else {
@@ -1147,7 +1152,9 @@ fn sql_completion_dialect(dialect: DatabaseKind) -> &'static dyn SqlCompletionDi
     match dialect {
         DatabaseKind::MySql | DatabaseKind::TiDb => &MYSQL_COMPLETION_DIALECT,
         DatabaseKind::Sqlite => &SQLITE_COMPLETION_DIALECT,
-        DatabaseKind::MongoDb | DatabaseKind::Redis => &GENERIC_COMPLETION_DIALECT,
+        DatabaseKind::MongoDb | DatabaseKind::Redis | DatabaseKind::Postgres => {
+            &GENERIC_COMPLETION_DIALECT
+        }
     }
 }
 
@@ -1559,7 +1566,15 @@ struct TrailingIdentifier {
     quoted_identifier: bool,
 }
 
-fn trailing_identifier(before: &str) -> TrailingIdentifier {
+/// 方言的标识符引号字符：MySQL/TiDB 用反引号，其余（PostgreSQL/SQLite）用双引号。
+fn dialect_identifier_quote(kind: DatabaseKind) -> u8 {
+    match kind {
+        DatabaseKind::MySql | DatabaseKind::TiDb => b'`',
+        _ => b'"',
+    }
+}
+
+fn trailing_identifier(before: &str, kind: DatabaseKind) -> TrailingIdentifier {
     let mut prefix_start = before.len();
     for (index, ch) in before.char_indices().rev() {
         if is_sql_ident_char(ch) {
@@ -1569,7 +1584,10 @@ fn trailing_identifier(before: &str) -> TrailingIdentifier {
         }
     }
     let prefix = before[prefix_start..].to_string();
-    let quoted_identifier = prefix_start > 0 && before.as_bytes()[prefix_start - 1] == b'`';
+    // 已输入的起始引号（MySQL 反引号 / PG 双引号）说明这是带引号标识符：
+    // 替换范围纳入该引号，插入文本强制加引号并保留大小写（§8.4）。
+    let quoted_identifier =
+        prefix_start > 0 && before.as_bytes()[prefix_start - 1] == dialect_identifier_quote(kind);
     // 将左反引号纳入替换范围：既能恢复 FROM/JOIN 上下文，也避免采纳候选后留下旧引号。
     let start = prefix_start - usize::from(quoted_identifier);
     let qualifier_path = trailing_qualifier_path(before, start);
@@ -2463,6 +2481,10 @@ fn function_completion_items_for(
     items
 }
 
+/// 表候选（P1.5 + §8.4 跨 schema 消歧）。
+///
+/// 同表名出现在多个 schema（PG search_path 多段）时，label 与 apply 文本加 `schema.` 前缀区分，
+/// 唯一表名保持裸名；`detail` 始终展示所属 schema/库，便于用户确认来源。
 fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<QueryCompletionItem> {
     let mut tables = tables
         .into_iter()
@@ -2476,7 +2498,22 @@ fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<Que
                     .to_ascii_lowercase()
                     .cmp(&right.name.to_ascii_lowercase())
             })
+            .then_with(|| {
+                left.schema
+                    .as_deref()
+                    .unwrap_or_default()
+                    .cmp(right.schema.as_deref().unwrap_or_default())
+            })
     });
+
+    // 同表名跨 schema 计数：仅当同名出现在多个不同 schema/库时才加限定前缀。
+    let mut owners: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for table in &tables {
+        owners
+            .entry(table.name.clone())
+            .or_default()
+            .insert(table.schema.clone().or_else(|| table.database.clone()).unwrap_or_default());
+    }
 
     tables
         .into_iter()
@@ -2486,25 +2523,58 @@ fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<Que
             } else {
                 QueryCompletionKind::Table
             };
-            QueryCompletionItem {
-                label: table.name.clone(),
-                insert_text: table.name,
-                kind,
-                detail: table
+            let namespace = table
+                .schema
+                .clone()
+                .or_else(|| table.database.clone())
+                .unwrap_or_default();
+            let ambiguous = owners
+                .get(&table.name)
+                .is_some_and(|set| set.len() > 1)
+                && !namespace.is_empty();
+            let detail = match table.schema.clone() {
+                Some(schema) => Some(match table.database.clone() {
+                    Some(database) => format!("{database}.{schema}"),
+                    None => schema,
+                }),
+                None => table
                     .database
+                    .clone()
                     .or_else(|| Some(completion_kind_label(kind).to_string())),
-                documentation: None,
+            };
+            let (label, insert_text) = if ambiguous {
+                (
+                    format!("{namespace}.{}", table.name),
+                    format!("{namespace}.{}", table.name),
+                )
+            } else {
+                (table.name.clone(), table.name)
+            };
+            QueryCompletionItem {
+                label,
+                insert_text,
+                kind,
+                detail,
+                // 表/视图注释作为文档提示；无注释时不伪造。
+                documentation: table
+                    .comment
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|comment| !comment.is_empty())
+                    .map(str::to_string),
                 filter_text: None,
                 sort_text: None,
-                            ..Default::default()
-}
+                ..Default::default()
+            }
         })
         .collect()
 }
 
-/// 将 routines 中指定 kind 的候选生成为补全项（P1.7）。
+/// 将 routines 中指定 kind 的候选生成为补全项（P1.7 + §8.4 函数重载）。
 ///
 /// 函数无参数 metadata 时插入 `name()`，方便继续输入参数；procedure 插入裸名。
+/// 同名重载（同 schema、同 kind、签名不同）分别成条：detail/文档展示签名便于区分，
+/// insert_text 仍为可调用的 `name()`，不把重载合并成一个候选。
 fn routine_completion_items(
     routines: Vec<CompletionRoutine>,
     kind: CompletionRoutineKind,
@@ -2515,24 +2585,51 @@ fn routine_completion_items(
         .filter_map(|routine| {
             (routine.kind == kind
                 && matches_completion_prefix(&routine.name, prefix))
-            .then(|| QueryCompletionItem {
-                label: routine.name.clone(),
-                insert_text: match kind {
-                    CompletionRoutineKind::Function => format!("{}()", routine.name),
-                    CompletionRoutineKind::Procedure => routine.name,
-                },
-                kind: match kind {
-                    CompletionRoutineKind::Function => QueryCompletionKind::Function,
-                    CompletionRoutineKind::Procedure => QueryCompletionKind::Procedure,
-                },
-                detail: match kind {
-                    CompletionRoutineKind::Function => Some("function".to_string()),
-                    CompletionRoutineKind::Procedure => Some("procedure".to_string()),
-                },
-                documentation: None,
-                filter_text: None,
-                sort_text: None,
-                insert_text_format: InsertTextFormat::PlainText,
+            .then(|| {
+                let label = match routine.signature.as_deref() {
+                    Some(signature) if !signature.is_empty() => {
+                        format!("{}({signature})", routine.name)
+                    }
+                    _ => routine.name.clone(),
+                };
+                let detail = match (kind, routine.signature.as_deref()) {
+                    (CompletionRoutineKind::Function, Some(signature)) if !signature.is_empty() => {
+                        Some(format!("function({signature})"))
+                    }
+                    (CompletionRoutineKind::Procedure, Some(signature)) if !signature.is_empty() => {
+                        Some(format!("procedure({signature})"))
+                    }
+                    (CompletionRoutineKind::Function, _) => Some("function".to_string()),
+                    (CompletionRoutineKind::Procedure, _) => Some("procedure".to_string()),
+                };
+                let name = routine.name.clone();
+                QueryCompletionItem {
+                    label,
+                    insert_text: match kind {
+                        CompletionRoutineKind::Function => format!("{name}()"),
+                        CompletionRoutineKind::Procedure => name,
+                    },
+                    kind: match kind {
+                        CompletionRoutineKind::Function => QueryCompletionKind::Function,
+                        CompletionRoutineKind::Procedure => QueryCompletionKind::Procedure,
+                    },
+                    detail,
+                    documentation: routine.signature.as_deref().map(|signature| {
+                        let role = match kind {
+                            CompletionRoutineKind::Function => "函数",
+                            CompletionRoutineKind::Procedure => "过程",
+                        };
+                        match routine.schema.as_deref() {
+                            Some(schema) if !schema.is_empty() => {
+                                format!("{role} {}（schema {schema}）\n参数：{signature}", routine.name)
+                            }
+                            _ => format!("{role} {}\n参数：{signature}", routine.name),
+                        }
+                    }),
+                    filter_text: None,
+                    sort_text: None,
+                    insert_text_format: InsertTextFormat::PlainText,
+                }
             })
         })
         .collect()
@@ -2607,10 +2704,18 @@ fn snippet_completion_items(prefix: &str) -> Vec<QueryCompletionItem> {
         .collect()
 }
 
-/// 判断标识符是否需要引号包裹（P1.6）：保留字、以数字开头、或含非标识符字符时。
+/// 判断标识符是否需要引号包裹（P1.6 + §8.4 大小写）。
+///
+/// 规则：保留字、以数字开头、含非标识符字符时必须加引号；此外 PostgreSQL 把未加引号的
+/// 标识符折叠为小写，含大写字母的名字不加引号会指向另一个对象，因此同样必须加引号。
+/// MySQL/TiDB/SQLite 不做折叠，保持原判定。
 ///
 /// `reserved` 由调用方提供该方言的保留字判定，避免在纯函数层引入关键字表耦合。
-pub fn identifier_needs_quote(name: &str, reserved: impl Fn(&str) -> bool) -> bool {
+pub fn identifier_needs_quote(
+    name: &str,
+    kind: DatabaseKind,
+    reserved: impl Fn(&str) -> bool,
+) -> bool {
     if name.is_empty() {
         return false;
     }
@@ -2618,6 +2723,9 @@ pub fn identifier_needs_quote(name: &str, reserved: impl Fn(&str) -> bool) -> bo
         return true;
     }
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return true;
+    }
+    if kind == DatabaseKind::Postgres && name.chars().any(|c| c.is_ascii_uppercase()) {
         return true;
     }
     reserved(name)
@@ -2632,7 +2740,7 @@ pub fn quote_identifier(
     kind: DatabaseKind,
     reserved: impl Fn(&str) -> bool,
 ) -> String {
-    if !identifier_needs_quote(name, &reserved) {
+    if !identifier_needs_quote(name, kind, &reserved) {
         return name.to_string();
     }
     let (open, close) = match kind {
@@ -2779,6 +2887,32 @@ fn derived_column_completion_items(
 }
 
 #[allow(dead_code)]
+/// 列候选的文档提示（§8.4）：类型、可空性、主键与注释，逐行展示。
+///
+/// 只在有真实 metadata 时输出对应行，不用占位文本冒充已知信息。
+pub fn column_completion_documentation(column: &CompletionColumn) -> Option<String> {
+    let mut lines = Vec::new();
+    if let Some(type_name) = column
+        .type_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(format!("类型：{type_name}"));
+    }
+    lines.push(format!("可空：{}", if column.nullable { "是" } else { "否" }));
+    if column.primary_key {
+        lines.push("主键".to_string());
+    }
+    if let Some(comment) = column
+        .comment
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(format!("注释：{}", comment.trim()));
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
 fn column_completion_detail(column: &CompletionColumn) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(type_name) = column.type_name.as_ref().filter(|value| !value.is_empty()) {

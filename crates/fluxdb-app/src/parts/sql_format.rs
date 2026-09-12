@@ -249,6 +249,12 @@ fn sql_statement_ranges(sql: &str) -> Vec<(usize, usize)> {
             '-' if matches!(chars.peek(), Some((_, '-'))) => skip_line_comment(&mut chars),
             '#' => skip_line_comment(&mut chars),
             '/' if matches!(chars.peek(), Some((_, '*'))) => skip_block_comment(&mut chars),
+            // PG dollar-quote `$tag$...$tag$` / `$$...$$`：体内分号/引号属函数体，不得切分。
+            '$' => {
+                if let Some(tag) = dollar_quote_opener_tag(&mut chars) {
+                    skip_dollar_quote(&mut chars, &tag);
+                }
+            }
             ';' | '；' => ranges.push((index, ch.len_utf8())),
             _ => {}
         }
@@ -462,6 +468,72 @@ fn skip_block_comment(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>
     }
 }
 
+/// 识别 PG dollar-quote 开启符 `$$` 或 `$tag$`，识别成功则消费到闭合 `$` 并返回标签；
+/// 识别失败返回 `None`。标签须为字母/下划线开头，仅字母数字下划线（`$1` 参数、`$name` 不计入）。
+fn dollar_quote_opener_tag(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+) -> Option<String> {
+    let mut tag = String::new();
+    // 空标签 `$$`。
+    if matches!(chars.peek(), Some((_, '$'))) {
+        chars.next();
+        return Some(tag);
+    }
+    // 非空标签须以字母或下划线开头。
+    match chars.peek() {
+        Some((_, c)) if c.is_ascii_alphabetic() || *c == '_' => {}
+        _ => return None,
+    }
+    while let Some((_, c)) = chars.peek() {
+        if c.is_ascii_alphanumeric() || *c == '_' {
+            tag.push(*c);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    if matches!(chars.peek(), Some((_, '$'))) {
+        chars.next();
+        Some(tag)
+    } else {
+        None
+    }
+}
+
+/// 跳过 dollar-quote 体内直到匹配的结束 `$tag$`。标签体不含 `;`/`；`，
+/// 故不匹配处的消费不影响分号切分。
+fn skip_dollar_quote(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    tag: &str,
+) {
+    while let Some((_, c)) = chars.peek().copied() {
+        if c != '$' {
+            chars.next();
+            continue;
+        }
+        // 试匹配 `$` + tag + `$`。
+        chars.next(); // 消费起始 `$`
+        let mut tag_chars = tag.chars();
+        let mut matched = true;
+        for tc in tag_chars.by_ref() {
+            match chars.peek() {
+                Some((_, c2)) if *c2 == tc => {
+                    chars.next();
+                }
+                _ => {
+                    matched = false;
+                    break;
+                }
+            }
+        }
+        if matched && matches!(chars.peek(), Some((_, '$'))) {
+            chars.next(); // 消费结束 `$`
+            return;
+        }
+        // 未匹配：继续扫描（已消费的 tag/`$` 字符不含分号，不破坏切分）。
+    }
+}
+
 fn is_sql_word_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
@@ -668,7 +740,8 @@ fn format_sql_with_options(sql: &str, dialect: DatabaseKind) -> String {
                 | DatabaseKind::TiDb
                 | DatabaseKind::Sqlite
                 | DatabaseKind::MongoDb
-                | DatabaseKind::Redis => Dialect::Generic,
+                | DatabaseKind::Redis
+                | DatabaseKind::Postgres => Dialect::Generic,
             },
             ..FormatOptions::default()
         },

@@ -66,6 +66,7 @@ impl NavicatMain {
             options: config.options,
             redis_profile: config.redis_profile.clone(),
             mysql_profile: config.mysql_profile.clone(),
+            postgres_profile: config.postgres_profile.clone(),
         };
         let event = self
             .controller
@@ -253,6 +254,21 @@ impl NavicatMain {
         })
     }
 
+    /// 新建 schema 成功后失效该库对象缓存并重取 schema 清单，使新 schema 出现在对象树。
+    fn invalidate_database_schema_cache(
+        &mut self,
+        database_path: &ObjectPath,
+        cx: &mut Context<Self>,
+    ) {
+        let database = database_path
+            .database
+            .clone()
+            .unwrap_or_else(|| database_path.name.clone());
+        let key = database_tree_key(database_path.connection_id, &database);
+        self.loaded_database_children.remove(&key);
+        self.load_database_children(database_path.clone(), key, cx);
+    }
+
     fn toggle_database_tree(
         &mut self,
         connection_id: ConnectionId,
@@ -289,6 +305,16 @@ impl NavicatMain {
         self.loading_databases.insert(database_key.clone());
         let mut controller = self.controller.clone();
         let task_key = database_key.clone();
+        // 生命周期防旧响应写回：记录发起时的连接 id 与 config，完成时若连接已不存在/已断开/
+        // 配置已变更（断开、重连、改配置），则丢弃迟到响应，不 merge 覆盖新状态。
+        let connection_id_for_stale = database_path.connection_id;
+        let stale_guard_config = self
+            .controller
+            .state()
+            .connections
+            .iter()
+            .find(|c| c.config.id == connection_id_for_stale)
+            .map(|c| c.config.clone());
         let task = cx.spawn(async move |view, cx| {
             let (controller, event) = cx
                 .background_spawn(async move {
@@ -303,9 +329,19 @@ impl NavicatMain {
                 };
                 view.update(cx, |this, cx| {
                     let loaded = if let AppEvent::ObjectsLoaded(Some(parent), objects) = &event {
-                        this.controller
-                            .merge_loaded_children(parent, objects.clone());
-                        true
+                        // 旧响应防覆盖：连接仍存在、仍连接、config 未变时才允许合并。
+                        let still_valid = this.controller.is_connection_load_current(
+                            connection_id_for_stale,
+                            stale_guard_config.as_ref(),
+                        );
+                        if still_valid {
+                            this.controller
+                                .merge_loaded_children(parent, objects.clone());
+                            true
+                        } else {
+                            // 连接已断开/删除/配置变更：丢弃迟到响应，不写回。
+                            false
+                        }
                     } else {
                         this.controller.merge_last_error_from(&controller);
                         false
@@ -323,14 +359,44 @@ impl NavicatMain {
         cx.notify();
     }
 
+    fn toggle_schema_tree(
+        &mut self,
+        connection_id: ConnectionId,
+        schema_path: ObjectPath,
+        has_loaded_children: bool,
+        cx: &mut Context<Self>,
+    ) {
+        // PG schema 行独立于数据库行展开/加载：key 带 schema，展开时懒加载该 schema 的关系。
+        let database = schema_path
+            .database
+            .clone()
+            .unwrap_or_else(|| schema_path.name.clone());
+        let schema = schema_path
+            .schema
+            .clone()
+            .unwrap_or_else(|| schema_path.name.clone());
+        let key = schema_tree_key(connection_id, &database, &schema);
+        let expanded = self.expanded_databases.get(&key).copied().unwrap_or(false);
+        self.expanded_databases.insert(key.clone(), !expanded);
+
+        if !expanded && !has_loaded_children && !self.loading_databases.contains(&key) {
+            self.load_database_children(schema_path, key, cx);
+            return;
+        }
+        cx.notify();
+    }
+
     fn toggle_object_group_tree(
         &mut self,
         connection_id: ConnectionId,
         database: String,
+        schema: Option<&str>,
         group: ObjectGroup,
         cx: &mut Context<Self>,
     ) {
-        let key = object_group_tree_key(connection_id, &database, group);
+        // key 必须与渲染侧 `object_group_tree_key_scoped` 一致：PG 分组按 schema 分桶，
+        // 若这里用不带 schema 的 key，写入的展开态永远匹配不上渲染读的 key，分组点不开。
+        let key = object_group_tree_key_scoped(connection_id, &database, schema, group);
         let expanded = self
             .expanded_object_groups
             .get(&key)

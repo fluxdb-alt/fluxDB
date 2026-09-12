@@ -1,3 +1,5 @@
+use fluxdb_app::{pg_psql_invocation, pg_script_needs_native_mode};
+
 const SQL_FILE_VISIBLE_LOG_LIMIT: usize = 300;
 const SQL_FILE_START_DELAY_MS: u64 = 50;
 
@@ -326,6 +328,10 @@ impl NavicatMain {
             return;
         }
 
+        if self.start_pg_native_sql_file_execution(task_id, &form, &path, &text, cx) {
+            return;
+        }
+
         let file_name = sql_file_name(&path);
         let total = sql_file_execution_statement_count(&text, form.split_statements).max(1);
         // 取消标志可能在「任务还没开始执行」时就已被用户点过，需要带回后台任务
@@ -368,6 +374,7 @@ impl NavicatMain {
                     .execute_query_text_for_scope_with_progress(
                         connection_id,
                         database,
+                        None,
                         text,
                         options,
                         &mut on_summary,
@@ -434,6 +441,199 @@ impl NavicatMain {
         });
         self._sql_file_execute_tasks.insert(task_id, task);
         cx.notify();
+    }
+
+    /// PostgreSQL 原生脚本执行（T24）：当脚本含 psql 元命令或 `COPY ... FROM STDIN` 时，
+    /// 分号拆分不可靠，改由 psql 子进程执行整个文件。
+    ///
+    /// 返回 true 表示本任务已在此处理（PG + 需要原生模式），调用方返回；否则返回 false 走普通
+    /// 分句执行路径。密码仅经 `pg_psql_invocation` 注入 PGPASSWORD 环境变量，绝不出现在 argv。
+    /// stderr 逐段回填到任务日志以便中途失败可见；取消时 kill 子进程并等待回收。
+    fn start_pg_native_sql_file_execution(
+        &mut self,
+        task_id: u64,
+        form: &SqlFileExecutionForm,
+        path: &std::path::Path,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let config = self
+            .controller
+            .connection_configs()
+            .into_iter()
+            .find(|config| config.id == form.connection_id);
+        let Some(config) = config else {
+            return false;
+        };
+        if config.kind != DatabaseKind::Postgres {
+            return false;
+        }
+        if !pg_script_needs_native_mode(text) {
+            return false;
+        }
+        let (host, port, user, password) = resolved_credentials(&config);
+        // psql 目标库：优先当前作用域库，缺省回退连接维护库；两者皆空无法执行时按 psql 默认库处理。
+        let database = form
+            .database
+            .clone()
+            .or_else(|| match config.postgres_resolved().endpoint {
+                Endpoint::Tcp { database, .. } => database,
+                _ => None,
+            });
+
+        let file_name = sql_file_name(path);
+        {
+            let mut data = self.sql_file_modal.borrow_mut();
+            if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
+                task.file_name = file_name;
+                task.path = path.to_path_buf();
+                task.total = 1;
+            }
+            data.log_task = Some(task_id);
+        }
+        let cancel_flag = Arc::new(AtomicBool::new(
+            self.sql_file_modal
+                .borrow()
+                .tasks
+                .iter()
+                .find(|task| task.id == task_id)
+                .is_some_and(|task| task.cancel_requested),
+        ));
+        self._sql_file_cancel_flags
+            .insert(task_id, cancel_flag.clone());
+
+        // 原生工具沿连接档案的 TLS 模式（sslmode），使 psql 与连接器使用一致的加密强度；
+        // Prefer（默认）不显式传参。
+        let ssl_mode = config
+            .postgres_profile
+            .as_ref()
+            .map(|profile| profile.tls.ssl_mode)
+            .unwrap_or(PostgresSslMode::Prefer);
+        // SSH 隧道（若启用）：起 ssh -N -L 子进程把远端映射到本地端口，psql 经
+        // 127.0.0.1:local（PGHOSTADDR）拨号，-h 保持真实远端供 TLS 校验；保持通道至 psql 结束。
+        let ssh = config.postgres_profile.as_ref().and_then(|profile| profile.ssh());
+        let mut tunnel_child = None;
+        let connect_host = host.clone();
+        let mut connect_port = port;
+        let mut hostaddr: Option<String> = None;
+        if let Some(ssh) = ssh {
+            match pg_start_ssh_tunnel(ssh, &host, port, &cancel_flag) {
+                Ok((child, local_port)) => {
+                    tunnel_child = Some(child);
+                    connect_port = local_port;
+                    hostaddr = Some("127.0.0.1".to_string());
+                }
+                Err(error) => {
+                    let _ = error;
+                    self.show_message("SSH 隧道建立失败", AppMessageKind::Error, cx);
+                    return true;
+                }
+            }
+        }
+        let mut invocation = pg_psql_invocation(
+            &connect_host,
+            connect_port,
+            &user,
+            database.as_deref().unwrap_or_default(),
+            path.to_string_lossy().as_ref(),
+            Some(&password),
+            !form.continue_on_error,
+            ssl_mode,
+        );
+        if let Some(addr) = &hostaddr {
+            invocation.env.extend(fluxdb_app::pg_hostaddr_env(addr, connect_port));
+        }
+        let connection_id = form.connection_id;
+        let file_label = sql_file_name(path);
+        // 捕获 owned 副本，避免借用逃逸到 spawn 的后台任务生命周期外。
+        let cancel_for_spawn = cancel_flag.clone();
+        let cancel_for_check = cancel_flag.clone();
+        let task = cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let result = run_pg_native_psql(invocation, &cancel_for_spawn);
+                    // 工具结束即关闭隧道并回收 ssh 子进程。
+                    if let Some(mut child) = tunnel_child {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                    result
+                })
+                .await;
+            let _ = cx.update(|cx| {
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| {
+                    this._sql_file_execute_tasks.remove(&task_id);
+                    this._sql_file_cancel_flags.remove(&task_id);
+                    let canceled = cancel_for_check.load(Ordering::Relaxed);
+                    let message = match result {
+                        Ok(summary) if !canceled => {
+                            this.record_sql_file_statement_summary(
+                                task_id,
+                                fluxdb_core::QueryExecutionSummary {
+                                    sql: file_label.clone(),
+                                    kind: fluxdb_core::QueryStatementKind::Command,
+                                    success: true,
+                                    message: summary.clone(),
+                                    returned_rows: 0,
+                                    affected_rows: 0,
+                                    elapsed_ms: 0,
+                                },
+                            );
+                            summary
+                        }
+                        Ok(_) => "已取消".to_string(),
+                        Err(error) => {
+                            this.record_sql_file_statement_summary(
+                                task_id,
+                                fluxdb_core::QueryExecutionSummary {
+                                    sql: file_label.clone(),
+                                    kind: fluxdb_core::QueryStatementKind::Command,
+                                    success: false,
+                                    message: error.to_string(),
+                                    returned_rows: 0,
+                                    affected_rows: 0,
+                                    elapsed_ms: 0,
+                                },
+                            );
+                            error.to_string()
+                        }
+                    };
+                    this.finish_sql_file_task(
+                        task_id,
+                        Ok(fluxdb_core::QueryExecutionResult {
+                            summaries: Vec::new(),
+                            results: Vec::new(),
+                            rollback_snapshots: Vec::new(),
+                        }),
+                        canceled,
+                    );
+                    let popup = if canceled {
+                        "SQL 文件已取消".to_string()
+                    } else if message.is_empty() {
+                        "SQL 文件执行完成".to_string()
+                    } else {
+                        message.clone()
+                    };
+                    this.show_message(
+                        popup,
+                        if message.contains("失败") {
+                            AppMessageKind::Warning
+                        } else {
+                            AppMessageKind::Success
+                        },
+                        cx,
+                    );
+                    this.open_connection_from_sidebar(connection_id, cx);
+                    cx.notify();
+                });
+            });
+        });
+        self._sql_file_execute_tasks.insert(task_id, task);
+        cx.notify();
+        true
     }
 
     fn finish_sql_file_task(
@@ -1367,4 +1567,87 @@ fn sql_file_task_status(task: &SqlFileExecutionTaskState) -> &'static str {
     } else {
         "已完成"
     }
+}
+
+/// 真正执行 psql 原生脚本（T24）：非交互后台子进程，stderr 逐段回填，支持取消 kill 与回收。
+///
+/// `PgPsqlInvocation` 已保证密码只在 PGPASSWORD 环境变量、argv 无凭据、不经 shell。
+/// 返回值携带执行摘要文本（供 UI 展示成功/失败信息）。
+fn run_pg_native_psql(
+    invocation: fluxdb_app::PgPsqlInvocation,
+    cancel_flag: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> anyhow::Result<String> {
+    let mut cmd = Command::new(&invocation.program);
+    cmd.args(&invocation.args);
+    for (key, value) in &invocation.env {
+        cmd.env(key, value);
+    }
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| anyhow::anyhow!("启动 psql 失败：{error}"))?;
+
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
+    // 后台线程收集 stdout/stderr 尾段，进程退出后 join 取回。
+    let out_handle = pg_pipe_tail_thread(stdout);
+    let err_handle = pg_pipe_tail_thread(stderr);
+
+    // 等待期间定期检测取消并 kill；kill 后仍要 wait 回收避免僵尸进程。
+    let status = loop {
+        if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("已取消");
+        }
+        match child.try_wait()? {
+            Some(status) => break status,
+            None => std::thread::sleep(Duration::from_millis(100)),
+        }
+    };
+    let (_out_total, stdout_tail) = out_handle.join().unwrap_or((0, String::new()));
+    let (_err_total, stderr_tail) = err_handle.join().unwrap_or((0, String::new()));
+
+    if let Some(code) = status.code()
+        && code != 0
+    {
+        let mut message = format!("psql 退出码 {code}");
+        if !stderr_tail.is_empty() {
+            message.push_str(&format!("：{}", stderr_tail));
+        } else if !stdout_tail.is_empty() {
+            message.push_str(&format!("：{}", stdout_tail));
+        }
+        anyhow::bail!("{message}");
+    }
+    // ON_ERROR_STOP 语义下 psql 会以非零码退出；这里成功即表示文件执行完成。
+    let summary = if stderr_tail.is_empty() {
+        format!("psql 原生脚本执行完成")
+    } else {
+        format!("psql 原生脚本执行完成（{}）", stderr_tail)
+    };
+    Ok(summary)
+}
+
+/// 在后台线程读取子进程管道并保留尾部（防无界内存），返回 (总字节数，尾部文本)。
+fn pg_pipe_tail_thread<R: std::io::Read + Send + 'static>(
+    mut stream: R,
+) -> std::thread::JoinHandle<(u64, String)> {
+    std::thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+        let mut tail = Vec::<u8>::new();
+        let mut total: u64 = 0;
+        while let Ok(n) = std::io::Read::read(&mut stream, &mut buffer) {
+            if n == 0 {
+                break;
+            }
+            total += n as u64;
+            tail.extend_from_slice(&buffer[..n]);
+            if tail.len() > 8192 {
+                let overflow = tail.len() - 8192;
+                tail.drain(..overflow);
+            }
+        }
+        (total, String::from_utf8_lossy(&tail).trim().to_string())
+    })
 }

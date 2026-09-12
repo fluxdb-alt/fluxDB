@@ -35,6 +35,12 @@ struct TableId(usize);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 struct ColumnId(usize);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+struct RoutineId(usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+struct TriggerId(usize);
+
 #[derive(Clone, Debug)]
 struct IndexedColumnRef {
     source: ColumnRef,
@@ -50,6 +56,12 @@ struct CompletionIndex {
     column_prefix_index: BTreeMap<PrefixKey, Vec<ColumnId>>,
     tables: Vec<TableRef>,
     columns: Vec<IndexedColumnRef>,
+    /// 例程（含签名 identity arguments）与触发器同样进索引并随快照持久化：
+    /// 同名重载按签名分条，避免缓存/持久化时把重载合并成一个候选（§8.4）。
+    routines_by_db: BTreeMap<DbKey, Vec<RoutineId>>,
+    routines: Vec<RoutineRef>,
+    triggers_by_db: BTreeMap<DbKey, Vec<TriggerId>>,
+    triggers: Vec<TriggerRef>,
     dirty_databases: BTreeSet<DbKey>,
     dirty_tables: BTreeSet<TableKey>,
     metas: BTreeMap<DbKey, CompletionIndexMeta>,
@@ -70,6 +82,10 @@ impl CompletionIndex {
         }
     }
 
+    /// 表索引键：名称按 catalog 原样持有，不做大小写折叠。
+    ///
+    /// PG 允许 `"Foo"` 与 `"foo"` 并存（未加引号才折叠为小写），折叠会合并两个真实对象
+    /// 并互相覆盖列（§8.4）。大小写差异在匹配阶段按方言处理，不在存储阶段合并。
     fn table_key(
         connection_id: ConnectionId,
         database: Option<&str>,
@@ -80,7 +96,7 @@ impl CompletionIndex {
             connection_id,
             database: database.map(str::to_string),
             schema: schema.map(str::to_string),
-            table: table.to_ascii_lowercase(),
+            table: table.to_string(),
         }
     }
 
@@ -101,7 +117,8 @@ impl CompletionIndex {
                 name: table.name,
                 kind: table.kind,
                 rows: None,
-                comment: None,
+                // 注释随表元数据进索引与快照，供补全项文档提示（§8.4）。
+                comment: table.comment,
             };
             let table_id = TableId(self.tables.len());
             self.tables.push(source);
@@ -148,8 +165,165 @@ impl CompletionIndex {
 
         self.columns_by_table.insert(table_key, column_ids);
         self.touch_meta(db_key, db_kind);
-        self.dirty_tables
-            .retain(|key| key != &Self::table_key(connection_id, database, schema, table));
+        self.clear_dirty_table_names_matching(connection_id, database, schema, table);
+    }
+
+    /// 清除指定库/schema 下「按名称匹配（忽略大小写）」的表级 dirty 标记。
+    ///
+    /// 存储键按 catalog 原名（§8.4 不折叠、不合并），但 dirty 标记来自 DDL 文本，
+    /// 各客户端方言对未加引号标识符的折叠规则不同（PG 折小写、MySQL 视配置），
+    /// 故清除与匹配都按忽略大小写进行：多清一点只是多刷一次，不会漏刷。
+    /// 失效指定库/schema 的例程与触发器索引（表与列不受影响）。
+    ///
+    /// 例程/触发器无法按表名精确刷新，DDL 或 TTL 过期后整体失效，下次补全按需重取（§8.4）。
+    fn clear_routines_and_triggers(
+        &mut self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+    ) {
+        let db_key = Self::db_key(connection_id, database, schema);
+        self.routines_by_db.remove(&db_key);
+        self.triggers_by_db.remove(&db_key);
+    }
+
+    /// 清除指定库/schema 的**全部**表级 dirty 标记（库级 dirty 标记保留，由整库刷新负责）。
+    fn clear_dirty_tables(
+        &mut self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+    ) {
+        self.dirty_tables.retain(|key| {
+            !(key.connection_id == connection_id
+                && key.database.as_deref() == database
+                && key.schema.as_deref() == schema)
+        });
+    }
+
+    fn clear_dirty_table_names_matching(
+        &mut self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        table: &str,
+    ) {
+        self.dirty_tables.retain(|key| {
+            !(key.connection_id == connection_id
+                && key.database.as_deref() == database
+                && key.schema.as_deref() == schema
+                && key.table.eq_ignore_ascii_case(table))
+        });
+    }
+
+    /// 写入某 scope 的例程索引（整批替换）。
+    ///
+    /// 去重键含签名：PG 同名但 identity arguments 不同的重载是不同候选，必须分别保留。
+    fn insert_routines(
+        &mut self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        routines: Vec<CompletionRoutine>,
+        db_kind: DatabaseKind,
+    ) {
+        let db_key = Self::db_key(connection_id, database, schema);
+        let mut seen = BTreeSet::new();
+        let mut routine_ids = Vec::new();
+        for routine in routines {
+            let reference = RoutineRef {
+                database: database.map(str::to_string),
+                schema: routine.schema.or_else(|| schema.map(str::to_string)),
+                name: routine.name,
+                kind: routine.kind,
+                signature: routine.signature,
+            };
+            let dedupe_key = (
+                reference.schema.clone(),
+                reference.name.clone(),
+                reference.signature.clone(),
+            );
+            if !seen.insert(dedupe_key) {
+                continue;
+            }
+            let routine_id = RoutineId(self.routines.len());
+            self.routines.push(reference);
+            routine_ids.push(routine_id);
+        }
+        self.routines_by_db.insert(db_key.clone(), routine_ids);
+        self.touch_meta(db_key, db_kind);
+    }
+
+    fn database_routines(
+        &self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+    ) -> Vec<CompletionRoutine> {
+        let db_key = Self::db_key(connection_id, database, schema);
+        self.routines_by_db
+            .get(&db_key)
+            .into_iter()
+            .flat_map(|ids| ids.iter())
+            .filter_map(|id| self.routines.get(id.0))
+            .map(|reference| CompletionRoutine {
+                schema: reference.schema.clone(),
+                name: reference.name.clone(),
+                kind: reference.kind,
+                signature: reference.signature.clone(),
+            })
+            .collect()
+    }
+
+    /// 写入某 scope 的触发器索引（整批替换）。
+    fn insert_triggers(
+        &mut self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        triggers: Vec<CompletionTrigger>,
+        db_kind: DatabaseKind,
+    ) {
+        let db_key = Self::db_key(connection_id, database, schema);
+        let mut seen = BTreeSet::new();
+        let mut trigger_ids = Vec::new();
+        for trigger in triggers {
+            let reference = TriggerRef {
+                database: database.map(str::to_string),
+                schema: trigger.schema.or_else(|| schema.map(str::to_string)),
+                name: trigger.name,
+                table: trigger.table,
+            };
+            let dedupe_key = (reference.schema.clone(), reference.name.clone(), reference.table.clone());
+            if !seen.insert(dedupe_key) {
+                continue;
+            }
+            let trigger_id = TriggerId(self.triggers.len());
+            self.triggers.push(reference);
+            trigger_ids.push(trigger_id);
+        }
+        self.triggers_by_db.insert(db_key.clone(), trigger_ids);
+        self.touch_meta(db_key, db_kind);
+    }
+
+    fn database_triggers(
+        &self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+    ) -> Vec<CompletionTrigger> {
+        let db_key = Self::db_key(connection_id, database, schema);
+        self.triggers_by_db
+            .get(&db_key)
+            .into_iter()
+            .flat_map(|ids| ids.iter())
+            .filter_map(|id| self.triggers.get(id.0))
+            .map(|reference| CompletionTrigger {
+                schema: reference.schema.clone(),
+                name: reference.name.clone(),
+                table: reference.table.clone(),
+            })
+            .collect()
     }
 
     fn insert_snapshot(&mut self, snapshot: CompletionIndexSnapshot) {
@@ -190,6 +364,26 @@ impl CompletionIndex {
                 .push(column_id);
             self.index_column_prefixes(&db_key, column_id);
         }
+        let routine_ids = snapshot
+            .routines
+            .into_iter()
+            .map(|routine| {
+                let routine_id = RoutineId(self.routines.len());
+                self.routines.push(routine);
+                routine_id
+            })
+            .collect::<Vec<_>>();
+        self.routines_by_db.insert(db_key.clone(), routine_ids);
+        let trigger_ids = snapshot
+            .triggers
+            .into_iter()
+            .map(|trigger| {
+                let trigger_id = TriggerId(self.triggers.len());
+                self.triggers.push(trigger);
+                trigger_id
+            })
+            .collect::<Vec<_>>();
+        self.triggers_by_db.insert(db_key.clone(), trigger_ids);
         self.metas.insert(db_key, snapshot.meta);
     }
 
@@ -215,6 +409,20 @@ impl CompletionIndex {
             .flat_map(|ids| ids.iter())
             .filter_map(|id| self.columns.get(id.0).map(|column| column.source.clone()))
             .collect::<Vec<_>>();
+        let routines = self
+            .routines_by_db
+            .get(&db_key)
+            .into_iter()
+            .flat_map(|ids| ids.iter())
+            .filter_map(|id| self.routines.get(id.0).cloned())
+            .collect::<Vec<_>>();
+        let triggers = self
+            .triggers_by_db
+            .get(&db_key)
+            .into_iter()
+            .flat_map(|ids| ids.iter())
+            .filter_map(|id| self.triggers.get(id.0).cloned())
+            .collect::<Vec<_>>();
         let mut meta = self
             .metas
             .get(&db_key)
@@ -230,8 +438,8 @@ impl CompletionIndex {
             schema: schema.map(str::to_string),
             tables,
             columns,
-            routines: Vec::new(),
-            triggers: Vec::new(),
+            routines,
+            triggers,
             meta,
         }
     }
@@ -239,6 +447,8 @@ impl CompletionIndex {
     fn clear_database(&mut self, db_key: &DbKey) {
         self.tables_by_db.remove(db_key);
         self.columns_by_db.remove(db_key);
+        self.routines_by_db.remove(db_key);
+        self.triggers_by_db.remove(db_key);
         self.metas.remove(db_key);
         self.dirty_databases.remove(db_key);
         self.columns_by_table.retain(|key, _| {
@@ -423,6 +633,7 @@ impl CompletionIndex {
                 schema: table.schema.clone(),
                 name: table.name.clone(),
                 kind: table.kind,
+                comment: table.comment.clone(),
             })
             .collect()
     }
@@ -592,6 +803,8 @@ fn rank_column_completion(
         score += 10;
     }
     let detail = column_completion_detail_with_table(&column);
+    // 文档提示含类型/可空/主键/注释，而非仅注释（§8.4）；须在 name 被移动前计算。
+    let documentation = column_completion_documentation(&column);
     RankedCompletionItem {
         rank: completion_match_rank(&column.name, prefix),
         source_table: column.table.to_ascii_lowercase(),
@@ -601,7 +814,7 @@ fn rank_column_completion(
             insert_text: column.name,
             kind: QueryCompletionKind::Column,
             detail,
-            documentation: column.comment.clone(),
+            documentation,
             filter_text: None,
             sort_text: None,
                     ..Default::default()
@@ -696,6 +909,8 @@ fn token_prefixes(token: &str) -> Vec<String> {
 fn indexed_column_to_completion(column: &IndexedColumnRef) -> CompletionColumn {
     CompletionColumn {
         table: column.source.table.clone(),
+        database: None,
+        schema: None,
         name: column.source.column.clone(),
         type_name: column.source.type_name.clone(),
         nullable: column.source.nullable,

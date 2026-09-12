@@ -8,6 +8,7 @@ impl NavicatMain {
         }
         if self.connection_context_menu.take().is_some()
             || self.database_context_menu.take().is_some()
+            || self.schema_context_menu.take().is_some()
             || self.table_context_menu.take().is_some()
             || self.table_group_context_menu.take().is_some()
             || self.table_folder_context_menu.take().is_some()

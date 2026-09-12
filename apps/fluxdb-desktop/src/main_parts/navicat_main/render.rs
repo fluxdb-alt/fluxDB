@@ -31,11 +31,12 @@ impl Render for NavicatMain {
         let pending_apply_preview = self.pending_apply_data_changes.and_then(|tab_id| {
             self.data_change_preview_for_tab(tab_id)
                 .map(|(page, changes)| {
+                    let db_kind = self.connection_database_kind(changes.object.connection_id);
                     (
                         tab_id,
                         data_change_item_count(&changes),
                         data_change_statement_count(&changes),
-                        data_change_sql_preview(&page, &changes),
+                        data_change_sql_preview(&page, &changes, db_kind),
                     )
                 })
         });
@@ -202,6 +203,7 @@ impl Render for NavicatMain {
             .when(
                 self.connection_context_menu.is_some()
                     || self.database_context_menu.is_some()
+                    || self.schema_context_menu.is_some()
                     || self.table_context_menu.is_some()
                     || self.table_group_context_menu.is_some()
                     || self.table_folder_context_menu.is_some()
@@ -211,21 +213,31 @@ impl Render for NavicatMain {
                     || self.group_context_menu.is_some(),
                 |this| this.child(context_menu_backdrop(cx)),
             )
+            .when_some(self.schema_context_menu.clone(), |this, menu| {
+                this.child(schema_context_menu(menu, colors, cx))
+            })
             .when_some(self.connection_context_menu, |this, menu| {
                 this.child(connection_context_menu(menu, &state, colors, cx))
             })
             .when_some(self.database_context_menu.clone(), |this, menu| {
-                // Redis CLI 只对 Redis 连接下的数据库显示。
+                // Redis CLI 只对 Redis 连接下的数据库显示；新建 schema 只对 PostgreSQL 显示。
                 let is_redis = self
                     .controller
                     .state()
                     .connections
                     .iter()
                     .any(|c| c.config.id == menu.connection_id && c.config.kind == DatabaseKind::Redis);
+                let is_postgres = self
+                    .controller
+                    .state()
+                    .connections
+                    .iter()
+                    .any(|c| c.config.id == menu.connection_id && c.config.kind == DatabaseKind::Postgres);
                 this.child(database_context_menu(
                     menu,
                     &self.pinned_databases,
                     is_redis,
+                    is_postgres,
                     colors,
                     cx,
                 ))
@@ -512,12 +524,31 @@ impl Render for NavicatMain {
                     self.create_database_name_input.clone(),
                     self.create_database_charset_select.clone(),
                     self.create_database_collation_select.clone(),
+                    self.create_database_owner_input.clone(),
+                    self.create_database_template_input.clone(),
                     running,
                     self.focus_handle.clone(),
                     colors,
                     cx,
                 ))
             })
+            .when_some(
+                self.pending_create_schema.clone(),
+                |this, (_, database_path, _)| {
+                    let database_name = database_path
+                        .database
+                        .clone()
+                        .unwrap_or_else(|| database_path.name.clone());
+                    this.child(create_schema_modal(
+                        database_name,
+                        self.create_schema_name_input.clone(),
+                        self.create_schema_running,
+                        self.focus_handle.clone(),
+                        colors,
+                        cx,
+                    ))
+                },
+            )
             .when_some(self.pending_query_save, |this, tab_id| {
                 this.child(query_save_choice_modal(
                     tab_id,
@@ -559,6 +590,8 @@ impl Render for NavicatMain {
                     &self.new_connection_form,
                     &self.new_connection_inputs,
                     self.editing_connection_id.is_some(),
+                    self._test_connection_task.is_some(),
+                    self.saving_connection,
                     colors,
                     window,
                     cx,
@@ -645,6 +678,7 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
         TabKind::QueryEditor(editor) => TabKind::QueryEditor(QueryEditorState {
             connection_id: editor.connection_id,
             database: editor.database.clone(),
+            schema: editor.schema.clone(),
             text: String::new(),
             origin: None,
             saved_fingerprint: None,
@@ -721,6 +755,18 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
             role_membership_edits: admin.role_membership_edits.clone(),
             member_grant_edits: admin.member_grant_edits.clone(),
             pending_sql: admin.pending_sql.clone(),
+            pg_can_login: admin.pg_can_login,
+            pg_grant_kind: admin.pg_grant_kind,
+            pg_grant_schema: admin.pg_grant_schema.clone(),
+            pg_grant_object: admin.pg_grant_object.clone(),
+            pg_grant_signature: admin.pg_grant_signature.clone(),
+            pg_object_grants: admin.pg_object_grants.clone(),
+            pg_effective_grants: admin.pg_effective_grants.clone(),
+            loading_pg_grants: admin.loading_pg_grants,
+            pg_grants_error: admin.pg_grants_error.clone(),
+            pg_edit_mode: admin.pg_edit_mode,
+            pg_rename_new: admin.pg_rename_new.clone(),
+            pg_role_login: admin.pg_role_login.clone(),
         }),
         TabKind::Settings(settings) => TabKind::Settings(settings.clone()),
     }

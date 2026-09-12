@@ -31,6 +31,7 @@ mod tests {
             options: BTreeMap::new(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
 
         let config = draft.into_config(ConnectionId(7));
@@ -169,6 +170,7 @@ mod tests {
                 }],
             }],
             deletes: Vec::new(),
+            insert_intents: None,
         };
 
         assert!(!changes.is_empty());
@@ -465,6 +467,7 @@ mod tests {
             options: BTreeMap::new(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }
     }
 

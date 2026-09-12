@@ -63,6 +63,22 @@ impl AppController {
         self.load_data_page(object, Pagination::new(offset, limit), sort, filters)
     }
 
+    /// 一致快照分页导出（PG 经单 REPEATABLE READ 事务，其余默认逐页）。
+    /// 供桌面导出驱动对 PG 获得全量一致快照，避免并发写行间漂移。
+    pub fn export_pages_for_connection(
+        &self,
+        object: &ObjectPath,
+        sort: &[SortSpec],
+        filters: &[FilterSpec],
+        on_cancel: &dyn Fn() -> bool,
+        on_page: &mut dyn FnMut(DataPage) -> bool,
+    ) -> fluxdb_core::Result<()> {
+        let config = self
+            .connection_config(object.connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        export_pages_for_connection(&config, object, sort, filters, on_cancel, on_page)
+    }
+
     pub fn preview_data_export(
         &self,
         object: &ObjectPath,
@@ -179,6 +195,33 @@ impl AppController {
                 replace_redis_key_row(target, key, row.clone());
             }
         }
+    }
+
+    /// 生命周期旧响应防覆盖判定：该连接当前仍存在、仍连接、且 config 与发起加载时一致。
+    ///
+    /// 单飞只保证同 key 无并行；断开、重连、改配置后迟到的旧响应不得写回新状态。
+    /// 这里是纯函数，便于单元测试覆盖各生命周期场景。
+    pub fn connection_load_is_current(
+        state: &AppState,
+        connection_id: ConnectionId,
+        expected_config: Option<&ConnectionConfig>,
+    ) -> bool {
+        state
+            .connections
+            .iter()
+            .find(|c| c.config.id == connection_id)
+            .is_some_and(|c| {
+                c.connected && expected_config.map(|expected| expected == &c.config).unwrap_or(false)
+            })
+    }
+
+    /// 实例包装：树加载完成时用当前 state 判断连接加载是否仍有效。
+    pub fn is_connection_load_current(
+        &self,
+        connection_id: ConnectionId,
+        expected_config: Option<&ConnectionConfig>,
+    ) -> bool {
+        Self::connection_load_is_current(&self.state, connection_id, expected_config)
     }
 
     pub fn merge_loaded_children(&mut self, parent: &ObjectPath, children: Vec<ObjectSummary>) {
@@ -323,6 +366,7 @@ impl AppController {
         &self,
         connection_id: ConnectionId,
         database: Option<String>,
+        schema: Option<String>,
         text: String,
         cursor: usize,
         explicit: bool,
@@ -330,6 +374,7 @@ impl AppController {
         self.query_completions_for_text_with_cancel(
             connection_id,
             database,
+            schema,
             text,
             cursor,
             explicit,
@@ -342,6 +387,7 @@ impl AppController {
         &self,
         connection_id: ConnectionId,
         database: Option<String>,
+        schema: Option<String>,
         text: String,
         cursor: usize,
         explicit: bool,
@@ -351,6 +397,7 @@ impl AppController {
         let editor = QueryEditorState {
             connection_id,
             database,
+            schema,
             text,
             origin: None,
             saved_fingerprint: None,

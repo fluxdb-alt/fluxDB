@@ -1,14 +1,15 @@
 use fluxdb_core::{
-    BinaryCellSummary, CellValue, Column, CommandBulk, CommandExecutionItem,
-    CommandExecutionStatus, CommandExecutionSummary, CommandExecutionTarget, CommandReply,
-    CommandWorkbenchExecution, CommandWorkbenchRequest, CompletionColumn, CompletionRoutine,
-    CompletionRoutineKind, CompletionTable, CompletionTrigger, ConnectionConfig, ConnectionId,
-    ConnectionOverview, Connector, CreateDatabaseRequest, DataChangeSet, DataExportPreview,
-    DataPage, DatabaseKind, Endpoint, Error, ErrorKind, FilterOp, FilterSpec, ForeignKeyInfo,
-    IndexInfo, ObjectKind, ObjectPath, ObjectSummary, Pagination, QueryExecutionResult,
-    QueryExecutionSummary, QueryRequest, QueryStatementKind, RedisHashFieldTtl, RedisServerVersion,
-    Row, RowUpdate, SortDirection, SortSpec, TriggerInfo, is_binary_type_name,
-    sqlite_attached_databases,
+    AppliedChangeOutcome, BinaryCellSummary, CellValue, CheckMeta, Column, ColumnMeta, CommandBulk,
+    CommandExecutionItem, CommandExecutionStatus, CommandExecutionSummary, CommandExecutionTarget,
+    CommandReply, CommandWorkbenchExecution, CommandWorkbenchRequest, CompletionColumn,
+    CompletionRoutine, CompletionRoutineKind, CompletionTable, CompletionTrigger, ConnectionConfig,
+    ConnectionId, ConnectionOverview, Connector, CreateDatabaseRequest, DataChangeSet,
+    DataExportPreview, DataPage, DatabaseKind, Endpoint, Error, ErrorKind, FilterOp, FilterSpec,
+    ForeignKeyInfo, ForeignKeyMeta, IndexColumnItem, IndexInfo, IndexMeta, ObjectKind, ObjectPath,
+    ObjectSummary, Pagination, QueryExecutionResult, QueryExecutionSummary, QueryRequest,
+    QuerySessionId, QueryStatementKind, RedisHashFieldTtl, RedisServerVersion, Row, RowIdentity,
+    RowUpdate, SortDirection, SortSpec, TableStructure, TriggerInfo, TriggerMeta, UniqueKeyMeta,
+    WriteValue, is_binary_type_name, sqlite_attached_databases,
 };
 use sqlx::{
     Column as SqlxColumn, ColumnIndex, ConnectOptions as _, Connection as _, MySql, QueryBuilder,
@@ -31,8 +32,14 @@ use std::{
 // First-pass source split: included files remain in crate-root scope while connector modules are refined.
 include!("parts/common.rs");
 include!("parts/mock.rs");
+include!("parts/transport.rs");
 include!("parts/mysql.rs");
+include!("parts/postgres.rs");
 include!("parts/redis.rs");
 include!("parts/sqlite.rs");
-include!("parts/shared.rs");
+include!("parts/shared_cells.rs");
+include!("parts/shared_write.rs");
+include!("parts/shared_read_exec.rs");
+include!("parts/shared_read_sql.rs");
+include!("parts/shared_demo.rs");
 include!("parts/tests.rs");

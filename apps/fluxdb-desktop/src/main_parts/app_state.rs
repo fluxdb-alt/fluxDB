@@ -864,6 +864,16 @@ struct NavicatMain {
     _user_admin_create_password_subscription: Subscription,
     user_admin_new_password_input: Entity<InputState>,
     _user_admin_new_password_subscription: Subscription,
+    // PG 对象权限面板（T27）：授权目标的 schema / 对象名 / 函数签名（区分重载）。
+    user_admin_pg_grant_schema_input: Entity<InputState>,
+    _user_admin_pg_grant_schema_subscription: Subscription,
+    user_admin_pg_grant_object_input: Entity<InputState>,
+    _user_admin_pg_grant_object_subscription: Subscription,
+    user_admin_pg_grant_signature_input: Entity<InputState>,
+    _user_admin_pg_grant_signature_subscription: Subscription,
+    // PG 角色「重命名」新名输入（T27）。
+    user_admin_pg_rename_input: Entity<InputState>,
+    _user_admin_pg_rename_subscription: Subscription,
     user_admin_max_queries_input: Entity<InputState>,
     _user_admin_max_queries_subscription: Subscription,
     user_admin_max_updates_input: Entity<InputState>,
@@ -901,6 +911,10 @@ struct NavicatMain {
     _create_database_charset_select_subscription: Subscription,
     create_database_collation_select: Entity<SelectState<SearchableVec<String>>>,
     _create_database_collation_select_subscription: Subscription,
+    create_database_owner_input: Entity<InputState>,
+    _create_database_owner_subscription: Subscription,
+    create_database_template_input: Entity<InputState>,
+    _create_database_template_subscription: Subscription,
     danger_table_foreign_key_check_select: Entity<SelectState<SearchableVec<String>>>,
     _danger_table_foreign_key_check_select_subscription: Subscription,
     rename_table_input: Entity<InputState>,
@@ -943,6 +957,9 @@ struct NavicatMain {
     _danger_table_task: Option<Task<()>>,
     data_export_task_seq: u64,
     _test_connection_task: Option<Task<()>>,
+    _create_schema_task: Option<Task<()>>,
+    /// 连接保存/测试期间为 `true`，用于绑定“测试”“保存并连接”按钮 loading/禁用。
+    saving_connection: bool,
     /// Redis 连接串导入 / 云自动发现的异步任务。
     _redis_discover_task: Option<Task<()>>,
     /// Redis 连接串导入成功后，输入框实体待与表单重新同步的标记
@@ -950,6 +967,7 @@ struct NavicatMain {
     redis_discovery_pending_sync: bool,
     connection_context_menu: Option<ConnectionContextMenu>,
     database_context_menu: Option<DatabaseContextMenu>,
+    schema_context_menu: Option<SchemaContextMenu>,
     table_context_menu: Option<TableContextMenu>,
     table_group_context_menu: Option<TableGroupContextMenu>,
     table_folder_context_menu: Option<TableFolderContextMenu>,
@@ -1002,6 +1020,11 @@ struct NavicatMain {
     display_database_show_system: bool,
     pending_create_database: Option<CreateDatabaseForm>,
     create_database_running: BTreeSet<ConnectionId>,
+    /// 新建 schema 弹框：连接 id + 所属库 ObjectPath + schema 名。
+    pending_create_schema: Option<(ConnectionId, ObjectPath, String)>,
+    create_schema_running: bool,
+    create_schema_name_input: Entity<InputState>,
+    _create_schema_name_subscription: Subscription,
     new_connection_target_group: Option<ConnectionGroupId>,
     connecting_connections: BTreeSet<ConnectionId>,
     loading_databases: BTreeSet<String>,
@@ -1357,6 +1380,10 @@ struct BackupForm {
     include_data: bool,
     /// 常规：备注（可空）。备份成功后随表清单写入 {文件}.meta.json。
     note: String,
+    /// 高级（仅 PostgreSQL 原生 pg_dump）：导出属主（OWNER）；默认 false 传 `--no-owner`。
+    pg_include_owner: bool,
+    /// 高级（仅 PostgreSQL 原生 pg_dump）：导出 ACL 权限；默认 false 传 `--no-acl`。
+    pg_include_acl: bool,
 }
 
 /// 备份文件的旁挂元数据（{备份文件}.meta.json）：记录表清单与备注。
@@ -1575,6 +1602,15 @@ struct DatabaseContextMenu {
     backup_only: bool,
 }
 
+/// PostgreSQL schema 节点右键菜单：与数据库菜单隔离，避免把 schema 当作数据库操作。
+#[derive(Clone, Debug)]
+struct SchemaContextMenu {
+    connection_id: ConnectionId,
+    database: String,
+    schema: String,
+    position: Point<Pixels>,
+}
+
 #[derive(Clone, Debug)]
 struct TableContextMenu {
     object_path: ObjectPath,
@@ -1635,6 +1671,8 @@ struct PendingDangerTableAction {
     object_path: ObjectPath,
     action: DangerTableAction,
     foreign_key_check: ForeignKeyCheckMode,
+    /// PG 清空表：是否 RESTART IDENTITY（默认 CONTINUE IDENTITY）。
+    restart_identity: bool,
     acknowledged: bool,
     error: Option<String>,
 }
@@ -1812,6 +1850,10 @@ struct CreateDatabaseForm {
     charset: String,
     database_kind: DatabaseKind,
     collation: String,
+    /// PostgreSQL OWNER（可选）。
+    owner: String,
+    /// PostgreSQL TEMPLATE（可选）。
+    template: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

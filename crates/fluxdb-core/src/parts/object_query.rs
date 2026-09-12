@@ -33,9 +33,13 @@ pub struct ObjectSummary {
 pub struct QueryRequest {
     pub connection_id: ConnectionId,
     pub database: Option<String>,
+    /// 显式 schema 作用域（PG 用，控制 `search_path` / 对象解析）；其它方言忽略。
+    pub schema: Option<String>,
     pub text: String,
     pub mode: QueryMode,
     pub options: QueryExecutionOptions,
+    /// 可选复用会话的标识；`None` 时用隔离短连接执行。
+    pub session_id: Option<QuerySessionId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +61,16 @@ impl Default for QueryExecutionOptions {
     }
 }
 
+/// 数据提交的落定结果（§8.4/R11）。
+///
+/// 目前只承载 INSERT 的真实身份：自增列/序列/默认值生成的主键无法从编辑输入得知，
+/// 只能由服务端 `RETURNING` 返回，否则补偿 SQL 会定位到错误的行。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AppliedChangeOutcome {
+    /// 按 `DataChangeSet.inserts` 顺序给出每行插入的真实身份；无法取回时为空。
+    pub inserted_identities: Vec<RowIdentity>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct QueryExecutionResult {
     pub summaries: Vec<QueryExecutionSummary>,
@@ -73,12 +87,20 @@ pub enum QueryRollbackSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QueryInsertRollbackSnapshot {
+    /// 生成该补偿 SQL 时使用的方言（§8.4）。旧记录缺省为 None，按 MySQL 兼容渲染，
+    /// 保证既有 MySQL 历史可读可用；新记录写入真实方言，PG 走双引号标识符与类型化字面量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_kind: Option<DatabaseKind>,
     pub table: String,
     pub identities: Vec<RowIdentity>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QueryUpdateRollbackSnapshot {
+    /// 生成该补偿 SQL 时使用的方言（§8.4）。旧记录缺省为 None，按 MySQL 兼容渲染，
+    /// 保证既有 MySQL 历史可读可用；新记录写入真实方言，PG 走双引号标识符与类型化字面量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_kind: Option<DatabaseKind>,
     pub table: String,
     pub columns: Vec<Column>,
     pub changed_columns: Vec<String>,
@@ -88,6 +110,10 @@ pub struct QueryUpdateRollbackSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QueryDeleteRollbackSnapshot {
+    /// 生成该补偿 SQL 时使用的方言（§8.4）。旧记录缺省为 None，按 MySQL 兼容渲染，
+    /// 保证既有 MySQL 历史可读可用；新记录写入真实方言，PG 走双引号标识符与类型化字面量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_kind: Option<DatabaseKind>,
     pub table: String,
     pub columns: Vec<Column>,
     pub rows: Vec<Row>,
@@ -115,6 +141,9 @@ pub struct SavedQuery {
     pub id: u64,
     pub connection_id: ConnectionId,
     pub database: Option<String>,
+    /// schema 作用域（PG）；旧记录缺省为 None。附带 `#[serde(default)]` 兼容加载。
+    #[serde(default)]
+    pub schema: Option<String>,
     pub name: String,
     pub text: String,
 }
@@ -132,7 +161,10 @@ pub enum QueryMode {
     Selection,
 }
 
-pub const COMPLETION_INDEX_VERSION: u32 = 1;
+/// 补全索引快照结构版本。变更快照结构（字段含义/新增集合）时必须递增：
+/// 旧缓存因版本不匹配被安全拒绝并重建，但连接、查询与历史不受影响（§8.4）。
+/// 3：快照新增 routines（含签名）/triggers，用于函数重载索引与触发器持久化。
+pub const COMPLETION_INDEX_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueryCompletionResult {
@@ -220,10 +252,17 @@ pub struct CompletionTable {
     pub schema: Option<String>,
     pub name: String,
     pub kind: ObjectKind,
+    /// 表/视图注释（PG `obj_description`），用于补全项的文档提示；无注释为 None。
+    pub comment: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompletionColumn {
+    /// 所属 database（PG 为物理连接库，MySQL/TiDB 为库名，Redis 无）。
+    pub database: Option<String>,
+    /// 所属 schema（PG 必备；MySQL/TiDB 为 None）。
+    pub schema: Option<String>,
+    /// 所属表名（不拼点号；裸 table 匹配只在本结构内，跨 schema 同名表靠 database+schema 区分）。
     pub table: String,
     pub name: String,
     pub type_name: Option<String>,
@@ -237,6 +276,9 @@ pub struct CompletionRoutine {
     pub schema: Option<String>,
     pub name: String,
     pub kind: CompletionRoutineKind,
+    /// 签名 / identity arguments（PG `pg_get_function_identity_arguments`）。
+    /// 用于区分同 schema 同名重载：同名不同签名是不同候选，不能合并（§8.4）；MySQL 为 None。
+    pub signature: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -281,6 +323,10 @@ pub struct RoutineRef {
     pub schema: Option<String>,
     pub name: String,
     pub kind: CompletionRoutineKind,
+    /// 签名 / identity arguments（PG 的 `pg_get_function_identity_arguments`），
+    /// 用于区分同 schema 同名重载；MySQL 可空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

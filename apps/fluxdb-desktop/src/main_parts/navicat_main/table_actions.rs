@@ -96,6 +96,8 @@ impl NavicatMain {
         cx: &mut Context<Self>,
     ) {
         self.pending_danger_table_action = Some(PendingDangerTableAction {
+            // 默认 CONTINUE IDENTITY：不重置自增，可由用户在对话框显式改为 RESTART。
+            restart_identity: false,
             object_path,
             action,
             foreign_key_check: ForeignKeyCheckMode::Default,
@@ -130,6 +132,18 @@ impl NavicatMain {
             form.acknowledged = acknowledged;
             form.error = None;
             cx.notify();
+        }
+    }
+
+    /// PG 清空表时是否 RESTART IDENTITY；改动后重算 SQL 预览。
+    fn set_danger_table_restart_identity(&mut self, restart: bool, cx: &mut Context<Self>) {
+        if self._danger_table_task.is_some() {
+            return;
+        }
+        if let Some(form) = &mut self.pending_danger_table_action {
+            form.restart_identity = restart;
+            form.error = None;
+            cx.notify(); // notify 触发重渲染，render 处重算 SQL 预览（含 RESTART IDENTITY）。
         }
     }
 
@@ -216,7 +230,12 @@ impl NavicatMain {
         let Some(database_kind) = self.table_database_kind(&form.object_path) else {
             return Err("连接不存在".to_string());
         };
-        rename_table_sql_preview(database_kind, &form.object_path.name, &form.new_name)
+        rename_table_sql_preview(
+            database_kind,
+            form.object_path.schema.as_deref(),
+            &form.object_path.name,
+            &form.new_name,
+        )
     }
 
     fn copy_table_sql_for_form(&self, form: &PendingCopyTable) -> Result<String, String> {
@@ -234,6 +253,7 @@ impl NavicatMain {
         };
         copy_table_sql_preview_with_source_ddl(
             database_kind,
+            form.object_path.schema.as_deref(),
             &form.object_path.name,
             &form.new_name,
             form.copy_data,
@@ -248,12 +268,16 @@ impl NavicatMain {
         match form.action {
             DangerTableAction::Drop => drop_table_sql_preview(
                 database_kind,
+                form.object_path.kind,
+                form.object_path.schema.as_deref(),
                 &form.object_path.name,
                 form.foreign_key_check,
             ),
             DangerTableAction::Truncate => truncate_table_sql_preview(
                 database_kind,
+                form.object_path.schema.as_deref(),
                 &form.object_path.name,
+                form.restart_identity,
                 form.foreign_key_check,
             ),
         }
@@ -471,6 +495,7 @@ impl NavicatMain {
                         DangerTableAction::Truncate => AppCommand::TruncateTable {
                             object: object.clone(),
                             foreign_key_check: form.foreign_key_check,
+                            restart_identity: form.restart_identity,
                         },
                     };
                     let event = controller.dispatch(command);

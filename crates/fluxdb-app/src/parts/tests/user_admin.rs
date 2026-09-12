@@ -158,3 +158,188 @@ fn user_admin_loaded_privileges_are_not_dirty_until_changed() {
 
     assert!(admin.privileges_dirty());
 }
+
+/// PG：成员关系 → 某角色所在组角色，纯函数过滤逻辑。
+#[test]
+fn pg_groups_for_member_filters_and_returns_groups() {
+    let memberships = vec![
+        fluxdb_core::PgRoleMembership {
+            grantee: "analyst_group".to_string(),
+            member: "alice".to_string(),
+            admin_option: true,
+            inherit_option: true,
+            set_option: true,
+        },
+        fluxdb_core::PgRoleMembership {
+            grantee: "reader".to_string(),
+            member: "alice".to_string(),
+            admin_option: false,
+            inherit_option: true,
+            set_option: true,
+        },
+        fluxdb_core::PgRoleMembership {
+            grantee: "reader".to_string(),
+            member: "bob".to_string(),
+            admin_option: false,
+            inherit_option: true,
+            set_option: false,
+        },
+    ];
+    assert_eq!(pg_groups_for_member(&memberships, "alice"), vec!["analyst_group", "reader"]);
+    assert_eq!(pg_groups_for_member(&memberships, "bob"), vec!["reader"]);
+    assert!(pg_groups_for_member(&memberships, "eve").is_empty());
+}
+
+/// PG：UserAdminState 的 pg_can_login（新建角色可登录）默认与切换。
+#[test]
+fn user_admin_pg_can_login_defaults_and_reflects() {
+    let mut admin = UserAdminState::new(ConnectionId(1), None, PrivilegeScope::Postgres);
+    assert!(admin.pg_can_login, "PG 新建角色默认可登录 LOGIN");
+    admin.pg_can_login = false;
+    assert!(!admin.pg_can_login, "切换为 NOLOGIN 组角色应生效");
+}
+
+/// PG：UserAdminState 角色内联编辑模式（改密/重命名）默认关闭，可切换与清空。
+#[test]
+fn user_admin_pg_edit_mode_defaults_and_clears() {
+    let mut admin = UserAdminState::new(ConnectionId(1), None, PrivilegeScope::Postgres);
+    assert_eq!(admin.pg_edit_mode, PgRoleEditMode::None, "默认无编辑模式");
+    admin.pg_edit_mode = PgRoleEditMode::Rename;
+    assert_eq!(admin.pg_edit_mode, PgRoleEditMode::Rename);
+    admin.pg_edit_mode = PgRoleEditMode::Password;
+    assert_eq!(admin.pg_edit_mode, PgRoleEditMode::Password);
+    admin.pg_edit_mode = PgRoleEditMode::None;
+    assert_eq!(admin.pg_edit_mode, PgRoleEditMode::None, "结束后回到 None");
+}
+
+/// PG 权限面板：授权目标 scope 构造（表/视图/序列/函数/schema/数据库 + 空 schema 回退 public）。
+#[test]
+fn pg_grant_scope_from_state_maps_kinds_and_defaults_schema() {
+    assert_eq!(
+        pg_grant_scope_from_state(PgGrantObjectKind::Table, "s1", "t", ""),
+        PgObjectGrantScope::Relation {
+            schema: "s1".into(),
+            name: "t".into(),
+            kind: PgRelationKind::Table,
+        }
+    );
+    assert_eq!(
+        pg_grant_scope_from_state(PgGrantObjectKind::Sequence, "s1", "seq", ""),
+        PgObjectGrantScope::Relation {
+            schema: "s1".into(),
+            name: "seq".into(),
+            kind: PgRelationKind::Sequence,
+        }
+    );
+    assert_eq!(
+        pg_grant_scope_from_state(PgGrantObjectKind::Routine, "s1", "fn", "a integer"),
+        PgObjectGrantScope::Routine {
+            schema: "s1".into(),
+            name: "fn".into(),
+            signature: "a integer".into(),
+        }
+    );
+    assert_eq!(
+        pg_grant_scope_from_state(PgGrantObjectKind::Schema, "s1", "", ""),
+        PgObjectGrantScope::Schema { schema: "s1".into() }
+    );
+    assert_eq!(
+        pg_grant_scope_from_state(PgGrantObjectKind::Database, "", "appdb", ""),
+        PgObjectGrantScope::Database { database: "appdb".into() }
+    );
+    // 空 schema 回退 public。
+    assert_eq!(
+        pg_grant_scope_from_state(PgGrantObjectKind::Table, "  ", "t", ""),
+        PgObjectGrantScope::Relation {
+            schema: "public".into(),
+            name: "t".into(),
+            kind: PgRelationKind::Table,
+        }
+    );
+}
+
+/// PG 权限面板：GRANT/REVOKE 的 `ON <object>` 片段（双引号 + 关键字 + 函数签名）。
+#[test]
+fn pg_grant_object_sql_renders_keyword_and_quoting() {
+    fn sql(scope: &PgObjectGrantScope) -> String {
+        pg_grant_object_sql(scope).expect("合法目标应能渲染")
+    }
+    let table = PgObjectGrantScope::Relation {
+        schema: "s".into(),
+        name: "t".into(),
+        kind: PgRelationKind::Table,
+    };
+    assert_eq!(sql(&table), "TABLE \"s\".\"t\"");
+    let seq = PgObjectGrantScope::Relation {
+        schema: "s".into(),
+        name: "q".into(),
+        kind: PgRelationKind::Sequence,
+    };
+    assert_eq!(sql(&seq), "SEQUENCE \"s\".\"q\"");
+    let routine = PgObjectGrantScope::Routine {
+        schema: "s".into(),
+        name: "fn".into(),
+        signature: "a integer".into(),
+    };
+    assert_eq!(sql(&routine), "FUNCTION \"s\".\"fn\"(a integer)");
+    assert_eq!(
+        sql(&PgObjectGrantScope::Schema { schema: "s".into() }),
+        "SCHEMA \"s\""
+    );
+    assert_eq!(
+        sql(&PgObjectGrantScope::Database { database: "d".into() }),
+        "DATABASE \"d\""
+    );
+    // 双引号标识符转义。
+    let quoted = PgObjectGrantScope::Relation {
+        schema: "s".into(),
+        name: "a\"b".into(),
+        kind: PgRelationKind::Table,
+    };
+    assert_eq!(sql(&quoted), "TABLE \"s\".\"a\"\"b\"");
+}
+
+/// 函数签名是唯一无法靠引号消毒的部分（类型列表不是标识符），必须白名单拒绝注入。
+///
+/// 回归：早期签名原样拼进 `GRANT ... ON FUNCTION`，而 GRANT 走 simple query protocol，
+/// 分号可另起语句——签名里塞 `int) TO postgres; ALTER ROLE x SUPERUSER; --` 即以管理角色
+/// 执行任意 DDL。
+#[test]
+fn pg_grant_object_sql_rejects_injected_routine_signature() {
+    for bad in [
+        "int) TO postgres; ALTER ROLE attacker SUPERUSER; --",
+        "int) TO postgres; DROP TABLE t; --",
+        "integer /* 注释 */",
+        "integer -- 行注释",
+        "a' OR '1'='1",
+        "integer\"x",
+    ] {
+        let scope = PgObjectGrantScope::Routine {
+            schema: "s".into(),
+            name: "fn".into(),
+            signature: bad.into(),
+        };
+        assert!(
+            pg_grant_object_sql(&scope).is_err(),
+            "{bad:?} 应被拒绝，不得进入 GRANT 语句"
+        );
+    }
+    // 正常签名（含数组、带长度、schema 限定、参数名）仍放行。
+    for ok in [
+        "integer, text",
+        "character varying(10)",
+        "integer[]",
+        "pg_catalog.text",
+        "IN a integer",
+    ] {
+        let scope = PgObjectGrantScope::Routine {
+            schema: "s".into(),
+            name: "fn".into(),
+            signature: ok.into(),
+        };
+        assert!(
+            pg_grant_object_sql(&scope).is_ok(),
+            "{ok:?} 是合法签名，不应拒绝"
+        );
+    }
+}

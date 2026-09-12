@@ -458,6 +458,7 @@ impl NavicatMain {
         let completion_controller = self.controller.clone();
         let completion_connection_id = editor.connection_id;
         let completion_database = editor.database.clone();
+        let completion_schema = editor.schema.clone();
         // F004：采纳补全时回写个性化（recency/frequency）。与补全解析同一 controller。
         let accept_controller = completion_controller.clone();
         // F005：metadata 详情解析复用同一 controller（内存 CompletionIndex，无数据库访问）。
@@ -468,6 +469,7 @@ impl NavicatMain {
                     .query_completions_for_text_with_cancel(
                         completion_connection_id,
                         completion_database.clone(),
+                        completion_schema.clone(),
                         text,
                         cursor,
                         explicit,

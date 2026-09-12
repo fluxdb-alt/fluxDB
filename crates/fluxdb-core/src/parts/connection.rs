@@ -5,6 +5,7 @@ pub enum DatabaseKind {
     Sqlite,
     MongoDb,
     Redis,
+    Postgres,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
@@ -29,6 +30,10 @@ pub struct ConnectionConfig {
     /// 仅为 MySQL/TiDB 连接填充；历史连接缺省为 `None`，兼容既有落盘数据。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mysql_profile: Option<MysqlConnectionProfile>,
+    /// PostgreSQL 专用结构化连接档案（TLS / SSH / 代理 / 作用域 / 超时）。
+    /// 仅为 Postgres 连接填充；历史连接缺省为 `None`，兼容既有落盘数据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postgres_profile: Option<PostgresConnectionProfile>,
 }
 
 impl ConnectionConfig {
@@ -79,6 +84,33 @@ impl ConnectionConfig {
             host,
             port,
             database: Some(profile.basic.database.clone()),
+        };
+        for (key, value) in profile.into_options() {
+            config.options.insert(key, value);
+        }
+        config
+    }
+
+    /// 是否存在 PostgreSQL 结构化档案。
+    pub fn has_postgres_profile(&self) -> bool {
+        self.postgres_profile.is_some()
+    }
+
+    /// 若携带 PostgreSQL 档案，则把档案归一化进扁平的 `endpoint` / `options`，
+    /// 产出一份可直接拨号的配置；无档案时原样返回（兼容历史连接）。
+    ///
+    /// 归一化规则同 [`ConnectionConfig::mysql_resolved`]：档案是事实来源，
+    /// 其派生的扁平参数覆盖同名 `options` 键，其余参数保留。
+    pub fn postgres_resolved(&self) -> Self {
+        let Some(profile) = self.postgres_profile.clone() else {
+            return self.clone();
+        };
+        let mut config = self.clone();
+        let (host, port) = profile.dial_endpoint();
+        config.endpoint = Endpoint::Tcp {
+            host,
+            port,
+            database: Some(profile.maintenance_database().to_string()),
         };
         for (key, value) in profile.into_options() {
             config.options.insert(key, value);
@@ -346,6 +378,9 @@ pub struct ConnectionDraft {
     /// MySQL/TiDB 专用结构化连接档案；见 [`ConnectionConfig::mysql_profile`]。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mysql_profile: Option<MysqlConnectionProfile>,
+    /// PostgreSQL 专用结构化连接档案；见 [`ConnectionConfig::postgres_profile`]。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postgres_profile: Option<PostgresConnectionProfile>,
 }
 
 impl ConnectionDraft {
@@ -359,6 +394,7 @@ impl ConnectionDraft {
             options: self.options,
             redis_profile: self.redis_profile,
             mysql_profile: self.mysql_profile,
+            postgres_profile: self.postgres_profile,
         }
     }
 }

@@ -1,4 +1,15 @@
 impl NavicatMain {
+    /// 由连接 id 解析数据库类型（用于 SQL 字面量/标识符按方言渲染）；缺失回退 MySQL。
+    fn connection_database_kind(&self, connection_id: ConnectionId) -> DatabaseKind {
+        self.controller
+            .state()
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == connection_id)
+            .map(|connection| connection.config.kind)
+            .unwrap_or(DatabaseKind::MySql)
+    }
+
     fn query_editor_database_kind(&self, tab_id: TabId) -> DatabaseKind {
         let connection_id = self
             .controller
@@ -177,6 +188,7 @@ impl NavicatMain {
             AppCommand::OpenQueryEditorInDatabase {
                 connection_id,
                 database,
+                schema: None,
             },
             cx,
         );
@@ -409,10 +421,16 @@ impl NavicatMain {
                 .connections
                 .iter()
                 .any(|connection| connection.config.id == entry.connection_id)
-                .then_some((entry.connection_id, entry.database.clone()))
-                .or_else(|| self.current_query_scope())
-                .or_else(|| self.first_connection_id().map(|connection_id| (connection_id, None)));
-            let Some((connection_id, database)) = target else {
+                .then_some((entry.connection_id, entry.database.clone(), entry.schema.clone()))
+                .or_else(|| {
+                    self.current_query_scope()
+                        .map(|(connection_id, database)| (connection_id, database, None))
+                })
+                .or_else(|| {
+                    self.first_connection_id()
+                        .map(|connection_id| (connection_id, None, None))
+                });
+            let Some((connection_id, database, schema)) = target else {
                 self.show_message("请先创建连接", AppMessageKind::Warning, cx);
                 return;
             };
@@ -420,6 +438,7 @@ impl NavicatMain {
                 AppCommand::OpenQueryEditorInDatabase {
                     connection_id,
                     database,
+                    schema,
                 },
                 cx,
             );
@@ -529,6 +548,7 @@ impl NavicatMain {
             AppCommand::OpenQueryEditorInDatabase {
                 connection_id,
                 database,
+                schema: None,
             },
             cx,
         );

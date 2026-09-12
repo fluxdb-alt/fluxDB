@@ -152,6 +152,7 @@ mod tests {
         let editor = QueryEditorState {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
             text: String::new(),
             origin: None,
             saved_fingerprint: None,
@@ -208,6 +209,7 @@ mod tests {
         let editor = QueryEditorState {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
             text: String::new(),
             origin: None,
             saved_fingerprint: None,
@@ -403,6 +405,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                     kind: TabKind::QueryEditor(QueryEditorState {
                         connection_id: ConnectionId(1),
                         database: Some("main".to_string()),
+                        schema: None,
                         text: "select 1".to_string(),
                         origin: None,
                         saved_fingerprint: None,
@@ -421,6 +424,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                     kind: TabKind::QueryEditor(QueryEditorState {
                         connection_id: ConnectionId(1),
                         database: Some("main".to_string()),
+                        schema: None,
                         text: "select * from users".to_string(),
                         origin: Some(QueryOrigin::Connection { query_id: 7 }),
                         saved_fingerprint: None,
@@ -450,6 +454,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             kind: TabKind::QueryEditor(QueryEditorState {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
                 text: String::new(),
                 origin: None,
                 saved_fingerprint: None,
@@ -534,6 +539,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                     kind: TabKind::QueryEditor(QueryEditorState {
                         connection_id: ConnectionId(1),
                         database: Some("main".to_string()),
+                        schema: None,
                         text: "select * from users".to_string(),
                         origin: None,
                         saved_fingerprint: None,
@@ -550,8 +556,10 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             ..AppState::default()
         };
         state.query_history.push(fluxdb_app::QueryHistoryEntry {
+            session_id: None,
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
             text: "select * from users".to_string(),
             tables: vec!["users".to_string()],
             kind: fluxdb_app::QueryHistoryKind::Query,
@@ -568,6 +576,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             executed_at_unix_secs: 1,
             object: Some("users".to_string()),
             rollback_snapshot: None,
+            transaction_state: fluxdb_app::QueryHistoryTransactionState::Committed,
         });
 
         let snapshot = render_state_snapshot(&state);
@@ -1683,6 +1692,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             DataRowExportFormat::Csv,
             Some(&object),
             rows.as_slice(),
+            DatabaseKind::MySql,
         )
         .unwrap();
 
@@ -1709,6 +1719,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             DataRowExportFormat::Csv,
             None,
             rows.as_slice(),
+            DatabaseKind::MySql,
         )
         .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "id\n7\n");
@@ -1719,6 +1730,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             DataRowExportFormat::SqlInsert,
             None,
             rows.as_slice(),
+            DatabaseKind::MySql,
         )
         .is_err());
     }
@@ -1757,6 +1769,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             DataRowExportFormat::Markdown,
             Some(&object),
             rows.as_slice(),
+            DatabaseKind::MySql,
         )
         .unwrap();
 
@@ -1800,6 +1813,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             DataRowExportFormat::SqlInsert,
             Some(&object),
             rows.as_slice(),
+            DatabaseKind::MySql,
         )
         .unwrap();
 
@@ -1854,6 +1868,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             TableDataExportFormat::Csv,
             object.clone(),
             vec!["name".to_string()],
+            DatabaseKind::MySql,
         )
         .unwrap();
         assert_eq!(csv.write_page(&page).unwrap(), 1);
@@ -1864,6 +1879,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             TableDataExportFormat::Xml,
             object,
             vec!["name".to_string()],
+            DatabaseKind::MySql,
         )
         .unwrap();
         assert_eq!(xml.write_page(&page).unwrap(), 1);
@@ -1875,6 +1891,121 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             .contains("<field name=\"name\">Alice &amp; Bob</field>"));
         let _ = fs::remove_file(csv_path);
         let _ = fs::remove_file(xml_path);
+    }
+
+    /// T23：PG 导出各格式（SQL/CSV/JSON/XML/TXT）类型化值往返与方言渲染。
+    #[test]
+    fn postgres_table_data_export_formats_render_typed_values() {
+        let object = ObjectPath {
+            connection_id: ConnectionId(1),
+            database: Some("appdb".to_string()),
+            schema: Some("public".to_string()),
+            name: "items".to_string(),
+            kind: ObjectKind::Table,
+        };
+        let page = DataPage {
+            columns: vec![
+                GdbColumn {
+                    name: "id".to_string(),
+                    type_name: Some("integer".to_string()),
+                    nullable: false,
+                    primary_key: true,
+                    comment: None,
+                },
+                GdbColumn {
+                    name: "price".to_string(),
+                    type_name: Some("numeric".to_string()),
+                    nullable: true,
+                    primary_key: false,
+                    comment: None,
+                },
+                GdbColumn {
+                    name: "tags".to_string(),
+                    type_name: Some("jsonb".to_string()),
+                    nullable: true,
+                    primary_key: false,
+                    comment: None,
+                },
+                GdbColumn {
+                    name: "note".to_string(),
+                    type_name: Some("text".to_string()),
+                    nullable: true,
+                    primary_key: false,
+                    comment: None,
+                },
+            ],
+            rows: vec![fluxdb_core::Row {
+                values: vec![
+                    CellValue::I64(1),
+                    // numeric 保精：以精确十进制文本（不经 f64）。
+                    CellValue::Text("12.50".to_string()),
+                    CellValue::Json("{\"k\": 1}".to_string()),
+                    CellValue::Text("O'Brien".to_string()),
+                ],
+            }],
+            offset: 0,
+            limit: 100,
+            has_more: false,
+        };
+        let fields = vec![
+            "id".to_string(),
+            "price".to_string(),
+            "tags".to_string(),
+            "note".to_string(),
+        ];
+        let base = std::env::temp_dir().join(format!(
+            "gdb-pg-export-test-{}",
+            std::process::id()
+        ));
+        let write = |ext: &str, format: TableDataExportFormat| -> String {
+            let path = base.with_extension(ext);
+            let mut w = TableDataExportWriter::create(
+                &path,
+                format,
+                object.clone(),
+                fields.clone(),
+                DatabaseKind::Postgres,
+            )
+            .unwrap();
+            w.write_page(&page).unwrap();
+            w.finish().unwrap();
+            let text = fs::read_to_string(&path).unwrap();
+            let _ = fs::remove_file(&path);
+            text
+        };
+
+        // SQL：PG 双引号标识符限定 + 类型化字面量（jsonb 具名转换；文本单引号转义）。
+        let sql = write("sql", TableDataExportFormat::Sql);
+        assert!(sql.contains("\"public\".\"items\""), "PG 限定名应双引号：{sql}");
+        assert!(sql.contains("'12.50'"), "numeric 应以精确文本输出：{sql}");
+        assert!(sql.contains("O''Brien"), "文本单引号应转义：{sql}");
+        assert!(sql.contains("::jsonb"), "jsonb 应显式转换：{sql}");
+
+        // CSV：表头 + 值（含引号转义）。
+        let csv = write("csv", TableDataExportFormat::Csv);
+        assert!(csv.starts_with("id,price,tags,note\n"), "CSV 表头：{csv}");
+        assert!(csv.contains("12.50"), "numeric 值：{csv}");
+
+        // JSON：值以 JSON 呈现。
+        let json = write("json", TableDataExportFormat::Json);
+        assert!(json.contains("\"price\""), "JSON 列名：{json}");
+        assert!(json.contains("12.50"), "JSON numeric 值：{json}");
+
+        // XML：转义字段（撇号转 &apos;，双引号转 &quot;）。
+        let xml = write("xml", TableDataExportFormat::Xml);
+        assert!(
+            xml.contains("<field name=\"note\">O&apos;Brien</field>"),
+            "XML 文本字段应转义撇号：{xml}"
+        );
+        assert!(
+            xml.contains("&quot;k&quot;"),
+            "XML 文本字段应转义双引号：{xml}"
+        );
+
+        // TXT：制表符分隔。
+        let txt = write("txt", TableDataExportFormat::Txt);
+        assert!(txt.contains("12.50"), "TXT 值：{txt}");
+        assert!(txt.contains('\t'), "TXT 应为制表符分隔：{txt}");
     }
 
     #[test]
@@ -1965,12 +2096,62 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         ];
 
         assert_eq!(
-            row_insert_sql(&object, fields.as_slice(), false),
+            row_insert_sql(&object, fields.as_slice(), false, DatabaseKind::MySql),
             "INSERT INTO `shop`.`users` (`id`, `name`) VALUES (7, 'Alice');"
         );
         assert_eq!(
-            row_insert_sql(&object, fields.as_slice(), true),
+            row_insert_sql(&object, fields.as_slice(), true, DatabaseKind::MySql),
             "INSERT INTO `shop`.`users` (`name`) VALUES ('Alice');"
+        );
+
+        // PG：双引号标识符 + schema.table 限定（不生成跨库三段名）。
+        let mut pg_object = object.clone();
+        pg_object.kind = ObjectKind::Table;
+        pg_object.schema = Some("public".to_string());
+        assert_eq!(
+            row_insert_sql(&pg_object, fields.as_slice(), false, DatabaseKind::Postgres),
+            "INSERT INTO \"public\".\"users\" (\"id\", \"name\") VALUES (7, 'Alice');"
+        );
+    }
+
+    /// PG 导出/预览字面量：bytea 用 `'\x..'::bytea`（非 MySQL `X'..'`）、jsonb 显式转换。
+    #[test]
+    fn postgres_export_literals_use_pg_bytea_and_jsonb() {
+        let object = ObjectPath {
+            connection_id: ConnectionId(1),
+            database: Some("appdb".to_string()),
+            schema: Some("public".to_string()),
+            name: "blobs".to_string(),
+            kind: ObjectKind::Table,
+        };
+        let fields = vec![
+            RowFieldSnapshot {
+                index: 1,
+                name: "payload".to_string(),
+                type_name: "bytea".to_string(),
+                primary_key: false,
+                comment: None,
+                value: CellValue::Bytes(vec![0xde, 0xad, 0xbe, 0xef]),
+            },
+            RowFieldSnapshot {
+                index: 2,
+                name: "meta".to_string(),
+                type_name: "jsonb".to_string(),
+                primary_key: false,
+                comment: None,
+                value: CellValue::Json("{\"k\": 1}".to_string()),
+            },
+        ];
+        assert_eq!(
+            row_insert_sql(&object, fields.as_slice(), false, DatabaseKind::Postgres),
+            "INSERT INTO \"public\".\"blobs\" (\"payload\", \"meta\") \
+             VALUES ('\\xdeadbeef'::bytea, '{\"k\": 1}'::jsonb);"
+        );
+        // MySQL 保持 X'..' 十六进制 + 裸 JSON 文本。
+        assert_eq!(
+            row_insert_sql(&object, fields.as_slice(), false, DatabaseKind::MySql),
+            "INSERT INTO `appdb`.`public`.`blobs` (`payload`, `meta`) \
+             VALUES (X'DEADBEEF', '{\"k\": 1}');"
         );
     }
 
@@ -2410,6 +2591,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                 kind: TabKind::QueryEditor(QueryEditorState {
                     connection_id: ConnectionId(1),
                     database: Some("data_centre_cloud".to_string()),
+                    schema: None,
                     text: String::new(),
                     origin: None,
                     saved_fingerprint: None,
@@ -2428,6 +2610,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                 kind: TabKind::QueryEditor(QueryEditorState {
                     connection_id: ConnectionId(1),
                     database: Some("data_centre_cloud".to_string()),
+                    schema: None,
                     text: String::new(),
                     origin: None,
                     saved_fingerprint: None,
@@ -2461,6 +2644,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             kind: TabKind::QueryEditor(QueryEditorState {
                 connection_id: ConnectionId(1),
                 database: Some(database.to_string()),
+                schema: None,
                 text: String::new(),
                 origin: None,
                 saved_fingerprint: None,
@@ -2654,9 +2838,10 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             deletes: vec![RowIdentity {
                 values: BTreeMap::from([("id".to_string(), CellValue::I64(3))]),
             }],
+            insert_intents: None,
         };
 
-        let preview = data_change_sql_preview(&page, &changes);
+        let preview = data_change_sql_preview(&page, &changes, DatabaseKind::MySql);
 
         assert_eq!(data_change_statement_count(&changes), 3);
         assert!(
@@ -2700,9 +2885,10 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             }],
             updates: Vec::new(),
             deletes: Vec::new(),
+            insert_intents: None,
         };
 
-        let preview = data_change_sql_preview(&page, &changes);
+        let preview = data_change_sql_preview(&page, &changes, DatabaseKind::MySql);
 
         assert_eq!(preview, "INSERT INTO `shop-db`.`orders` DEFAULT VALUES;");
     }
@@ -2742,6 +2928,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             deletes: vec![RowIdentity {
                 values: BTreeMap::from([("id".to_string(), CellValue::I64(2))]),
             }],
+            insert_intents: None,
         };
 
         assert_eq!(
@@ -2970,7 +3157,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         };
         let mut pinned = BTreeSet::new();
         pinned.insert(table_tree_key(&connection.objects[1].path));
-        let table_names = sorted_group_objects(&connection, "main", ObjectGroup::Tables, &pinned)
+        let table_names = sorted_group_objects(&connection, "main", None, ObjectGroup::Tables, &pinned)
             .into_iter()
             .map(|object| object.path.name.as_str())
             .collect::<Vec<_>>();
@@ -2999,6 +3186,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let unassigned_tables = sorted_unassigned_group_objects(
             &connection,
             "main",
+            None,
             ObjectGroup::Tables,
             &pinned,
             &assignments,
@@ -3426,6 +3614,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             options: BTreeMap::new(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }
     }
 
@@ -3654,4 +3843,131 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         assert!(empty.columns.is_empty());
     }
 
+}
+
+/// T19：PG 表单 → 结构化档案 → 回填表单，字段不丢；测试连接与保存用同一份档案。
+#[test]
+fn postgres_connection_form_roundtrips_into_profile() {
+    let mut form = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
+    form.host = "db.internal".to_string();
+    form.port = "5433".to_string();
+    form.database = "appdb".to_string();
+    form.username = "app_user".to_string();
+    form.password = "s3cret".to_string();
+    form.tls_enabled = true;
+    form.pg_tls_ssl_mode = "verify-full".to_string();
+    form.tls_ca = "/etc/ssl/root.crt".to_string();
+    form.tls_sni = "db.example.com".to_string();
+    form.pg_default_schema = "sales".to_string();
+    form.pg_application_name = "FluxDB Desktop".to_string();
+    form.pg_connect_timeout_secs = "7".to_string();
+    form.pg_query_timeout_secs = "30".to_string();
+
+    let profile = form.build_postgres_profile();
+    assert_eq!(profile.basic.host, "db.internal");
+    assert_eq!(profile.basic.port, 5433);
+    assert_eq!(profile.basic.maintenance_database, "appdb");
+    assert_eq!(profile.basic.username, "app_user");
+    assert_eq!(
+        profile.basic.password.value().map(str::to_string),
+        Some("s3cret".to_string())
+    );
+    assert!(profile.tls.enabled);
+    assert_eq!(profile.tls.ssl_mode, fluxdb_core::PostgresSslMode::VerifyFull);
+    assert_eq!(profile.tls.ca.key, "/etc/ssl/root.crt");
+    assert_eq!(profile.tls.server_name, "db.example.com");
+    assert_eq!(profile.scope.default_schema, "sales");
+    assert_eq!(profile.advanced.application_name, "FluxDB Desktop");
+    assert_eq!(profile.advanced.connect_timeout_secs, 7);
+    assert_eq!(profile.advanced.query_timeout_secs, 30);
+    // 未启用 SSH/代理时保持直连（不塞入无效传输层）。
+    assert_eq!(profile.transport.len(), 1);
+
+    // 回填：编辑/重启后表单值应与档案一致。
+    let mut restored = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
+    restored.apply_postgres_profile(&profile);
+    assert_eq!(restored.pg_tls_ssl_mode, "verify-full");
+    assert_eq!(restored.pg_default_schema, "sales");
+    assert_eq!(restored.pg_application_name, "FluxDB Desktop");
+    assert_eq!(restored.pg_connect_timeout_secs, "7");
+    assert_eq!(restored.pg_query_timeout_secs, "30");
+    assert_eq!(restored.database, "appdb");
+    assert_eq!(restored.tls_ca, "/etc/ssl/root.crt");
+
+    // SSH 隧道：启用后进入传输层并可回填。
+    let mut ssh_form = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
+    ssh_form.ssh_enabled = true;
+    ssh_form.ssh_host = "jump.internal".to_string();
+    ssh_form.ssh_username = "ops".to_string();
+    ssh_form.ssh_auth = "private_key".to_string();
+    ssh_form.ssh_private_key = "/home/ops/.ssh/id_ed25519".to_string();
+    let profile = ssh_form.build_postgres_profile();
+    let ssh = profile
+        .transport
+        .iter()
+        .find_map(|layer| match layer {
+            fluxdb_core::PostgresTransportLayer::Ssh(ssh) => Some(ssh),
+            _ => None,
+        })
+        .expect("SSH 传输层应存在");
+    assert_eq!(ssh.host, "jump.internal");
+    assert_eq!(ssh.private_key.key, "/home/ops/.ssh/id_ed25519");
+
+    let mut restored_ssh = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
+    restored_ssh.apply_postgres_profile(&profile);
+    assert!(restored_ssh.ssh_enabled);
+    assert_eq!(restored_ssh.ssh_host, "jump.internal");
+    assert_eq!(restored_ssh.ssh_auth, "private_key");
+}
+
+/// T19：默认值保持 MySQL/TiDB 表单不变（回归）。
+#[test]
+fn mysql_connection_form_defaults_unchanged_by_postgres_fields() {
+    let form = NewConnectionForm::for_kind(DatabaseKind::MySql, 1);
+    assert_eq!(form.host, "127.0.0.1");
+    assert_eq!(form.port, "3306");
+    assert_eq!(form.username, "root");
+    assert_eq!(form.mysql_tls_ssl_mode, "preferred");
+    assert_eq!(form.mysql_charset, "utf8mb4");
+}
+
+/// T19：PG 表单校验走结构化档案（TLS 模式/SSH 等），不是只看主机端口。
+#[test]
+fn postgres_form_validation_uses_profile_rules() {
+    let mut form = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
+    form.name = "PG".to_string();
+    form.host = "127.0.0.1".to_string();
+    form.port = "5432".to_string();
+    let profile = form.build_postgres_profile();
+    assert_eq!(profile.validate(), None);
+
+    // verify-full 未启用 TLS：档案校验应拒绝。
+    form.pg_tls_ssl_mode = "verify-full".to_string();
+    form.tls_enabled = false;
+    assert!(
+        form.build_postgres_profile()
+            .validate()
+            .is_some_and(|message| message.contains("需先启用 TLS")),
+        "verify-full 未启用 TLS 应被拒绝"
+    );
+
+    // 启用 TLS 后通过；verify-full 用纯 IP 且无 server_name 仍应提示。
+    form.tls_enabled = true;
+    assert!(
+        form.build_postgres_profile()
+            .validate()
+            .is_some_and(|message| message.contains("server_name")),
+        "verify-full 纯 IP 应要求主机名或 server_name"
+    );
+    form.tls_sni = "db.example.com".to_string();
+    assert_eq!(form.build_postgres_profile().validate(), None);
+
+    // SSH 启用但缺主机：应报错而不是静默用直连。
+    form.ssh_enabled = true;
+    assert!(
+        form.build_postgres_profile()
+            .validate()
+            .is_some_and(|message| message.contains("SSH")),
+        "启用 SSH 但缺主机应被拒绝"
+    );
 }

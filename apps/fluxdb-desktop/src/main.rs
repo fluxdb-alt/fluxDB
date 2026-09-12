@@ -22,12 +22,13 @@ use fluxdb_app::{
     CreateTableIndexColumnField, CreateTableIndexField, CreateTableOptionField,
     CreateTablePartitionField, CreateTableState, CreateTableTab, CreateTableTrigger,
     CreateTableTriggerEvent, CreateTableTriggerField, DataEditorState, ForeignKeyCheckMode,
-    LoadState, ObjectListState, QueryEditorState, QueryHistoryEntry, QueryHistoryKind, QueryOrigin,
-    RedisAddKeyKind, RedisAddKeyRequest, RedisConnectionOverview, RedisListDirection,
-    RedisWorkbenchState, TabId, TabKind, TabState, TabWorkspace, TableInfoState, TableInfoTab,
-    UserAdminDetailTab, UserAdminState, compress_sql_text, copy_table_sql_preview_with_source_ddl,
-    create_table_provider, drop_table_sql_preview, format_sql_text_for_dialect,
-    rename_table_sql_preview, truncate_table_sql_preview,
+    LoadState, ObjectListState, QueryEditorState, QueryHistoryEntry, QueryHistoryKind,
+    QueryHistoryTransactionState, QueryOrigin, RedisAddKeyKind, RedisAddKeyRequest,
+    RedisConnectionOverview, RedisListDirection, RedisWorkbenchState, TabId, TabKind, TabState,
+    TabWorkspace, TableInfoState, TableInfoTab, UserAdminDetailTab, UserAdminState,
+    compress_sql_text, copy_table_sql_preview_with_source_ddl, create_table_provider,
+    drop_table_sql_preview, format_sql_text_for_dialect, rename_table_sql_preview,
+    truncate_table_sql_preview,
 };
 use fluxdb_core::{
     BinaryUpdatePayload, CellValue, Column as GdbColumn, CommandBulk, CommandExecutionItem,
@@ -35,12 +36,13 @@ use fluxdb_core::{
     ConnectionDraft, ConnectionGroupId, ConnectionId, CreateDatabaseRequest, CreatePrincipalInput,
     DATA_TABLE_PAGE_SIZE_CHOICES, DataChangeSet, DataExportPreview, DataPage, DatabaseKind,
     DatabaseUserIdentity, Endpoint, FilterOp, FilterSpec, ForeignKeyInfo, IndexInfo, LogLevel,
-    ObjectKind, ObjectPath, ObjectSummary, QueryExecutionOptions, QueryExecutionSummary,
-    RedisHashFieldTtl, RedisServerVersion, ResultsPlacement, Row, RowIdentity, SavedQuery,
-    ScrollbarMode, Settings, SidebarOrderEntry, SortDirection, SortSpec, Theme as AppTheme,
-    TriggerInfo, UiDensity, UserResourceLimits, WorkbenchHistoryItem, WorkbenchHistoryScope,
-    WorkbenchHistoryStore, data_table_page_size_max, database_user_admin_provider,
-    role_memberships_from_grants, sqlite_attached_database_path, supports_database_user_admin,
+    ObjectKind, ObjectPath, ObjectSummary, PostgresSslMode, QueryExecutionOptions,
+    QueryExecutionSummary, RedisHashFieldTtl, RedisServerVersion, ResultsPlacement, Row,
+    RowIdentity, SavedQuery, ScrollbarMode, Settings, SidebarOrderEntry, SortDirection, SortSpec,
+    Theme as AppTheme, TriggerInfo, UiDensity, UserResourceLimits, WorkbenchHistoryItem,
+    WorkbenchHistoryScope, WorkbenchHistoryStore, data_table_page_size_max,
+    database_user_admin_provider, role_memberships_from_grants, sqlite_attached_database_path,
+    supports_database_user_admin,
 };
 use fluxdb_storage::{
     FileStorage, QueryHistoryRecord, RedisKeySearchHistoryRecord, RedisWorkbenchHistoryRecord,
@@ -136,10 +138,13 @@ include!("main_parts/data_editor_model.rs");
 include!("main_parts/connection_state.rs");
 include!("main_parts/navicat_main_impl.rs");
 include!("main_parts/connection_dialog.rs");
+include!("main_parts/connection_dialog_query_history.rs");
+include!("main_parts/connection_dialog_fields.rs");
 include!("main_parts/tabs_workspace.rs");
 include!("main_parts/sidebar.rs");
 include!("main_parts/menus_dialogs.rs");
 include!("main_parts/user_admin.rs");
+include!("main_parts/pg_user_admin.rs");
 include!("main_parts/user_admin_privileges.rs");
 include!("main_parts/create_table.rs");
 include!("main_parts/content_views.rs");
@@ -151,7 +156,9 @@ include!("main_parts/cell_detail_table_info.rs");
 include!("main_parts/filter_ui.rs");
 include!("main_parts/data_table_ui.rs");
 include!("main_parts/tree_helpers.rs");
+include!("main_parts/sidebar_visible_rows.rs");
 include!("main_parts/logging.rs");
 include!("main_parts/tray_icon.rs");
 include!("main_parts/app_boot.rs");
+include!("main_parts/app_boot_helpers.rs");
 include!("main_parts/tests.rs");

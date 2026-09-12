@@ -225,7 +225,7 @@ fn data_editor_sql_preview(
                 .filter(|rule| rule.enabled)
                 .map(|rule| {
                     let direction = if rule.ascending { "ASC" } else { "DESC" };
-                    format!("{} {direction}", sql_quote_ident(&rule.field))
+                    format!("{} {direction}", sql_quote_ident(&rule.field, DatabaseKind::MySql))
                 })
                 .collect::<Vec<_>>();
             if !order_by.is_empty() {
@@ -251,7 +251,7 @@ fn data_editor_sql_preview(
 
     format!(
         "SELECT * FROM {} {}",
-        sql_qualified_object_name(object),
+        sql_qualified_object_name(object, DatabaseKind::MySql),
         clauses.join(" ")
     )
 }

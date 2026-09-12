@@ -25,6 +25,7 @@ impl AppController {
         &mut self,
         connection_id: ConnectionId,
         database: Option<String>,
+        schema: Option<String>,
     ) -> AppEvent {
         let tab_id = self.next_tab_id();
         self.push_tab(TabState {
@@ -33,6 +34,7 @@ impl AppController {
             kind: TabKind::QueryEditor(QueryEditorState {
                 connection_id,
                 database,
+                schema,
                 text: String::new(),
                 origin: None,
                 saved_fingerprint: None,
@@ -172,19 +174,30 @@ impl AppController {
         else {
             return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
         };
-        let Some(provider) = database_user_admin_provider(connection.config.kind) else {
-            return self.fail(Error::new(ErrorKind::Unsupported, "暂不支持该连接的用户与权限管理"));
+        // 用户与权限：MySQL/TiDB 走既有 provider；PostgreSQL 走 PG 角色管理（角色经连接器读取）。
+        let scope = match connection.config.kind {
+            DatabaseKind::MySql | DatabaseKind::TiDb => match database_user_admin_provider(connection.config.kind) {
+                Some(provider) => provider.default_scope(),
+                None => {
+                    return self.fail(Error::new(ErrorKind::Internal, "MySQL 用户与权限 provider 缺失"));
+                }
+            },
+            DatabaseKind::Postgres => PrivilegeScope::Postgres,
+            _ => {
+                return self.fail(Error::new(ErrorKind::Unsupported, "暂不支持该连接的用户与权限管理"));
+            }
         };
         let database = connection.config.options.get("database").cloned();
         let tab_id = self.next_tab_id();
+        let mut admin = UserAdminState::new(connection_id, database, scope);
+        // PG：面板以「成员关系」为主视图，默认停在 MemberOf，选角色即自动加载成员（无 MySQL 权限页）。
+        if scope == PrivilegeScope::Postgres {
+            admin.active_detail_tab = UserAdminDetailTab::MemberOf;
+        }
         self.push_tab(TabState {
             id: tab_id,
             title: "用户与权限".to_string(),
-            kind: TabKind::UserAdmin(UserAdminState::new(
-                connection_id,
-                database,
-                provider.default_scope(),
-            )),
+            kind: TabKind::UserAdmin(admin),
             dirty: false,
         });
         AppEvent::TabOpened(tab_id)

@@ -588,10 +588,17 @@ fn user_admin_content(
         .iter()
         .find(|connection| connection.config.id == admin.connection_id);
     let provider = connection.and_then(|connection| database_user_admin_provider(connection.config.kind));
-    let supported = provider.is_some();
+    let is_postgres = connection.is_some_and(|connection| connection.config.kind == DatabaseKind::Postgres);
+    let supported = provider.is_some() || is_postgres;
     let connection_name = connection
         .map(|connection| connection.config.name.clone())
         .unwrap_or_else(|| "连接".to_string());
+
+    // PostgreSQL：角色是集群级身份，走独立 PG 角色管理面板（列表 + 成员/权限），
+    // 不套 MySQL 的 SQL 预览/apply 流程（provider 为 None 时该流程无意义）。
+    if is_postgres {
+        return pg_role_admin_content(tab_id, admin, connection_name, this, window, colors, cx);
+    }
 
     let mut root = div()
         .relative()
@@ -710,6 +717,7 @@ fn sync_user_admin_inputs(
     sync_input_value(&this.user_admin_ssl_cipher_input, &admin.ssl_cipher, window, cx);
     sync_input_value(&this.user_admin_ssl_issuer_input, &admin.ssl_issuer, window, cx);
     sync_input_value(&this.user_admin_ssl_subject_input, &admin.ssl_subject, window, cx);
+    sync_input_value(&this.user_admin_pg_rename_input, &admin.pg_rename_new, window, cx);
 }
 
 fn sync_input_value(

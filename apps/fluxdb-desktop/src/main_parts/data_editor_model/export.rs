@@ -96,10 +96,11 @@ fn write_data_row_export_file(
     format: DataRowExportFormat,
     object: Option<&ObjectPath>,
     rows: &[Vec<RowFieldSnapshot>],
+    db_kind: DatabaseKind,
 ) -> io::Result<()> {
     let file = fs::File::create(path)?;
     let mut writer = BufWriter::new(file);
-    write_data_row_export(&mut writer, format, object, rows)?;
+    write_data_row_export(&mut writer, format, object, rows, db_kind)?;
     writer.flush()
 }
 
@@ -116,6 +117,8 @@ struct TableDataExportWriter {
     object: ObjectPath,
     fields: Vec<String>,
     wrote_rows: bool,
+    /// 方言：SQL INSERT 字面量/标识符按此渲染（PG 双引号 + `'\x..'::bytea`）。
+    db_kind: DatabaseKind,
 }
 
 impl TableDataExportWriter {
@@ -124,6 +127,7 @@ impl TableDataExportWriter {
         format: TableDataExportFormat,
         object: ObjectPath,
         fields: Vec<String>,
+        db_kind: DatabaseKind,
     ) -> io::Result<Self> {
         let file = fs::File::create(path)?;
         let mut export = Self {
@@ -132,6 +136,7 @@ impl TableDataExportWriter {
             object,
             fields,
             wrote_rows: false,
+            db_kind,
         };
         export.write_header()?;
         Ok(export)
@@ -212,7 +217,7 @@ impl TableDataExportWriter {
             TableDataExportFormat::Sql => writeln!(
                 self.writer,
                 "{}",
-                row_insert_sql(&self.object, fields, false)
+                row_insert_sql(&self.object, fields, false, self.db_kind)
             )?,
             TableDataExportFormat::Txt => writeln!(
                 self.writer,
@@ -284,6 +289,7 @@ fn write_data_row_export<W: Write>(
     format: DataRowExportFormat,
     object: Option<&ObjectPath>,
     rows: &[Vec<RowFieldSnapshot>],
+    db_kind: DatabaseKind,
 ) -> io::Result<()> {
     match format {
         DataRowExportFormat::Csv => write_data_row_csv_export(writer, rows),
@@ -296,7 +302,7 @@ fn write_data_row_export<W: Write>(
                     "SQL INSERT 导出需要表对象信息",
                 ));
             };
-            write_data_row_insert_export(writer, object, rows)
+            write_data_row_insert_export(writer, object, rows, db_kind)
         }
     }
 }
@@ -393,9 +399,10 @@ fn write_data_row_insert_export<W: Write>(
     writer: &mut W,
     object: &ObjectPath,
     rows: &[Vec<RowFieldSnapshot>],
+    db_kind: DatabaseKind,
 ) -> io::Result<()> {
     for fields in rows {
-        writeln!(writer, "{}", row_insert_sql(object, fields.as_slice(), false))?;
+        writeln!(writer, "{}", row_insert_sql(object, fields.as_slice(), false, db_kind))?;
     }
     Ok(())
 }

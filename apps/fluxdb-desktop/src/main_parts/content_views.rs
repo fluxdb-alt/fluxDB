@@ -724,7 +724,10 @@ fn data_editor_content(
         .changes
         .as_ref()
         .filter(|changes| !changes.is_empty())
-        .map(|changes| data_change_sql_preview(page, changes));
+        .map(|changes| {
+            let db_kind = this.connection_database_kind(changes.object.connection_id);
+            data_change_sql_preview(page, changes, db_kind)
+        });
     let change_sql_preview_open = this.data_change_sql_preview_tabs.contains(&tab_id);
     // min_h(0)：flex 项默认最小尺寸为内容高度，缺这行时整列会被内容撑出窗口，
     // 下游（如 Redis Set 成员列表）拿到的永远是内容高度而非可用高度，滚动区因此永不溢出
@@ -3451,6 +3454,38 @@ fn query_output_error_state(
         )),
     )
 }
+/// 空结果集的列头条：仅对列列表渲染列名，供 0 行但保留列头的结果显示。
+fn query_result_empty_columns_header(
+    columns: &[fluxdb_core::Column],
+    colors: UiColors,
+) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(32.))
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .border_b_1()
+        .border_color(colors.border)
+        .bg(colors.panel_alt)
+        .text_size(px(13.))
+        .text_color(colors.muted)
+        .children(columns.iter().enumerate().map(|(index, column)| {
+            let name = if column.name.is_empty() {
+                format!("列{}", index + 1)
+            } else {
+                column.name.clone()
+            };
+            div()
+                .flex_none()
+                .max_w(px(240.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(name)
+        }))
+}
+
 
 #[derive(Clone, Copy)]
 enum QueryResultEntry<'a> {
@@ -3640,11 +3675,23 @@ fn query_result_view(
         }
     }
     if page.rows.is_empty() {
+        // 空结果仍保留列头（T13 后端按列头生成），避免 PG/MY 空集合查询丢字段信息。
+        let column_header = if page.columns.is_empty() {
+            None
+        } else {
+            Some(
+                query_result_empty_columns_header(&page.columns, colors)
+                    .into_any_element(),
+            )
+        };
         return div()
             .size_full()
+            .flex()
+            .flex_col()
+            .child(column_header.unwrap_or_else(|| div().into_any_element()))
             .child(
                 div()
-                    .size_full()
+                    .flex_1()
                     .overflow_y_scrollbar()
                     .child(
                         div()
@@ -3699,7 +3746,10 @@ fn query_result_view(
     let change_sql_preview = result_editor
         .and_then(|_| change_count)
         .and_then(|_| result_editor.and_then(|editor| editor.changes.as_ref()))
-        .map(|changes| data_change_sql_preview(result_page, changes));
+        .map(|changes| {
+            let db_kind = this.connection_database_kind(changes.object.connection_id);
+            data_change_sql_preview(result_page, changes, db_kind)
+        });
     let change_sql_preview_open = this.data_change_sql_preview_tabs.contains(&tab_id);
     let cell_detail_drawer = result_editor
         .filter(|editor| editor.cell_detail_panel.open)

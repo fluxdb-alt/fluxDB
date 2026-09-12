@@ -41,8 +41,10 @@ fn seed_history(controller: &mut AppController) -> Vec<WorkbenchHistoryScope> {
     controller.record_redis_workbench_history_execution(&redis_execution(2, 0, "GET c", 0));
     // SQL 历史：应完全独立于 Redis scope（直接构造条目标注为 SQL 查询）。
     controller.state.query_history.push(QueryHistoryEntry {
+        session_id: None,
         connection_id: ConnectionId(1),
         database: Some("main".to_string()),
+        schema: None,
         text: "SELECT 1".to_string(),
         tables: Vec::new(),
         kind: QueryHistoryKind::Query,
@@ -59,6 +61,7 @@ fn seed_history(controller: &mut AppController) -> Vec<WorkbenchHistoryScope> {
         executed_at_unix_secs: 900,
         object: None,
         rollback_snapshot: None,
+        transaction_state: QueryHistoryTransactionState::Committed,
     });
 
     vec![
@@ -97,6 +100,7 @@ fn redis_history_load_routes_and_scopes_by_database_type() {
     let sql_scope = WorkbenchHistoryScope::Sql {
         connection_id: ConnectionId(1),
         database: Some("main".to_string()),
+        schema: None,
     };
     let sql = controller.load_history(&sql_scope, 100);
     assert_eq!(sql.len(), 1, "SQL scope 只应命中 SQL 查询历史");
@@ -120,6 +124,7 @@ fn redis_history_clear_is_scope_scoped() {
     let sql_scope = WorkbenchHistoryScope::Sql {
         connection_id: ConnectionId(1),
         database: Some("main".to_string()),
+        schema: None,
     };
     assert_eq!(controller.load_history(&sql_scope, 100).len(), 1, "清空 Redis 不应影响 SQL 历史");
 }

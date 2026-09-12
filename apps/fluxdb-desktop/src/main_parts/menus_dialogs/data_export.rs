@@ -623,6 +623,14 @@ fn run_table_data_export(
     cancel_flag: Arc<AtomicBool>,
     sender: mpsc::Sender<TableDataExportProgress>,
 ) -> anyhow::Result<TableDataExportResult> {
+    // 导出 SQL 字面量/标识符按连接方言渲染（PG 双引号 + `'\x..'::bytea`）。
+    let db_kind = controller
+        .state()
+        .connections
+        .iter()
+        .find(|c| c.config.id == form.object.connection_id)
+        .map(|c| c.config.kind)
+        .unwrap_or(DatabaseKind::MySql);
     let sort = match form.scope {
         TableDataExportScope::CurrentConditions => form.sort,
         TableDataExportScope::AllRows => Vec::new(),
@@ -635,37 +643,92 @@ fn run_table_data_export(
         TableDataExportScope::AllRows => Vec::new(),
         TableDataExportScope::CustomRules => data_filter_specs_from_rules(&form.custom_filter_rules),
     };
-    let mut writer =
-        TableDataExportWriter::create(&path, form.format, form.object.clone(), fields)?;
-    let mut offset = 0;
-    let mut exported = 0;
-    let started_at = Instant::now();
-    loop {
-        if cancel_flag.load(Ordering::Relaxed) {
-            writer.finish()?;
-            return Ok(TableDataExportResult { canceled: true });
+    // 取消/失败只留可识别的临时状态：先写 `path.partial`，成功后 rename 为最终 path；
+    // 取消/失败删除临时文件，避免把半成品导出误当成功（T23 取消临时文件语义）。
+    let temp_path = table_data_export_temp_path(&path);
+    let mut writer = TableDataExportWriter::create(
+        &temp_path,
+        form.format,
+        form.object.clone(),
+        fields,
+        db_kind,
+    )?;
+    // PostgreSQL 走一致快照导出（单 REPEATABLE READ 事务），其余按既有逐页手动循环。
+    let canceled = if db_kind == DatabaseKind::Postgres {
+        let mut exported: u64 = 0;
+        let started_at = Instant::now();
+        let mut on_page = |page: DataPage| -> bool {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return false;
+            }
+            match writer.write_page(&page) {
+                Ok(rows) => {
+                    exported += rows as u64;
+                    let _ = sender.send(TableDataExportProgress {
+                        rows: rows as u64,
+                        elapsed_ms: started_at.elapsed().as_millis() as u64,
+                        message: format!("已导出 {} 行", exported),
+                    });
+                    true
+                }
+                Err(_) => false,
+            }
+        };
+        let on_cancel = || cancel_flag.load(Ordering::Relaxed);
+        match controller.export_pages_for_connection(&form.object, &sort, &filters, &on_cancel, &mut on_page) {
+            Ok(()) => cancel_flag.load(Ordering::Relaxed),
+            Err(error) => {
+                let _ = fs::remove_file(&temp_path);
+                return Err(anyhow::anyhow!("导出失败：{error}"));
+            }
         }
-        let page = controller.load_data_for_export(
-            &form.object,
-            offset,
-            DATA_EXPORT_BATCH_SIZE,
-            &sort,
-            &filters,
-        )?;
-        let rows = writer.write_page(&page)?;
-        exported += rows;
-        let _ = sender.send(TableDataExportProgress {
-            rows,
-            elapsed_ms: started_at.elapsed().as_millis() as u64,
-            message: format!("已导出第 {} 批，累计 {} 行", offset / DATA_EXPORT_BATCH_SIZE + 1, exported),
-        });
-        if rows == 0 || !page.has_more {
-            break;
+    } else {
+        let mut offset = 0;
+        let mut exported = 0;
+        let started_at = Instant::now();
+        loop {
+            if cancel_flag.load(Ordering::Relaxed) {
+                break;
+            }
+            let page = controller.load_data_for_export(
+                &form.object,
+                offset,
+                DATA_EXPORT_BATCH_SIZE,
+                &sort,
+                &filters,
+            )?;
+            let rows = writer.write_page(&page)?;
+            exported += rows;
+            let _ = sender.send(TableDataExportProgress {
+                rows,
+                elapsed_ms: started_at.elapsed().as_millis() as u64,
+                message: format!("已导出第 {} 批，累计 {} 行", offset / DATA_EXPORT_BATCH_SIZE + 1, exported),
+            });
+            if rows == 0 || !page.has_more {
+                break;
+            }
+            offset += rows;
         }
-        offset += rows;
-    }
+        cancel_flag.load(Ordering::Relaxed)
+    };
     writer.finish()?;
-    Ok(TableDataExportResult { canceled: false })
+    if canceled {
+        // 取消：删除临时文件，不rename到最终路径（不留半成品）。
+        let _ = fs::remove_file(&temp_path);
+        Ok(TableDataExportResult { canceled: true })
+    } else {
+        // 成功：临时文件原子改名到最终路径。
+        fs::rename(&temp_path, &path)
+            .map_err(|error| anyhow::anyhow!("导出文件落盘失败：{error}"))?;
+        Ok(TableDataExportResult { canceled: false })
+    }
+}
+
+/// 导出临时文件路径：最终路径加 `.partial` 后缀，成功后才改名落盘。
+fn table_data_export_temp_path(path: &Path) -> PathBuf {
+    let mut temp = path.as_os_str().to_os_string();
+    temp.push(".partial");
+    PathBuf::from(temp)
 }
 
 fn table_data_export_set_path_on_ui(
