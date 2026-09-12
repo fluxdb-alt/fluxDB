@@ -4,6 +4,8 @@
 // 拆分执行；本模块只做「检测」与「参数构造」两件纯逻辑（可单测），实际子进程执行在 app 层，
 // 且 psql 不存在/版本不符需给清晰错误（见集中人工验收）。密码绝不出现在 argv，只经环境变量。
 
+use fluxdb_core::PostgresSslMode;
+
 /// 脚本是否需要 psql 原生模式：存在 `COPY ... FROM STDIN`（数据块以 `\.` 结束）或 psql 元命令。
 ///
 /// 为纯函数便于单测：单引号字符串、双引号标识符、行/块注释内容先被抹成空白，再在「代码掩码」上
@@ -144,7 +146,11 @@ pub struct PgPsqlInvocation {
     pub env: Vec<(String, String)>,
 }
 
-/// 构造 psql 调用：非交互 + 可选继续错误 + 目标库；密码只在 env，绝不进 argv（设计 §11.2）。
+/// 构造 psql 调用：非交互 + 可选继续错误 + 目标库 + TLS 模式；密码只在 env，绝不进 argv（设计 §11.2）。
+///
+/// `ssl_mode` 决定是否追加 `sslmode=` 选项（disable/require/verify-ca/verify-full）；
+/// `Prefer`（PG 默认，缺省先尝试 SSL）不显式传参。注意：本函数只按直连/TLS 语义生成连接参数，
+/// SSH 隧道场景由调用方另建隧道并把 `host` 指向隧道本地端口（SSH+TLS 原生工具链待人工验证）。
 pub fn pg_psql_invocation(
     host: &str,
     port: u16,
@@ -153,6 +159,7 @@ pub fn pg_psql_invocation(
     script_path: &str,
     password: Option<&str>,
     stop_on_error: bool,
+    ssl_mode: PostgresSslMode,
 ) -> PgPsqlInvocation {
     let args = vec![
         "--no-psqlrc".to_string(),
@@ -174,13 +181,30 @@ pub fn pg_psql_invocation(
         "-f".to_string(),
         script_path.to_string(),
     ];
-    let env = password
-        .filter(|password| !password.is_empty())
-        .map(|password| vec![("PGPASSWORD".to_string(), password.to_string())])
-        .unwrap_or_default();
+    // 密码只走 env；TLS 模式同样只走 env（PGSSLMODE，psql/pg_dump 都认），不进 argv——
+    // psql/pg_dump 无 `--sslmode` CLI 开关，`-c sslmode=..` 会被当作用户 SQL 而非连接参数。
+    let mut env = Vec::new();
+    if let Some(mode) = pg_sslmode_value(ssl_mode) {
+        env.push(("PGSSLMODE".to_string(), mode.to_string()));
+    }
+    if let Some(password) = password.filter(|password| !password.is_empty()) {
+        env.push(("PGPASSWORD".to_string(), password.to_string()));
+    }
     PgPsqlInvocation {
         program: "psql".to_string(),
         args,
         env,
+    }
+}
+
+/// 把连接档案的 TLS 模式映射为 psql/pg_dump 的 `sslmode` 值；`Prefer` 返回 None（省略）。
+pub fn pg_sslmode_value(ssl_mode: PostgresSslMode) -> Option<&'static str> {
+    match ssl_mode {
+        PostgresSslMode::Disabled => Some("disable"),
+        PostgresSslMode::Require => Some("require"),
+        PostgresSslMode::VerifyCa => Some("verify-ca"),
+        PostgresSslMode::VerifyFull => Some("verify-full"),
+        // Prefer 是服务端默认，显式传属冗余；省略等价。
+        PostgresSslMode::Prefer => None,
     }
 }

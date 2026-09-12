@@ -535,18 +535,26 @@ fn run_backup(
             DatabaseKind::MongoDb | DatabaseKind::Redis => {
                 anyhow::bail!("当前连接类型不支持原生备份")
             }
-            DatabaseKind::Postgres => run_native_pg_dump(
-                &settings,
-                &host,
-                port,
-                &user,
-                &password,
-                form.database.as_deref().unwrap_or_default(),
-                &output_path,
-                &cancel_flag,
-                &sender,
-                &form,
-            ),
+            DatabaseKind::Postgres => {
+                let ssl_mode = config
+                    .postgres_profile
+                    .as_ref()
+                    .map(|profile| profile.tls.ssl_mode)
+                    .unwrap_or(PostgresSslMode::Prefer);
+                run_native_pg_dump(
+                    &settings,
+                    &host,
+                    port,
+                    &user,
+                    &password,
+                    ssl_mode,
+                    form.database.as_deref().unwrap_or_default(),
+                    &output_path,
+                    &cancel_flag,
+                    &sender,
+                    &form,
+                )
+            }
         },
         BackupMode::Logic => run_logic_backup(
             &controller,
@@ -901,6 +909,7 @@ fn run_native_pg_dump(
     port: u16,
     user: &str,
     password: &str,
+    ssl_mode: PostgresSslMode,
     database: &str,
     output_path: &Path,
     cancel_flag: &Arc<AtomicBool>,
@@ -934,6 +943,11 @@ fn run_native_pg_dump(
         "-d",
         database,
     ]);
+    // 沿档案 TLS 模式（sslmode）——pg_dump 经 PGSSLMODE 环境变量（无 --sslmode CLI 开关且不进 argv）；
+    // Prefer（默认）省略。
+    if let Some(mode) = fluxdb_app::pg_sslmode_value(ssl_mode) {
+        cmd.env("PGSSLMODE", mode);
+    }
     // 表过滤：选中表非空时按表导出（schema.table 原样透传），空集合 = 整库。
     if !form.selected_tables.is_empty() {
         for table in form.selected_tables.iter() {
@@ -984,6 +998,8 @@ fn run_native_pg_dump(
         if cancel_flag.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait();
+            // 清理取消产生的半成品备份，避免残留部分 dump 被误当成功备份。
+            let _ = fs::remove_file(output_path);
             anyhow::bail!("已取消");
         }
         let n = std::io::Read::read(&mut stdout_io, &mut buffer)?;
@@ -1011,6 +1027,8 @@ fn run_native_pg_dump(
                 success: false,
             });
         }
+        // 失败也清理半成品输出，避免留下残缺备份被扫描为「历史备份」。
+        let _ = fs::remove_file(output_path);
         anyhow::bail!("pg_dump 退出码 {code}");
     }
     emit_native_log(

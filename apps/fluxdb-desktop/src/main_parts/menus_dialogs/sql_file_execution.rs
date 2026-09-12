@@ -502,6 +502,13 @@ impl NavicatMain {
         self._sql_file_cancel_flags
             .insert(task_id, cancel_flag.clone());
 
+        // 原生工具沿连接档案的 TLS 模式（sslmode），使 psql 与连接器使用一致的加密强度；
+        // Prefer（默认）不显式传参。SSH 隧道场景的原生链路（子进程隧道）见集中人工验收 F 节待验证。
+        let ssl_mode = config
+            .postgres_profile
+            .as_ref()
+            .map(|profile| profile.tls.ssl_mode)
+            .unwrap_or(PostgresSslMode::Prefer);
         let invocation = pg_psql_invocation(
             &host,
             port,
@@ -510,6 +517,7 @@ impl NavicatMain {
             path.to_string_lossy().as_ref(),
             Some(&password),
             !form.continue_on_error,
+            ssl_mode,
         );
         let connection_id = form.connection_id;
         let file_label = sql_file_name(path);

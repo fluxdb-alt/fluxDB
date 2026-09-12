@@ -462,7 +462,8 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   增量一（`aff447a`）：`pg_script_needs_native_mode` + `pg_psql_invocation`（见本文件历史记录）。
   增量二（本会话，app/桌面原生脚本执行接入）：`fluxdb-app` 对外再导出 `pg_script_needs_native_mode`/`pg_psql_invocation`/`PgPsqlInvocation`（桌面经 app 网关，遵循分层）；`sql_file_execution.rs` 的 `start_sql_file_execution` 在分句执行前调 `start_pg_native_sql_file_execution`——当连接为 PG 且 `pg_script_needs_native_mode(text)` 命中时改走 psql 子进程：`pg_psql_invocation(host,port,user,db,path,password,!continue_on_error)` 构造 argv（密码仅 PGPASSWORD 环境变量）、`run_pg_native_psql` 无 shell 执行并逐批检测取消 kill+wait 回收、stderr 尾段回填失败原因、成功后经 `record_sql_file_statement_summary` 记一条日志；目标库优先作用域库、缺省回退连接维护库。捕获 owned 副本避免借用逃逸。普通脚本（非原生模式）仍走原分句执行，MySQL 流程不变。
   验证（真库，docker fluxdb-t09-pg PG16.15）：(1) 原生脚本（CREATE TABLE + COPY FROM STDIN + SELECT）以 `pg_psql_invocation` 完全相同的 argv 经 psql 执行退出 0，COPY 两行正确落入并 count=2——COAPY STDIN 分号不误拆、原生模式可行；(2) ON_ERROR_STOP=1 下唯一冲突使 psql 退出码 3（非零 → 判失败、中途停止），`continue_on_error`(ON_ERROR_STOP=off) 下报错但继续且退出 0——与 `!form.continue_on_error` 映射一致；(3) 错误 stderr 尾部回填。临时库/文件已清理。cargo test --workspace 全绿。
-  未完成项：桌面端真实调用链需主机有 psql（本机无 psql/pg_dump，已并入集中人工验收清单，容器内工具验证了后端但桌面实际 spawn 待人工）；psql 版本/不存在错误的 UI 呈现（spawn 失败有清晰「启动 psql 失败」错误，具体版本不符提示待人工）；目标 database/schema 下拉与编码转换在原生模式的深度验证。
+  增量三（本会话，TLS 模式接入子进程，见 T25 增量二同记录）：原生脚本执行沿档案 ssl_mode 经 PGSSLMODE env 传 psql，密码同样只入 env。
+  未完成项：桌面端真实调用链需主机有 psql（本机无 psql/pg_dump，已并入集中人工验收清单，容器内工具验证了后端但桌面实际 spawn 待人工）；psql 版本/不存在错误的 UI 呈现（spawn 失败有清晰「启动 psql 失败」错误，具体版本不符提示待人工）；SSH 隧道下原生子进程链路未落地（保留待验证）；目标 database/schema 下拉与编码转换在原生模式的深度验证。
 
 ### T25 — 数据库备份和恢复验收
 
@@ -474,7 +475,9 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 - **完成记录**：进行中（FluxDB，2026-09-12）。
   增量一（本会话，PG 原生 pg_dump 备份）：`database_backup.rs` 新增 `run_native_pg_dump`（`--no-owner --no-acl --format=plain --inserts -h -p -U -d` 单文件 .sql；选中表 `-t schema.table` 透传、空集合=整库；密码仅经 `PGPASSWORD` 环境变量不进 argv；stdout 流式写文件+逐批取消检测 kill；stderr 尾部回填失败提示）。`run_backup` 的 Native/Postgres 分支由 `不支持原生备份` 接入该函数；`native_tool_available` 增 PG 分支（`settings.pg_dump_path` 或 PATH 的 `pg_dump`）。`resolved_credentials` 按连接类型分支——PG 走 `postgres_resolved()`（host/maintenance_database/username/password），纠正此前恒走 `mysql_resolved()` 导致 PG 拿不到 host/user。设置新增 `pg_dump_path`（core Settings + Default + storage 测试字面量 + content_views 路径行/选择/changed/apply）。备份写行沿用既有 `{backup_dir}/{库安全名}/*.sql` 约定，backup_tab 扫描兼容。
   验证（真库，docker `fluxdb-t09-pg` PG16.15）：构造隔离源库 `t25_dump_src`（serial 主键表 items + name 索引 + qty CHECK + 视图 items_v + 函数 items_total + 3 行数据 + 序列 last_value=3）→ 以与代码完全相同参数跑 `pg_dump --no-owner --no-acl --format=plain --inserts` 退出 0（stderr 空）→ dump 含 CREATE TABLE/VIEW/FUNCTION/INDEX/SEQUENCE + INSERT 三行 + `setval(seq,3)` → `createdb t25_dump_dst` + psql 恢复退出 0 → 比对：3 行数据/数值 12.50 保精、序列 last_value=3、新插入 `delta` 得 id=4（identity+sequence 独立可用）、视图 count=3、函数 items_total()=4、索引 items_pkey + idx_items_name 均在。源/目标库与临时文件已清理。
-  未完成项：SSH+TLS 下 pg_dump 的真实链路（本地无 psql/pg_dump 主机工具，原生子进程实际执行依赖桌面端带工具环境的验证，已并入集中人工清单）；custom 格式 + pg_restore + 「目录/记录」备份记录管理；工具检测/版本差异与缺工具/权限不足的清晰错误；普通表逻辑导出准确标注范围的 PG 分支；MySQL 原生/逻辑备份回归手测（→ 集中人工清单 E 节）。
+  增量二（本会话，子进程审计：TLS 模式 + 取消/失败清理）：`pg_psql_invocation` 增 `ssl_mode` 参数——TLS 模式经 `PGSSLMODE` 环境变量（psql/pg_dump 无 `--sslmode` CLI 开关；`-c sslmode=..` 会被当作用户 SQL，已修正）；新增 `pg_sslmode_value`（Disabled→disable/Require→require/VerifyCa→verify-ca/VerifyFull→verify-full/Prefer→None 省略）。desktop `run_native_pg_dump` 与原生脚本执行沿档案 `profile.tls.ssl_mode` 传 PGSSLMODE；pg_dump 取消或失败时删除半成品输出文件（防残留部分 dump 被备份扫描误当成功）。
+  验证：作为竞争检查，`PGSSLMODE=disable` 连接成功（容器 ssl off）、`PGSSLMODE=require` 明确报「server does not support SSL, but SSL was required」退出 2——证明 TLS 模式经 env 正确生效且错误语义清晰。新单测 `pg_sslmode_value_maps_tls_modes`、更新 `pg_psql_invocation_keeps_password_out_of_argv`（密码与 sslmode 均只入 env 不入 argv）。工具全绿（connectors 141）。
+  未完成项：SSH 隧道下 pg_dump/psql 的原生子进程链路未落地（当前只传直连 host/port，未建子进程隧道；需 SSH 环境 + 主机工具，保留待验证，并入集中人工清单 F 节）；custom 格式 + pg_restore + 「目录/记录」备份记录管理；工具检测/版本差异与缺工具/权限不足的清晰错误；普通表逻辑导出准确标注范围的 PG 分支；MySQL 原生/逻辑备份回归手测（→ 集中人工清单 E 节）。
 
 ### T26 — 角色、用户和 ACL 后端
 

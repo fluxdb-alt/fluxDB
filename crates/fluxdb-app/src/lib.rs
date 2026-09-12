@@ -12,7 +12,7 @@ use fluxdb_connectors::{
 pub use fluxdb_connectors::{
     PgPsqlInvocation, PubSubMessage, PubSubPollOutcome, PubSubPublishResult,
     PubSubSubscriptionEvent, RedisAddKeyKind, RedisAddKeyRequest, RedisListDirection,
-    RedisPubSubSession, pg_psql_invocation, pg_script_needs_native_mode,
+    RedisPubSubSession, pg_psql_invocation, pg_script_needs_native_mode, pg_sslmode_value,
 };
 use fluxdb_core::{
     AppliedChangeOutcome, BinaryCellSummary, BinaryPreviewResponse, BinaryUpdatePayload,

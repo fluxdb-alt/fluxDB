@@ -2,7 +2,8 @@
 mod tests {
     use super::*;
     use fluxdb_core::{
-        CellUpdate, Endpoint, Error, ErrorKind, QueryExecutionOptions, QueryMode, RowIdentity,
+        CellUpdate, Endpoint, Error, ErrorKind, PostgresSslMode, QueryExecutionOptions, QueryMode,
+        RowIdentity,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -3548,25 +3549,46 @@ SELECT item_id, name FROM audit_log;"
             "/tmp/script.sql",
             Some("s3cret"),
             true,
+            PostgresSslMode::Require,
         );
         assert_eq!(invocation.program, "psql");
         assert!(invocation.args.contains(&"--no-psqlrc".to_string()));
         assert!(invocation.args.contains(&"ON_ERROR_STOP=1".to_string()));
         assert!(invocation.args.contains(&"/tmp/script.sql".to_string()));
-        // 密码绝不出现在 argv。
+        // 密码与 TLS 模式都只走 env（PGPASSWORD / PGSSLMODE），绝不出现在 argv。
         assert!(
             !invocation.args.iter().any(|arg| arg.contains("s3cret")),
             "密码不得进入 argv：{:?}",
             invocation.args
         );
-        assert_eq!(
-            invocation.env,
-            vec![("PGPASSWORD".to_string(), "s3cret".to_string())]
+        assert!(
+            !invocation.args.iter().any(|arg| arg.contains("sslmode")),
+            "sslmode 不得进入 argv：{:?}",
+            invocation.args
         );
-        // 无密码时不注入 PGPASSWORD。
-        let no_pw = pg_psql_invocation("h", 5432, "u", "d", "f", None, false);
+        assert!(
+            invocation.env.iter().any(|(k, v)| k == "PGSSLMODE" && v == "require"),
+            "Require 应注入 PGSSLMODE=require"
+        );
+        assert!(
+            invocation.env.iter().any(|(k, v)| k == "PGPASSWORD" && v == "s3cret"),
+            "应注入 PGPASSWORD"
+        );
+        // 无密码且 Prefer 时不注入任何 env；ON_ERROR_STOP=off。
+        let no_pw = pg_psql_invocation("h", 5432, "u", "d", "f", None, false, PostgresSslMode::Prefer);
         assert!(no_pw.env.is_empty());
         assert!(no_pw.args.contains(&"ON_ERROR_STOP=off".to_string()));
+    }
+
+    /// sslmode 映射：各 TLS 模式 → psql/pg_dump 可识别值，Prefer 省略。
+    #[test]
+    fn pg_sslmode_value_maps_tls_modes() {
+        use fluxdb_core::PostgresSslMode as S;
+        assert_eq!(pg_sslmode_value(S::Disabled), Some("disable"));
+        assert_eq!(pg_sslmode_value(S::Require), Some("require"));
+        assert_eq!(pg_sslmode_value(S::VerifyCa), Some("verify-ca"));
+        assert_eq!(pg_sslmode_value(S::VerifyFull), Some("verify-full"));
+        assert_eq!(pg_sslmode_value(S::Prefer), None);
     }
 
     /// 真实 PG：对象权限读取（aclexplode）+ 授权/撤销往返。

@@ -80,6 +80,8 @@
 | F3 | 执行含 COPY FROM STDIN 的 SQL 文件 | 自动识别原生模式走 psql；COPY 数据正确落入；分号不误拆 |
 | F4 | 原生脚本中途失败 | ON_ERROR_STOP 停止并提示失败；勾选「继续错误」则跳过继续 |
 | F5 | 主机无 psql/pg_dump | 启动报「启动 psql/pg_dump 失败」清晰错误，不假成功 |
+| F6 | TLS 连接（ssl_mode 非 prefer）执行原生备份/脚本 | psql/pg_dump 经 PGSSLMODE 以与连接器一致强度加密；不加密时明确报连接失败 |
+| F7 | SSH 隧道连接执行原生备份/脚本 | 待验证：当前原生子进程只按直连 host/port 生成，未建子进程隧道；需确认或补实现后标注结果 |
 
 ---
 
