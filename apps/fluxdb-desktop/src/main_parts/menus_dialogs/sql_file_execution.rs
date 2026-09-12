@@ -503,15 +503,36 @@ impl NavicatMain {
             .insert(task_id, cancel_flag.clone());
 
         // 原生工具沿连接档案的 TLS 模式（sslmode），使 psql 与连接器使用一致的加密强度；
-        // Prefer（默认）不显式传参。SSH 隧道场景的原生链路（子进程隧道）见集中人工验收 F 节待验证。
+        // Prefer（默认）不显式传参。
         let ssl_mode = config
             .postgres_profile
             .as_ref()
             .map(|profile| profile.tls.ssl_mode)
             .unwrap_or(PostgresSslMode::Prefer);
-        let invocation = pg_psql_invocation(
-            &host,
-            port,
+        // SSH 隧道（若启用）：起 ssh -N -L 子进程把远端映射到本地端口，psql 经
+        // 127.0.0.1:local（PGHOSTADDR）拨号，-h 保持真实远端供 TLS 校验；保持通道至 psql 结束。
+        let ssh = config.postgres_profile.as_ref().and_then(|profile| profile.ssh());
+        let mut tunnel_child = None;
+        let connect_host = host.clone();
+        let mut connect_port = port;
+        let mut hostaddr: Option<String> = None;
+        if let Some(ssh) = ssh {
+            match pg_start_ssh_tunnel(ssh, &host, port, &cancel_flag) {
+                Ok((child, local_port)) => {
+                    tunnel_child = Some(child);
+                    connect_port = local_port;
+                    hostaddr = Some("127.0.0.1".to_string());
+                }
+                Err(error) => {
+                    let _ = error;
+                    self.show_message("SSH 隧道建立失败", AppMessageKind::Error, cx);
+                    return true;
+                }
+            }
+        }
+        let mut invocation = pg_psql_invocation(
+            &connect_host,
+            connect_port,
             &user,
             database.as_deref().unwrap_or_default(),
             path.to_string_lossy().as_ref(),
@@ -519,6 +540,9 @@ impl NavicatMain {
             !form.continue_on_error,
             ssl_mode,
         );
+        if let Some(addr) = &hostaddr {
+            invocation.env.extend(fluxdb_app::pg_hostaddr_env(addr, connect_port));
+        }
         let connection_id = form.connection_id;
         let file_label = sql_file_name(path);
         // 捕获 owned 副本，避免借用逃逸到 spawn 的后台任务生命周期外。
@@ -526,7 +550,15 @@ impl NavicatMain {
         let cancel_for_check = cancel_flag.clone();
         let task = cx.spawn(async move |view, cx| {
             let result = cx
-                .background_spawn(async move { run_pg_native_psql(invocation, &cancel_for_spawn) })
+                .background_spawn(async move {
+                    let result = run_pg_native_psql(invocation, &cancel_for_spawn);
+                    // 工具结束即关闭隧道并回收 ssh 子进程。
+                    if let Some(mut child) = tunnel_child {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                    result
+                })
                 .await;
             let _ = cx.update(|cx| {
                 let Some(view) = view.upgrade() else {

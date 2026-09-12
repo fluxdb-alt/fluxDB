@@ -1350,54 +1350,13 @@ fn run_native_pg_dump_via_ssh(
     sender: &mpsc::Sender<BackupTaskProgress>,
     form: &BackupForm,
 ) -> anyhow::Result<()> {
-    let local_port = pg_pick_free_local_port()?;
-    let auth = pg_ssh_auth_from_options(ssh);
-    let tunnel = fluxdb_app::pg_ssh_tunnel_invocation(
-        &ssh.host,
-        ssh.port,
-        &ssh.username,
-        &auth,
-        remote_host,
-        remote_port,
-        local_port,
-        ssh.keepalive_interval_secs,
-    );
     emit_native_log(
         sender,
         "隧道",
-        format!("正在经 SSH {} 建立隧道 → 本地端口 {local_port}", ssh.host),
+        format!("正在经 SSH {} 建立隧道", ssh.host),
     )?;
-    // 密码认证：ssh 不接受 argv 明文密码，经 `sshpass -e`（读 SSHPASS 环境变量）包裹 ssh。
-    let password_auth = matches!(auth, fluxdb_app::SshTunnelAuth::Password);
-    let mut tunnel_cmd = if password_auth {
-        Command::new("sshpass")
-    } else {
-        Command::new(&tunnel.program)
-    };
-    if password_auth {
-        tunnel_cmd.arg("-e").arg(&tunnel.program);
-    }
-    tunnel_cmd.args(&tunnel.args);
-    if password_auth {
-        let pass = ssh.password.value().unwrap_or_default();
-        if !pass.is_empty() {
-            tunnel_cmd.env("SSHPASS", pass);
-        }
-    }
-    let mut tunnel_child = tunnel_cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| anyhow::anyhow!("启动 ssh 隧道失败：{error}"))?;
-
-    // 等隧道就绪（本地端口可连），最多 ~8s，期间响应取消。
-    let ready = pg_wait_tunnel_ready(local_port, &mut tunnel_child, cancel_flag, 8000);
-    if !ready {
-        let _ = tunnel_child.kill();
-        let _ = tunnel_child.wait();
-        anyhow::bail!("SSH 隧道建立失败或超时");
-    }
+    let (mut tunnel_child, local_port) =
+        pg_start_ssh_tunnel(ssh, remote_host, remote_port, cancel_flag)?;
 
     let result = run_native_pg_dump(
         settings,
@@ -1472,4 +1431,54 @@ fn pg_wait_tunnel_ready(
         std::thread::sleep(Duration::from_millis(150));
     }
     false
+}
+
+/// 建立 SSH 隧道子进程（供 pg_dump/psql 复用）：选空闲端口 → `ssh -N -L`（密码认证经 sshpass -e）
+/// → 等就绪。返回 (隧道子进程, 本地端口)；调用方负责在工具结束后 kill+wait 回收。
+pub fn pg_start_ssh_tunnel(
+    ssh: &fluxdb_core::PostgresSshOptions,
+    remote_host: &str,
+    remote_port: u16,
+    cancel_flag: &Arc<AtomicBool>,
+) -> anyhow::Result<(std::process::Child, u16)> {
+    let local_port = pg_pick_free_local_port()?;
+    let auth = pg_ssh_auth_from_options(ssh);
+    let tunnel = fluxdb_app::pg_ssh_tunnel_invocation(
+        &ssh.host,
+        ssh.port,
+        &ssh.username,
+        &auth,
+        remote_host,
+        remote_port,
+        local_port,
+        ssh.keepalive_interval_secs,
+    );
+    let password_auth = matches!(auth, fluxdb_app::SshTunnelAuth::Password);
+    let mut tunnel_cmd = if password_auth {
+        Command::new("sshpass")
+    } else {
+        Command::new(&tunnel.program)
+    };
+    if password_auth {
+        tunnel_cmd.arg("-e").arg(&tunnel.program);
+    }
+    tunnel_cmd.args(&tunnel.args);
+    if password_auth {
+        let pass = ssh.password.value().unwrap_or_default();
+        if !pass.is_empty() {
+            tunnel_cmd.env("SSHPASS", pass);
+        }
+    }
+    let mut child = tunnel_cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| anyhow::anyhow!("启动 ssh 隧道失败：{error}"))?;
+    if !pg_wait_tunnel_ready(local_port, &mut child, cancel_flag, 8000) {
+        let _ = child.kill();
+        let _ = child.wait();
+        anyhow::bail!("SSH 隧道建立失败或超时");
+    }
+    Ok((child, local_port))
 }
