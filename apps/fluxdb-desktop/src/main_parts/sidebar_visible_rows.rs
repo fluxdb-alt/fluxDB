@@ -759,7 +759,16 @@ fn build_sidebar_row(
                 .clone()
                 .expect("schema row has database name");
             let schema = row.schema.clone().expect("schema row has schema");
-            let database_path = row.database_path.clone().expect("schema row has path");
+            // 必须是真正的 schema 对象路径（kind=Schema、name=schema）：此前误把库路径交给
+            // schema 行，展开时按库路径重新拉了一遍 schema 列表而不是该 schema 的表，
+            // 表现为「schema 点不开」。schema 字段同时供 replace_loaded_children 按 schema 限定合并范围。
+            let schema_path = ObjectPath {
+                connection_id: row.connection_id,
+                database: Some(database_name.clone()),
+                schema: Some(schema.clone()),
+                name: schema.clone(),
+                kind: ObjectKind::Schema,
+            };
             let schema_key = schema_tree_key(row.connection_id, &database_name, &schema);
             let schema_expanded = if search_active {
                 tree_expanded_for_search(this.expanded_databases.get(&schema_key).copied(), true)
@@ -774,7 +783,7 @@ fn build_sidebar_row(
             });
             schema_tree(
                 row.connection_id,
-                database_path,
+                schema_path,
                 schema,
                 row.indent,
                 schema_expanded,
@@ -808,6 +817,7 @@ fn build_sidebar_row(
                 row.connection_id,
                 database_path,
                 database_name,
+                row.schema.clone(),
                 group,
                 row.indent,
                 group_expanded,
@@ -1173,6 +1183,52 @@ mod sidebar_flatten_tests {
         );
         let mk: Vec<SidebarRowKind> = mysql_rows.iter().map(|r| r.kind).collect();
         assert!(!mk.contains(&SidebarRowKind::Schema), "MySQL 树不应出现 schema 行");
+    }
+
+    /// 回归：PG 展开库后尚未加载表时，schema 层也能从「schema 子对象」直接列出，
+    /// 而不是依赖已加载的 Table/View 反推。曾因只查 Table/View 导致 schema 行永不出现、表列不出来。
+    #[test]
+    fn database_schemas_includes_schema_objects() {
+        let mut pg = connection_state(&pg_config(), true);
+        pg.objects.push(database_option(ObjectKind::Database, "appdb"));
+        // 展开库后落回的是 Schema 对象（name 即 schema 名）。
+        pg.objects.push(ObjectSummary {
+            path: ObjectPath {
+                connection_id: ConnectionId(1),
+                database: Some("appdb".to_string()),
+                schema: None,
+                name: "public".to_string(),
+                kind: ObjectKind::Schema,
+            },
+            rows: None,
+            modified_at: None,
+            comment: None,
+        });
+        assert_eq!(
+            database_schemas(&pg, "appdb"),
+            vec!["public".to_string()],
+            "仅有 schema 子对象也应列出 public"
+        );
+    }
+
+    /// 回归：PG 的分组展开态必须按 schema 分桶。渲染侧读 `object_group_tree_key_scoped` 的 key，
+    /// 点击侧若退回不带 schema 的 `object_group_tree_key`，写入的展开态永远匹配不上读取的 key，
+    /// 表现为「表/视图/…分组点不开」——此坑已出现两次（schema 行、分组行），故锁住。
+    #[test]
+    fn pg_object_group_key_is_schema_scoped() {
+        let scoped = object_group_tree_key_scoped(
+            ConnectionId(1),
+            "appdb",
+            Some("public"),
+            ObjectGroup::Tables,
+        );
+        let unscoped = object_group_tree_key(ConnectionId(1), "appdb", ObjectGroup::Tables);
+        assert_ne!(scoped, unscoped, "带 schema 的分组 key 必须与不带 schema 的区分开");
+        assert_eq!(
+            object_group_tree_key_scoped(ConnectionId(1), "appdb", None, ObjectGroup::Tables),
+            unscoped,
+            "非 PG（无 schema 分桶）时两者应保持一致"
+        );
     }
 
     #[test]

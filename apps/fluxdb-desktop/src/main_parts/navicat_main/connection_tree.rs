@@ -390,10 +390,13 @@ impl NavicatMain {
         &mut self,
         connection_id: ConnectionId,
         database: String,
+        schema: Option<&str>,
         group: ObjectGroup,
         cx: &mut Context<Self>,
     ) {
-        let key = object_group_tree_key(connection_id, &database, group);
+        // key 必须与渲染侧 `object_group_tree_key_scoped` 一致：PG 分组按 schema 分桶，
+        // 若这里用不带 schema 的 key，写入的展开态永远匹配不上渲染读的 key，分组点不开。
+        let key = object_group_tree_key_scoped(connection_id, &database, schema, group);
         let expanded = self
             .expanded_object_groups
             .get(&key)

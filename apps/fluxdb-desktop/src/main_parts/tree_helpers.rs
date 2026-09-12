@@ -77,6 +77,7 @@ fn tree_with_highlight(
                 .justify_center()
                 .text_color(match glyph {
                     "database" => rgb(0xf0b400),
+                    "schema" => rgb(0x2f80ed),
                     "table" | "tables" => rgb(0x10b85f),
                     "view" | "views" => rgb(0x9333ea),
                     "procedures" => rgb(0x2087ff),
@@ -188,6 +189,7 @@ fn tree_icon(glyph: &'static str) -> gpui::AnyElement {
 fn tree_icon_path(glyph: &str) -> Option<&'static str> {
     match glyph {
         "database" => Some("tree/database.svg"),
+        "schema" => Some("tree/schema.svg"),
         "table" | "tables" => Some("tree/table.svg"),
         "view" | "views" => Some("tree/view.svg"),
         "procedures" => Some("tree/procedure.svg"),
@@ -338,7 +340,7 @@ fn database_tree(
 
 fn schema_tree(
     connection_id: ConnectionId,
-    database_path: ObjectPath,
+    schema_path: ObjectPath,
     schema: String,
     indent: u8,
     expanded: bool,
@@ -348,8 +350,8 @@ fn schema_tree(
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let schema_for_click = database_path.clone();
-    let database_for_menu = database_path.clone();
+    let schema_for_click = schema_path.clone();
+    let database_for_menu = schema_path.clone();
     let schema_name_for_menu = schema.clone();
     let arrow: gpui::AnyElement = if loading {
         loading_spinner(13.).into_any_element()
@@ -358,7 +360,7 @@ fn schema_tree(
     };
     tree_with_highlight(
         arrow,
-        "database",
+        "schema",
         schema,
         indent,
         selected,
@@ -407,6 +409,8 @@ fn object_group_tree(
     connection_id: ConnectionId,
     database_path: ObjectPath,
     database: String,
+    // PG 下为所属 schema；非 schema 分桶数据库为 `None`。展开态 key 与右键菜单作用域都要用。
+    schema: Option<String>,
     group: ObjectGroup,
     indent: u8,
     expanded: bool,
@@ -415,6 +419,7 @@ fn object_group_tree(
 ) -> Div {
     // 备份节点单击开 tab 需要 ObjectPath 的独立副本（右键闭包已消费 database_path）。
     let database_path_for_open = database_path.clone();
+    let schema_for_toggle = schema.clone();
     tree(
         arrow_element(expanded, colors),
         group.icon_key(),
@@ -434,7 +439,13 @@ fn object_group_tree(
             if group == ObjectGroup::Backup {
                 this.dispatch(AppCommand::OpenBackupList(database_path_for_open.clone()), cx);
             } else {
-                this.toggle_object_group_tree(connection_id, database.clone(), group, cx);
+                this.toggle_object_group_tree(
+                    connection_id,
+                    database.clone(),
+                    schema_for_toggle.as_deref(),
+                    group,
+                    cx,
+                );
             }
             cx.stop_propagation();
         }),
@@ -995,7 +1006,8 @@ fn object_glyph(kind: ObjectKind) -> &'static str {
         ObjectKind::Index => "#",
         ObjectKind::Collection => "◆",
         ObjectKind::RedisKey => "●",
-        ObjectKind::Database | ObjectKind::Schema | ObjectKind::RedisDb => "database",
+        ObjectKind::Schema => "schema",
+        ObjectKind::Database | ObjectKind::RedisDb => "database",
     }
 }
 
@@ -1193,20 +1205,33 @@ fn connection_databases(connection: &ConnectionState) -> Vec<ObjectSummary> {
 /// 该库已加载的表/视图按 schema 分桶的升序 schema 名；无 schema（MySQL/SQLite/Redis）返回空。
 ///
 /// PG 对象 `path.schema` 为 `Some`；空 schema / "main" 等非 schema 数据库视为未分桶。
+///
+/// schema 名两个来源都要纳入：schema 子对象本身（`kind=Schema`，名字在 `path.name`，
+/// 展开库后即出现，无需先加载表）；以及已加载的表/视图（`kind=Table|View`，名字在
+/// `path.schema`）。漏掉前者会导致库下面的 schema 层永远为空，表因此列不出来。
 fn database_schemas(connection: &ConnectionState, database: &str) -> Vec<String> {
     let mut schemas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for object in &connection.objects {
         let matches_db = object.path.database.as_deref().unwrap_or("main") == database;
-        let is_relation = matches!(
-            object.path.kind,
-            ObjectKind::Table | ObjectKind::View
-        );
-        if matches_db && is_relation {
-            if let Some(schema) = object.path.schema.as_deref() {
+        if !matches_db {
+            continue;
+        }
+        match object.path.kind {
+            ObjectKind::Schema => {
+                // PG 的 schema 子对象：名字在 `path.name`（见 pg_list_schemas）。
+                let schema = object.path.name.as_str();
                 if !schema.is_empty() {
                     schemas.insert(schema.to_string());
                 }
             }
+            ObjectKind::Table | ObjectKind::View => {
+                if let Some(schema) = object.path.schema.as_deref() {
+                    if !schema.is_empty() {
+                        schemas.insert(schema.to_string());
+                    }
+                }
+            }
+            _ => {}
         }
     }
     schemas.into_iter().collect()
