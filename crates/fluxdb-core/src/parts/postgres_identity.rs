@@ -123,6 +123,24 @@ pub struct PgObjectGrants {
     pub entries: Vec<PgGrantEntry>,
 }
 
+/// PG 角色成员关系（`pg_auth_members` 一行）：成员是某个组角色的成员。
+///
+/// `inherit_option`/`set_option` 为 PG16+ 引入的成员级选项（PG ≤14 无这两列，语义为成员默认
+/// INHERIT=true 且可 SET ROLE，读取时按版本回填默认值）。`admin_option` 表示成员可否再授权。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PgRoleMembership {
+    /// 组角色（授权方，`roleid`）。
+    pub grantee: String,
+    /// 成员角色（`member`）。
+    pub member: String,
+    /// 是否有 ADMIN OPTION（可再授权）。
+    pub admin_option: bool,
+    /// 成员是否继承组角色权限（PG16+ 列，PG≤14 恒 true）。
+    pub inherit_option: bool,
+    /// 成员是否可 SET ROLE 到组角色（PG16+ 列，PG≤14 恒 true）。
+    pub set_option: bool,
+}
+
 /// 某角色对某对象的一种权限的**有效**状态（经 PG 原生 has_*_privilege 判定，天然含 owner/继承/PUBLIC）。
 ///
 /// `effective` 表示该角色实际拥有该权限；`direct` 表示该角色在显式 ACL 中有本条直接授权。

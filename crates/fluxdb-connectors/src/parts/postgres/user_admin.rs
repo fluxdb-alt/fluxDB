@@ -8,7 +8,7 @@
 
 use fluxdb_core::{
     PgEffectivePrivilege, PgGrantEntry, PgObjectGrantScope, PgObjectGrants, PgRelationKind,
-    PgRole,
+    PgRole, PgRoleMembership,
 };
 
 /// 列出全部角色（pg_roles 自带有效连接数/SUPERUSER 等列，无需逐角色二次查询）。
@@ -204,23 +204,45 @@ fn pg_alter_role_options(
     pg_exec_role_sql(config, &sql)
 }
 
-/// 成员关系：GRANT member TO role [WITH ADMIN OPTION]（成员可再授权的 ADMIN OPTION 分开）。
+/// 是否 PG16+（支持成员级 INHERIT/SET 选项），同步入口（独立会话查 server_version_num）。
+fn pg_supports_member_options(config: &ConnectionConfig) -> fluxdb_core::Result<bool> {
+    pg_runtime().block_on(async {
+        let session = pg_connect(config, &pg_request_database(config, None)).await?;
+        pg_auth_members_has_member_options(session.client.as_ref()).await
+    })
+}
+
+/// 成员关系：GRANT role TO member [+ 各成员级选项]。
+///
+/// PG 每次 GRANT 只能带**一个** `WITH {ADMIN|INHERIT|SET}` 子句（见 `\h GRANT`），因此组合
+/// admin/inherit/set 选项需拆成多条语句经 batch_execute 一次执行。PG16+ 支持成员级 INHERIT/SET
+/// 选项；PG≤14 无此语法，仅 ADMIN。只对**非默认**值补发语句（默认 admin=false、inherit=true、set=true），
+/// 先 `GRANT role TO member` 确立成员关系（幂等）再按需补选项。
 fn pg_grant_role_membership(
     config: &ConnectionConfig,
     role: &str,
     member: &str,
     admin_option: bool,
+    inherit_option: bool,
+    set_option: bool,
 ) -> fluxdb_core::Result<()> {
     if role.is_empty() || member.is_empty() {
         return Err(Error::new(ErrorKind::Query, "角色与成员名不能为空"));
     }
-    let sql = format!(
-        "GRANT {} TO {}{};",
-        pg_quote_identifier(role),
-        pg_quote_identifier(member),
-        if admin_option { " WITH ADMIN OPTION" } else { "" }
-    );
-    pg_exec_role_sql(config, &sql)
+    let role_q = pg_quote_identifier(role);
+    let member_q = pg_quote_identifier(member);
+    // 每次 GRANT 一个 WITH 子句；按调用方请求的选项值**显式**下发（含关闭态，保证可从既有
+    // 开启态切回），先确立成员关系再逐项设置。
+    let mut stmts = vec![format!("GRANT {role_q} TO {member_q};")];
+    let admin_clause = if admin_option { "OPTION" } else { "FALSE" };
+    stmts.push(format!("GRANT {role_q} TO {member_q} WITH ADMIN {admin_clause};"));
+    if pg_supports_member_options(config)? {
+        let inherit_clause = if inherit_option { "TRUE" } else { "FALSE" };
+        stmts.push(format!("GRANT {role_q} TO {member_q} WITH INHERIT {inherit_clause};"));
+        let set_clause = if set_option { "TRUE" } else { "FALSE" };
+        stmts.push(format!("GRANT {role_q} TO {member_q} WITH SET {set_clause};"));
+    }
+    pg_exec_role_sql(config, &stmts.join("\n"))
 }
 
 /// 撤销成员关系：REVOKE role FROM member。
@@ -285,33 +307,62 @@ fn is_pg_privilege_name(value: &str) -> bool {
     )
 }
 
-/// 列成员关系（grantees with admin option）—— 供 UI 读取，聚合查询一次返回。
-async fn pg_list_role_membership_async(
+/// 是否 PG16+（pg_auth_members 有 inherit_option/set_option 列）。PG ≤14 无此列，成员选项恒默认
+/// （INHERIT=true 且可 SET ROLE）。按版本选择 SQL，避免在旧版本查询不存在的列报错。
+async fn pg_auth_members_has_member_options(
     client: &tokio_postgres::Client,
-) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
-    let rows = client
-        .query(
-            "SELECT gp.rolname AS grantee, r.rolname AS member, gm.admin_option \
-             FROM pg_auth_members gm \
-             JOIN pg_roles r ON r.oid = gm.member \
-             JOIN pg_roles gp ON gp.oid = gm.roleid \
-             ORDER BY grantee, member",
+) -> fluxdb_core::Result<bool> {
+    let row = client
+        .query_one(
+            "SELECT current_setting('server_version_num')::int >= 160000",
             &[],
         )
         .await
         .map_err(pg_error)?;
+    let has: bool = row.get(0);
+    Ok(has)
+}
+
+/// 列成员关系（PG 全选项：admin/inherit/set，版本感知）—— 供 UI 读取，聚合查询一次返回。
+/// PG16+ 读取 inherit_option/set_option 列；PG≤14 回填默认 true。
+async fn pg_list_role_membership_async(
+    client: &tokio_postgres::Client,
+) -> fluxdb_core::Result<Vec<PgRoleMembership>> {
+    let has_member_options = pg_auth_members_has_member_options(client).await?;
+    // 选列字符串（PG16 有 inherit/set，否则回填常数 true）。
+    let (inherit_expr, set_expr) = if has_member_options {
+        ("gm.inherit_option", "gm.set_option")
+    } else {
+        ("true", "true")
+    };
+    let sql = format!(
+        "SELECT gp.rolname AS grantee, r.rolname AS member, \
+                gm.admin_option, {inherit_expr} AS inherit_option, {set_expr} AS set_option \
+         FROM pg_auth_members gm \
+         JOIN pg_roles r ON r.oid = gm.member \
+         JOIN pg_roles gp ON gp.oid = gm.roleid \
+         ORDER BY grantee, member"
+    );
+    let rows = client.query(&sql, &[]).await.map_err(pg_error)?;
     Ok(rows
         .into_iter()
         .map(|row| {
-            // admin_option 是原生 bool（pg_auth_members），非 text 投影。
             let admin: bool = row.get(2);
-            (row.get(0), row.get(1), admin)
+            let inherit: bool = row.get(3);
+            let set: bool = row.get(4);
+            PgRoleMembership {
+                grantee: row.get(0),
+                member: row.get(1),
+                admin_option: admin,
+                inherit_option: inherit,
+                set_option: set,
+            }
         })
         .collect())
 }
 
 /// 列成员关系（同步入口，供 UI/命令用）。
-fn pg_list_role_membership(config: &ConnectionConfig) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
+fn pg_list_role_membership(config: &ConnectionConfig) -> fluxdb_core::Result<Vec<PgRoleMembership>> {
     pg_runtime().block_on(async {
         let session = pg_connect(config, &pg_request_database(config, None)).await?;
         pg_list_role_membership_async(session.client.as_ref()).await

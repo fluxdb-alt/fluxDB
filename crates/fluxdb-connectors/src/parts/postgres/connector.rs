@@ -138,10 +138,12 @@ impl Connector for PostgresConnector {
         role: &str,
         member: &str,
         admin_option: bool,
+        inherit_option: bool,
+        set_option: bool,
     ) -> fluxdb_core::Result<()> {
         let _ = connection_id;
         let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
-        pg_grant_role_membership(config, role, member, admin_option)
+        pg_grant_role_membership(config, role, member, admin_option, inherit_option, set_option)
     }
 
     fn revoke_role_membership(
@@ -182,7 +184,7 @@ impl Connector for PostgresConnector {
     fn list_role_membership(
         &self,
         connection_id: ConnectionId,
-    ) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
+    ) -> fluxdb_core::Result<Vec<fluxdb_core::PgRoleMembership>> {
         let _ = connection_id;
         let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
         pg_list_role_membership(config)

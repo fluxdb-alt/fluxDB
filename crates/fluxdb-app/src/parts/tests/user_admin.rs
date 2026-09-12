@@ -163,9 +163,27 @@ fn user_admin_loaded_privileges_are_not_dirty_until_changed() {
 #[test]
 fn pg_groups_for_member_filters_and_returns_groups() {
     let memberships = vec![
-        ("analyst_group".to_string(), "alice".to_string(), true),
-        ("reader".to_string(), "alice".to_string(), false),
-        ("reader".to_string(), "bob".to_string(), false),
+        fluxdb_core::PgRoleMembership {
+            grantee: "analyst_group".to_string(),
+            member: "alice".to_string(),
+            admin_option: true,
+            inherit_option: true,
+            set_option: true,
+        },
+        fluxdb_core::PgRoleMembership {
+            grantee: "reader".to_string(),
+            member: "alice".to_string(),
+            admin_option: false,
+            inherit_option: true,
+            set_option: true,
+        },
+        fluxdb_core::PgRoleMembership {
+            grantee: "reader".to_string(),
+            member: "bob".to_string(),
+            admin_option: false,
+            inherit_option: true,
+            set_option: false,
+        },
     ];
     assert_eq!(pg_groups_for_member(&memberships, "alice"), vec!["analyst_group", "reader"]);
     assert_eq!(pg_groups_for_member(&memberships, "bob"), vec!["reader"]);

@@ -60,7 +60,16 @@ pub trait Connector {
     ) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持修改角色属性"))
     }
-    fn grant_role_membership(&self, _: ConnectionId, _: &str, _: &str, _: bool) -> Result<()> {
+    /// 成员授权。`inherit`/`set` 为 PG16+ 成员级选项（PG≤14 语法不支持，连接器按版本省略）。
+    fn grant_role_membership(
+        &self,
+        _: ConnectionId,
+        _: &str,
+        _: &str,
+        _: bool,
+        _: bool,
+        _: bool,
+    ) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持成员授权"))
     }
     fn revoke_role_membership(&self, _: ConnectionId, _: &str, _: &str) -> Result<()> {
@@ -72,8 +81,8 @@ pub trait Connector {
     fn revoke_object_privilege(&self, _: ConnectionId, _: &str, _: &str, _: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持对象撤销"))
     }
-    /// 列成员关系：(grantee, member, admin_option)。
-    fn list_role_membership(&self, _: ConnectionId) -> Result<Vec<(String, String, bool)>> {
+    /// 列成员关系（PG 全选项：admin/inherit/set，版本感知）。
+    fn list_role_membership(&self, _: ConnectionId) -> Result<Vec<PgRoleMembership>> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持读取成员关系"))
     }
     /// 列对象权限：(grantee, privilege, grant_option)；grantee 空表示 PUBLIC。

@@ -155,11 +155,11 @@ impl AppController {
             .map(|execution| grants_from_query_result(&execution))
     }
 
-    /// 经连接器读取 PG 成员关系：(grantee, member, admin_option)。
+    /// 经连接器读取 PG 成员关系（含 admin/inherit/set 选项，版本感知）。
     fn list_pg_memberships_for_connection(
         &self,
         connection_id: ConnectionId,
-    ) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
+    ) -> fluxdb_core::Result<Vec<fluxdb_core::PgRoleMembership>> {
         let config = self
             .connection_config(connection_id)
             .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
@@ -240,10 +240,10 @@ impl AppController {
 
 /// PG 成员关系中某角色直接所在的组角色名列表：(grantee, member, admin_option) → grantee。
 /// 供 PG 用户/权限 UI 展示「该 role 是哪些组角色的成员」（MemberOf 语义），纯函数便于测试。
-pub fn pg_groups_for_member(memberships: &[(String, String, bool)], member: &str) -> Vec<String> {
+pub fn pg_groups_for_member(memberships: &[fluxdb_core::PgRoleMembership], member: &str) -> Vec<String> {
     memberships
         .iter()
-        .filter(|(_, m, _)| m == member)
-        .map(|(grantee, _, _)| grantee.clone())
+        .filter(|m| m.member == member)
+        .map(|m| m.grantee.clone())
         .collect()
 }

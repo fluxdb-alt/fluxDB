@@ -3514,9 +3514,9 @@ SELECT item_id, name FROM audit_log;"
         let group_role = roles.iter().find(|r| r.name == group).expect("组角色应在列表");
         assert!(!group_role.can_login, "NOLOGIN 角色 can_login 应为 false");
 
-        // 成员关系：role 加入 group，带 ADMIN OPTION。
+        // 成员关系：role 加入 group，带 ADMIN OPTION（PG16 成员级 INHERIT/SET 选项）。
         connector
-            .grant_role_membership(config.id, &group, &role, true)
+            .grant_role_membership(config.id, &group, &role, true, true, true)
             .expect("成员授权应成功");
         let members = connector
             .list_role_membership(config.id)
@@ -3524,8 +3524,25 @@ SELECT item_id, name FROM audit_log;"
         assert!(
             members
                 .iter()
-                .any(|(g, m, admin)| g == &group && m == &role && *admin),
+                .any(|m| m.grantee == group && m.member == role && m.admin_option),
             "应含带 ADMIN OPTION 的成员关系：{members:?}"
+        );
+        // PG16 成员级 INHERIT/SET 选项贯通：非默认 inherit=false 写回并读回一致。
+        connector
+            .grant_role_membership(config.id, &group, &role, false, false, true)
+            .expect("成员授权(INHERIT FALSE)应成功");
+        let members2 = connector
+            .list_role_membership(config.id)
+            .expect("列成员关系应成功");
+        assert!(
+            members2
+                .iter()
+                .any(|m| m.grantee == group
+                    && m.member == role
+                    && !m.admin_option
+                    && !m.inherit_option
+                    && m.set_option),
+            "INHERIT FALSE/SET TRUE 应读回一致：{members2:?}"
         );
         connector
             .revoke_role_membership(config.id, &group, &role)
@@ -3846,7 +3863,7 @@ SELECT item_id, name FROM audit_log;"
             .expect("建组角色应成功");
         // direct_role 直接授权 SELECT；group 授权 SELECT，inherit_role 仅是 group 成员 → 继承。
         connector
-            .grant_role_membership(config.id, &group, &inherit_role, false)
+            .grant_role_membership(config.id, &group, &inherit_role, false, true, true)
             .expect("inherit_role 加入 group 应成功");
         let mut setup = pg_query_request(&config, None);
         setup.text = format!(
