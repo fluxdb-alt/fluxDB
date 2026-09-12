@@ -76,6 +76,15 @@ pub trait Connector {
     fn list_role_membership(&self, _: ConnectionId) -> Result<Vec<(String, String, bool)>> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持读取成员关系"))
     }
+    /// 列对象权限：(grantee, privilege, grant_option)；grantee 空表示 PUBLIC。
+    fn list_relation_grants(
+        &self,
+        _: ConnectionId,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<(String, String, bool)>> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持读取对象权限"))
+    }
     fn delete_database(&self, _: ConnectionId, _: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持删除数据库"))
     }

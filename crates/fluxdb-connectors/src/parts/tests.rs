@@ -3501,6 +3501,49 @@ SELECT item_id, name FROM audit_log;"
             .expect("删除组角色应成功");
     }
 
+    /// 真实 PG：对象权限读取（aclexplode）+ 授权/撤销往返。
+    #[test]
+    fn pg_live_smoke_relation_grants_roundtrip() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let role = format!("t26_grantee_{suffix}");
+        connector
+            .create_role(config.id, &role, true, None)
+            .expect("建授权角色应成功");
+
+        // 建临时表 + 授权 SELECT（schema 限定句柄）。
+        let mut setup = pg_query_request(&config, None);
+        setup.text = format!(
+            "DROP TABLE IF EXISTS t26_acl CASCADE; \
+             CREATE TABLE t26_acl(id int); \
+             GRANT SELECT ON \"public\".\"t26_acl\" TO \"{role}\";"
+        );
+        connector.execute(&setup).expect("建表+授权应成功");
+
+        let grants = connector
+            .list_relation_grants(config.id, "public", "t26_acl")
+            .expect("列对象权限应成功");
+        assert!(
+            grants
+                .iter()
+                .any(|(grantee, privilege, _)| grantee == &role && privilege == "SELECT"),
+            "应含 {role} 的 SELECT 授权：{grants:?}"
+        );
+
+        // 清理表与角色。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t26_acl CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理表应成功");
+        connector.drop_role(config.id, &role).expect("清理角色应成功");
+    }
+
     #[test]
     fn pg_live_smoke_create_delete_database() {
         let Some(params) = pg_smoke_params() else {

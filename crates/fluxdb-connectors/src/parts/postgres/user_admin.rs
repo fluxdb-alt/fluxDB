@@ -314,3 +314,47 @@ fn pg_list_role_membership(config: &ConnectionConfig) -> fluxdb_core::Result<Vec
         pg_list_role_membership_async(session.client.as_ref()).await
     })
 }
+
+/// 列某表的对象权限（aclexplode 展开 ACL 到「授权对象 × 权限 × grant option」）。
+///
+/// 返回 (grantee, privilege, grant_option)；grantee 为空视为 PUBLIC。PG 的 relacl 为 NULL
+/// 时表示默认权限（owner 全权、其余无），此处不展开默认，交由 UI 明示。
+async fn pg_list_relation_grants_async(
+    client: &tokio_postgres::Client,
+    schema: &str,
+    table: &str,
+) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
+    let rows = client
+        .query(
+            "SELECT COALESCE(grantee.rolname, '') AS grantee, \
+                    acl.privilege_type, acl.is_grantable \
+             FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             CROSS JOIN LATERAL aclexplode(c.relacl) AS acl \
+             LEFT JOIN pg_roles grantee ON grantee.oid = acl.grantee \
+             WHERE n.nspname = $1 AND c.relname = $2 \
+             ORDER BY grantee, acl.privilege_type",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(pg_error)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let grant_option: bool = row.get(2);
+            (row.get(0), row.get(1), grant_option)
+        })
+        .collect())
+}
+
+/// 列某表的对象权限（同步入口）。
+fn pg_list_relation_grants(
+    config: &ConnectionConfig,
+    schema: &str,
+    table: &str,
+) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
+    pg_runtime().block_on(async {
+        let session = pg_connect(config, &pg_request_database(config, None)).await?;
+        pg_list_relation_grants_async(session.client.as_ref(), schema, table).await
+    })
+}

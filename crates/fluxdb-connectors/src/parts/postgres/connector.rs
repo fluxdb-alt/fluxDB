@@ -188,6 +188,17 @@ impl Connector for PostgresConnector {
         pg_list_role_membership(config)
     }
 
+    fn list_relation_grants(
+        &self,
+        connection_id: ConnectionId,
+        schema: &str,
+        table: &str,
+    ) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
+        let _ = connection_id;
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
+        pg_list_relation_grants(config, schema, table)
+    }
+
     fn list_indexes(&self, path: &ObjectPath) -> fluxdb_core::Result<Vec<IndexInfo>> {
         let Some(config) = self.config.as_ref() else {
             return Err(Error::new(
