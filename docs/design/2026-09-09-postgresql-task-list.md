@@ -484,7 +484,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T26 — 角色、用户和 ACL 后端
 
-- [ ] 完成 T26（实现增量一/二/三/四，ACL 语义与有效权限已落地，T27 UI 待续）
+- [ ] 完成 T26（实现增量一~五，ACL 语义/有效权限/成员选项已落地，T27 UI 待续）
 - **开始前读**：设计 12；R02、R07、R09、R20、R28、R29。
 - **工作**：PrincipalIdentity 和 PG role 属性；角色/LOGIN 用户列表/创建/改密/重命名/删除；成员关系/ADMIN OPTION；database/schema/table/sequence/routine 授权撤销；直接/继承/PUBLIC/owner 权限解释与变更差异；敏感操作隔离历史日志。
 - **交付位置**：core user_admin 领域类型、postgres/user_admin.rs、app/user_admin PG provider/命令。
@@ -499,7 +499,8 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   - core `PgEffectivePrivilege`（privilege/effective/direct/grant_option）+ Connector `role_effective_grants`：经 PG 原生 `has_{database|schema|table|sequence|function}_privilege` 判定有效权限（owner/继承/PUBLIC 天然计入），与显式 direct 条目合并——`effective&&direct`=可直接撤销的直接授权；`effective&&!direct`=来自 owner/继承/PUBLIC（只读展示，**不得直接撤销**，撤销应到成员角色或 PUBLIC 源头）；`!effective`=无权限。函数按 identity 签名剥参数名构造参数类型列表供 `has_function_privilege`。
   - 编辑侧安全由 GRANT/REVOKE 仅改显式 ACL 保证（PG 语义），读取侧把继承/owner/PUBLIC 与直接授权分开，UI 不会据不完整有效视图误删未展示授权。
   验证：真库 PG16.15 `pg_live_smoke_object_grants_per_scope` 扩到 owner/默认/PUBLIC 断言（schema NULL ACL→acl_is_null+owner、PUBLIC 授权以空 grantee 呈现、is_owner 标记）；新增 `pg_live_smoke_role_effective_grants`——direct_role effective&&direct、inherit_role effective&&!direct（经 group 成员继承不可直接撤销）、none_role effective=false，三态全过；connectors 142（+1）、工作区全绿。
-  未完成项：scope 选择器带 database/schema/签名的 UI 入口（T27，数据源已齐：list_object_grants + role_effective_grants + list_role_membership）；PG14/16 成员选项差异（INHERIT/SET 选项基于版本处理，后端成员关系读到 admin_option，版本差异的选项展示属 T27 UI）；T27 用户/角色 UI（user_admin 现为 MySQL user@host 外形，需按 provider 新增 Postgres dialect——连接器/核心数据层已齐，UI 待续）。
+  增量五（`bf682fc`，PG14/16 成员选项贯穿）：core `PgRoleMembership`（含 inherit/set）+ `list_role_membership` 改返回它 + `grant_role_membership` 增 inherit/set；连接器读 `pg_auth_members` 版本感知（PG16+ 取 inherit_option/set_option 列，≤14 回填 true），授权拆多条 GRANT（每语句一 WITH 子句，关闭态显式下发可切回）。真库 INHERIT FALSE/SET TRUE 往返验证。
+  未完成项：scope 选择器带 database/schema/签名的 UI 入口（T27，数据源已齐：list_object_grants + role_effective_grants + list_role_membership）；T27 用户/角色 UI（user_admin 现为 MySQL user@host 外形，需按 provider 新增 Postgres dialect——连接器/核心数据层已齐，UI 待续）。PG14/16 成员选项**已贯穿**。
 
 ### T27 — 用户与权限 UI
 
