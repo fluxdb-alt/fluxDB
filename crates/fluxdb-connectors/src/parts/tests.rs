@@ -3501,6 +3501,74 @@ SELECT item_id, name FROM audit_log;"
             .expect("删除组角色应成功");
     }
 
+    /// T24：原生脚本检测（COPY FROM STDIN / psql 元命令），且不被字符串/注释误判。
+    #[test]
+    fn pg_script_native_mode_detection() {
+        // 普通多语句：不需要原生模式。
+        assert!(!pg_script_needs_native_mode(
+            "CREATE TABLE t(id int);\nINSERT INTO t VALUES (1);\n"
+        ));
+        // 函数体含分号/字符串：仍不需要原生模式。
+        assert!(!pg_script_needs_native_mode(
+            "CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END $$ LANGUAGE plpgsql;"
+        ));
+        // 字符串里出现 \copy / COPY..FROM STDIN 字样：不应误判。
+        assert!(!pg_script_needs_native_mode(
+            "INSERT INTO t VALUES ('\\copy not a command');"
+        ));
+        assert!(!pg_script_needs_native_mode(
+            "INSERT INTO t VALUES ('COPY x FROM STDIN');"
+        ));
+        // 注释里的元命令：不误判。
+        assert!(!pg_script_needs_native_mode(
+            "-- \\copy t from stdin\nSELECT 1;\n"
+        ));
+        // 真 COPY FROM STDIN：需要原生模式。
+        assert!(pg_script_needs_native_mode(
+            "COPY t (id) FROM stdin;\n1\n2\n\\.\n"
+        ));
+        // psql 元命令 \copy：需要原生模式。
+        assert!(pg_script_needs_native_mode(
+            "\\copy t (id) FROM 'data.csv' WITH CSV\n"
+        ));
+        // \set 元命令（缩进行首）：需要原生模式。
+        assert!(pg_script_needs_native_mode(
+            "  \\set foo bar\nSELECT 1;\n"
+        ));
+    }
+
+    /// T24：psql 调用参数不把密码放进 argv，只经 env；含非交互与 ON_ERROR_STOP。
+    #[test]
+    fn pg_psql_invocation_keeps_password_out_of_argv() {
+        let invocation = pg_psql_invocation(
+            "db.internal",
+            5432,
+            "app",
+            "appdb",
+            "/tmp/script.sql",
+            Some("s3cret"),
+            true,
+        );
+        assert_eq!(invocation.program, "psql");
+        assert!(invocation.args.contains(&"--no-psqlrc".to_string()));
+        assert!(invocation.args.contains(&"ON_ERROR_STOP=1".to_string()));
+        assert!(invocation.args.contains(&"/tmp/script.sql".to_string()));
+        // 密码绝不出现在 argv。
+        assert!(
+            !invocation.args.iter().any(|arg| arg.contains("s3cret")),
+            "密码不得进入 argv：{:?}",
+            invocation.args
+        );
+        assert_eq!(
+            invocation.env,
+            vec![("PGPASSWORD".to_string(), "s3cret".to_string())]
+        );
+        // 无密码时不注入 PGPASSWORD。
+        let no_pw = pg_psql_invocation("h", 5432, "u", "d", "f", None, false);
+        assert!(no_pw.env.is_empty());
+        assert!(no_pw.args.contains(&"ON_ERROR_STOP=off".to_string()));
+    }
+
     /// 真实 PG：对象权限读取（aclexplode）+ 授权/撤销往返。
     #[test]
     fn pg_live_smoke_relation_grants_roundtrip() {
