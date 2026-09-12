@@ -643,10 +643,18 @@ fn run_table_data_export(
         TableDataExportScope::AllRows => Vec::new(),
         TableDataExportScope::CustomRules => data_filter_specs_from_rules(&form.custom_filter_rules),
     };
-    let mut writer =
-        TableDataExportWriter::create(&path, form.format, form.object.clone(), fields, db_kind)?;
+    // 取消/失败只留可识别的临时状态：先写 `path.partial`，成功后 rename 为最终 path；
+    // 取消/失败删除临时文件，避免把半成品导出误当成功（T23 取消临时文件语义）。
+    let temp_path = table_data_export_temp_path(&path);
+    let mut writer = TableDataExportWriter::create(
+        &temp_path,
+        form.format,
+        form.object.clone(),
+        fields,
+        db_kind,
+    )?;
     // PostgreSQL 走一致快照导出（单 REPEATABLE READ 事务），其余按既有逐页手动循环。
-    if db_kind == DatabaseKind::Postgres {
+    let canceled = if db_kind == DatabaseKind::Postgres {
         let mut exported: u64 = 0;
         let started_at = Instant::now();
         let mut on_page = |page: DataPage| -> bool {
@@ -668,13 +676,10 @@ fn run_table_data_export(
         };
         let on_cancel = || cancel_flag.load(Ordering::Relaxed);
         match controller.export_pages_for_connection(&form.object, &sort, &filters, &on_cancel, &mut on_page) {
-            Ok(()) => {
-                writer.finish()?;
-                Ok(TableDataExportResult { canceled: cancel_flag.load(Ordering::Relaxed) })
-            }
+            Ok(()) => cancel_flag.load(Ordering::Relaxed),
             Err(error) => {
-                writer.finish()?;
-                Err(anyhow::anyhow!("导出失败：{error}"))
+                let _ = fs::remove_file(&temp_path);
+                return Err(anyhow::anyhow!("导出失败：{error}"));
             }
         }
     } else {
@@ -683,8 +688,7 @@ fn run_table_data_export(
         let started_at = Instant::now();
         loop {
             if cancel_flag.load(Ordering::Relaxed) {
-                writer.finish()?;
-                return Ok(TableDataExportResult { canceled: true });
+                break;
             }
             let page = controller.load_data_for_export(
                 &form.object,
@@ -705,9 +709,26 @@ fn run_table_data_export(
             }
             offset += rows;
         }
-        writer.finish()?;
+        cancel_flag.load(Ordering::Relaxed)
+    };
+    writer.finish()?;
+    if canceled {
+        // 取消：删除临时文件，不rename到最终路径（不留半成品）。
+        let _ = fs::remove_file(&temp_path);
+        Ok(TableDataExportResult { canceled: true })
+    } else {
+        // 成功：临时文件原子改名到最终路径。
+        fs::rename(&temp_path, &path)
+            .map_err(|error| anyhow::anyhow!("导出文件落盘失败：{error}"))?;
         Ok(TableDataExportResult { canceled: false })
     }
+}
+
+/// 导出临时文件路径：最终路径加 `.partial` 后缀，成功后才改名落盘。
+fn table_data_export_temp_path(path: &Path) -> PathBuf {
+    let mut temp = path.as_os_str().to_os_string();
+    temp.push(".partial");
+    PathBuf::from(temp)
 }
 
 fn table_data_export_set_path_on_ui(
