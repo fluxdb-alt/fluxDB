@@ -72,7 +72,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一：PG 原生 pg_dump + 真库恢复验证）/ FluxDB |
 | T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 进行中（增量一~四：对象权限 + 敏感隔离 + ACL 语义/有效权限；T27 UI 待续）/ FluxDB |
 | T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 进行中（增量一~三：app 数据+CRUD 支撑 + desktop 只读角色面板；桌面表单/权限渲染待视觉验收）/ FluxDB |
-| T28 | 全矩阵联调、MySQL 回归与交付审查 | T01–T27 | 未开始 / — |
+| T28 | 全矩阵联调、MySQL 回归与交付审查 | T01–T27 | 进行中（增量一：MySQL 真库回归测试 + 资源审查；剩余矩阵/手测待续）/ FluxDB |
 
 ## 4. 可执行任务
 
@@ -523,7 +523,9 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 - **交付位置**：相关 integration tests/fixture/CI 或运行脚本；本文件验收证据；设计参考索引新增实际实现路径（保留原参考）。
 - **验收命令**：`cargo fmt --all`、`cargo check --workspace`、`cargo test --workspace`；另运行显式 opt-in 的 PostgreSQL 与 MySQL 真实测试并记录完整命令/服务器版本；`cargo run -p fluxdb-desktop` 启动及明暗主题手工回归。环境不足如实待验证，不能跳过后宣称完成。
 - **最终标准**：T01–T27 全部有有效完成记录；F01–F20 每行通过；无必须功能残留或以 mock/仅 SQL 替代图形能力；MySQL 正常功能保持；文档与代码一致。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：进行中（FluxDB，2026-09-12）。
+  增量一（真库回归 + 资源审查）：新增 `mysql_live_smoke_test_connection_regressed_by_postgres`（`FLUXDB_MYSQL_SMOKE` 环境门控）——对隔离真实 MySQL 8.0.34 容器 `test_connection` 通过，证明 PG/T23/T24/T25/T27 改动未回归 MySQL 连接。资源审查（代码走查）：`run_pg_native_psql`/`run_native_pg_dump` 取消路径 kill+wait 防僵尸、stdout/stderr 后台线程随管道 EOF 自收敛（进程被杀→管道关闭→线程退出，不泄漏）；`pg_export_pages` 单事务结束/取消统一 ROLLBACK 释放会话，连接随 session drop 回收。`cargo check --workspace` + `cargo test --workspace` 全绿。
+  剩余：`cargo run -p fluxdb-desktop` 明暗主题手测、F01–F20 逐项登记到 §5 表、PG14–18 真库矩阵（现有 16.x 单点，其余版本待环境）、MySQL 共享手续测（→ 人工）、T01–T27 全部有效完成记录复核。
 
 ## 5. 最终功能验收证据
 
