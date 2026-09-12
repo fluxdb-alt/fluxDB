@@ -71,7 +71,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 进行中（增量一/二：原生检测+psql 参数+桌面接入）/ FluxDB |
 | T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一：PG 原生 pg_dump + 真库恢复验证）/ FluxDB |
 | T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 进行中（增量一~四：对象权限 + 敏感隔离 + ACL 语义/有效权限；T27 UI 待续）/ FluxDB |
-| T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 进行中（增量一~三：app 数据+CRUD 支撑 + desktop 只读角色面板；桌面表单/权限渲染待视觉验收）/ FluxDB |
+| T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 实现完成，待人工验收（增量一~五：角色 CRUD 表单 + 成员 + 对象权限面板）/ FluxDB |
 | T28 | 全矩阵联调、MySQL 回归与交付审查 | T01–T27 | 进行中（增量一：MySQL 真库回归测试 + 资源审查；剩余矩阵/手测待续）/ FluxDB |
 
 ## 4. 可执行任务
@@ -504,7 +504,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T27 — 用户与权限 UI
 
-- [ ] 完成 T27
+- [ ] 完成 T27（实现完成，待人工验收）
 - **开始前读**：设计 10、12；R00、R09、R16、R17、R20。
 - **工作**：现有 user_admin 页面按 provider 显示 PG role/LOGIN/成员/对象权限；授权对象选择带 database/schema/签名；loading/草稿/应用/错误/确认；MySQL host/plugin/每小时资源限制不出现在 PG 表单。
 - **交付位置**：user_admin/、user_admin_privileges、现有用户管理入口与菜单能力。
@@ -514,7 +514,9 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   **增量一（app 层，`860e39e`）**：core `PrivilegeScope::Postgres` + `supports_database_user_admin(Postgres)=true`（菜单/入口放行）；app `open_user_admin` 对 Postgres 放行；`load_user_admin_users` 对 PG 经连接器 `list_roles` 读取（role→user 映射）；`load_user_admin_grants` 对 PG 经 `list_role_membership` 返回该 role 所在组角色；新增 `list_pg_roles_for_connection`/`list_pg_memberships_for_connection` 复用 `role_operation_for_connection` 路由；纯函数 `pg_groups_for_member`（可测试）。验证：`pg_groups_for_member` 单测 + 工作区全绿。
   **增量二（desktop，`1bb4416`）**：`user_admin_content` 对 Postgres 连接分支到新增 `pg_user_admin.rs` 的 `pg_role_admin_content`（不再显示 MySQL/TiDB-only 占位）；左侧复用 `user_admin_user_list`（PG 角色经 app 层 list_roles 装载为 admin.users），右侧展示选中角色的组角色成员关系（admin.grants ← pg_auth_members）；集群级角色语义提示。MySQL user_admin 全保留。build/test 全绿。
   **增量三（app 层 CRUD 支撑，`f57490c`）**：`UserAdminState` 增 `pg_can_login`（default true）；新增 AppCommand `EndUserAdminCreateUser` / `SetUserAdminPgCanLogin`（桌面不直接改 app 状态）；render 快照补字段；单测 `user_admin_pg_can_login_defaults_and_reflects`。
-  **剩余（desktop 渲染，视觉验收范畴）**：现有 desktop user_admin 走 MySQL SQL-preview-apply 流程（`provider.create_user_sql` 等），对 PG provider 为 None，无法复用 SQL 预览。PG 角色 CRUD/成员/对象权限桌面绑定需走独立交互路径：经 AppCommand（CreatePgRole/DropPgRole/AlterPgRolePassword/EndUserAdminCreateUser/SetUserAdminPgCanLogin + start_user_admin_users_load 刷新）而非 SQL 文本；MySQL-only 字段（host/plugin/资源限制/ssl）对 PG 隐藏；Members/Grants 渲染 T26 数据（list_object_grants/role_effective_grants）。数据/app 支撑（增量一~三）已齐，仅剩桌面表单/按钮绑定与对象权限面板，属人工视觉验收增量。
+  **增量四（desktop 角色 CRUD 表单 + 成员详情，`95ad136`）**：工具栏新建（BeginUserAdminCreateUser）/删除（DropPgRole，postgres/pg_* 不给删除入口）；内联创建表单复用已订阅输入句柄 + LOGIN 开关 + 创建/取消 → 刷新；右侧详情展示所属组角色（list_role_membership→admin.grants）；PG tab 默认停 MemberOf 使选角色即加载成员。
+  **增量五（PG 对象权限面板，`9cd6139`）**：core `grant_object_privilege` 增 grant_option；app 新纯函数 `pg_grant_scope_from_state`/`pg_grant_object_sql` + AppCommand（SetUserAdminPgGrantTarget / Load-Start-Finish / Grant / Revoke）+ 路由 `load_pg_object_grants`（list_object_grants + role_effective_grants）；desktop 面板：目标种类按钮组 + schema/对象/签名输入 + 逐权限「直接授权（可撤销）/继承·PUBLIC·属主（不可直接撤销）/无」+ 授予（带/不带 GRANT OPTION）/撤销；ACL 为 NULL 显示「属主 X（默认权限）」而非空表。真库 grant(带 option)+revoke 往返 + app 纯函数单测。
+  **剩余（视觉验收范畴）**：仅剩桌面交互/视觉确认（弹框 Esc/外点/主题/loading/disabled、手形光标、按钮组与输入框渲染、授权后列表刷新目视）与 MySQL 用户页面回归手测——功能实现已完成，UI 编码不等人工，留最后集中验收。
 
 ### T28 — 全量对齐与交付审查
 
