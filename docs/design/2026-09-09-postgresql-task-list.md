@@ -70,7 +70,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T23 | 所有现有数据导出格式与范围 | T10、T11、T13、T21 | 未开始 / — |
 | T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 未开始 / — |
 | T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 未开始 / — |
-| T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 未开始 / — |
+| T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 进行中（增量一/二，ACL 解释与 T27 待续）/ FluxDB |
 | T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 未开始 / — |
 | T28 | 全矩阵联调、MySQL 回归与交付审查 | T01–T27 | 未开始 / — |
 
@@ -468,12 +468,16 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T26 — 角色、用户和 ACL 后端
 
-- [ ] 完成 T26
+- [ ] 完成 T26（实现增量一/二，ACL 解释与 T27 待续）
 - **开始前读**：设计 12；R02、R07、R09、R20、R28、R29。
 - **工作**：PrincipalIdentity 和 PG role 属性；角色/LOGIN 用户列表/创建/改密/重命名/删除；成员关系/ADMIN OPTION；database/schema/table/sequence/routine 授权撤销；直接/继承/PUBLIC/owner 权限解释与变更差异；敏感操作隔离历史日志。
 - **交付位置**：core user_admin 领域类型、postgres/user_admin.rs、app/user_admin PG provider/命令。
 - **验收**：管理者与普通用户；所有对齐操作可执行；函数重载与跨 schema 授权不混淆；PG14/16+ 成员差异；缺权限不覆盖既有 ACL；删除有依赖 role 不自动 DROP OWNED；密码不入日志/历史；MySQL user@host 和资源字段保持。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：进行中（FluxDB，2026-09-12）。
+  增量一（`89c5a0e`）：core `PgRole`（集群级 role 身份，不复用 MySQL user@host）+ Connector trait 角色方法（list/create/alter-password/rename/drop role、alter_role_options、成员 grant/revoke/list、对象 grant/revoke 默认 Unsupported）；connectors `postgres/user_admin.rs` 用 pg_roles 真实列 + 独立 autocommit 连接执行角色 DDL（标识符 `pg_quote_identifier`、密码单引号字面量转义、权限关键字白名单防注入、DROP 默认 RESTRICT 不自动 DROP OWNED）；app `role_operation_for_connection` 真实路由 + AppCommand（LoadPgRoles/CreatePgRole/AlterPgRolePassword/RenamePgRole/DropPgRole）+ 事件 PgRolesLoaded/PgRoleChanged。
+  增量二（`5dd8130`）：`pg_list_relation_grants` 用 `aclexplode(relacl)` 展开 grantee×privilege×grant_option（空 grantee=PUBLIC、无 ACL 记 NULL 由 UI 示默认）+ Connector `list_relation_grants`。
+  验证：真实 PG 冒烟 `pg_live_smoke_role_crud_and_membership`（建组/登录角色、列表属性、成员 ADMIN OPTION 授权撤销、改密、重命名、清理）、`pg_live_smoke_relation_grants_roundtrip`（建表授权 SELECT → aclexplode 读取命中 → 清理）；connectors 137、app 395 全过。
+  未完成项：直接/继承/PUBLIC/owner 权限解释与变更差异（scope 选择器带 database/schema/签名）、sequence/routine/database/schema 粒度授权 UI 入口、PG14/16 成员选项差异、敏感操作历史隔离；T27 用户/角色 UI（现有 user_admin 为 MySQL user@host 外形，需按 provider 显示 PG role）待续。
 
 ### T27 — 用户与权限 UI
 
