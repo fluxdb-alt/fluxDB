@@ -23,6 +23,59 @@ pub trait Connector {
     fn create_schema(&self, _: ConnectionId, _: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持新建 schema"))
     }
+    fn list_roles(&self, _: ConnectionId) -> Result<Vec<PgRole>> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持角色管理"))
+    }
+    fn create_role(
+        &self,
+        _: ConnectionId,
+        _: &str,
+        _: bool,
+        _: Option<&str>,
+    ) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持创建角色"))
+    }
+    fn alter_role_password(&self, _: ConnectionId, _: &str, _: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持修改角色密码"))
+    }
+    fn rename_role(&self, _: ConnectionId, _: &str, _: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持重命名角色"))
+    }
+    fn drop_role(&self, _: ConnectionId, _: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持删除角色"))
+    }
+    fn alter_role_options(
+        &self,
+        _: ConnectionId,
+        _: &str,
+        _: Option<bool>,
+        _: Option<bool>,
+        _: Option<bool>,
+        _: Option<bool>,
+        _: Option<bool>,
+        _: Option<bool>,
+        _: Option<bool>,
+        _: Option<i32>,
+        _: Option<&str>,
+    ) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持修改角色属性"))
+    }
+    fn grant_role_membership(&self, _: ConnectionId, _: &str, _: &str, _: bool) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持成员授权"))
+    }
+    fn revoke_role_membership(&self, _: ConnectionId, _: &str, _: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持撤销成员关系"))
+    }
+    fn grant_object_privilege(&self, _: ConnectionId, _: &str, _: &str, _: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持对象授权"))
+    }
+    fn revoke_object_privilege(&self, _: ConnectionId, _: &str, _: &str, _: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持对象撤销"))
+    }
+    /// 列成员关系：(grantee, member, admin_option)。
+    fn list_role_membership(&self, _: ConnectionId) -> Result<Vec<(String, String, bool)>> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持读取成员关系"))
+    }
     fn delete_database(&self, _: ConnectionId, _: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持删除数据库"))
     }

@@ -180,6 +180,30 @@ fn create_schema_for_connection(
     }
 }
 
+/// 角色/ACL 真实路由：PG 走 PostgresConnector，其余走 MockConnector 默认错误。
+/// 用泛型闭包转发 Connector 上的角色方法，避免为每个动作重复 match。
+fn role_operation_for_connection<T, F>(
+    config: &ConnectionConfig,
+    operation: F,
+) -> fluxdb_core::Result<T>
+where
+    F: FnOnce(&dyn fluxdb_core::Connector) -> fluxdb_core::Result<T>,
+{
+    if config
+        .options
+        .get("demo")
+        .is_some_and(|value| value == "true")
+    {
+        return operation(&MockConnector::new(config.kind));
+    }
+    match config.kind {
+        DatabaseKind::Postgres => {
+            operation(&PostgresConnector::with_config(config.clone()))
+        }
+        _ => operation(&MockConnector::new(config.kind)),
+    }
+}
+
 fn delete_database_for_connection(
     config: &ConnectionConfig,
     connection_id: ConnectionId,

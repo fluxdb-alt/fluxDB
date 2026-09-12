@@ -446,6 +446,74 @@ impl AppController {
                 // 建 schema 成功后通知 UI 失效该库 schema 缓存并重取（见 SchemaCreated 消费点）。
                 AppEvent::SchemaCreated { connection_id, schema }
             }
+            AppCommand::LoadPgRoles(connection_id) => {
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.list_roles(connection_id)
+                }) {
+                    Ok(roles) => AppEvent::PgRolesLoaded(connection_id, roles),
+                    Err(error) => self.fail(error),
+                }
+            }
+            AppCommand::CreatePgRole {
+                connection_id,
+                name,
+                can_login,
+                password,
+            } => {
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.create_role(connection_id, &name, can_login, password.as_deref())
+                }) {
+                    Ok(()) => AppEvent::PgRoleChanged(connection_id),
+                    Err(error) => self.fail(error),
+                }
+            }
+            AppCommand::AlterPgRolePassword {
+                connection_id,
+                name,
+                password,
+            } => {
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.alter_role_password(connection_id, &name, &password)
+                }) {
+                    Ok(()) => AppEvent::PgRoleChanged(connection_id),
+                    Err(error) => self.fail(error),
+                }
+            }
+            AppCommand::RenamePgRole {
+                connection_id,
+                old_name,
+                new_name,
+            } => {
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.rename_role(connection_id, &old_name, &new_name)
+                }) {
+                    Ok(()) => AppEvent::PgRoleChanged(connection_id),
+                    Err(error) => self.fail(error),
+                }
+            }
+            AppCommand::DropPgRole { connection_id, name } => {
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.drop_role(connection_id, &name)
+                }) {
+                    Ok(()) => AppEvent::PgRoleChanged(connection_id),
+                    Err(error) => self.fail(error),
+                }
+            }
             AppCommand::DeleteDatabase {
                 connection_id,
                 database,

@@ -12,4 +12,5 @@ include!("postgres/values.rs");
 include!("postgres/data.rs");
 include!("postgres/apply_changes.rs");
 include!("postgres/completion.rs");
+include!("postgres/user_admin.rs");
 include!("postgres/connector.rs");

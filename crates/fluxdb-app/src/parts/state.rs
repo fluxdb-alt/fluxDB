@@ -872,6 +872,28 @@ pub enum AppCommand {
         connection_id: ConnectionId,
         schema: String,
     },
+    /// 角色管理（T26）：列表 + CRUD（PG 集群级角色）。
+    LoadPgRoles(ConnectionId),
+    CreatePgRole {
+        connection_id: ConnectionId,
+        name: String,
+        can_login: bool,
+        password: Option<String>,
+    },
+    AlterPgRolePassword {
+        connection_id: ConnectionId,
+        name: String,
+        password: String,
+    },
+    RenamePgRole {
+        connection_id: ConnectionId,
+        old_name: String,
+        new_name: String,
+    },
+    DropPgRole {
+        connection_id: ConnectionId,
+        name: String,
+    },
     DeleteDatabase {
         connection_id: ConnectionId,
         database: String,
@@ -1773,6 +1795,10 @@ pub enum AppEvent {
         connection_id: ConnectionId,
         schema: String,
     },
+    /// PG 角色列表加载完成（T26）。
+    PgRolesLoaded(ConnectionId, Vec<fluxdb_core::PgRole>),
+    /// PG 角色变更成功（CRUD 后 UI 重取列表）。
+    PgRoleChanged(ConnectionId),
     DataLoaded(TabId, DataPage),
     /// 惰性补齐无用的事件：元信息已由控制器合并进 `editor.page`，只用于通知 UI 续补下一批可见行。
     RedisKeyMetadataLoaded {

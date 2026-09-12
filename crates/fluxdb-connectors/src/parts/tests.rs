@@ -3436,6 +3436,71 @@ SELECT item_id, name FROM audit_log;"
         connector.execute(&req).expect("清理 schema 应成功");
     }
 
+    /// 真实 PG：角色 CRUD + 成员关系 + 对象授权（隔离环境，测试后清理角色）。
+    #[test]
+    fn pg_live_smoke_role_crud_and_membership() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let role = format!("t26_role_{suffix}");
+        let group = format!("t26_grp_{suffix}");
+
+        // 建 NOLOGIN 组角色 + LOGIN 用户（带密码）。
+        connector
+            .create_role(config.id, &group, false, None)
+            .expect("建组角色应成功");
+        connector
+            .create_role(config.id, &role, true, Some("T26_pw_1"))
+            .expect("建登录角色应成功");
+
+        // 列表可见，属性正确。
+        let roles = connector.list_roles(config.id).expect("列角色应成功");
+        let created = roles.iter().find(|r| r.name == role).expect("新角色应在列表");
+        assert!(created.can_login, "LOGIN 角色 can_login 应为 true");
+        let group_role = roles.iter().find(|r| r.name == group).expect("组角色应在列表");
+        assert!(!group_role.can_login, "NOLOGIN 角色 can_login 应为 false");
+
+        // 成员关系：role 加入 group，带 ADMIN OPTION。
+        connector
+            .grant_role_membership(config.id, &group, &role, true)
+            .expect("成员授权应成功");
+        let members = connector
+            .list_role_membership(config.id)
+            .expect("列成员关系应成功");
+        assert!(
+            members
+                .iter()
+                .any(|(g, m, admin)| g == &group && m == &role && *admin),
+            "应含带 ADMIN OPTION 的成员关系：{members:?}"
+        );
+        connector
+            .revoke_role_membership(config.id, &group, &role)
+            .expect("撤销成员关系应成功");
+
+        // 改密码 + 重命名。
+        connector
+            .alter_role_password(config.id, &role, "T26_pw_2")
+            .expect("改密码应成功");
+        let renamed = format!("t26_role2_{suffix}");
+        connector
+            .rename_role(config.id, &role, &renamed)
+            .expect("重命名角色应成功");
+
+        // 清理（先删组成员归属已撤销，直接 DROP）。
+        connector
+            .drop_role(config.id, &renamed)
+            .expect("删除登录角色应成功");
+        connector
+            .drop_role(config.id, &group)
+            .expect("删除组角色应成功");
+    }
+
     #[test]
     fn pg_live_smoke_create_delete_database() {
         let Some(params) = pg_smoke_params() else {

@@ -72,6 +72,122 @@ impl Connector for PostgresConnector {
         pg_create_schema(config, connection_id, schema)
     }
 
+    fn list_roles(&self, connection_id: ConnectionId) -> fluxdb_core::Result<Vec<fluxdb_core::PgRole>> {
+        let _ = connection_id;
+        self.config
+            .as_ref()
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))
+            .and_then(|config| pg_list_roles(config))
+    }
+
+    fn create_role(
+        &self,
+        connection_id: ConnectionId,
+        name: &str,
+        can_login: bool,
+        password: Option<&str>,
+    ) -> fluxdb_core::Result<()> {
+        let _ = connection_id;
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
+        pg_create_role(config, name, can_login, password)
+    }
+
+    fn alter_role_password(&self, connection_id: ConnectionId, name: &str, password: &str) -> fluxdb_core::Result<()> {
+        let _ = connection_id;
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
+        pg_alter_role_password(config, name, password)
+    }
+
+    fn rename_role(&self, connection_id: ConnectionId, old_name: &str, new_name: &str) -> fluxdb_core::Result<()> {
+        let _ = connection_id;
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
+        pg_rename_role(config, old_name, new_name)
+    }
+
+    fn drop_role(&self, connection_id: ConnectionId, name: &str) -> fluxdb_core::Result<()> {
+        let _ = connection_id;
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
+        pg_drop_role(config, name)
+    }
+
+    fn alter_role_options(
+        &self,
+        connection_id: ConnectionId,
+        name: &str,
+        can_login: Option<bool>,
+        is_superuser: Option<bool>,
+        can_create_db: Option<bool>,
+        can_create_role: Option<bool>,
+        inherit: Option<bool>,
+        is_replication: Option<bool>,
+        bypass_rls: Option<bool>,
+        connection_limit: Option<i32>,
+        valid_until: Option<&str>,
+    ) -> fluxdb_core::Result<()> {
+        let _ = connection_id;
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
+        pg_alter_role_options(
+            config, name, can_login, is_superuser, can_create_db, can_create_role,
+            inherit, is_replication, bypass_rls, connection_limit, valid_until,
+        )
+    }
+
+    fn grant_role_membership(
+        &self,
+        connection_id: ConnectionId,
+        role: &str,
+        member: &str,
+        admin_option: bool,
+    ) -> fluxdb_core::Result<()> {
+        let _ = connection_id;
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
+        pg_grant_role_membership(config, role, member, admin_option)
+    }
+
+    fn revoke_role_membership(
+        &self,
+        connection_id: ConnectionId,
+        role: &str,
+        member: &str,
+    ) -> fluxdb_core::Result<()> {
+        let _ = connection_id;
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
+        pg_revoke_role_membership(config, role, member)
+    }
+
+    fn grant_object_privilege(
+        &self,
+        connection_id: ConnectionId,
+        privilege: &str,
+        object_sql: &str,
+        grantee: &str,
+    ) -> fluxdb_core::Result<()> {
+        let _ = connection_id;
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
+        pg_grant_object_privilege(config, privilege, object_sql, grantee)
+    }
+
+    fn revoke_object_privilege(
+        &self,
+        connection_id: ConnectionId,
+        privilege: &str,
+        object_sql: &str,
+        grantee: &str,
+    ) -> fluxdb_core::Result<()> {
+        let _ = connection_id;
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
+        pg_revoke_object_privilege(config, privilege, object_sql, grantee)
+    }
+
+    fn list_role_membership(
+        &self,
+        connection_id: ConnectionId,
+    ) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
+        let _ = connection_id;
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
+        pg_list_role_membership(config)
+    }
+
     fn list_indexes(&self, path: &ObjectPath) -> fluxdb_core::Result<Vec<IndexInfo>> {
         let Some(config) = self.config.as_ref() else {
             return Err(Error::new(
