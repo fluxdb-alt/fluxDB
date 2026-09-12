@@ -108,6 +108,8 @@ impl AppController {
                     let endpoint_changed = connection.config.kind != config.kind
                         || connection.config.endpoint != config.endpoint;
                     connection.config = config.clone();
+                    // 配置已变更：旧会话按旧档案建立，一律释放（含仅改密码/TLS 的情况）。
+                    fluxdb_connectors::pg_close_connection_sessions(config.id);
                     if endpoint_changed {
                         connection.connected = false;
                         connection.expanded = false;
@@ -290,6 +292,9 @@ impl AppController {
                 connection.connected = false;
                 connection.expanded = false;
                 connection.objects.clear();
+                // 断开即释放该连接的全部 PG 会话：连接驱动、SSH 桥线程随会话 drop 收敛，
+                // 不再挂到空闲 TTL（设计 §3.3）。
+                fluxdb_connectors::pg_close_connection_sessions(connection_id);
                 self.state
                     .tabs
                     .retain(|tab| !tab_belongs_to_connection(tab, connection_id));
@@ -348,6 +353,7 @@ impl AppController {
                 AppEvent::ObjectsLoaded(None, connection.objects.clone())
             }
             AppCommand::DeleteConnection(connection_id) => {
+                fluxdb_connectors::pg_close_connection_sessions(connection_id);
                 let original_len = self.state.connections.len();
                 self.state
                     .connections
@@ -427,6 +433,7 @@ impl AppController {
             }
             AppCommand::CreateSchema {
                 connection_id,
+                database,
                 schema,
             } => {
                 let Some(connection) = self
@@ -438,9 +445,12 @@ impl AppController {
                     return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
                 };
                 let config = connection.config.clone();
-                if let Err(error) =
-                    create_schema_for_connection(&config, connection_id, schema.as_str())
-                {
+                if let Err(error) = create_schema_for_connection(
+                    &config,
+                    connection_id,
+                    database.as_str(),
+                    schema.as_str(),
+                ) {
                     return self.fail(error);
                 }
                 // 建 schema 成功后通知 UI 失效该库 schema 缓存并重取（见 SchemaCreated 消费点）。
@@ -1680,7 +1690,8 @@ impl AppController {
                     TabKind::QueryEditor(editor) => Some(QueryRequest {
                         connection_id: editor.connection_id,
                         database: editor.database.clone(),
-                        session_id: None,
+                        // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
+                        session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
                         schema: editor.schema.clone(),
                         text: sql_text_for_execution(&editor.text),
                         mode: fluxdb_core::QueryMode::All,
@@ -1745,7 +1756,8 @@ impl AppController {
                     TabKind::QueryEditor(editor) => Some(QueryRequest {
                         connection_id: editor.connection_id,
                         database: editor.database.clone(),
-                        session_id: None,
+                        // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
+                        session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
                         schema: editor.schema.clone(),
                         text: sql_text_for_execution(&text),
                         mode: fluxdb_core::QueryMode::Selection,
@@ -1802,7 +1814,8 @@ impl AppController {
                         Some(QueryRequest {
                             connection_id: editor.connection_id,
                             database: editor.database.clone(),
-                            session_id: None,
+                            // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
+                            session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
                             schema: editor.schema.clone(),
                             text: editor.text.clone(),
                             mode: fluxdb_core::QueryMode::All,
@@ -1843,7 +1856,8 @@ impl AppController {
                         Some(QueryRequest {
                             connection_id: editor.connection_id,
                             database: editor.database.clone(),
-                            session_id: None,
+                            // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
+                            session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
                             schema: editor.schema.clone(),
                             text: sql_text_for_execution(&editor.text),
                             mode: fluxdb_core::QueryMode::All,
@@ -1898,7 +1912,8 @@ impl AppController {
                         connection_id,
                         database,
                         schema,
-                        session_id: None,
+                        // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
+                        session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
                         text: summary.sql.clone(),
                         mode: fluxdb_core::QueryMode::Selection,
                         options: QueryExecutionOptions::default(),
@@ -2638,6 +2653,7 @@ impl AppController {
                     return AppEvent::TabCloseRequested(tab_id);
                 }
 
+                self.release_tab_query_sessions(&[tab_id]);
                 self.state.tabs.retain(|tab| tab.id != tab_id);
                 if self.state.pending_dirty_tab_close == Some(tab_id) {
                     self.state.pending_dirty_tab_close = None;
@@ -2655,6 +2671,8 @@ impl AppController {
                     .iter()
                     .find(|tab| tab_ids.contains(&tab.id))
                     .map(|tab| tab.id);
+                let closed_ids = tab_ids.iter().copied().collect::<Vec<_>>();
+                self.release_tab_query_sessions(&closed_ids);
                 self.state.tabs.retain(|tab| !tab_ids.contains(&tab.id));
                 if self
                     .state
@@ -2679,6 +2697,7 @@ impl AppController {
                     return self.fail(Error::new(ErrorKind::Internal, "没有待关闭的标签页"));
                 }
 
+                self.release_tab_query_sessions(&[tab_id]);
                 self.state.tabs.retain(|tab| tab.id != tab_id);
                 self.state.pending_dirty_tab_close = None;
                 if self.state.active_tab == Some(tab_id) {
@@ -2745,6 +2764,24 @@ impl AppController {
 }
 
 impl AppController {
+    /// 释放与这些标签页绑定的独占查询会话（关闭标签时调用）。
+    ///
+    /// 标签的查询会话 id 就是 `tab_id`（见各 `QueryRequest` 构造点）；标签关闭后连接由
+    /// 服务端回收，未提交事务随之回滚——不这样做，连接会一直挂到空闲 TTL 才消失。
+    fn release_tab_query_sessions(&self, tab_ids: &[TabId]) {
+        for tab in &self.state.tabs {
+            if !tab_ids.contains(&tab.id) {
+                continue;
+            }
+            if let TabKind::QueryEditor(editor) = &tab.kind {
+                fluxdb_connectors::pg_close_query_session(
+                    editor.connection_id,
+                    fluxdb_core::QuerySessionId(tab.id.0),
+                );
+            }
+        }
+    }
+
     fn default_query_execution_options(&self) -> QueryExecutionOptions {
         QueryExecutionOptions {
             page_size: Pagination::new(0, self.state.settings.page_size).limit,

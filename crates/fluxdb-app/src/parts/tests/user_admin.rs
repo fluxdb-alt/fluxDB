@@ -261,30 +261,33 @@ fn pg_grant_scope_from_state_maps_kinds_and_defaults_schema() {
 /// PG 权限面板：GRANT/REVOKE 的 `ON <object>` 片段（双引号 + 关键字 + 函数签名）。
 #[test]
 fn pg_grant_object_sql_renders_keyword_and_quoting() {
+    fn sql(scope: &PgObjectGrantScope) -> String {
+        pg_grant_object_sql(scope).expect("合法目标应能渲染")
+    }
     let table = PgObjectGrantScope::Relation {
         schema: "s".into(),
         name: "t".into(),
         kind: PgRelationKind::Table,
     };
-    assert_eq!(pg_grant_object_sql(&table), "TABLE \"s\".\"t\"");
+    assert_eq!(sql(&table), "TABLE \"s\".\"t\"");
     let seq = PgObjectGrantScope::Relation {
         schema: "s".into(),
         name: "q".into(),
         kind: PgRelationKind::Sequence,
     };
-    assert_eq!(pg_grant_object_sql(&seq), "SEQUENCE \"s\".\"q\"");
+    assert_eq!(sql(&seq), "SEQUENCE \"s\".\"q\"");
     let routine = PgObjectGrantScope::Routine {
         schema: "s".into(),
         name: "fn".into(),
         signature: "a integer".into(),
     };
-    assert_eq!(pg_grant_object_sql(&routine), "FUNCTION \"s\".\"fn\"(a integer)");
+    assert_eq!(sql(&routine), "FUNCTION \"s\".\"fn\"(a integer)");
     assert_eq!(
-        pg_grant_object_sql(&PgObjectGrantScope::Schema { schema: "s".into() }),
+        sql(&PgObjectGrantScope::Schema { schema: "s".into() }),
         "SCHEMA \"s\""
     );
     assert_eq!(
-        pg_grant_object_sql(&PgObjectGrantScope::Database { database: "d".into() }),
+        sql(&PgObjectGrantScope::Database { database: "d".into() }),
         "DATABASE \"d\""
     );
     // 双引号标识符转义。
@@ -293,5 +296,50 @@ fn pg_grant_object_sql_renders_keyword_and_quoting() {
         name: "a\"b".into(),
         kind: PgRelationKind::Table,
     };
-    assert_eq!(pg_grant_object_sql(&quoted), "TABLE \"s\".\"a\"\"b\"");
+    assert_eq!(sql(&quoted), "TABLE \"s\".\"a\"\"b\"");
+}
+
+/// 函数签名是唯一无法靠引号消毒的部分（类型列表不是标识符），必须白名单拒绝注入。
+///
+/// 回归：早期签名原样拼进 `GRANT ... ON FUNCTION`，而 GRANT 走 simple query protocol，
+/// 分号可另起语句——签名里塞 `int) TO postgres; ALTER ROLE x SUPERUSER; --` 即以管理角色
+/// 执行任意 DDL。
+#[test]
+fn pg_grant_object_sql_rejects_injected_routine_signature() {
+    for bad in [
+        "int) TO postgres; ALTER ROLE attacker SUPERUSER; --",
+        "int) TO postgres; DROP TABLE t; --",
+        "integer /* 注释 */",
+        "integer -- 行注释",
+        "a' OR '1'='1",
+        "integer\"x",
+    ] {
+        let scope = PgObjectGrantScope::Routine {
+            schema: "s".into(),
+            name: "fn".into(),
+            signature: bad.into(),
+        };
+        assert!(
+            pg_grant_object_sql(&scope).is_err(),
+            "{bad:?} 应被拒绝，不得进入 GRANT 语句"
+        );
+    }
+    // 正常签名（含数组、带长度、schema 限定、参数名）仍放行。
+    for ok in [
+        "integer, text",
+        "character varying(10)",
+        "integer[]",
+        "pg_catalog.text",
+        "IN a integer",
+    ] {
+        let scope = PgObjectGrantScope::Routine {
+            schema: "s".into(),
+            name: "fn".into(),
+            signature: ok.into(),
+        };
+        assert!(
+            pg_grant_object_sql(&scope).is_ok(),
+            "{ok:?} 是合法签名，不应拒绝"
+        );
+    }
 }

@@ -62,14 +62,19 @@ impl Connector for PostgresConnector {
         pg_delete_database(config, connection_id, database)
     }
 
-    fn create_schema(&self, connection_id: ConnectionId, schema: &str) -> fluxdb_core::Result<()> {
+    fn create_schema(
+        &self,
+        connection_id: ConnectionId,
+        database: &str,
+        schema: &str,
+    ) -> fluxdb_core::Result<()> {
         let Some(config) = self.config.as_ref() else {
             return Err(Error::new(
                 ErrorKind::Connection,
                 "PostgreSQL 新建 schema 需要连接配置上下文",
             ));
         };
-        pg_create_schema(config, connection_id, schema)
+        pg_create_schema(config, connection_id, database, schema)
     }
 
     fn list_roles(&self, connection_id: ConnectionId) -> fluxdb_core::Result<Vec<fluxdb_core::PgRole>> {
@@ -161,25 +166,25 @@ impl Connector for PostgresConnector {
         &self,
         connection_id: ConnectionId,
         privilege: &str,
-        object_sql: &str,
+        scope: &fluxdb_core::PgObjectGrantScope,
         grantee: &str,
         grant_option: bool,
     ) -> fluxdb_core::Result<()> {
         let _ = connection_id;
         let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
-        pg_grant_object_privilege(config, privilege, object_sql, grantee, grant_option)
+        pg_grant_object_privilege(config, privilege, scope, grantee, grant_option)
     }
 
     fn revoke_object_privilege(
         &self,
         connection_id: ConnectionId,
         privilege: &str,
-        object_sql: &str,
+        scope: &fluxdb_core::PgObjectGrantScope,
         grantee: &str,
     ) -> fluxdb_core::Result<()> {
         let _ = connection_id;
         let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
-        pg_revoke_object_privilege(config, privilege, object_sql, grantee)
+        pg_revoke_object_privilege(config, privilege, scope, grantee)
     }
 
     fn list_role_membership(

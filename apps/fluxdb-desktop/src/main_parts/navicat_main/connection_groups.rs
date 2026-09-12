@@ -852,12 +852,19 @@ impl NavicatMain {
         self.create_schema_running = true;
         let schema_display = schema.clone();
         let database_path_display = database_path.clone();
+        // 目标库取右键所在的数据库节点（database 字段优先，回退节点名）：schema 必须建在
+        // 用户选中的库里，不能落到连接的维护库。
+        let target_database = database_path
+            .database
+            .clone()
+            .unwrap_or_else(|| database_path.name.clone());
         let mut controller = self.controller.clone();
         let task = cx.spawn(async move |view, cx| {
             let (_, event) = cx
                 .background_spawn(async move {
                     let event = controller.dispatch(AppCommand::CreateSchema {
                         connection_id,
+                        database: target_database,
                         schema: schema.clone(),
                     });
                     (controller, event)

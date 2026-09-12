@@ -175,6 +175,9 @@ pub(crate) fn open_tunnel_with(
 
     // 桥线程接管 session/listener；session 在握手/鉴权后不再被主线程引用。
     let bridge = std::thread::spawn(move || {
+        // 整个会话切非阻塞：搬运阶段两个方向要并行、各自短持会话锁，阻塞模式会互相饿死
+        // （见 bridge_one 注释）。liSSH 的阻塞标志是会话级的，故在此统一设置一次。
+        session.set_blocking(false);
         let mut since_keepalive = std::time::Instant::now();
         loop {
             // 心跳：长连接期间桥线程空闲于 accept，可周期发送。
@@ -185,7 +188,7 @@ pub(crate) fn open_tunnel_with(
             match handle.accept() {
                 Ok((local_sock, _)) => {
                     // 每条入站连接独立 channel，各自双向搬运；互不影响。
-                    match session.channel_direct_tcpip(&target_host_owned, target_port_owned, None) {
+                    match open_direct_tcpip(&session, &target_host_owned, target_port_owned) {
                         Ok(channel) => {
                             bridge_one(local_sock, channel);
                         }
@@ -209,25 +212,106 @@ pub(crate) fn open_tunnel_with(
     })
 }
 
+/// libssh2 `LIBSSH2_ERROR_EAGAIN`：非阻塞会话下「暂时无数据/还不能写」。
+const SSH_EAGAIN: i32 = -37;
+
+/// 该 SSH 错误是否为 EAGAIN（非阻塞重试信号，不是真失败）。
+fn ssh_error_is_again(error: &ssh2::Error) -> bool {
+    matches!(error.code(), ssh2::ErrorCode::Session(SSH_EAGAIN))
+}
+
+/// 打开一条指向远端目标的 direct-tcpip 通道。
+///
+/// 会话已切非阻塞，通道建立期间可能返回 EAGAIN（libssh2 尚未完成握手往返），
+/// 故短退避重试；其它错误立即返回。
+fn open_direct_tcpip(
+    session: &ssh2::Session,
+    target_host: &str,
+    target_port: u16,
+) -> Result<ssh2::Channel, ssh2::Error> {
+    for _ in 0..BRIDGE_RETRY_LIMIT {
+        match session.channel_direct_tcpip(target_host, target_port, None) {
+            Ok(channel) => return Ok(channel),
+            Err(error) if ssh_error_is_again(&error) => {
+                std::thread::sleep(BRIDGE_RETRY_BACKOFF);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(ssh2::Error::from_errno(ssh2::ErrorCode::Session(SSH_EAGAIN)))
+}
+
+/// 非阻塞重试上限与退避间隔（通道建立 + 单次读写）。
+const BRIDGE_RETRY_LIMIT: u32 = 20_000;
+const BRIDGE_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(1);
+
 /// 为一条入站本地连接 + 一条 channel 启动双向搬运线程。
+///
+/// SSH 会话被切为非阻塞：libssh2 的每次通道读写都要持会话锁，阻塞模式下先开始的方向会
+/// 一直持锁到连接结束，另一方向永远拿不到锁（半双工死锁，PG 握手就会卡到建连超时）。
+/// 非阻塞后每次调用立刻返回（无数据即 EAGAIN），两个方向各自按调用粒度取锁、交替推进。
+/// `ssh2::Channel` 是 `Arc` 包装的共享句柄，可直接 clone 给两个线程。
 fn bridge_one(local_sock: TcpStream, channel: ssh2::Channel) {
-    let channel = std::sync::Arc::new(std::sync::Mutex::new(channel));
-    let (chan_a, chan_b) = (channel.clone(), channel.clone());
     let (sock_a, sock_b) = (local_sock.try_clone(), local_sock);
+    let (chan_a, chan_b) = (channel.clone(), channel);
     // 方向1：本地 → 远端。
     let _ = std::thread::spawn(move || {
-        let mut sock = sock_a.ok()?;
-        let mut channel = chan_a.lock().ok()?;
-        let _ = std::io::copy(&mut sock, &mut *channel);
-        Some(())
+        let Ok(mut sock) = sock_a else { return };
+        let _ = pump_local_to_remote(&mut sock, &mut chan_a.clone());
     });
     // 方向2：远端 → 本地。任一方向 EOF 后，另一方向会因通道/本地关闭而退出。
     let _ = std::thread::spawn(move || {
         let mut sock = sock_b;
-        let mut channel = chan_b.lock().ok()?;
-        let _ = std::io::copy(&mut *channel, &mut sock);
-        Some(())
+        let _ = pump_remote_to_local(&mut chan_b.clone(), &mut sock);
     });
+}
+
+/// 本地 → 远端：读本地 socket（阻塞），写通道（非阻塞，满窗口时退避重试）。
+fn pump_local_to_remote(
+    sock: &mut TcpStream,
+    channel: &mut ssh2::Channel,
+) -> std::io::Result<()> {
+    let mut buffer = [0u8; 32 * 1024];
+    loop {
+        let read = match std::io::Read::read(sock, &mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        let mut offset = 0;
+        while offset < read {
+            match std::io::Write::write(channel, &buffer[offset..read]) {
+                Ok(0) => return Ok(()),
+                Ok(written) => offset += written,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(BRIDGE_RETRY_BACKOFF);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+}
+
+/// 远端 → 本地：读通道（非阻塞，无数据即退避），写本地 socket（阻塞）。
+fn pump_remote_to_local(
+    channel: &mut ssh2::Channel,
+    sock: &mut TcpStream,
+) -> std::io::Result<()> {
+    let mut buffer = [0u8; 32 * 1024];
+    loop {
+        let read = match std::io::Read::read(channel, &mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(BRIDGE_RETRY_BACKOFF);
+                continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        std::io::Write::write_all(sock, &buffer[..read])?;
+    }
 }
 
 /// 校验远端主机密钥：读取 `~/.ssh/known_hosts`；未知或变更即拒绝。
@@ -388,6 +472,74 @@ mod ssh_tunnel_tests {
     #[test]
     fn disabled_ssh_yields_no_auth() {
         assert!(ssh_auth_from_options(&options(&[]), false).is_none());
+    }
+
+    /// 真库门控：隧道双向搬运（回归「半双工死锁」）。
+    ///
+    /// 目标选跳板机自身的 sshd 端口：连上后 sshd 会主动发 `SSH-2.0-...` banner，因此
+    /// **只要远端→本地这一个方向能回流数据，就证明桥没有死锁**——修复前通道被单方向
+    /// 长期持锁，本地读会一直阻塞到超时。
+    ///
+    /// 环境：`FLUXDB_SSH_SMOKE=host:port:user:password`；未配置则跳过（不谎报通过）。
+    #[test]
+    fn ssh_tunnel_relays_both_directions() {
+        let Some(value) = std::env::var("FLUXDB_SSH_SMOKE").ok() else {
+            return;
+        };
+        let mut parts = value.split(':');
+        let host = parts.next().unwrap_or_default().to_string();
+        let port: u16 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let user = parts.next().unwrap_or_default().to_string();
+        let password = parts.next().unwrap_or_default().to_string();
+        if host.is_empty() || port == 0 {
+            return;
+        }
+        let auth = SshAuthParams {
+            username: user,
+            password: Some(password),
+            private_key_path: String::new(),
+            passphrase: None,
+        };
+        // 目标 = 跳板机自己的 sshd（从跳板机视角解析 127.0.0.1）。
+        let tunnel = open_tunnel_with(
+            (&host, port),
+            &auth,
+            ("127.0.0.1", port),
+            SshTunnelOptions::default(),
+        )
+        .expect("建隧道应成功");
+
+        let mut stream = TcpStream::connect_timeout(
+            &(std::net::Ipv4Addr::LOCALHOST, tunnel.local_port).into(),
+            std::time::Duration::from_secs(5),
+        )
+        .expect("连隧道本地端口应成功");
+        // 读 banner：读不到（死锁）就会在此超时失败，而不是静默通过。
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("设置读超时");
+        // 逐字节读满版本串（banner 一次读不一定读全）。
+        let mut banner = Vec::new();
+        while !banner.ends_with(b"\n") {
+            let mut byte = [0u8; 1];
+            let read = std::io::Read::read(&mut stream, &mut byte).expect("远端→本地应有数据回流");
+            assert_ne!(read, 0, "banner 未读完即 EOF");
+            banner.push(byte[0]);
+        }
+        assert!(
+            String::from_utf8_lossy(&banner).starts_with("SSH-2.0"),
+            "应收到 sshd banner，实收 {:?}",
+            String::from_utf8_lossy(&banner)
+        );
+
+        // 本地→远端：回自己的版本串完成协议交换，sshd 随后会发 KEXINIT（二进制，远大于
+        // banner）。若该方向不通，sshd 收不到版本串，本地读就会超时——以此验证上行。
+        std::io::Write::write_all(&mut stream, b"SSH-2.0-FluxDBTunnelProbe\r\n")
+            .expect("本地→远端应能写入");
+        let mut kexinit = [0u8; 32];
+        let read = std::io::Read::read(&mut stream, &mut kexinit)
+            .expect("版本串送达后 sshd 应回 KEXINIT（上行不通会在此超时）");
+        assert!(read > 0, "应收到 KEXINIT 数据");
     }
 
     /// 集成口径：SSH 开启但缺跳板机主机时，拨号入口应报可读中文错误而不是静默降级为直连。

@@ -267,18 +267,75 @@ fn pg_revoke_role_membership(
     pg_exec_role_sql(config, &sql)
 }
 
+/// 把结构化授权目标渲染成 `GRANT/REVOKE ... ON <object>` 片段（PG 双引号引用）。
+///
+/// 安全边界在此：库/schema/对象名经 `pg_quote_identifier` 引用（引号内无注入面），
+/// **函数签名是唯一不能引用的部分**（它是类型列表而非标识符），因此单独按白名单字符集
+/// 校验；不合法直接拒绝，绝不把用户自由文本拼进以管理员身份执行的 DDL（设计 §12）。
+pub fn pg_object_scope_sql(
+    scope: &fluxdb_core::PgObjectGrantScope,
+) -> fluxdb_core::Result<String> {
+    use fluxdb_core::{PgObjectGrantScope, PgRelationKind};
+    fn ident(name: &str) -> fluxdb_core::Result<String> {
+        if !is_pg_quotable_object_name(name) {
+            return Err(Error::new(ErrorKind::Query, "授权对象名不合法"));
+        }
+        Ok(pg_quote_identifier(name))
+    }
+    Ok(match scope {
+        PgObjectGrantScope::Database { database } => format!("DATABASE {}", ident(database)?),
+        PgObjectGrantScope::Schema { schema } => format!("SCHEMA {}", ident(schema)?),
+        PgObjectGrantScope::Relation { schema, name, kind } => {
+            let keyword = match kind {
+                PgRelationKind::Sequence => "SEQUENCE",
+                PgRelationKind::Table | PgRelationKind::View => "TABLE",
+            };
+            format!("{keyword} {}.{}", ident(schema)?, ident(name)?)
+        }
+        PgObjectGrantScope::Routine {
+            schema,
+            name,
+            signature,
+        } => {
+            if !is_pg_routine_signature(signature) {
+                return Err(Error::new(
+                    ErrorKind::Query,
+                    "函数签名不合法（只接受参数类型列表）",
+                ));
+            }
+            format!("FUNCTION {}.{}({signature})", ident(schema)?, ident(name)?)
+        }
+    })
+}
+
+/// 函数 identity 签名校验：只接受「参数类型列表」形态，如 `integer, text`、
+/// `character varying(10)`、`integer[]`、`pg_catalog.text`、`IN a integer`。
+///
+/// 只允许 ASCII 字母/数字/下划线/空白/`,`/`.`/`[]`/`()`/`$`，并额外拒绝注释起始序列；
+/// 引号、分号、减号等一律不接受——签名不是标识符，无法靠引用消毒，必须白名单。
+fn is_pg_routine_signature(value: &str) -> bool {
+    if value.len() > 1024 || value.contains("--") || value.contains("/*") {
+        return false;
+    }
+    value.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric()
+            || matches!(byte, b'_' | b' ' | b'\t' | b',' | b'.' | b'[' | b']' | b'(' | b')' | b'$')
+    })
+}
+
 /// 对象授权：GRANT priv ON object TO grantee [WITH GRANT OPTION]。priv 为白名单关键字
-/// （SELECT/INSERT/…）；object 形如 `TABLE "s"."t"` / `"db"` / `SCHEMA "s"`（由 app 侧渲染）。
+/// （SELECT/INSERT/…）；对象片段由 `pg_object_scope_sql` 在本层渲染与校验。
 fn pg_grant_object_privilege(
     config: &ConnectionConfig,
     privilege: &str,
-    object_sql: &str,
+    scope: &fluxdb_core::PgObjectGrantScope,
     grantee: &str,
     grant_option: bool,
 ) -> fluxdb_core::Result<()> {
     if !is_pg_privilege_name(privilege) || !is_pg_identifier_name(grantee) {
         return Err(Error::new(ErrorKind::Query, "权限/授权对象名不合法"));
     }
+    let object_sql = pg_object_scope_sql(scope)?;
     let suffix = if grant_option { " WITH GRANT OPTION" } else { "" };
     let sql = format!(
         "GRANT {} ON {} TO {}{};",
@@ -291,16 +348,14 @@ fn pg_grant_object_privilege(
 fn pg_revoke_object_privilege(
     config: &ConnectionConfig,
     privilege: &str,
-    object_sql: &str,
+    scope: &fluxdb_core::PgObjectGrantScope,
     grantee: &str,
 ) -> fluxdb_core::Result<()> {
     if !is_pg_privilege_name(privilege) || !is_pg_identifier_name(grantee) {
         return Err(Error::new(ErrorKind::Query, "权限/授权对象名不合法"));
     }
-    let sql = format!(
-        "REVOKE {} ON {} FROM {};",
-        privilege, object_sql, grantee
-    );
+    let object_sql = pg_object_scope_sql(scope)?;
+    let sql = format!("REVOKE {} ON {} FROM {};", privilege, object_sql, grantee);
     pg_exec_role_sql(config, &sql)
 }
 

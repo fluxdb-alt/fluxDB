@@ -944,6 +944,8 @@ pub enum AppCommand {
     CreateDatabase(CreateDatabaseRequest),
     CreateSchema {
         connection_id: ConnectionId,
+        /// 目标数据库（PG 的 schema 属于库）；空串表示回退连接维护库。
+        database: String,
         schema: String,
     },
     /// 角色管理（T26）：列表 + CRUD（PG 集群级角色）。

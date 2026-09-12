@@ -3145,10 +3145,103 @@ SELECT item_id, name FROM audit_log;"
             "不同会话不应看到未提交事务的行（互不串事务）"
         );
 
-        // 收尾：A 提交，确认 B 之后可见；并清理。
+        // 收尾：A 提交（不删表，留给下面复核可见性）。
         let mut commit = pg_query_request(&config, Some(QuerySessionId(100)));
-        commit.text = "COMMIT; DROP TABLE t04_leak".to_string();
-        connector.execute(&commit).expect("A 提交并清理");
+        commit.text = "COMMIT".to_string();
+        connector.execute(&commit).expect("A 提交");
+
+        // 会话复用回归（P0-1）：上面这条 COMMIT 能成功本身就证明「同一 session_id 的两次
+        // 执行落在同一连接上」——否则服务端会报 no transaction in progress。此处再显式确认
+        // 提交后的行对第三方会话可见，避免只是「看起来没报错」。
+        let mut after = pg_query_request(&config, Some(QuerySessionId(300)));
+        after.text = "SELECT count(*) AS c FROM t04_leak".to_string();
+        let after_result = connector.execute(&after).expect("提交后查询应成功");
+        assert_eq!(
+            after_result.results[0].rows[0].values[0],
+            CellValue::I64(1),
+            "同会话 COMMIT 后，写入应对其它会话可见"
+        );
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t04_leak".to_string();
+        connector.execute(&cleanup).expect("清理应成功");
+    }
+
+    /// 查询会话内切换 schema 作用域：不重建连接（事务保住），search_path 当场生效。
+    #[test]
+    fn pg_live_smoke_query_session_switches_schema_without_losing_transaction() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let session = QuerySessionId(400);
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "DROP SCHEMA IF EXISTS t04_scope_a CASCADE; \
+                      DROP SCHEMA IF EXISTS t04_scope_b CASCADE; \
+                      CREATE SCHEMA t04_scope_a; CREATE SCHEMA t04_scope_b"
+            .to_string();
+        connector.execute(&setup).expect("建两个 schema");
+
+        // 在 scope_a 内开启事务写入（未提交）。
+        let mut begin = pg_query_request(&config, Some(session));
+        begin.schema = Some("t04_scope_a".to_string());
+        begin.text = "CREATE TABLE t(id int); BEGIN; INSERT INTO t VALUES (1)".to_string();
+        connector.execute(&begin).expect("scope_a 建表并开启事务");
+
+        // 同一 session 切到 scope_b：应复用同一连接（事务存活），且 search_path 立即生效。
+        let mut switched = pg_query_request(&config, Some(session));
+        switched.schema = Some("t04_scope_b".to_string());
+        switched.text = "SELECT current_schema() AS s".to_string();
+        let result = connector.execute(&switched).expect("切 schema 后查询应成功");
+        assert_eq!(
+            result.results[0].rows[0].values[0],
+            CellValue::Text("t04_scope_b".to_string()),
+            "切换后的 search_path 应立即生效"
+        );
+
+        // 回到 scope_a 提交：若中途换过连接，这里的 COMMIT 会报 no transaction in progress。
+        let mut back = pg_query_request(&config, Some(session));
+        back.schema = Some("t04_scope_a".to_string());
+        back.text = "COMMIT".to_string();
+        connector.execute(&back).expect("切 schema 不应丢掉事务，COMMIT 应成功");
+
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP SCHEMA IF EXISTS t04_scope_a CASCADE; DROP SCHEMA IF EXISTS t04_scope_b CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理应成功");
+    }
+
+    /// 配置代际：改主机/端口/账号/密码都会换 key，旧会话不再被复用（P0-4）。
+    #[test]
+    fn pg_config_generation_changes_with_connection_settings() {
+        let base = postgres_config();
+        let original = pg_config_generation(&base);
+
+        let mut other_port = base.clone();
+        if let Some(profile) = other_port.postgres_profile.as_mut() {
+            profile.basic.port = profile.basic.port.wrapping_add(1);
+        }
+        assert_ne!(
+            original,
+            pg_config_generation(&other_port),
+            "端口变化应换代际"
+        );
+
+        let mut other_password = base.clone();
+        if let Some(profile) = other_password.postgres_profile.as_mut() {
+            profile.basic.password = fluxdb_core::SecretRef::inline("changed-secret");
+        }
+        assert_ne!(
+            original,
+            pg_config_generation(&other_password),
+            "仅改密码也应换代际（否则会继续复用旧凭据的连接）"
+        );
+
+        assert_eq!(
+            original,
+            pg_config_generation(&base),
+            "同一配置的代际必须稳定"
+        );
     }
 
     /// 读 FLUXDB_PG_SMOKE 环境变量 → (host, port, user, password, db)。
@@ -3577,14 +3670,25 @@ SELECT item_id, name FROM audit_log;"
     }
 
     /// 真实建/删库（T07 验收）：建库（charset/collation）→ 对象树可见 → 删库；维护库保护。
-    /// T20 建 schema：name 非法字符在连接前即拒绝（标识符白名单），合法名交由真实 PG 冒烟验证。
+    /// T20 建 schema：空名/控制字符/超长名在连接前即拒绝。
+    ///
+    /// 带空格、分号、引号、中文的名字**不拒绝**——它们会被 `pg_quote_identifier` 引号包裹后下发，
+    /// 引号内不存在注入面；早期白名单把这类真实合法名一起挡掉了（与设计 §13.1 的
+    /// 「带双引号/点/空格/Unicode 名称」验收要求冲突）。
     #[test]
     fn pg_create_schema_rejects_untrusted_names_before_connect() {
         let config = postgres_config();
-        for bad in ["  ", "a b", "a;DROP", "a'b"] {
+        let too_long = "s".repeat(64);
+        for bad in ["", "  ", "a\0b", too_long.as_str()] {
             assert!(
-                pg_create_schema(&config, ConnectionId(9), bad).is_err(),
+                pg_create_schema(&config, ConnectionId(9), "postgres", bad).is_err(),
                 "{bad:?} 应被拒绝"
+            );
+        }
+        for ok in ["a b", "a;DROP", "a'b", "租户_甲"] {
+            assert!(
+                is_pg_quotable_object_name(ok),
+                "{ok:?} 是合法 schema 名（引用后无注入面），不应拒绝"
             );
         }
     }
@@ -3599,7 +3703,7 @@ SELECT item_id, name FROM audit_log;"
         let connector = PostgresConnector::with_config(config.clone());
         let name = format!("t20_smoke_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
         connector
-            .create_schema(config.id, &name)
+            .create_schema(config.id, "postgres", &name)
             .expect("建 schema 应成功");
         // 删除该 schema（隔离测试环境清理）。
         let remove = format!("DROP SCHEMA IF EXISTS \"{name}\"");
@@ -4090,7 +4194,7 @@ SELECT item_id, name FROM audit_log;"
             .grant_object_privilege(
                 config.id,
                 "INSERT",
-                "TABLE \"t26_sco\".\"tbl\"",
+                &tbl_scope,
                 &role,
                 true,
             )
@@ -4110,7 +4214,7 @@ SELECT item_id, name FROM audit_log;"
             .revoke_object_privilege(
                 config.id,
                 "INSERT",
-                "TABLE \"t26_sco\".\"tbl\"",
+                &tbl_scope,
                 &role,
             )
             .expect("撤销授权应成功");

@@ -117,6 +117,16 @@ UI 不持有驱动 Client，不拼数据库 SQL，不读写配置或保存密码
 - 取消超时/传输异常则关闭并废弃该会话，标记“执行结果待核实”；不自动重试写操作。连接驱动、转发线程和子进程在断开/编辑配置/删除连接/退出时一起释放。切换 database 需新连接；已有事务先显式提交或回滚后才能切换。
 - 所有返回携带 request id、config generation、目标 object/query session；已关闭标签、已切换 schema、已刷新为更新请求时丢弃迟到结果。取消、失败、成功均清除对应 loading，其他任务状态不受影响。
 
+> **实现记录（P0 会话生命周期修复，2026-09-12）**：本章此前只在连接器层实现了会话注册表，应用层从未接通，导致本章多条要求形同虚设。本次按 3.3 原文补齐：
+>
+> - **查询会话接通**：查询编辑器标签即一个独占会话——各 `QueryRequest` 构造点传 `session_id = QuerySessionId(tab_id.0)`（TabId 进程内单调递增，天然唯一）。此前全仓 `session_id` 恒为 `None`，每次执行新拨连接用后即弃，**`BEGIN` 与后续 `COMMIT` 落在不同连接上**，临时表/SET/advisory lock 同样丢失；现已真库验证跨执行保持事务（`pg_live_smoke_transient_sessions_do_not_leak_transactions` 的 COMMIT 与提交后可见性断言）。
+> - **键含配置代际**：`PgSessionKey` 增 `config_generation`（连接档案有效内容的哈希，来源 `into_options()` 而**非** `Debug`——`SecretRef` 的 Debug 是打码的，只改密码会看不出变化）。原来改主机/账号/密码后仍复用旧凭据连接。
+> - **schema 不参与键**：按本章原文，schema 从键中移除，改由 `pg_ensure_search_path` 在复用到的**同一连接**上补发 `SET search_path`——切 schema 不再重建连接（保住事务）也不再用错作用域（真库：`pg_live_smoke_query_session_switches_schema_without_losing_transaction`）。
+> - **活跃时间回写 + TTL 语义**：`last_used` 改为命中即刷新（原先只在建连时写一次，一条持续在用的会话创建满 60s 就会被淘汰并**静默回滚用户未提交事务**）；兜底 TTL 由 60s 提到 30 分钟且 `${advanced.idle_ttl_secs}` 可配，正常回收改走显式关闭。
+> - **显式释放**：新增 `pg_close_connection_sessions` / `pg_close_query_session`，接线到断开连接、保存配置、删除连接、关闭标签（含多标签与脏标签确认路径）。原先只有「下一次任意 PG 请求」才会顺手清理，断开后 TCP 连接与 SSH 桥线程继续挂着。
+>
+> 同批修复的 P0：新建 schema 未带目标库导致建到维护库（`Connector::create_schema` 增 database 参数，桌面取右键所在库）；PG 权限面板的函数签名原样拼进 `GRANT ... ON FUNCTION`（GRANT 走 simple query protocol，分号可另起语句 → 管理角色任意 DDL），改为结构化 `PgObjectGrantScope` 由 connector 渲染并白名单校验签名；进程内 SSH 桥半双工死锁（libssh2 每次通道读写持会话锁，阻塞模式下先开始的方向持锁到连接结束，另一方向永久饿死），改为会话非阻塞 + 双方向各自短持锁搬运，并真库验证（修复前 5s 无任何数据回流）。
+
 ### 3.4 最小结构拆分
 
 以下均为**拟新增路径**，尚不存在。只按明确职责拆分，不为几行包装创建大量小文件。

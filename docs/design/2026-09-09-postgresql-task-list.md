@@ -549,6 +549,15 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   - **收尾**：修 `pg_live_smoke_tls_verify_full` 未用 `hostname` lint 警告；`cargo fmt --all`/`cargo check --workspace`/`cargo test --workspace`（app 400、connectors 149、desktop 372、storage 231 等）全绿；`cargo run -p fluxdb-desktop` 启动进入事件循环无 panic；F01–F20 已逐项登记到 §5 表（区分真库已验证 / 待补格式往返 / 待人工 UI）。
   增量五（本会话，T13 剩余补齐）：实现真实 CancelToken + OutcomeUnknown（见 T13 记录增量三），`SELECT pg_sleep(120)` 真实取消 ~1.26s 返回（远小于 30s 硬超时）；PG14/16 全量 `pg_live_` 24/24、MySQL 回归 2/2、workspace 1255 全过。审计其余被「另增增量」推迟项：T12 格式化保函数体已由 `sql_format` 的 dollar-quote 跳过实现（非缺）；T12 `::`/`$n` 与 snippet tabstop 消歧（补全 insert_text 从不含 `$n`/`$$`，无实际触发，YAGNI 不补）；T23 表级格式渲染 + 真库快照分页 + 字面量已覆盖，行/选区各格式 PG 用例与预览 E2E 属边缘/偏 UI。
   剩余：`cargo run -p fluxdb-desktop`明暗主题手测（集中人工）、非超级用户/TLS/取消异常延伸（TLS verify-full 已真库；非超级用户场景覆盖于 effective 权限冒烟，完整矩阵属可选项）、T01–T27 全部有效完成记录复核（本会话已复核 T19–T27、T13、§5）。
+  增量六（2026-09-12，对照设计/dbx/DBeaver 复审后修 P0）：审计发现连接器层会话机制从未被应用层接通，连同另外五项 P0 一并修复——
+  - **P0-1 查询会话接通（T13/T04 范围）**：`QueryRequest.session_id` 全仓恒为 `None`，每次执行新拨连接用后即弃 → `BEGIN` 与 `COMMIT` 落在不同连接，事务/临时表/SET 全丢；会话注册表、TTL、`PgSessionPurpose::Query` 均为不可达代码。改为查询编辑器标签传 `QuerySessionId(tab_id.0)`。真库断言：同会话 COMMIT 成功且提交后对第三方会话可见。
+  - **P0-2 建 schema 建错库（T20）**：`Connector::create_schema` 无 database 参数，`pg_create_schema` 用维护库 → 在 `appdb` 右键建 schema 实际建到 `postgres`。签名加 database，桌面取右键所在库；同时把 schema 名校验从 ASCII 白名单放宽为「引用后可接受」（引用后无注入面），恢复中文/空格/大写名支持（设计 §13.1 要求的 Unicode 名称此前被挡）。
+  - **P0-3 活跃时间与 TTL（T04/T13）**：`last_used` 只在建连时写一次，持续使用的会话创建满 60s 即被淘汰并静默回滚未提交事务。改为命中即刷新、兜底 TTL 30 分钟、`idle_ttl_secs` 可配。
+  - **P0-4 会话释放与配置代际（T04）**：断开/改配置/删连接均不释放 PG 会话（连接与 SSH 桥线程挂到 TTL）；键缺 `config_generation` → 改密码后复用旧连接。新增 `pg_close_connection_sessions`/`pg_close_query_session` 并接线到断开/保存配置/删除连接/关闭标签；键增配置代际（取 `into_options()` 而非打码的 `Debug`）。
+  - **P0-5 权限面板 SQL 注入（T26/T27）**：函数签名原样拼进 `GRANT ... ON FUNCTION`，而 GRANT 走 simple query protocol 可另起语句 → 管理角色任意 DDL。授权目标改为结构化 `PgObjectGrantScope` 传参，由 connector 渲染（标识符引用 + 签名白名单，拒绝分号/引号/注释）。
+  - **P0-6 进程内 SSH 桥死锁（T05）**：libssh2 每次通道读写持会话锁，阻塞模式下先开始的方向持锁到连接结束、另一方向永久饿死（此前所有 SSH 冒烟都走外部 `ssh -L` 子进程，掩盖了该路径）。改为会话非阻塞 + 双方向短持锁搬运；真库对照验证：旧实现 5s 内无任何数据回流，新实现完成 SSH 版本交换。
+  验证 — 真库：`pg_live_` 25/25（PG16.15，含新增会话保持/schema 切换两项）、新增 `ssh_tunnel_relays_both_directions`（旧实现失败/新实现通过）、MySQL 回归 2/2；workspace 全量通过（app 401、connectors 153、desktop 372、core 81、editor 231、storage 20）；`cargo fmt --all`、`cargo build -p fluxdb-desktop` 干净。
+  剩余（P1/P2，未本次处理）：SQLSTATE/constraint/position 诊断丢失、`Prefer/Disabled` TLS 分支走入强校验、30s 超时未读档案、任意查询结果全量入内存无行上限、数据/元数据每请求新拨连接无并发上限、`show_other_databases`/`show_system_schemas`/`tcp_keepalive`/`timezone` 仅存不执行、更新/删除未比对原始值、PG 代码仍用 `include!` 拼在 crate 根（设计 §3.4 要求真实 `mod`）。
 
 ## 5. 最终功能验收证据
 

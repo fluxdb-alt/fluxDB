@@ -83,6 +83,15 @@ fn is_pg_identifier_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
 }
 
+/// 「可加引号的对象名」校验：用于会被 `pg_quote_identifier` 双引号引用后下发的名字
+/// （schema 等）。引用后引号内不存在注入面，故允许中文/空格/大写等真实合法名字；
+/// 只拒绝 PG 标识符本身不接受的内容：空、NUL/控制字符、超过 63 字节（PG 会静默截断）。
+fn is_pg_quotable_object_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && !value.chars().any(|ch| ch == '\0' || ch.is_control())
+}
+
 /// 编码名校验：字母/数字/下划线（UTF8、SQL_ASCII、LATIN1 等）。
 fn is_pg_encoding_name(value: &str) -> bool {
     value
@@ -100,30 +109,38 @@ fn is_pg_locale_name(value: &str) -> bool {
 
 /// 删库：连接维护库执行。PG 天然拒绝删“当前打开的库”；这里额外保护维护库，
 /// 且不追加 `WITH (FORCE)` —— 有活动连接的删库按 PG 默认 RESTRICT 语义失败。
-/// 建 schema：在维护数据库的独立 autocommit 连接执行 `CREATE SCHEMA "name"`。
-/// schema 名按标识符引用（允许带引号内外层），默认不带 AUTHORIZATION，owner 为当前连接用户。
+/// 建 schema：在**目标数据库**的独立 autocommit 连接执行 `CREATE SCHEMA "name"`。
+///
+/// PG 的 schema 隶属于某个数据库，不是集群级对象：必须连到用户选中的那个库执行，
+/// 否则 schema 会落到维护库里（用户在目标库刷新永远看不到它）。`database` 为空时
+/// 才回退维护库。schema 名按标识符引用后下发，允许中文/空格/大写等需要引号的名字。
 fn pg_create_schema(
     config: &ConnectionConfig,
     _connection_id: ConnectionId,
+    database: &str,
     schema: &str,
 ) -> fluxdb_core::Result<()> {
     let schema = schema.trim();
     if schema.is_empty() {
         return Err(Error::new(ErrorKind::Query, "schema 名称不能为空"));
     }
-    if !is_pg_identifier_name(schema) {
+    if !is_pg_quotable_object_name(schema) {
         return Err(Error::new(ErrorKind::Query, "schema 名称不合法"));
     }
-    let database = pg_request_database(config, None);
+    let database = pg_request_database(config, Some(database));
     pg_runtime().block_on(async {
         let session = pg_connect(config, &database).await?;
         let sql = format!("CREATE SCHEMA {}", pg_quote_identifier(schema));
-        tracing::debug!(target: "fluxdb_connectors", "CREATE SCHEMA 执行");
+        tracing::debug!(
+            target: "fluxdb_connectors",
+            database = %database,
+            "CREATE SCHEMA 执行"
+        );
         session
             .client
             .batch_execute(&sql)
             .await
-            .map_err(|error| pg_error(error))
+            .map_err(pg_error)
     })
 }
 

@@ -20,7 +20,11 @@ pub trait Connector {
     fn create_database(&self, _: &CreateDatabaseRequest) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持新建数据库"))
     }
-    fn create_schema(&self, _: ConnectionId, _: &str) -> Result<()> {
+    /// 在指定数据库内新建 schema。
+    ///
+    /// `database` 是目标物理库（PG 的 schema 属于库而非集群）；为空表示由实现回退到
+    /// 连接的维护库。缺这个参数会把 schema 建到维护库而非用户右键的那个库。
+    fn create_schema(&self, _: ConnectionId, _database: &str, _: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持新建 schema"))
     }
     fn list_roles(&self, _: ConnectionId) -> Result<Vec<PgRole>> {
@@ -76,18 +80,27 @@ pub trait Connector {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持撤销成员关系"))
     }
     /// 对象授权：`GRANT <privilege> ON <object> TO <grantee> [WITH GRANT OPTION]`。
-    /// `privilege` 为权限关键字，`object_sql` 为 `ON` 后的对象片段，`grant_option` 决定可否再授权。
+    ///
+    /// 目标以结构化 `PgObjectGrantScope` 传入而非预渲染 SQL 片段：`ON` 后的对象片段由
+    /// connector 负责引用与校验（设计 §12），避免上层把用户输入（尤其函数签名）拼进
+    /// 特权 DDL。`privilege` 为权限关键字，`grant_option` 决定可否再授权。
     fn grant_object_privilege(
         &self,
         _: ConnectionId,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: bool,
+        _privilege: &str,
+        _scope: &PgObjectGrantScope,
+        _grantee: &str,
+        _grant_option: bool,
     ) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持对象授权"))
     }
-    fn revoke_object_privilege(&self, _: ConnectionId, _: &str, _: &str, _: &str) -> Result<()> {
+    fn revoke_object_privilege(
+        &self,
+        _: ConnectionId,
+        _privilege: &str,
+        _scope: &PgObjectGrantScope,
+        _grantee: &str,
+    ) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持对象撤销"))
     }
     /// 列成员关系（PG 全选项：admin/inherit/set，版本感知）。

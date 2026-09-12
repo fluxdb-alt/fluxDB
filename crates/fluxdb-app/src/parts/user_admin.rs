@@ -351,12 +351,11 @@ impl AppController {
             &admin.pg_grant_signature,
         );
         let connection_id = admin.connection_id;
-        let object_sql = pg_grant_object_sql(&scope);
         let config = self
             .connection_config(connection_id)
             .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
         role_operation_for_connection(&config, |connector| {
-            connector.grant_object_privilege(connection_id, privilege, &object_sql, &role, grant_option)
+            connector.grant_object_privilege(connection_id, privilege, &scope, &role, grant_option)
         })
     }
 
@@ -377,33 +376,19 @@ impl AppController {
             &admin.pg_grant_signature,
         );
         let connection_id = admin.connection_id;
-        let object_sql = pg_grant_object_sql(&scope);
         let config = self
             .connection_config(connection_id)
             .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
         role_operation_for_connection(&config, |connector| {
-            connector.revoke_object_privilege(connection_id, privilege, &object_sql, &role)
+            connector.revoke_object_privilege(connection_id, privilege, &scope, &role)
         })
     }
 }
 
 /// 把授权目标渲染为 GRANT/REVOKE 的 `ON <object>` 片段（PG 双引号、函数带签名）。
-pub fn pg_grant_object_sql(scope: &PgObjectGrantScope) -> String {
-    fn q(name: &str) -> String {
-        format!("\"{}\"", name.replace('"', "\"\""))
-    }
-    match scope {
-        PgObjectGrantScope::Database { database } => format!("DATABASE {}", q(database)),
-        PgObjectGrantScope::Schema { schema } => format!("SCHEMA {}", q(schema)),
-        PgObjectGrantScope::Relation { schema, name, kind } => {
-            let keyword = match kind {
-                PgRelationKind::Sequence => "SEQUENCE",
-                PgRelationKind::Table | PgRelationKind::View => "TABLE",
-            };
-            format!("{keyword} {}.{}", q(schema), q(name))
-        }
-        PgObjectGrantScope::Routine { schema, name, signature } => {
-            format!("FUNCTION {}.{}({})", q(schema), q(name), signature)
-        }
-    }
+///
+/// 渲染与校验的事实来源在连接器（`pg_object_scope_sql`，设计 §12 要求由 connector 负责
+/// 标识符引用与白名单）；此处仅转发，供预览/测试使用，避免两份不一致的渲染实现。
+pub fn pg_grant_object_sql(scope: &PgObjectGrantScope) -> fluxdb_core::Result<String> {
+    fluxdb_connectors::pg_object_scope_sql(scope)
 }

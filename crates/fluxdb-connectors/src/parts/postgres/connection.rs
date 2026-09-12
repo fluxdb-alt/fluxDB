@@ -7,8 +7,12 @@
 // - 显式查询会话（带 `session_id`）复用同一连接，会话内事务/状态跨查询保持；
 //   无 `session_id` 的请求走隔离短连接（每请求新建、用后即弃），保证互不串事务。
 
-/// 会话空闲淘汰 TTL：超过此时长的空闲会话被惰性回收（防只进不出）。
-const PG_SESSION_IDLE_TTL: Duration = Duration::from_secs(60);
+/// 会话空闲淘汰兜底 TTL：档案未配 `idle_ttl_secs` 时使用。
+///
+/// 取 30 分钟而非早期的 60 秒：查询会话可能持有用户显式事务/临时表/SET，秒级淘汰会
+/// 在用户毫无察觉时回滚未提交事务（设计 §8.3 禁止偷偷回滚）。正常回收靠显式关闭
+/// （关标签/断开/改配置/删连接，见 `pg_close_sessions_where`），TTL 只兜底异常路径。
+const PG_SESSION_IDLE_TTL: Duration = Duration::from_secs(1800);
 
 /// 会话用途：决定复用策略与事务隔离语义。
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -19,10 +23,14 @@ enum PgSessionPurpose {
     Transient,
 }
 
-/// 会话注册表键：连接身份 + 作用域 + 用途。
+/// 会话注册表键：连接身份 + 配置代际 + 作用域 + 用途。
+///
+/// `config_generation` 是连接档案有效内容的哈希：改主机/端口/账号/密码/TLS/SSH 后代际变化，
+/// 旧会话不再被命中（设计 §3.3），避免编辑配置后继续复用旧凭据的连接。
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct PgSessionKey {
     connection_id: ConnectionId,
+    config_generation: u64,
     database: Option<String>,
     schema: Option<String>,
     purpose: PgSessionPurpose,
@@ -39,7 +47,12 @@ struct PgSession {
     client: std::sync::Arc<tokio_postgres::Client>,
     /// SSH 隧道句柄（直连 / 代理路径为 None）。持有即保活。
     _tunnel: Option<std::sync::Arc<SshTunnel>>,
-    last_used: std::time::Instant,
+    /// 最近使用时刻。命中缓存时回写——否则一条持续在用的会话会在创建满 TTL 后被
+    /// 空闲淘汰，把用户未提交的事务悄悄回滚。
+    last_used: std::sync::Arc<Mutex<std::time::Instant>>,
+    /// 当前会话已生效的 schema 作用域（建连时 `SET search_path` 的结果）。
+    /// 会话被复用而请求 schema 变了时据此补发 SET，既不丢事务也能切作用域。
+    applied_schema: std::sync::Arc<Mutex<Option<String>>>,
 }
 
 /// 共享 runtime：全进程唯一，避免每个请求重建。
@@ -58,14 +71,24 @@ fn pg_sessions() -> &'static Mutex<HashMap<PgSessionKey, PgSession>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// 惰性淘汰空闲会话：取用前顺手清理躺太久/超上限的连接，避免只进不出。
-fn pg_sweep_idle(now: std::time::Instant) {
+/// 惰性淘汰空闲会话：取用前顺手清理躺太久的连接，避免只进不出。
+///
+/// 仅兜底异常路径（进程长期运行、UI 未走关闭链路）；正常回收走显式关闭。
+fn pg_sweep_idle(now: std::time::Instant, ttl: Duration) {
     let Ok(mut sessions) = pg_sessions().lock() else {
         return;
     };
-    let deadline = now - PG_SESSION_IDLE_TTL;
+    let Some(deadline) = now.checked_sub(ttl) else {
+        return;
+    };
     let idle_before = sessions.len();
-    sessions.retain(|_, session| session.last_used >= deadline);
+    sessions.retain(|_, session| {
+        session
+            .last_used
+            .lock()
+            .map(|last_used| *last_used >= deadline)
+            .unwrap_or(false)
+    });
     if sessions.len() != idle_before {
         tracing::debug!(
             target: "fluxdb_connectors",
@@ -73,6 +96,79 @@ fn pg_sweep_idle(now: std::time::Instant) {
             "PostgreSQL 空闲会话已淘汰"
         );
     }
+}
+
+/// 会话空闲 TTL：档案显式配了 `idle_ttl_secs` 就用它，否则用兜底常量。
+fn pg_session_idle_ttl(config: &ConnectionConfig) -> Duration {
+    config
+        .postgres_profile
+        .as_ref()
+        .map(|profile| profile.advanced.idle_ttl_secs)
+        .filter(|secs| *secs > 0)
+        .map(|secs| Duration::from_secs(u64::from(secs)))
+        .unwrap_or(PG_SESSION_IDLE_TTL)
+}
+
+/// 按谓词关闭并移除会话：`Client` 与 SSH 隧道随之 drop，连接 future 与桥线程收敛。
+/// 返回关闭数量。
+fn pg_close_sessions_where(predicate: impl Fn(&PgSessionKey) -> bool) -> usize {
+    let Ok(mut sessions) = pg_sessions().lock() else {
+        return 0;
+    };
+    let before = sessions.len();
+    sessions.retain(|key, _| !predicate(key));
+    before - sessions.len()
+}
+
+/// 关闭某连接的全部 PostgreSQL 会话（断开连接 / 编辑配置 / 删除连接时调用）。
+///
+/// 设计 §3.3：连接驱动、转发线程和子进程要在断开/编辑配置/删除连接时一起释放；
+/// 只靠空闲 TTL 会让连接与 SSH 桥线程在断开后继续挂着。
+pub fn pg_close_connection_sessions(connection_id: ConnectionId) -> usize {
+    let closed = pg_close_sessions_where(|key| key.connection_id == connection_id);
+    if closed > 0 {
+        tracing::info!(
+            target: "fluxdb_connectors",
+            connection_id = ?connection_id,
+            closed,
+            "PostgreSQL 会话已随连接释放"
+        );
+    }
+    closed
+}
+
+/// 关闭单个查询会话（关闭查询标签页时调用）：未提交事务随连接释放由服务端回滚。
+pub fn pg_close_query_session(connection_id: ConnectionId, session_id: QuerySessionId) -> usize {
+    pg_close_sessions_where(|key| {
+        key.connection_id == connection_id
+            && key.purpose == PgSessionPurpose::Query(session_id)
+    })
+}
+
+/// 连接档案有效内容的代际哈希：主机/端口/库/账号/密码/TLS/SSH/代理/超时任一变化即变化。
+///
+/// 用 `into_options()`（含解析后的密码等敏感值）而非 `Debug`——`SecretRef` 的 Debug 是打码的，
+/// 拿它算哈希会让「只改密码」看起来毫无变化，从而继续复用旧连接。哈希值不回显、不落日志。
+fn pg_config_generation(config: &ConnectionConfig) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    match config.postgres_profile.as_ref() {
+        Some(profile) => {
+            for (key, value) in profile.into_options() {
+                key.hash(&mut hasher);
+                value.hash(&mut hasher);
+            }
+        }
+        // 无结构化档案（历史连接）：退回扁平参数，仍能反映配置变更。
+        None => {
+            for (key, value) in &config.options {
+                key.hash(&mut hasher);
+                value.hash(&mut hasher);
+            }
+        }
+    }
+    config.credential_ref.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// 从连接档案构建 `tokio_postgres::Config`。
@@ -140,7 +236,8 @@ async fn pg_connect(config: &ConnectionConfig, database: &str) -> fluxdb_core::R
         .as_ref()
         .ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 连接档案缺失"))?;
     let pg = pg_config(config, database)?;
-    let default_schema = profile.scope.default_schema.clone();
+    // 建连先落档案默认 schema（空则保留服务器 search_path）；请求级 schema 由会话层按需补 SET。
+    let wanted_schema = profile.scope.default_schema.clone();
     let connect_timeout = profile.connect_timeout();
 
     let (client, tunnel) = tokio::time::timeout(connect_timeout, pg_connect_transport(profile, pg))
@@ -149,30 +246,40 @@ async fn pg_connect(config: &ConnectionConfig, database: &str) -> fluxdb_core::R
             Error::new(ErrorKind::Timeout, "PostgreSQL 建连超时（含传输与 TLS 握手）")
         })??;
 
-    if !default_schema.is_empty() {
-        // SET 是 utility 语句，不接受 $n 参数（服务端会报 syntax error at or near "$1"），
-        // 故按标识符转义后拼装；schema 名一律经 pg_quote_identifier 处理，不裸拼用户输入。
-        // 支持逗号分隔的 schema 顺序（如 `a,public`），逐段转义后按序设置。
-        let path = default_schema
-            .split(',')
-            .map(str::trim)
-            .filter(|schema| !schema.is_empty())
-            .map(pg_quote_identifier)
-            .collect::<Vec<_>>()
-            .join(", ");
-        if !path.is_empty() {
-            client
-                .batch_execute(&format!("SET search_path TO {path}"))
-                .await
-                .map_err(pg_error)?;
-        }
-    }
+    let applied_schema = pg_apply_search_path(&client, &wanted_schema).await?;
 
     Ok(PgSession {
         client: std::sync::Arc::new(client),
         _tunnel: tunnel.map(std::sync::Arc::new),
-        last_used: std::time::Instant::now(),
+        last_used: std::sync::Arc::new(Mutex::new(std::time::Instant::now())),
+        applied_schema: std::sync::Arc::new(Mutex::new(applied_schema)),
     })
+}
+
+/// 按需设置会话 search_path，返回实际生效的 schema 串（None = 未设置，保留服务器默认）。
+///
+/// SET 是 utility 语句，不接受 `$n` 参数（服务端会报 syntax error at or near "$1"），
+/// 故按标识符转义后拼装；schema 名一律经 `pg_quote_identifier`，不裸拼用户输入。
+/// 支持逗号分隔的多段顺序（如 `a,public`）。
+async fn pg_apply_search_path(
+    client: &tokio_postgres::Client,
+    schema: &str,
+) -> fluxdb_core::Result<Option<String>> {
+    let path = schema
+        .split(',')
+        .map(str::trim)
+        .filter(|schema| !schema.is_empty())
+        .map(pg_quote_identifier)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if path.is_empty() {
+        return Ok(None);
+    }
+    client
+        .batch_execute(&format!("SET search_path TO {path}"))
+        .await
+        .map_err(pg_error)?;
+    Ok(Some(schema.to_string()))
 }
 
 /// 按传输层建连并 spawn 连接 future，返回 `Client` 与隧道句柄。
@@ -283,6 +390,9 @@ fn pg_ssh_auth(ssh: &fluxdb_core::PostgresSshOptions) -> SshAuthParams {
 /// 获取本次请求的会话键：
 /// - 携带 `session_id` → 显式查询会话（复用连接，事务跨查询）；键含 session_id 确保互不串事务；
 /// - 无 `session_id` → 隔离短暂（每请求新建连接）。
+///
+/// 键不含 schema（设计 §3.3）：切换 schema 作用域不应丢掉会话里的事务，改由
+/// `pg_ensure_search_path` 在复用到的连接上补发 SET。
 fn pg_session_key_for(request: &QueryRequest, database: &str) -> PgSessionKey {
     let purpose = match request.session_id {
         Some(session_id) => PgSessionPurpose::Query(session_id),
@@ -290,8 +400,9 @@ fn pg_session_key_for(request: &QueryRequest, database: &str) -> PgSessionKey {
     };
     PgSessionKey {
         connection_id: request.connection_id,
+        config_generation: 0, // 由 pg_session_acquire 按连接档案填真实代际
         database: Some(database.to_string()),
-        schema: request.schema.clone(),
+        schema: None,
         purpose,
     }
 }
@@ -305,27 +416,43 @@ async fn pg_session_acquire(
     request: &QueryRequest,
     database: &str,
 ) -> fluxdb_core::Result<PgSession> {
-    let key = pg_session_key_for(request, database);
-    let is_transient = matches!(key.purpose, PgSessionPurpose::Transient);
+    let mut key = pg_session_key_for(request, database);
+    // 作用域 schema：建连时优先带它（首次拨号即落在正确 search_path）。
+    let schema = request
+        .schema
+        .clone()
+        .map(|schema| schema.trim().to_string())
+        .filter(|schema| !schema.is_empty());
 
-    if is_transient {
+    if matches!(key.purpose, PgSessionPurpose::Transient) {
         // 隔离执行：新拨一条，不进入注册表，天然互不串事务。
-        return pg_connect(config, database).await;
+        let session = pg_connect(config, database).await?;
+        pg_ensure_search_path(&session, schema.as_deref()).await?;
+        return Ok(session);
     }
 
-    // 惰性清除全局空闲会话（轻量，约 60s 一次）。
-    let now = std::time::Instant::now();
-    pg_sweep_idle(now);
+    key.config_generation = pg_config_generation(config);
 
-    {
+    // 惰性清除全局空闲会话（只兜底异常路径）。
+    let now = std::time::Instant::now();
+    pg_sweep_idle(now, pg_session_idle_ttl(config));
+
+    let existing = {
         let sessions = pg_sessions().lock().map_err(pg_lock_error)?;
-        if let Some(session) = sessions.get(&key) {
-            return Ok(session.clone());
+        sessions.get(&key).cloned()
+    };
+    if let Some(session) = existing {
+        // 命中即回写活跃时间，避免在用的会话被空闲淘汰回滚未提交事务。
+        if let Ok(mut last_used) = session.last_used.lock() {
+            *last_used = now;
         }
+        pg_ensure_search_path(&session, schema.as_deref()).await?;
+        return Ok(session);
     }
 
     // 未命中：在锁外拨号，避免持 std Mutex 跨 await；随后回填。
     let session = pg_connect(config, database).await?;
+    pg_ensure_search_path(&session, schema.as_deref()).await?;
     let mut sessions = pg_sessions().lock().map_err(pg_lock_error)?;
     match sessions.get(&key) {
         // 并发竞态：期间他人已插入可用会话，优先复用他人。
@@ -335,6 +462,32 @@ async fn pg_session_acquire(
             Ok(session)
         }
     }
+}
+
+/// 复用到的会话若 schema 作用域与本次请求不一致，则在**同一连接**上补发 SET search_path。
+///
+/// 这样切换 schema 不会重建连接（保住事务/临时表），也不会让新请求继续用旧 search_path。
+/// 请求未指定 schema（None）时保持会话既有作用域，不擅自改回服务器默认。
+async fn pg_ensure_search_path(
+    session: &PgSession,
+    schema: Option<&str>,
+) -> fluxdb_core::Result<()> {
+    let Some(schema) = schema else {
+        return Ok(());
+    };
+    let already = session
+        .applied_schema
+        .lock()
+        .map(|applied| applied.as_deref() == Some(schema))
+        .unwrap_or(false);
+    if already {
+        return Ok(());
+    }
+    let applied = pg_apply_search_path(&session.client, schema).await?;
+    if let Ok(mut slot) = session.applied_schema.lock() {
+        *slot = applied;
+    }
+    Ok(())
 }
 
 fn pg_lock_error(
