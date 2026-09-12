@@ -12,9 +12,9 @@ use fluxdb_connectors::{
 pub use fluxdb_connectors::{
     PgDumpInvocation, PgDumpScope, PgPsqlInvocation, PubSubMessage, PubSubPollOutcome,
     PubSubPublishResult, PubSubSubscriptionEvent, RedisAddKeyKind, RedisAddKeyRequest,
-    RedisListDirection, RedisPubSubSession, pg_dump_invocation, pg_dump_version_compatible,
-    pg_psql_invocation, pg_script_needs_native_mode, pg_server_major_version, pg_sslmode_value,
-    pg_tool_major_version,
+    RedisListDirection, RedisPubSubSession, SshTunnelAuth, SshTunnelInvocation, pg_dump_invocation,
+    pg_dump_version_compatible, pg_hostaddr_env, pg_psql_invocation, pg_script_needs_native_mode,
+    pg_server_major_version, pg_ssh_tunnel_invocation, pg_sslmode_value, pg_tool_major_version,
 };
 use fluxdb_core::{
     AppliedChangeOutcome, BinaryCellSummary, BinaryPreviewResponse, BinaryUpdatePayload,

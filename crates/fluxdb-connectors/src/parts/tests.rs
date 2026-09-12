@@ -5750,3 +5750,45 @@ SELECT item_id, name FROM audit_log;"
         connector.execute(&cleanup).expect("清理临时 schema 应成功");
     }
 }
+
+    /// SSH 隧道调用构造：-N -L local:target -p port [-i key] user@host；密码认证不落 argv。
+    #[test]
+    fn pg_ssh_tunnel_invocation_builds_forward_and_key_auth() {
+        let key = pg_ssh_tunnel_invocation(
+            "jump.example.com",
+            22,
+            "deploy",
+            &SshTunnelAuth::Key {
+                private_key_path: "/home/u/.ssh/id_ed25519".to_string(),
+            },
+            "db.internal",
+            5432,
+            41000,
+            30,
+        );
+        assert_eq!(key.program, "ssh");
+        assert!(key.args.contains(&"-N".to_string()));
+        // -L 映射 local:target:port；工具改用 127.0.0.1:local_port。
+        assert!(key.args.windows(2).any(|w| w[0] == "-L" && w[1] == "41000:db.internal:5432"));
+        assert!(key.args.windows(2).any(|w| w[0] == "-p" && w[1] == "22"));
+        assert!(key.args.windows(2).any(|w| w[0] == "-i" && w[1] == "/home/u/.ssh/id_ed25519"));
+        assert!(key.args.contains(&"deploy@jump.example.com".to_string()));
+        assert_eq!(key.local_port, 41000);
+        assert!(key.env.is_empty(), "私钥认证不应注入 env");
+
+        // 密码认证：BatchMode=no（由 sshpass 喂 SSHPASS），密码绝不进 argv。
+        let pw = pg_ssh_tunnel_invocation(
+            "j", 22, "u", &SshTunnelAuth::Password, "db", 5432, 41001, 0,
+        );
+        assert!(pw.args.contains(&"BatchMode=no".to_string()));
+        assert!(!pw.args.iter().any(|a| a.contains("passwor") || a.contains("secret")));
+        assert!(!pw.args.iter().any(|a| a.starts_with("ServerAliveInterval")), "keepalive=0 不注入");
+    }
+
+    /// SSH 隧道：libpq host/hostaddr 分离（PGHOSTADDR 拨号 + -h 保持 TLS 主机名）。
+    #[test]
+    fn pg_hostaddr_env_separates_dial_address_from_tls_name() {
+        let env = pg_hostaddr_env("127.0.0.1", 15432);
+        assert!(env.iter().any(|(k, v)| k == "PGHOSTADDR" && v == "127.0.0.1"));
+        assert!(env.iter().any(|(k, v)| k == "PGPORT" && v == "15432"));
+    }

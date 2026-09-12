@@ -329,3 +329,90 @@ pub fn pg_server_major_version(config: &ConnectionConfig) -> fluxdb_core::Result
         Ok(pg_tool_major_version(&version))
     })
 }
+
+/// SSH 隧道子进程调用参数：把远端 `host:port` 经 `ssh -L local:host:port` 映射到本地端口，
+/// 供 psql/pg_dump 等原生工具在 SSH 下连接（工具看到的是 `127.0.0.1:local_port`）。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SshTunnelInvocation {
+    /// `ssh` 可执行文件。
+    pub program: String,
+    /// argv（不含可执行文件）。
+    pub args: Vec<String>,
+    /// 需注入的环境变量（如 SSHPASS 由调用方经 sshpass 传入；本构造不直接放密码）。
+    pub env: Vec<(String, String)>,
+    /// 本地监听端口（远端映射到这个端口，供 psql/pg_dump 连接）。
+    pub local_port: u16,
+}
+
+/// SSH 认证方式（构建 `ssh` 参数用）。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SshTunnelAuth {
+    /// 公钥认证：`ssh -i <keyfile>`。
+    Key { private_key_path: String },
+    /// 密码认证：需外部 sshpass 注入 SSHPASS（`ssh` 自身不接受明文密码 argv）。
+    Password,
+    /// 无认证（依赖 ssh-agent / 默认密钥）。
+    Agent,
+}
+
+/// 构造 `ssh -N -L local:target -p port [-i key] user@jump` 隧道调用（不经 shell）。
+///
+/// `local_port` 由调用方（选择一个空闲端口）决定；工具改用 `127.0.0.1:local_port` 连接。
+/// 密码认证不在此注入密码（ssh 不支持 argv 密码），由调用方经 sshpass+SSHPASS 环境变量处理，
+/// 本函数仅标记需要密码认证（返回 `Password` 时调用方须自行注入）。保持通道至子进程结束由
+/// 调用方负责（子进程存活期间不 kill）。
+#[allow(clippy::too_many_arguments)]
+pub fn pg_ssh_tunnel_invocation(
+    ssh_host: &str,
+    ssh_port: u16,
+    ssh_user: &str,
+    auth: &SshTunnelAuth,
+    target_host: &str,
+    target_port: u16,
+    local_port: u16,
+    keepalive_interval_secs: u32,
+) -> SshTunnelInvocation {
+    let mut args = vec![
+        "-N".to_string(),
+        "-L".to_string(),
+        format!("{local_port}:{target_host}:{target_port}"),
+        "-p".to_string(),
+        ssh_port.to_string(),
+        // 非交互：失败即退，避免等待输入卡住；已知主机首次接受（与项目 SSH 既有策略一致）。
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "StrictHostKeyChecking=accept-new".to_string(),
+    ];
+    if keepalive_interval_secs > 0 {
+        args.push("-o".to_string());
+        args.push(format!("ServerAliveInterval={keepalive_interval_secs}"));
+    }
+    if let SshTunnelAuth::Key { private_key_path } = auth {
+        args.push("-i".to_string());
+        args.push(private_key_path.clone());
+    }
+    if matches!(auth, SshTunnelAuth::Password) {
+        // 密码认证需 sshpass；在此关闭 BatchMode 让 ssh 允许密码（由 sshpass 喂入）。
+        // 注：password 经 SSHPASS 环境变量，不落 argv。
+        if let Some(index) = args.iter().position(|a| a == "BatchMode=yes") {
+            args[index] = "BatchMode=no".to_string();
+        }
+    }
+    args.push(format!("{ssh_user}@{ssh_host}"));
+    SshTunnelInvocation {
+        program: "ssh".to_string(),
+        args,
+        env: Vec::new(),
+        local_port,
+    }
+}
+
+/// SSH/隧道场景的 libpq 拨号地址分离：`PGHOSTADDR` 指定实际拨号地址（隧道本地 127.0.0.1），
+/// 而 `-h`/`host` 仍为真实远端主机名供 TLS 校验（设计 §11.3：host/hostaddr 分别保持证书身份与拨号地址）。
+pub fn pg_hostaddr_env(hostaddr: &str, port: u16) -> Vec<(String, String)> {
+    vec![
+        ("PGHOSTADDR".to_string(), hostaddr.to_string()),
+        ("PGPORT".to_string(), port.to_string()),
+    ]
+}
