@@ -5436,6 +5436,56 @@ SELECT item_id, name FROM audit_log;"
         connector.execute(&cleanup).expect("清理临时结构应成功");
     }
 
+    /// T13 真实 CancelToken：`SELECT pg_sleep(120)` 长查询在用户取消时应立即停止
+    /// （无需等 30s 硬超时），回到 promptly 且标记「已取消/结果待核实」，不误报成功。
+    #[test]
+    fn pg_live_smoke_cancel_token_stops_long_query_promptly() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG 取消冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+
+        let mut req = pg_query_request(&config, None);
+        req.text = "SELECT pg_sleep(120);".to_string();
+        let start = std::time::Instant::now();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let mut result = QueryExecutionResult {
+            summaries: Vec::new(),
+            results: Vec::new(),
+            rollback_snapshots: Vec::new(),
+        };
+        // 语句跑起来约 1.2s 后触发取消（模拟用户在长查询期间点「停止」）。
+        let err = pg_execute_query_with_progress(
+            &config,
+            &req,
+            &mut |s| result.summaries.push(s),
+            &|| {
+                flag.store(start.elapsed() > std::time::Duration::from_millis(1200), std::sync::atomic::Ordering::Relaxed);
+                flag.load(std::sync::atomic::Ordering::Relaxed)
+            },
+        )
+        .err();
+        let _ = cancelled;
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "真实取消应 <10s 返回（远早于 30s 硬超时）：{elapsed:?}"
+        );
+        assert!(
+            err.is_none(),
+            "取消应作为语句级结果（Cancelled）返回而非整体抛错：{err:?}"
+        );
+        assert!(!result.summaries.is_empty(), "应有取消摘要");
+        assert!(
+            result.summaries.iter().any(|s| !s.success && s.message.contains("结果待核实"))
+                || result.summaries.iter().any(|s| s.message.contains("已取消")),
+            "应标记「已取消/结果待核实」：{:#?}",
+            result.summaries
+        );
+    }
+
     #[test]
     fn pg_live_smoke_empty_result_retains_columns() {
         let Some(params) = pg_smoke_params() else {
