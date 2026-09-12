@@ -68,6 +68,19 @@
 | E2 | MySQL 建表/建库/查询/补全 | 与接入 PG 前行为一致（反引号、AUTO_INCREMENT 等） |
 | E3 | 对象树 MySQL 层级 | 仍为 连接→库→分组，无 schema 行 |
 
+## F. PG 原生备份与原生脚本（T24/T25，需主机有 psql/pg_dump/pg_restore）
+
+> 后端子进程逻辑与 argv 已用容器内 psql/pg_dump 验证（PG16.15）；桌面端真实工具调用链
+> 需主机带工具后人工确认。设置里可配 pg_dump 路径（设置 → 数据 → pg_dump 路径）。
+
+| # | 操作步骤 | 预期结果 |
+|---|---|---|
+| F1 | PG 连接 → 备份 tab → 原生备份 | pg_dump 生成 .sql（plain+inserts）；进度、取消正常；密码不明文出现 |
+| F2 | 用 psql 把备份恢复到干净隔离库 | 表/行/视图/索引/序列/函数齐全；序列位置正确；新增 identity 行不冲突 |
+| F3 | 执行含 COPY FROM STDIN 的 SQL 文件 | 自动识别原生模式走 psql；COPY 数据正确落入；分号不误拆 |
+| F4 | 原生脚本中途失败 | ON_ERROR_STOP 停止并提示失败；勾选「继续错误」则跳过继续 |
+| F5 | 主机无 psql/pg_dump | 启动报「启动 psql/pg_dump 失败」清晰错误，不假成功 |
+
 ---
 
 ## 结果记录
