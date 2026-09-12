@@ -84,6 +84,8 @@ impl NavicatMain {
             include_schema: true,
             include_data: true,
             note: String::new(),
+            pg_include_owner: false,
+            pg_include_acl: false,
         });
         self.backup_log_task = None;
         self.backup_file_name_input
@@ -541,6 +543,23 @@ fn run_backup(
                     .as_ref()
                     .map(|profile| profile.tls.ssl_mode)
                     .unwrap_or(PostgresSslMode::Prefer);
+                // 版本校验：pg_dump 客户端主版本不得低于服务端主版本（PG 禁止更旧客户端备份）。
+                // 工具版本从 `pg_dump --version` 解析；服务端版本经连接器读取；任一未知则放行（不误拦）。
+                let tool = if !settings.pg_dump_path.trim().is_empty() {
+                    settings.pg_dump_path.clone()
+                } else {
+                    "pg_dump".to_string()
+                };
+                let tool_major = pg_dump_tool_major(&tool);
+                let server_major = fluxdb_app::pg_server_major_version(&config).ok().flatten();
+                if !fluxdb_app::pg_dump_version_compatible(tool_major, server_major) {
+                    anyhow::bail!(
+                        "pg_dump 版本过旧：客户端主版本 {} 低于服务端主版本 {}，\
+                         请在设置中配置与服务端匹配（或不低于服务端）的 pg_dump 路径",
+                        tool_major.unwrap_or(0),
+                        server_major.unwrap_or(0)
+                    );
+                }
                 run_native_pg_dump(
                     &settings,
                     &host,
@@ -928,36 +947,32 @@ fn run_native_pg_dump(
         anyhow::bail!("PostgreSQL 连接缺少主机信息");
     }
 
-    let mut cmd = Command::new(tool);
-    cmd.args([
-        "--no-owner",
-        "--no-acl",
-        "--format=plain",
-        "--inserts",
-        "-h",
+    // 备份范围：结构/数据/完整（复用表单 include_schema/include_data）。
+    let scope = match (form.include_schema, form.include_data) {
+        (true, false) => fluxdb_app::PgDumpScope::SchemaOnly,
+        (false, true) => fluxdb_app::PgDumpScope::DataOnly,
+        _ => fluxdb_app::PgDumpScope::Full,
+    };
+    let tables: Vec<String> = form.selected_tables.iter().cloned().collect();
+    // 参数与凭据/传输由连接器统一构造（可单测）；密码/TLS 只入 env，argv 无凭据、无 shell。
+    let invocation = fluxdb_app::pg_dump_invocation(
+        tool,
         host,
-        "-p",
-        &port.to_string(),
-        "-U",
+        port,
         user,
-        "-d",
         database,
-    ]);
-    // 沿档案 TLS 模式（sslmode）——pg_dump 经 PGSSLMODE 环境变量（无 --sslmode CLI 开关且不进 argv）；
-    // Prefer（默认）省略。
-    if let Some(mode) = fluxdb_app::pg_sslmode_value(ssl_mode) {
-        cmd.env("PGSSLMODE", mode);
+        Some(password),
+        ssl_mode,
+        scope,
+        form.pg_include_owner,
+        form.pg_include_acl,
+        &tables,
+    );
+    let mut cmd = Command::new(&invocation.program);
+    cmd.args(&invocation.args);
+    for (key, value) in &invocation.env {
+        cmd.env(key, value);
     }
-    // 表过滤：选中表非空时按表导出（schema.table 原样透传），空集合 = 整库。
-    if !form.selected_tables.is_empty() {
-        for table in form.selected_tables.iter() {
-            cmd.arg("-t").arg(table);
-        }
-    } else {
-        // 整库备份也把视图/序列/函数等全部对象覆盖（pg_dump 默认即全对象）。
-    }
-    // 密码只走环境变量，避免出现在进程参数列表。
-    cmd.env("PGPASSWORD", password);
 
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -1278,4 +1293,14 @@ fn backup_statusbar_area(
                         .child(label),
                 ),
         )
+}
+
+/// 运行 `<tool> --version` 并解析 pg_dump 客户端主版本号；失败/无法解析返回 None（不误拦）。
+fn pg_dump_tool_major(tool: &str) -> Option<u32> {
+    let output = Command::new(tool).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    fluxdb_app::pg_tool_major_version(&text)
 }

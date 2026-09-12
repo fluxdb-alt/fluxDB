@@ -51,6 +51,20 @@ impl NavicatMain {
         }
     }
 
+    fn set_backup_pg_include_owner(&mut self, value: bool, cx: &mut Context<Self>) {
+        if let Some(form) = &mut self.pending_backup_modal {
+            form.pg_include_owner = value;
+            cx.notify();
+        }
+    }
+
+    fn set_backup_pg_include_acl(&mut self, value: bool, cx: &mut Context<Self>) {
+        if let Some(form) = &mut self.pending_backup_modal {
+            form.pg_include_acl = value;
+            cx.notify();
+        }
+    }
+
     /// 对象选择：勾选/取消勾选一张表（空集合 = 全选，勾选后精确到表）。
     fn toggle_backup_table(&mut self, name: &str, cx: &mut Context<Self>) {
         if let Some(form) = &mut self.pending_backup_modal {
@@ -806,6 +820,22 @@ fn database_backup_advanced_body(
             colors,
             cx,
         ))
+        .child(database_backup_checkbox_row(
+            "backup-pg-owner",
+            "包含属主 OWNER（PG 原生）",
+            form.pg_include_owner,
+            BackupCheckboxField::PgIncludeOwner,
+            colors,
+            cx,
+        ))
+        .child(database_backup_checkbox_row(
+            "backup-pg-acl",
+            "包含 ACL 权限（PG 原生）",
+            form.pg_include_acl,
+            BackupCheckboxField::PgIncludeAcl,
+            colors,
+            cx,
+        ))
         .child(div().flex_1())
         .child(
             div()
@@ -828,6 +858,10 @@ enum BackupCheckboxField {
     IncludeRoutines,
     IncludeSchema,
     IncludeData,
+    /// 仅 PG 原生 pg_dump：导出属主（OWNER）。
+    PgIncludeOwner,
+    /// 仅 PG 原生 pg_dump：导出 ACL 权限。
+    PgIncludeAcl,
 }
 
 fn database_backup_checkbox_row(
@@ -867,6 +901,12 @@ fn database_backup_checkbox_row(
                                 this.set_backup_include_schema(value, cx)
                             }
                             BackupCheckboxField::IncludeData => this.set_backup_include_data(value, cx),
+                            BackupCheckboxField::PgIncludeOwner => {
+                                this.set_backup_pg_include_owner(value, cx)
+                            }
+                            BackupCheckboxField::PgIncludeAcl => {
+                                this.set_backup_pg_include_acl(value, cx)
+                            }
                         }
                     });
                 }),

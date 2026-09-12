@@ -3655,6 +3655,74 @@ SELECT item_id, name FROM audit_log;"
         assert_eq!(pg_sslmode_value(S::Prefer), None);
     }
 
+    /// pg_dump 调用参数：默认 plain+inserts+no-owner+no-acl；owner/acl 勾选才保留；
+    /// 结构/数据范围；表过滤；密码与 sslmode 只入 env 不入 argv。
+    #[test]
+    fn pg_dump_invocation_builds_scope_owner_acl_and_keeps_secrets_in_env() {
+        use fluxdb_core::PostgresSslMode;
+        let iv = pg_dump_invocation(
+            "pg_dump",
+            "h",
+            5432,
+            "u",
+            "db",
+            Some("secret"),
+            PostgresSslMode::Require,
+            PgDumpScope::Full,
+            false,
+            false,
+            &[],
+        );
+        assert!(iv.args.contains(&"--format=plain".to_string()));
+        assert!(iv.args.contains(&"--inserts".to_string()));
+        assert!(iv.args.contains(&"--no-owner".to_string()));
+        assert!(iv.args.contains(&"--no-acl".to_string()));
+        assert!(!iv.args.iter().any(|a| a.contains("secret")), "密码不得入 argv");
+        assert!(!iv.args.iter().any(|a| a.contains("sslmode")), "sslmode 不得入 argv");
+        assert!(iv.env.iter().any(|(k, v)| k == "PGPASSWORD" && v == "secret"));
+        assert!(iv.env.iter().any(|(k, v)| k == "PGSSLMODE" && v == "require"));
+
+        // 勾选 owner/acl：不再追加 --no-owner/--no-acl。
+        let with_owner = pg_dump_invocation(
+            "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::Prefer,
+            PgDumpScope::Full, true, true, &[],
+        );
+        assert!(!with_owner.args.contains(&"--no-owner".to_string()));
+        assert!(!with_owner.args.contains(&"--no-acl".to_string()));
+
+        // 结构/数据范围。
+        let schema_only = pg_dump_invocation(
+            "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::Prefer,
+            PgDumpScope::SchemaOnly, false, false, &[],
+        );
+        assert!(schema_only.args.contains(&"--schema-only".to_string()));
+        let data_only = pg_dump_invocation(
+            "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::Prefer,
+            PgDumpScope::DataOnly, false, false, &[],
+        );
+        assert!(data_only.args.contains(&"--data-only".to_string()));
+
+        // 表过滤：按 -t schema.table 透传。
+        let tables = pg_dump_invocation(
+            "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::Prefer,
+            PgDumpScope::Full, false, false, &["public.t".to_string(), "s.q".to_string()],
+        );
+        assert!(tables.args.windows(2).any(|w| w[0] == "-t" && w[1] == "public.t"));
+        assert!(tables.args.windows(2).any(|w| w[0] == "-t" && w[1] == "s.q"));
+    }
+
+    /// pg_dump 版本兼容：客户端主版本不得低于服务器主版本；未知则放行。
+    #[test]
+    fn pg_dump_version_compatibility_and_parsing() {
+        assert_eq!(pg_tool_major_version("pg_dump (PostgreSQL) 16.15"), Some(16));
+        assert_eq!(pg_tool_major_version("pg_dump (PostgreSQL) 14.11"), Some(14));
+        assert!(pg_dump_version_compatible(Some(16), Some(16)));
+        assert!(pg_dump_version_compatible(Some(17), Some(14)));
+        assert!(!pg_dump_version_compatible(Some(14), Some(16)));
+        assert!(pg_dump_version_compatible(None, Some(16)));
+        assert!(pg_dump_version_compatible(Some(14), None));
+    }
+
     /// 真实 PG：对象权限读取（aclexplode）+ 授权/撤销往返。
     #[test]
     fn pg_live_smoke_relation_grants_roundtrip() {

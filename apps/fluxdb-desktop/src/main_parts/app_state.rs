@@ -1372,6 +1372,10 @@ struct BackupForm {
     include_data: bool,
     /// 常规：备注（可空）。备份成功后随表清单写入 {文件}.meta.json。
     note: String,
+    /// 高级（仅 PostgreSQL 原生 pg_dump）：导出属主（OWNER）；默认 false 传 `--no-owner`。
+    pg_include_owner: bool,
+    /// 高级（仅 PostgreSQL 原生 pg_dump）：导出 ACL 权限；默认 false 传 `--no-acl`。
+    pg_include_acl: bool,
 }
 
 /// 备份文件的旁挂元数据（{备份文件}.meta.json）：记录表清单与备注。

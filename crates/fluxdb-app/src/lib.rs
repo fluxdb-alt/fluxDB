@@ -10,9 +10,11 @@ use fluxdb_connectors::{
 };
 // 对外再导出建 Key 相关的连接器类型，供桌面端（fluxdb-desktop）匹配/构造 AppCommand 使用。
 pub use fluxdb_connectors::{
-    PgPsqlInvocation, PubSubMessage, PubSubPollOutcome, PubSubPublishResult,
-    PubSubSubscriptionEvent, RedisAddKeyKind, RedisAddKeyRequest, RedisListDirection,
-    RedisPubSubSession, pg_psql_invocation, pg_script_needs_native_mode, pg_sslmode_value,
+    PgDumpInvocation, PgDumpScope, PgPsqlInvocation, PubSubMessage, PubSubPollOutcome,
+    PubSubPublishResult, PubSubSubscriptionEvent, RedisAddKeyKind, RedisAddKeyRequest,
+    RedisListDirection, RedisPubSubSession, pg_dump_invocation, pg_dump_version_compatible,
+    pg_psql_invocation, pg_script_needs_native_mode, pg_server_major_version, pg_sslmode_value,
+    pg_tool_major_version,
 };
 use fluxdb_core::{
     AppliedChangeOutcome, BinaryCellSummary, BinaryPreviewResponse, BinaryUpdatePayload,
