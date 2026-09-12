@@ -71,7 +71,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 进行中（增量一/二：原生检测+psql 参数+桌面接入）/ FluxDB |
 | T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一：PG 原生 pg_dump + 真库恢复验证）/ FluxDB |
 | T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 进行中（增量一~四：对象权限 + 敏感隔离 + ACL 语义/有效权限；T27 UI 待续）/ FluxDB |
-| T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 未开始 / — |
+| T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 未开始（方案已定：独立 PG 角色管理，非 MySQL provider 打补丁）/ FluxDB |
 | T28 | 全矩阵联调、MySQL 回归与交付审查 | T01–T27 | 未开始 / — |
 
 ## 4. 可执行任务
@@ -506,6 +506,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 - **交付位置**：user_admin/、user_admin_privileges、现有用户管理入口与菜单能力。
 - **验收**：无需手写 SQL 完成 F18；直接与继承权限区别明确；成员与 grant option 不混淆；无权限有理由；切用户不覆盖旧草稿；明暗主题、Esc/外点/组件/键盘；MySQL 全套用户页面回归。
 - **完成记录**：未开始；执行人 —；内容/验证 —。
+  **范围决策（2026-09-12，下一步实施依据）**：现有 `DatabaseUserAdminProvider`/desktop user_admin 是 MySQL 外形（user@host、SHOW GRANTS 文本解析、auth_plugin、每小时资源限制），把 PG role 塞进该 provider 会产生**误导性 UI**（host/plugin 空列、MySQL 资源限制、无法表达成员/对象 ACL）。因此 T27 **不应**通过给现有 provider 加 Postgres branch 实现，而应做独立 PG 角色管理接口，复用 T26 已就绪的数据源：`PgRole`（list/create/alter-password/rename/drop/options）、`list_role_membership`（admin_option）、`list_object_grants`（owner/默认/直接/PUBLIC/is_owner）、`role_effective_grants`（direct vs 继承/PUBLIC/owner）、`grant/revoke_role_membership`、`grant/revoke_object_privilege`。实现单元：core 新增 PG 角色领域（或独立 PG provider）+ app 路由（已有 role_operation_for_connection + AppCommand 可扩展）+ desktop 独立 PG user/role 页面（复用布局但按 dialect 切换）。MySQL user_admin 全套保回归。
 
 ### T28 — 全量对齐与交付审查
 
