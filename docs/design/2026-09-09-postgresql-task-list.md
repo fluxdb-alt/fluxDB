@@ -68,8 +68,8 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T21 | 数据/查询/详情与历史 UI 接入 | T10–T16、T20 | 实现完成，待人工验收 / FluxDB |
 | T22 | 新建/设计表及危险操作 UI | T17、T18、T21 | 实现完成，待人工验收 / FluxDB |
 | T23 | 所有现有数据导出格式与范围 | T10、T11、T13、T21 | 进行中（增量一/二/三：方言字面量 + 一致快照导出 + 桌面接入）/ FluxDB |
-| T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 进行中（增量一/二：原生检测+psql 参数+桌面接入）/ FluxDB |
-| T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一~三：pg_dump + 恢复验证 + 应用调用链/owner/ACL/版本）/ FluxDB |
+| T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 进行中（增量一~四：检测+psql+桌面接入+SSH 隧道机制）/ FluxDB |
+| T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一~四：pg_dump + 恢复验证 + 应用调用链/owner/ACL/版本 + SSH 隧道）/ FluxDB |
 | T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 进行中（增量一~四：对象权限 + 敏感隔离 + ACL 语义/有效权限；T27 UI 待续）/ FluxDB |
 | T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 实现完成，待人工验收（增量一~五：角色 CRUD 表单 + 成员 + 对象权限面板）/ FluxDB |
 | T28 | 全矩阵联调、MySQL 回归与交付审查 | T01–T27 | 进行中（增量一：MySQL 真库回归测试 + 资源审查；剩余矩阵/手测待续）/ FluxDB |
@@ -466,7 +466,8 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   增量二（本会话，app/桌面原生脚本执行接入）：`fluxdb-app` 对外再导出 `pg_script_needs_native_mode`/`pg_psql_invocation`/`PgPsqlInvocation`（桌面经 app 网关，遵循分层）；`sql_file_execution.rs` 的 `start_sql_file_execution` 在分句执行前调 `start_pg_native_sql_file_execution`——当连接为 PG 且 `pg_script_needs_native_mode(text)` 命中时改走 psql 子进程：`pg_psql_invocation(host,port,user,db,path,password,!continue_on_error)` 构造 argv（密码仅 PGPASSWORD 环境变量）、`run_pg_native_psql` 无 shell 执行并逐批检测取消 kill+wait 回收、stderr 尾段回填失败原因、成功后经 `record_sql_file_statement_summary` 记一条日志；目标库优先作用域库、缺省回退连接维护库。捕获 owned 副本避免借用逃逸。普通脚本（非原生模式）仍走原分句执行，MySQL 流程不变。
   验证（真库，docker fluxdb-t09-pg PG16.15）：(1) 原生脚本（CREATE TABLE + COPY FROM STDIN + SELECT）以 `pg_psql_invocation` 完全相同的 argv 经 psql 执行退出 0，COPY 两行正确落入并 count=2——COAPY STDIN 分号不误拆、原生模式可行；(2) ON_ERROR_STOP=1 下唯一冲突使 psql 退出码 3（非零 → 判失败、中途停止），`continue_on_error`(ON_ERROR_STOP=off) 下报错但继续且退出 0——与 `!form.continue_on_error` 映射一致；(3) 错误 stderr 尾部回填。临时库/文件已清理。cargo test --workspace 全绿。
   增量三（本会话，TLS 模式接入子进程，见 T25 增量二同记录）：原生脚本执行沿档案 ssl_mode 经 PGSSLMODE env 传 psql，密码同样只入 env。
-  未完成项：桌面端真实调用链需主机有 psql（本机无 psql/pg_dump，已并入集中人工验收清单，容器内工具验证了后端但桌面实际 spawn 待人工）；psql 版本/不存在错误的 UI 呈现（spawn 失败有清晰「启动 psql 失败」错误，具体版本不符提示待人工）；SSH 隧道下原生子进程链路未落地（保留待验证）；目标 database/schema 下拉与编码转换在原生模式的深度验证。
+  增量四（`bba23b9`，SSH 隧道链路机制，见 T25 增量四同记录）：连接器 `pg_ssh_tunnel_invocation`/`pg_hostaddr_env` 已就绪并经真库端到端验证（ssh -L 后 pg_dump/psql 可用）。原生脚本（psql）路径复用同机制的 desktop 接线待续（备份路径已接入）。
+  未完成项：桌面端真实调用链需主机有 psql（本机无 psql/pg_dump，容器内工具已验证后端与 SSH 隧道；桌面实际 spawn 属人工验收）；psql 版本/不存在错误的 UI 呈现（spawn 失败有清晰「启动 psql 失败」错误）；SQL 文件原生执行走 SSH 隧道（备份已接入，脚本路径待接入同一机制）；目标 database/schema 下拉与编码转换在原生模式的深度验证。
 
 ### T25 — 数据库备份和恢复验收
 
@@ -481,6 +482,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   增量二（本会话，子进程审计：TLS 模式 + 取消/失败清理）：`pg_psql_invocation` 增 `ssl_mode` 参数——TLS 模式经 `PGSSLMODE` 环境变量（psql/pg_dump 无 `--sslmode` CLI 开关；`-c sslmode=..` 会被当作用户 SQL，已修正）；新增 `pg_sslmode_value`（Disabled→disable/Require→require/VerifyCa→verify-ca/VerifyFull→verify-full/Prefer→None 省略）。desktop `run_native_pg_dump` 与原生脚本执行沿档案 `profile.tls.ssl_mode` 传 PGSSLMODE；pg_dump 取消或失败时删除半成品输出文件（防残留部分 dump 被备份扫描误当成功）。
   验证：作为竞争检查，`PGSSLMODE=disable` 连接成功（容器 ssl off）、`PGSSLMODE=require` 明确报「server does not support SSL, but SSL was required」退出 2——证明 TLS 模式经 env 正确生效且错误语义清晰。新单测 `pg_sslmode_value_maps_tls_modes`、更新 `pg_psql_invocation_keeps_password_out_of_argv`（密码与 sslmode 均只入 env 不入 argv）。工具全绿（connectors 141）。
   增量三（`0450d0e`，应用调用链 + owner/ACL/范围/版本）：connectors 新增 `pg_dump_invocation`（纯函数、可单测）——plain+inserts、结构/数据/完整（`PgDumpScope`）、owner/ACL 开关（默认 `--no-owner --no-acl` 便于跨环境恢复，勾选才保留）、表过滤 `-t`、密码/TLS 只入 env 不进 argv；`pg_dump_version_compatible`+`pg_tool_major_version`+`pg_server_major_version`。desktop `run_native_pg_dump` 改经连接器构造参数（不再手写 argv）；`run_backup` 加版本预检（pg_dump 主版本 < 服务端主版本明确报错，不假成功）；高级表单新增「包含属主 OWNER / ACL 权限（PG 原生）」。记录落盘时机已符合（`.meta.json` 仅成功写、失败/取消删残留文件）。
+  增量四（`bba23b9`，SSH 原生工具链路）：连接器 `pg_ssh_tunnel_invocation`（`ssh -N -L local:target:port -p [-i key] [-o ServerAlive] user@jump`）+ `SshTunnelAuth`（Key/Password/Agent，密码经 sshpass+SSHPASS 不落 argv）+ `pg_hostaddr_env`（libpq host/hostaddr 分离：`-h` 真远端供 TLS 校验、`PGHOSTADDR` 隧道本地拨号，设计 §11.3）。desktop PG 原生备份在 SSH 启用时起隧道子进程 → 等就绪 → pg_dump 经 127.0.0.1:local → 结束/失败/取消一律 kill+wait 回收。**真库 SSH 端到端验证**：`ssh -N -L 15432:<pg>:5432` 后 pg_dump(schema-only) 退出 0 产出 CREATE TABLE、psql 查询返回 1。
   **custom 格式未提供**（`BackupForm` 无格式选择器，恒为 plain .sql）——按设计条件项，**不实现 pg_restore**，不为此延误既定功能。
   未完成项：SSH 隧道下 pg_dump/psql 的原生子进程链路未落地（当前只传直连 host/port，未建子进程隧道；需 SSH 环境 + 主机工具，保留待验证，并入集中人工清单 F 节）；备份记录「耗时」字段与集群级角色边界说明（可加）；普通表逻辑导出准确标注范围的 PG 分支；MySQL 原生/逻辑备份回归手测（→ 集中人工清单 E 节）。
 
