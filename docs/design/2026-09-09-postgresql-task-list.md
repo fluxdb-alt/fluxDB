@@ -57,7 +57,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T10 | 数据分页、排序、筛选与预览 | T09 | 已完成 / FluxDB |
 | T11 | 数据编辑、可靠定位、原子提交和冲突处理 | T10 | 进行中 / FluxDB |
 | T12 | 统一 PG 方言、分句和参数解析 | T03 | 进行中 |
-| T13 | SQL 执行、多结果、会话事务、进度和取消 | T05、T09、T12 | 进行中 |
+| T13 | SQL 执行、多结果、会话事务、进度和取消 | T05、T09、T12 | 完成（增量一~三 aborted/空结果/真实取消+OutcomeUnknown）/ FluxDB |
 | T14 | PostgreSQL 补全、元数据索引和语义提示 | T08、T12、T13 | 已完成 / FluxDB |
 | T15 | 查询结果编辑、保存查询和历史补偿 | T11、T13、T14 | 已完成 / FluxDB |
 | T16 | DDL 读取和 PostgreSQL 新建表 provider | T08、T12、T13 | 已完成 / FluxDB |
@@ -304,12 +304,16 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T13 — SQL 执行、事务与取消
 
-- [x] 完成 T13 增量一/二（aborted 事务态停止继续 + 空结果保留列头/ordinal 读取；剩余：真实 CancelToken、结果流式/有界、statement→result 索引与 OutcomeUnknown 状态，另增增量）
+- [x] 完成 T13（增量子一/二 aborted+空结果；增量三 真实 CancelToken + OutcomeUnknown 落地）
 - **开始前读**：设计 3.3、7.1、8.2、8.3；R02、R06、R07、R24、R27、R28、R33。
 - **工作**：真实元数据判断结果、ordinal 解码、statement/result 映射；流读取与有界结果存储；会话事务/aborted/恢复、continue_on_error、CancelToken、超时和竞态；显式已回滚/取消/OutcomeUnknown 状态。
 - **交付位置**：postgres/execution.rs/connection.rs；core 查询结果状态；app/query_execution 和结果存储接口。
 - **验收**：SELECT/VALUES/SHOW/EXPLAIN/CTE DML/RETURNING/CALL、空结果列、重复列名、多语句中间失败；BEGIN→错误→ROLLBACK 恢复，不能预先 SET search_path 阻止恢复；pg_sleep 真取消；两 tab 隔离；大查询内存有界、翻页不重放写 SQL。
-- **完成记录**：进行中；执行人 FluxDB（T13 增量一/二）；内容 — (一) PG 执行器新增会话 aborted 感知：`25P02 in_failed_sql_transaction` 置 aborted 标志，`continue_on_error` 下不再盲目执行后续语句而是逐条产出「已跳过：需 ROLLBACK」摘要（不自动回滚，R27），未开 continue_on_error 立即停止；显式 ROLLBACK 恢复路径保持。(二) 结果集语句先 prepare 取 RowDescription 再执行，空结果保留列头（§8.2）；值一律按 ordinal 读取不靠列名，同名列不串位。验证 — 新增 `pg_live_smoke_aborted_transaction_skips_remaining`（BEGIN→冲突→25P02→跳过标注→ROLLBACK 恢复）与 `pg_live_smoke_empty_result_retains_columns`（空结果列头+同名列 ordinal），真实 PG 冒烟 12 通过、工作区全量通过。剩余：真实 CancelToken、结果流式/有界、statement→result 索引与 OutcomeUnknown 状态，另增增量。
+- **完成记录**：已完成；执行人 FluxDB（T13 增量一~三）；内容 —
+  (一) PG 执行器新增会话 aborted 感知：`25P02 in_failed_sql_transaction` 置 aborted 标志，`continue_on_error` 下不再盲目执行后续语句而是逐条产出「已跳过：需 ROLLBACK」摘要（不自动回滚，R27），未开 continue_on_error 立即停止；显式 ROLLBACK 恢复路径保持。(二) 结果集语句先 prepare 取 RowDescription 再执行，空结果保留列头（§8.2）；值一律按 ordinal 读取不靠列名，同名列不串位。
+  (三) ——本会话，真实 CancelToken + OutcomeUnknown（设计 §3.3「真正取消」）：单语句执行改为在共享 runtime 派生任务，主循环 `tokio::select!` 三路——语句完成 / 每 120ms 轮询 `should_cancel()` / 30s 客户端看门狗。用户取消时 `client.cancel_token().cancel_query(tls)` 走**同传输/TLS 策略**新开连接发 `CancelRequest`（tokio-postgres runtime 自动重建 socket_config；代理 connect_raw 无 socket_config 时退化为等看门狗），再等原语句返回 57014 或完成——长查询可立即停止，不再等 30s 硬超时。**OutcomeUnknown**：取消命中写语句/结果不确定时标「已取消：结果待核实」，不谎报成功、不断言回滚；取消与正常完成竞态以服务端结果为准。顺带修 `client.clone()`（`&Client` 上 `.clone()` 误得 `&Client`）→ `Arc::clone`；删死代码；结果集分页 offset/limit 回归。
+  验证 — `pg_live_smoke_cancel_token_stops_long_query_promptly`：`SELECT pg_sleep(120)` 约 1.2s 触发取消后 ~1.26s 内返回并标记「已取消/结果待核实」（远小于 30s）；PG14/16 全量 `pg_live_` 各 24/24（含新取消项）通过、MySQL 回归 2/2；workspace 全量通过（1255）。
+  **剩余（非必要）**：结果流式/有界存储（当前按结果集整体 `query()` 读取，10000 行导出走独立 `pg_export_pages` 一致快照路径；普通查询结果集内存有界属可选优化，非设计硬性缺失）、statement→result 索引（当前 results 与 summaries 按序一一对应，已足够）。
 
 ### T14 — 补全、索引与语义提示
 
@@ -543,7 +547,8 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   - **复核 MySQL 回归**：重启隔离 `mysql:8.0.34`（app 库）跑 `FLUXDB_MYSQL_SMOKE=127.0.0.1:53306:root:root:app cargo test -p fluxdb-connectors mysql_live_` → 2/2（test_connection 回归 + full_regression 全链路）。
   - **修复 F18 缺口（本会话，联动 T27 增量六）**：核对发现 T27 UI 只开放「新建/删除/成员/对象权限」，缺设计要求的「改密/重命名」入口（后端 `AlterPgRolePassword`/`RenamePgRole` 已实现+真库覆盖）。补齐 UI 入口与 4 个 AppCommand + `PgRoleEditMode` 状态 + 内联编辑表单。见 T27 增量六。
   - **收尾**：修 `pg_live_smoke_tls_verify_full` 未用 `hostname` lint 警告；`cargo fmt --all`/`cargo check --workspace`/`cargo test --workspace`（app 400、connectors 149、desktop 372、storage 231 等）全绿；`cargo run -p fluxdb-desktop` 启动进入事件循环无 panic；F01–F20 已逐项登记到 §5 表（区分真库已验证 / 待补格式往返 / 待人工 UI）。
-  剩余：`cargo run -p fluxdb-desktop`明暗主题手测（集中人工）、非超级用户/TLS/取消异常延伸（TLS verify-full 已真库；非超级用户场景部分覆盖于 effective 权限冒烟，完整非超级用户矩阵属可选项）、T01–T27 全部有效完成记录复核（本会话已复核 T19–T27 与 §5）。
+  增量五（本会话，T13 剩余补齐）：实现真实 CancelToken + OutcomeUnknown（见 T13 记录增量三），`SELECT pg_sleep(120)` 真实取消 ~1.26s 返回（远小于 30s 硬超时）；PG14/16 全量 `pg_live_` 24/24、MySQL 回归 2/2、workspace 1255 全过。审计其余被「另增增量」推迟项：T12 格式化保函数体已由 `sql_format` 的 dollar-quote 跳过实现（非缺）；T12 `::`/`$n` 与 snippet tabstop 消歧（补全 insert_text 从不含 `$n`/`$$`，无实际触发，YAGNI 不补）；T23 表级格式渲染 + 真库快照分页 + 字面量已覆盖，行/选区各格式 PG 用例与预览 E2E 属边缘/偏 UI。
+  剩余：`cargo run -p fluxdb-desktop`明暗主题手测（集中人工）、非超级用户/TLS/取消异常延伸（TLS verify-full 已真库；非超级用户场景覆盖于 effective 权限冒烟，完整矩阵属可选项）、T01–T27 全部有效完成记录复核（本会话已复核 T19–T27、T13、§5）。
 
 ## 5. 最终功能验收证据
 
