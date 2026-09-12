@@ -199,6 +199,15 @@ impl Connector for PostgresConnector {
         pg_list_relation_grants(config, schema, table)
     }
 
+    fn list_object_grants(
+        &self,
+        _: ConnectionId,
+        scope: &fluxdb_core::PgObjectGrantScope,
+    ) -> fluxdb_core::Result<Vec<(String, String, bool)>> {
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 对象权限需要连接配置上下文"))?;
+        pg_list_object_grants(config, scope)
+    }
+
     fn list_indexes(&self, path: &ObjectPath) -> fluxdb_core::Result<Vec<IndexInfo>> {
         let Some(config) = self.config.as_ref() else {
             return Err(Error::new(

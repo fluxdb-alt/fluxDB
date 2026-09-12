@@ -36,3 +36,50 @@ impl PgRole {
         self.name.clone()
     }
 }
+
+/// PG 关系种类：决定读取 relacl 时对 relkind 的匹配范围。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PgRelationKind {
+    /// 表（普通/分区/外部表；relkind r/p/f）。
+    Table,
+    /// 视图/物化视图（relkind v/m）。
+    View,
+    /// 序列（relkind S）。
+    Sequence,
+}
+
+impl PgRelationKind {
+    /// 匹配 pg_class.relkind 的常数 IN 列表。
+    pub fn relkind_list(self) -> &'static str {
+        match self {
+            PgRelationKind::Table => "'r','p','f'",
+            PgRelationKind::View => "'v','m'",
+            PgRelationKind::Sequence => "'S'",
+        }
+    }
+}
+
+/// PG 对象授权目标（设计 §12）：数据库 / schema / 表·视图·序列 / 函数（含签名区分重载）。
+///
+/// 由连接器据此分别查 `pg_database.datacl` / `pg_namespace.nspacl` / `pg_class.relacl` /
+/// `pg_proc.proacl`（aclexplode 展开）。Routine 的 `signature` 为 `pg_get_function_identity_arguments`
+/// 得到的参数类型串，用于区分同名重载。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PgObjectGrantScope {
+    Database {
+        database: String,
+    },
+    Schema {
+        schema: String,
+    },
+    Relation {
+        schema: String,
+        name: String,
+        kind: PgRelationKind,
+    },
+    Routine {
+        schema: String,
+        name: String,
+        signature: String,
+    },
+}

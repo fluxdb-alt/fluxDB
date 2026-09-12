@@ -3612,6 +3612,110 @@ SELECT item_id, name FROM audit_log;"
         connector.drop_role(config.id, &role).expect("清理角色应成功");
     }
 
+    /// T26：广义对象权限读取（数据库/schema/表/序列/函数），经 `PgObjectGrantScope` 分支。
+    #[test]
+    fn pg_live_smoke_object_grants_per_scope() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let role = format!("t26_scope_{suffix}");
+        connector
+            .create_role(config.id, &role, true, None)
+            .expect("建授权角色应成功");
+
+        // 建 schema/表/序列 + 函数，并对 role 执行各类对象授权。
+        let mut setup = pg_query_request(&config, None);
+        setup.text = format!(
+            "CREATE SCHEMA t26_sco; \
+             CREATE TABLE t26_sco.tbl(id int); \
+             CREATE SEQUENCE t26_sco.seq; \
+             CREATE FUNCTION t26_sco.fn(a int) RETURNS int LANGUAGE sql AS 'SELECT a'; \
+             GRANT SELECT ON t26_sco.tbl TO \"{role}\"; \
+             GRANT USAGE ON SEQUENCE t26_sco.seq TO \"{role}\"; \
+             GRANT EXECUTE ON FUNCTION t26_sco.fn(int) TO \"{role}\";"
+        );
+        connector.execute(&setup).expect("建对象+授权应成功");
+
+        // 表 SELECT。
+        let table = connector
+            .list_object_grants(
+                config.id,
+                &fluxdb_core::PgObjectGrantScope::Relation {
+                    schema: "t26_sco".into(),
+                    name: "tbl".into(),
+                    kind: fluxdb_core::PgRelationKind::Table,
+                },
+            )
+            .expect("列表权限应成功");
+        assert!(
+            table
+                .iter()
+                .any(|(grantee, privilege, _)| grantee == &role && privilege == "SELECT"),
+            "表应含 {role} 的 SELECT：{table:?}"
+        );
+        // 序列 USAGE。
+        let seq_grants = connector
+            .list_object_grants(
+                config.id,
+                &fluxdb_core::PgObjectGrantScope::Relation {
+                    schema: "t26_sco".into(),
+                    name: "seq".into(),
+                    kind: fluxdb_core::PgRelationKind::Sequence,
+                },
+            )
+            .expect("列序列权限应成功");
+        assert!(
+            seq_grants
+                .iter()
+                .any(|(grantee, privilege, _)| grantee == &role && privilege == "USAGE"),
+            "序列应含 {role} 的 USAGE：{seq_grants:?}"
+        );
+        // 函数 EXECUTE（按签名区分重载）。签名即 pg_get_function_identity_arguments 输出
+        // （`a integer` 含参数名），T27 从补全/元数据侧取同源字符串。
+        let fn_grants = connector
+            .list_object_grants(
+                config.id,
+                &fluxdb_core::PgObjectGrantScope::Routine {
+                    schema: "t26_sco".into(),
+                    name: "fn".into(),
+                    signature: "a integer".into(),
+                },
+            )
+            .expect("列函数权限应成功");
+        assert!(
+            fn_grants
+                .iter()
+                .any(|(grantee, privilege, _)| grantee == &role && privilege == "EXECUTE"),
+            "函数应含 {role} 的 EXECUTE：{fn_grants:?}"
+        );
+        // schema：未显式授权时返回空（默认权限由 UI 明示），列表读取本身不报错。
+        let schema_grants = connector
+            .list_object_grants(
+                config.id,
+                &fluxdb_core::PgObjectGrantScope::Schema {
+                    schema: "t26_sco".into(),
+                },
+            )
+            .expect("列 schema 权限应成功（可能为空）");
+
+        // 清理对象与角色。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP SCHEMA t26_sco CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理 schema 应成功");
+        connector
+            .drop_role(config.id, &role)
+            .expect("清理角色应成功");
+
+        // schema 空列表不算失败（默认权限），这里仅断言该读取可用。
+        let _ = schema_grants;
+    }
+
     #[test]
     fn pg_live_smoke_create_delete_database() {
         let Some(params) = pg_smoke_params() else {

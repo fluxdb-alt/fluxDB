@@ -85,6 +85,18 @@ pub trait Connector {
     ) -> Result<Vec<(String, String, bool)>> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持读取对象权限"))
     }
+    /// 列 PG 对象权限（数据库/schema/表·视图·序列/函数），返回 (grantee, privilege, grant_option)；
+    /// grantee 空表示 PUBLIC。为 T27 的对象权限展示提供数据源。
+    fn list_object_grants(
+        &self,
+        _: ConnectionId,
+        _: &PgObjectGrantScope,
+    ) -> Result<Vec<(String, String, bool)>> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "暂不支持读取该对象的权限",
+        ))
+    }
     fn delete_database(&self, _: ConnectionId, _: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持删除数据库"))
     }
