@@ -441,7 +441,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T23 — 数据导出
 
-- [ ] 完成 T23（实现增量一/二/三：方言字面量 + 一致快照导出分页 + 桌面接入）
+- [ ] 完成 T23（实现增量一~四：方言字面量 + 一致快照导出 + 桌面接入 + 取消临时文件语义；格式往返待续）
 - **开始前读**：设计 7.1、7.2、11.1；R02、R06、R10、R15、R16、R25、R26。
 - **工作**：从 UI 搬出共享编码/文件写入；PG 全表一致快照批量流；表 SQL/TXT/CSV/JSON/XML、行/选区 CSV/JSON/Markdown/INSERT；字段选择/条件/计数预览/进度/取消/临时文件。
 - **交付位置**：app/transfer、storage 文件服务、PG export provider、data_export UI 适配。
@@ -451,7 +451,8 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   验证：新增 `postgres_export_literals_use_pg_bytea_and_jsonb`（PG `'\xdeadbeef'::bytea`/`'{}'::jsonb`/`"public"."blobs"` + MySQL `X'DEADBEEF'`/反引号回归）；desktop 371、app 395 全过。
   增量二（`9d299a5`，一致快照导出分页）：`postgres/data.rs` 新增 `pg_export_pages`——在**单个** REPEATABLE READ 事务内分页读取整表（`LIMIT..OFFSET` + 主键 tie-breaker 稳定序），逐页 `on_page` 回调写出，一次只持一页（内存有界）；每页前检测 cancel 提前终止，结束/取消连接释放即回滚。解决现有桌面导出逐页每开新会话、并发写让行在页间漂移的不一致。真库验证 `pg_live_smoke_export_pages_snapshot`：建 10000 行表 → 快照导出页码齐全、id 无重漏（seen=10000、pages≥3）、on_page 提前停止生效；清理完整。
   增量三（`aceec5d`，接入桌面）：core `Connector::export_pages`（默认 load_data 逐页）+ PG 覆写（`pg_export_pages` 快照）；app `export_pages_for_connection` 路由；desktop `data_export` 对 PG 改走 `controller.export_pages_for_connection`（一致快照 + 逐页回调写文件 + cancel），其余保持原逐页循环（MySQL 不变）。workspace 全绿。
-  未完成项：取消临时文件语义（取消只留可识别临时状态不记录成功）、XML/TXT/CSV/JSON/INSERT 等全部格式的 PG 真库往返验证（bytea/numeric/jsonb 往返）、行/选区各格式 PG 用例、导出的字段/条件/计数预览端到端、桌面全程导出 UI 运行验证、MySQL 导出格式回归手测（→ 集中人工清单）。（一致快照分页与桌面接入已完成。）
+  增量四（`ea1a481`，取消临时文件语义）：`run_table_data_export` 先写临时文件 `path.partial`，成功后 `fs::rename` 原子改名到最终 path；取消/失败删除临时文件，不把半成品导出误当成功（`canceled` 不 rename 成成功文件）；PG 快照与逐页路径统一走该临时落盘语义。
+  未完成项：XML/TXT/CSV/JSON/INSERT 等全部格式的 PG 真库往返验证（bytea/numeric/jsonb 往返）、行/选区各格式 PG 用例、导出的字段/条件/计数预览端到端、桌面全程导出 UI 运行验证、MySQL 导出格式回归手测（→ 集中人工清单）。（一致快照分页 + 桌面接入 + 取消临时文件语义已完成。）
 
 ### T24 — SQL 文件与原生脚本
 
