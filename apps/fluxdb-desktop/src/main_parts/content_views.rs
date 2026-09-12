@@ -1640,6 +1640,16 @@ fn settings_data_panel(
                     false,
                     colors,
                     cx,
+                ))
+                .child(settings_path_row(
+                    "pg_dump 路径",
+                    "PostgreSQL 原生备份工具路径，留空时使用系统 PATH 中的 pg_dump",
+                    AppIcon::Database,
+                    &settings.pg_dump_path,
+                    "settings-backup-pgdump",
+                    false,
+                    colors,
+                    cx,
                 )),
         )
 }
@@ -1716,6 +1726,9 @@ fn settings_choose_backup_path(
                             }
                             "settings-backup-sqlite3" => {
                                 this.settings_editor_draft.sqlite3_path = value
+                            }
+                            "settings-backup-pgdump" => {
+                                this.settings_editor_draft.pg_dump_path = value
                             }
                             _ => {}
                         }
@@ -2543,6 +2556,7 @@ fn settings_section_changed(
             saved.backup_dir != draft.backup_dir
                 || saved.mysqldump_path != draft.mysqldump_path
                 || saved.sqlite3_path != draft.sqlite3_path
+                || saved.pg_dump_path != draft.pg_dump_path
         }
         SettingsPanelSection::ConnectionSecurity
         | SettingsPanelSection::DatabaseSupport
@@ -2594,6 +2608,7 @@ fn settings_apply_backup_fields(settings: &mut Settings, draft: &Settings) {
     settings.backup_dir = draft.backup_dir.clone();
     settings.mysqldump_path = draft.mysqldump_path.clone();
     settings.sqlite3_path = draft.sqlite3_path.clone();
+    settings.pg_dump_path = draft.pg_dump_path.clone();
 }
 
 fn reset_settings_section(

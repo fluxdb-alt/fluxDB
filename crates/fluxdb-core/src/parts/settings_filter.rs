@@ -145,6 +145,9 @@ pub struct Settings {
     /// 原生备份工具 sqlite3 的路径；为空时从系统 PATH 查找。
     #[serde(default)]
     pub sqlite3_path: String,
+    /// 原生备份工具 pg_dump 的路径；为空时从系统 PATH 查找。
+    #[serde(default)]
+    pub pg_dump_path: String,
 }
 
 impl Default for Settings {
@@ -180,6 +183,7 @@ impl Default for Settings {
             backup_dir: String::new(),
             mysqldump_path: String::new(),
             sqlite3_path: String::new(),
+            pg_dump_path: String::new(),
         }
     }
 }

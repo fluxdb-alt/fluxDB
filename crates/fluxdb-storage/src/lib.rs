@@ -1001,6 +1001,7 @@ mod tests {
             backup_dir: String::new(),
             mysqldump_path: String::new(),
             sqlite3_path: String::new(),
+            pg_dump_path: String::new(),
         };
 
         storage.save_settings(&settings).unwrap();

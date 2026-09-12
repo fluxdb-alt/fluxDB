@@ -535,9 +535,18 @@ fn run_backup(
             DatabaseKind::MongoDb | DatabaseKind::Redis => {
                 anyhow::bail!("当前连接类型不支持原生备份")
             }
-            DatabaseKind::Postgres => {
-                anyhow::bail!("当前连接类型不支持原生备份")
-            }
+            DatabaseKind::Postgres => run_native_pg_dump(
+                &settings,
+                &host,
+                port,
+                &user,
+                &password,
+                form.database.as_deref().unwrap_or_default(),
+                &output_path,
+                &cancel_flag,
+                &sender,
+                &form,
+            ),
         },
         BackupMode::Logic => run_logic_backup(
             &controller,
@@ -553,7 +562,12 @@ fn run_backup(
 }
 
 fn resolved_credentials(config: &ConnectionConfig) -> (String, u16, String, String) {
-    let resolved = config.mysql_resolved();
+    // PG 与 MySQL 凭据分属不同档案/options 键（PG 用 host/maintenance_database/username/password，
+    // MySQL 用 root/剩下扁平键），按连接类型选择对应归一化，避免 PG 拿到 MySQL 默认 root。
+    let resolved = match config.kind {
+        DatabaseKind::Postgres => config.postgres_resolved(),
+        _ => config.mysql_resolved(),
+    };
     let (host, port) = match &resolved.endpoint {
         Endpoint::Tcp { host, port, .. } => (host.clone(), *port),
         Endpoint::SqliteFile { .. } => (String::new(), 0),
@@ -563,7 +577,13 @@ fn resolved_credentials(config: &ConnectionConfig) -> (String, u16, String, Stri
         .options
         .get("username")
         .cloned()
-        .unwrap_or_else(|| "root".to_string());
+        .unwrap_or_else(|| {
+            if config.kind == DatabaseKind::Postgres {
+                String::new()
+            } else {
+                "root".to_string()
+            }
+        });
     let password = resolved
         .options
         .get("password")
@@ -586,6 +606,13 @@ fn native_tool_available(settings: &Settings, kind: &DatabaseKind) -> bool {
                 &settings.sqlite3_path
             } else {
                 "sqlite3"
+            }
+        }
+        DatabaseKind::Postgres => {
+            if !settings.pg_dump_path.trim().is_empty() {
+                &settings.pg_dump_path
+            } else {
+                "pg_dump"
             }
         }
         _ => return false,
@@ -860,6 +887,137 @@ fn run_native_sqlite(
         anyhow::bail!("sqlite3 退出码 {code}");
     }
     emit_native_log(sender, "完成", "原生备份完成".to_string())?;
+    Ok(())
+}
+
+/// PostgreSQL 原生备份：调用 pg_dump（plain+inserts 单文件 .sql，可直接用 psql 恢复）。
+///
+/// 密码只经 `PGPASSWORD` 环境变量，不进 argv（避免 `ps` 泄露，设计 §11.2）。表过滤走 `-t`
+/// 透传所选表名（schema 限定时原样下发）；空集合 = 整库。stdout 流式写文件并逐批检测取消。
+#[allow(clippy::too_many_arguments)]
+fn run_native_pg_dump(
+    settings: &Settings,
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    database: &str,
+    output_path: &Path,
+    cancel_flag: &Arc<AtomicBool>,
+    sender: &mpsc::Sender<BackupTaskProgress>,
+    form: &BackupForm,
+) -> anyhow::Result<()> {
+    if database.is_empty() {
+        anyhow::bail!("未指定数据库，无法进行原生备份");
+    }
+    let tool = if !settings.pg_dump_path.trim().is_empty() {
+        settings.pg_dump_path.as_str()
+    } else {
+        "pg_dump"
+    };
+    if cfg!(not(test)) && host.is_empty() {
+        anyhow::bail!("PostgreSQL 连接缺少主机信息");
+    }
+
+    let mut cmd = Command::new(tool);
+    cmd.args([
+        "--no-owner",
+        "--no-acl",
+        "--format=plain",
+        "--inserts",
+        "-h",
+        host,
+        "-p",
+        &port.to_string(),
+        "-U",
+        user,
+        "-d",
+        database,
+    ]);
+    // 表过滤：选中表非空时按表导出（schema.table 原样透传），空集合 = 整库。
+    if !form.selected_tables.is_empty() {
+        for table in form.selected_tables.iter() {
+            cmd.arg("-t").arg(table);
+        }
+    } else {
+        // 整库备份也把视图/序列/函数等全部对象覆盖（pg_dump 默认即全对象）。
+    }
+    // 密码只走环境变量，避免出现在进程参数列表。
+    cmd.env("PGPASSWORD", password);
+
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| anyhow::anyhow!("启动 pg_dump 失败：{error}"))?;
+
+    let output = child.stdout.take().expect("stdout piped");
+    // stderr 尾部收集（pg_dump 的错误/提示，如 connection 相关）。
+    let stderr_handle = if let Some(mut stderr) = child.stderr.take() {
+        emit_native_log(sender, "转储", "pg_dump 已启动，正在导出数据…")?;
+        Some(std::thread::spawn(move || {
+            let mut buffer = [0u8; 8192];
+            let mut tail = Vec::new();
+            while let Ok(n) = std::io::Read::read(&mut stderr, &mut buffer) {
+                if n == 0 {
+                    break;
+                }
+                tail.extend_from_slice(&buffer[..n]);
+                if tail.len() > 8192 {
+                    let overflow = tail.len() - 8192;
+                    tail.drain(..overflow);
+                }
+            }
+            String::from_utf8_lossy(&tail).trim().to_string()
+        }))
+    } else {
+        emit_native_log(sender, "转储", "pg_dump 已启动，正在导出数据…")?;
+        None
+    };
+
+    // 复制 stdout 到备份文件，同时每批检测取消请求并 kill。
+    let mut out_writer = BufWriter::new(fs::File::create(output_path)?);
+    let mut buffer = [0u8; 64 * 1024];
+    let mut written: u64 = 0;
+    let mut stdout_io = std::io::BufReader::new(output);
+    loop {
+        if cancel_flag.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("已取消");
+        }
+        let n = std::io::Read::read(&mut stdout_io, &mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        out_writer.write_all(&buffer[..n])?;
+        written += n as u64;
+    }
+    out_writer.flush()?;
+
+    let status = child.wait()?;
+    let stderr_tail = if let Some(handle) = stderr_handle {
+        handle.join().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    if let Some(code) = status.code()
+        && code != 0
+    {
+        if !stderr_tail.is_empty() {
+            let _ = sender.send(BackupTaskProgress {
+                stage: "转储".to_string(),
+                message: format!("pg_dump: {stderr_tail}"),
+                success: false,
+            });
+        }
+        anyhow::bail!("pg_dump 退出码 {code}");
+    }
+    emit_native_log(
+        sender,
+        "完成",
+        format!("原生备份完成，共写入 {} 字节", written),
+    )?;
     Ok(())
 }
 

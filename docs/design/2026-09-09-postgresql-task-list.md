@@ -69,7 +69,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T22 | 新建/设计表及危险操作 UI | T17、T18、T21 | 实现完成，待人工验收 / FluxDB |
 | T23 | 所有现有数据导出格式与范围 | T10、T11、T13、T21 | 进行中（增量一：方言字面量）/ FluxDB |
 | T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 进行中（增量一：原生检测+psql 参数）/ FluxDB |
-| T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 未开始 / — |
+| T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一：PG 原生 pg_dump + 真库恢复验证）/ FluxDB |
 | T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 进行中（增量一/二，ACL 解释与 T27 待续）/ FluxDB |
 | T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 未开始 / — |
 | T28 | 全矩阵联调、MySQL 回归与交付审查 | T01–T27 | 未开始 / — |
@@ -465,12 +465,15 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T25 — 数据库备份和恢复验收
 
-- [ ] 完成 T25
+- [ ] 完成 T25（增量一：PG 原生 pg_dump 备份路径 + 设置 + 真库恢复验证）
 - **开始前读**：设计 11.3；R13、R15、R18、R23、R26、R31。
 - **工作**：pg_dump 工具检测/版本、plain 格式与结构/数据/完整、对象/owner/ACL、目录/记录；有 custom 格式则同时实现 pg_restore；所有 I/O 经 app/connector/storage；取消、管道/进程回收、passfile/partial 清理；普通表逻辑导出准确标注范围。
 - **交付位置**：postgres/native_tools、app/transfer/backup、storage backup records、database_backup/backup_tab UI。
 - **验收**：完整备份恢复到干净隔离库后比对表/行/约束/索引/函数/视图/序列；恢复后新增 identity 行正确；SSH+TLS 下可用；旧 pg_dump/缺工具/权限不足不假成功；取消无进程/密钥泄漏；MySQL 原生/逻辑备份和记录回归。
-- **完成记录**：未开始；执行人 —；内容/验证 —。
+- **完成记录**：进行中（FluxDB，2026-09-12）。
+  增量一（本会话，PG 原生 pg_dump 备份）：`database_backup.rs` 新增 `run_native_pg_dump`（`--no-owner --no-acl --format=plain --inserts -h -p -U -d` 单文件 .sql；选中表 `-t schema.table` 透传、空集合=整库；密码仅经 `PGPASSWORD` 环境变量不进 argv；stdout 流式写文件+逐批取消检测 kill；stderr 尾部回填失败提示）。`run_backup` 的 Native/Postgres 分支由 `不支持原生备份` 接入该函数；`native_tool_available` 增 PG 分支（`settings.pg_dump_path` 或 PATH 的 `pg_dump`）。`resolved_credentials` 按连接类型分支——PG 走 `postgres_resolved()`（host/maintenance_database/username/password），纠正此前恒走 `mysql_resolved()` 导致 PG 拿不到 host/user。设置新增 `pg_dump_path`（core Settings + Default + storage 测试字面量 + content_views 路径行/选择/changed/apply）。备份写行沿用既有 `{backup_dir}/{库安全名}/*.sql` 约定，backup_tab 扫描兼容。
+  验证（真库，docker `fluxdb-t09-pg` PG16.15）：构造隔离源库 `t25_dump_src`（serial 主键表 items + name 索引 + qty CHECK + 视图 items_v + 函数 items_total + 3 行数据 + 序列 last_value=3）→ 以与代码完全相同参数跑 `pg_dump --no-owner --no-acl --format=plain --inserts` 退出 0（stderr 空）→ dump 含 CREATE TABLE/VIEW/FUNCTION/INDEX/SEQUENCE + INSERT 三行 + `setval(seq,3)` → `createdb t25_dump_dst` + psql 恢复退出 0 → 比对：3 行数据/数值 12.50 保精、序列 last_value=3、新插入 `delta` 得 id=4（identity+sequence 独立可用）、视图 count=3、函数 items_total()=4、索引 items_pkey + idx_items_name 均在。源/目标库与临时文件已清理。
+  未完成项：SSH+TLS 下 pg_dump 的真实链路（本地无 psql/pg_dump 主机工具，原生子进程实际执行依赖桌面端带工具环境的验证，已并入集中人工清单）；custom 格式 + pg_restore + 「目录/记录」备份记录管理；工具检测/版本差异与缺工具/权限不足的清晰错误；普通表逻辑导出准确标注范围的 PG 分支；MySQL 原生/逻辑备份回归手测（→ 集中人工清单 E 节）。
 
 ### T26 — 角色、用户和 ACL 后端
 
