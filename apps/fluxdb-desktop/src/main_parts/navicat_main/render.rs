@@ -757,6 +757,8 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
             pg_effective_grants: admin.pg_effective_grants.clone(),
             loading_pg_grants: admin.loading_pg_grants,
             pg_grants_error: admin.pg_grants_error.clone(),
+            pg_edit_mode: admin.pg_edit_mode,
+            pg_rename_new: admin.pg_rename_new.clone(),
         }),
         TabKind::Settings => TabKind::Settings,
     }

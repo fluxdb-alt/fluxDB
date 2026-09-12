@@ -871,6 +871,9 @@ struct NavicatMain {
     _user_admin_pg_grant_object_subscription: Subscription,
     user_admin_pg_grant_signature_input: Entity<InputState>,
     _user_admin_pg_grant_signature_subscription: Subscription,
+    // PG 角色「重命名」新名输入（T27）。
+    user_admin_pg_rename_input: Entity<InputState>,
+    _user_admin_pg_rename_subscription: Subscription,
     user_admin_max_queries_input: Entity<InputState>,
     _user_admin_max_queries_subscription: Subscription,
     user_admin_max_updates_input: Entity<InputState>,

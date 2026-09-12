@@ -717,6 +717,7 @@ fn sync_user_admin_inputs(
     sync_input_value(&this.user_admin_ssl_cipher_input, &admin.ssl_cipher, window, cx);
     sync_input_value(&this.user_admin_ssl_issuer_input, &admin.ssl_issuer, window, cx);
     sync_input_value(&this.user_admin_ssl_subject_input, &admin.ssl_subject, window, cx);
+    sync_input_value(&this.user_admin_pg_rename_input, &admin.pg_rename_new, window, cx);
 }
 
 fn sync_input_value(

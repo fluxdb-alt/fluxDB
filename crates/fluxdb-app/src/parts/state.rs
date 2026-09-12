@@ -196,6 +196,18 @@ pub struct UserAdminState {
     pub pg_effective_grants: Vec<PgEffectivePrivilege>,
     pub loading_pg_grants: bool,
     pub pg_grants_error: Option<UserFacingError>,
+    /// PostgreSQL（T27）：角色「改密 / 重命名」内联编辑模式 + 重命名新名。
+    pub pg_edit_mode: PgRoleEditMode,
+    pub pg_rename_new: String,
+}
+
+/// PG 角色内联编辑模式（改密 / 重命名），复用后端 AlterPgRolePassword / RenamePgRole。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PgRoleEditMode {
+    #[default]
+    None,
+    Rename,
+    Password,
 }
 
 /// PG 对象权限授权目标种类（UI 选择器用；映射到 `PgObjectGrantScope`）。
@@ -309,6 +321,8 @@ impl UserAdminState {
             pg_effective_grants: Vec::new(),
             loading_pg_grants: false,
             pg_grants_error: None,
+            pg_edit_mode: PgRoleEditMode::None,
+            pg_rename_new: String::new(),
         }
     }
 
@@ -1693,6 +1707,17 @@ pub enum AppCommand {
         tab_id: TabId,
         can_login: bool,
     },
+    /// PostgreSQL（T27）：进入角色「重命名」内联编辑模式（选中角色）。
+    BeginUserAdminPgRename(TabId),
+    /// PostgreSQL（T27）：进入角色「改密」内联编辑模式（选中角色）。
+    BeginUserAdminPgPassword(TabId),
+    /// PostgreSQL（T27）：更新重命名新名输入值。
+    SetUserAdminPgRenameNew {
+        tab_id: TabId,
+        value: String,
+    },
+    /// PostgreSQL（T27）：结束任何内联编辑模式（取消/完成）。
+    EndUserAdminPgEdit(TabId),
     /// PostgreSQL 对象权限：设置授权目标（种类/schema/对象/签名）。
     SetUserAdminPgGrantTarget {
         tab_id: TabId,

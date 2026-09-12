@@ -2160,6 +2160,45 @@ impl AppController {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
                 }
             }
+            AppCommand::BeginUserAdminPgRename(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_edit_mode = PgRoleEditMode::Rename;
+                    admin.pg_rename_new = admin
+                        .selected_user
+                        .as_ref()
+                        .map(|u| u.user.clone())
+                        .unwrap_or_default();
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::BeginUserAdminPgPassword(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_edit_mode = PgRoleEditMode::Password;
+                    admin.new_password.clear();
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetUserAdminPgRenameNew { tab_id, value } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_rename_new = value;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::EndUserAdminPgEdit(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_edit_mode = PgRoleEditMode::None;
+                    admin.pg_rename_new.clear();
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
             AppCommand::SetUserAdminPgGrantTarget {
                 tab_id,
                 kind,

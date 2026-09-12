@@ -199,6 +199,19 @@ fn user_admin_pg_can_login_defaults_and_reflects() {
     assert!(!admin.pg_can_login, "切换为 NOLOGIN 组角色应生效");
 }
 
+/// PG：UserAdminState 角色内联编辑模式（改密/重命名）默认关闭，可切换与清空。
+#[test]
+fn user_admin_pg_edit_mode_defaults_and_clears() {
+    let mut admin = UserAdminState::new(ConnectionId(1), None, PrivilegeScope::Postgres);
+    assert_eq!(admin.pg_edit_mode, PgRoleEditMode::None, "默认无编辑模式");
+    admin.pg_edit_mode = PgRoleEditMode::Rename;
+    assert_eq!(admin.pg_edit_mode, PgRoleEditMode::Rename);
+    admin.pg_edit_mode = PgRoleEditMode::Password;
+    assert_eq!(admin.pg_edit_mode, PgRoleEditMode::Password);
+    admin.pg_edit_mode = PgRoleEditMode::None;
+    assert_eq!(admin.pg_edit_mode, PgRoleEditMode::None, "结束后回到 None");
+}
+
 /// PG 权限面板：授权目标 scope 构造（表/视图/序列/函数/schema/数据库 + 空 schema 回退 public）。
 #[test]
 fn pg_grant_scope_from_state_maps_kinds_and_defaults_schema() {

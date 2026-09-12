@@ -3377,7 +3377,7 @@ SELECT item_id, name FROM audit_log;"
         let tls = env("FLUXDB_PG_SMOKE_TLS");
         let bad_ca = env("FLUXDB_PG_SMOKE_TLS_BAD_CA");
         let bad_host = env("FLUXDB_PG_SMOKE_TLS_BAD_HOST");
-        let (params, ca_path, server_name, hostname) = match tls {
+        let (params, ca_path, server_name, _hostname) = match tls {
             Some(v) => split_tls_env(&v),
             None => return,
         };

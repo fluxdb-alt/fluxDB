@@ -71,7 +71,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 进行中（增量一~四：检测+psql+桌面接入+SSH 隧道机制）/ FluxDB |
 | T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一~四：pg_dump + 恢复验证 + 应用调用链/owner/ACL/版本 + SSH 隧道）/ FluxDB |
 | T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 进行中（增量一~四：对象权限 + 敏感隔离 + ACL 语义/有效权限；T27 UI 待续）/ FluxDB |
-| T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 实现完成，待人工验收（增量一~五：角色 CRUD 表单 + 成员 + 对象权限面板）/ FluxDB |
+| T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 实现完成，待人工验收（增量一~六：角色 CRUD 表单 + 成员 + 对象权限面板 + 改密/重命名入口）/ FluxDB |
 | T28 | 全矩阵联调、MySQL 回归与交付审查 | T01–T27 | 进行中（增量一~三：MySQL 全链路回归 + 资源审查 + PG14–18 矩阵全过；剩余 F 登记/手测）/ FluxDB |
 
 ## 4. 可执行任务
@@ -520,7 +520,8 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   **增量三（app 层 CRUD 支撑，`f57490c`）**：`UserAdminState` 增 `pg_can_login`（default true）；新增 AppCommand `EndUserAdminCreateUser` / `SetUserAdminPgCanLogin`（桌面不直接改 app 状态）；render 快照补字段；单测 `user_admin_pg_can_login_defaults_and_reflects`。
   **增量四（desktop 角色 CRUD 表单 + 成员详情，`95ad136`）**：工具栏新建（BeginUserAdminCreateUser）/删除（DropPgRole，postgres/pg_* 不给删除入口）；内联创建表单复用已订阅输入句柄 + LOGIN 开关 + 创建/取消 → 刷新；右侧详情展示所属组角色（list_role_membership→admin.grants）；PG tab 默认停 MemberOf 使选角色即加载成员。
   **增量五（PG 对象权限面板，`9cd6139`）**：core `grant_object_privilege` 增 grant_option；app 新纯函数 `pg_grant_scope_from_state`/`pg_grant_object_sql` + AppCommand（SetUserAdminPgGrantTarget / Load-Start-Finish / Grant / Revoke）+ 路由 `load_pg_object_grants`（list_object_grants + role_effective_grants）；desktop 面板：目标种类按钮组 + schema/对象/签名输入 + 逐权限「直接授权（可撤销）/继承·PUBLIC·属主（不可直接撤销）/无」+ 授予（带/不带 GRANT OPTION）/撤销；ACL 为 NULL 显示「属主 X（默认权限）」而非空表。真库 grant(带 option)+revoke 往返 + app 纯函数单测。
-  **剩余（视觉验收范畴）**：仅剩桌面交互/视觉确认（弹框 Esc/外点/主题/loading/disabled、手形光标、按钮组与输入框渲染、授权后列表刷新目视）与 MySQL 用户页面回归手测——功能实现已完成，UI 编码不等人工，留最后集中验收。
+  **增量六（本会话，补齐 F18 改密/重命名 UI 入口）**：核对发现 T27 原实现只开放「新建/删除/成员/对象权限」，后端已支持的 `AlterPgRolePassword`/`RenamePgRole`（dispatch 已有、真库冒烟 `pg_live_smoke_role_crud_and_membership` 已覆盖改密+重命名）缺 UI 入口 → 补齐：app `UserAdminState` 增 `pg_edit_mode: PgRoleEditMode`（None/Rename/Password）+ `pg_rename_new` + 4 个 AppCommand（BeginUserAdminPgRename / BeginUserAdminPgPassword / SetUserAdminPgRenameNew / EndUserAdminPgEdit，dispatch 置态）；desktop 工具栏为选中普通角色增「重命名/改密」按钮（postgres/pg_* 无入口，与删除一致），内联编辑表单：重命名用新增输入句柄 `user_admin_pg_rename_input`，改密复用既有 `user_admin_new_password_input`；`pg_rename_role`/`pg_change_password` 走既有 `RenamePgRole`/`AlterPgRolePassword`。验证 — `user_admin_pg_edit_mode_defaults_and_clears` 单测；workspace 全绿（app 400）；改密/重命名真实链路已由既有 `pg_live_smoke_role_crud_and_membership` 覆盖。
+  **剩余（视觉验收范畴）**：仅剩桌面交互/视觉确认（弹框 Esc/外点/主题/loading/disabled、手形光标、按钮组与输入框、重命名/改密内联表单渲染、授权后列表刷新目视）与 MySQL 用户页面回归手测——功能实现已完成，UI 编码不等人工，留最后集中验收。人工新项见清单 G4b–G4d。
 
 ### T28 — 全量对齐与交付审查
 
@@ -534,7 +535,12 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   增量一（真库回归 + 资源审查）：新增 `mysql_live_smoke_test_connection_regressed_by_postgres`（`FLUXDB_MYSQL_SMOKE` 环境门控）——对隔离真实 MySQL 8.0.34 容器 `test_connection` 通过，证明 PG/T23/T24/T25/T27 改动未回归 MySQL 连接。资源审查（代码走查）：`run_pg_native_psql`/`run_native_pg_dump` 取消路径 kill+wait 防僵尸、stdout/stderr 后台线程随管道 EOF 自收敛（进程被杀→管道关闭→线程退出，不泄漏）；`pg_export_pages` 单事务结束/取消统一 ROLLBACK 释放会话，连接随 session drop 回收。`cargo check --workspace` + `cargo test --workspace` 全绿。
   增量二（MySQL 深度回归）：新增 `mysql_live_smoke_full_regression`——隔离真实 MySQL 8.0.34 上覆盖 test_connection → DDL → `load_data` 读 → `execute` 查询结果集 → `apply_changes` 更新并回读 → `list_completion_tables`/`list_completion_columns` 补全 → `list_indexes`/`table_ddl` 结构 → `preview_data_export` 计数 → 清理；证明 PG 接入（shared 读写/补全/结构/导出/凭据）未回归 MySQL。
   增量三（PG14–18 真库矩阵）：对 `postgres:{14,15,16,17,18}-alpine` 各起隔离容器跑全量 `pg_live_smoke`（23 项）——**14.24/15.19/16.15/17.11/18.6 全 23/23 通过**。矩阵发现并修复版本差异真 bug：`WITH ADMIN FALSE` 仅 PG16+ 有效，PG≤14 无该语法（原「总是显式下发关闭态」在 PG14 报错）——改为 ADMIN false 只在支持成员选项的版本下发（PG≤14 仅 `WITH ADMIN OPTION`）；成员选项断言按版本分支（PG≤14 无 inherit/set 列，回填默认）。
-  剩余：`cargo run -p fluxdb-desktop` 明暗主题手测、F01–F20 逐项登记到 §5 表、非超级用户/TLS/取消异常延伸、T01–T27 全部有效完成记录复核。
+  增量四（本会话复核 + F18 缺口修复 + F01–F20 登记）：
+  - **复核真库矩阵**：本会话独立重启隔离 `postgres:{14,15,16,17,18}-alpine` 各跑全量 `pg_live_smoke`（23 项），5 版本各 **23/23 全过**（每版本 `FLUXDB_PG_SMOKE=host:port:postgres:secret:postgres cargo test -p fluxdb-connectors pg_live_ -- --test-threads=1`），与增量三层记录一致——非仅凭报告，第一手复核。容器临时、已清理。
+  - **复核 MySQL 回归**：重启隔离 `mysql:8.0.34`（app 库）跑 `FLUXDB_MYSQL_SMOKE=127.0.0.1:53306:root:root:app cargo test -p fluxdb-connectors mysql_live_` → 2/2（test_connection 回归 + full_regression 全链路）。
+  - **修复 F18 缺口（本会话，联动 T27 增量六）**：核对发现 T27 UI 只开放「新建/删除/成员/对象权限」，缺设计要求的「改密/重命名」入口（后端 `AlterPgRolePassword`/`RenamePgRole` 已实现+真库覆盖）。补齐 UI 入口与 4 个 AppCommand + `PgRoleEditMode` 状态 + 内联编辑表单。见 T27 增量六。
+  - **收尾**：修 `pg_live_smoke_tls_verify_full` 未用 `hostname` lint 警告；`cargo fmt --all`/`cargo check --workspace`/`cargo test --workspace`（app 400、connectors 149、desktop 372、storage 231 等）全绿；`cargo run -p fluxdb-desktop` 启动进入事件循环无 panic；F01–F20 已逐项登记到 §5 表（区分真库已验证 / 待补格式往返 / 待人工 UI）。
+  剩余：`cargo run -p fluxdb-desktop`明暗主题手测（集中人工）、非超级用户/TLS/取消异常延伸（TLS verify-full 已真库；非超级用户场景部分覆盖于 effective 权限冒烟，完整非超级用户矩阵属可选项）、T01–T27 全部有效完成记录复核（本会话已复核 T19–T27 与 §5）。
 
 ## 5. 最终功能验收证据
 
@@ -542,25 +548,26 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 | 功能 | PostgreSQL 证据 | MySQL/相关旧数据库回归 | 状态 |
 | --- | --- | --- | --- |
-| F01 连接保存与恢复 | — | — | 未验证 |
-| F02 TLS/SSH/代理/超时 | — | — | 未验证 |
-| F03 树/分组/显示/断开 | — | — | 未验证 |
-| F04 建库/删库 | — | — | 未验证 |
-| F05 对象与注释 | — | — | 未验证 |
-| F06 分页/排序/过滤 | — | — | 未验证 |
-| F07 数据编辑与提交 | — | — | 未验证 |
-| F08 详情/JSON/时间/二进制 | — | — | 未验证 |
-| F09 查询/结果/进度/取消 | — | — | 未验证 |
-| F10 格式化/参数/补全 | — | — | 未验证 |
-| F11 保存/历史/补偿/结果编辑 | — | — | 未验证 |
-| F12 表信息与 DDL | — | — | 未验证 |
-| F13 新建/设计表 | — | — | 未验证 |
-| F14 复制/重命名/清空/删除 | — | — | 未验证 |
-| F15 全部导出格式与范围 | — | — | 未验证 |
-| F16 SQL 文件执行 | — | — | 未验证 |
-| F17 备份及恢复验证 | — | — | 未验证 |
-| F18 用户/角色/权限 | — | — | 未验证 |
-| F19 通用 UI、状态与主题 | — | — | 未验证 |
+| F01 连接保存与恢复 | T02/T04/T19：profile 持久化单测 `postgres_profile` 8 项、`pg_live_smoke_connect_and_version`（真库 PG16.15 建连+认证+读版本）；`postgres_connection_form_roundtrips_into_profile`、`postgres_form_validation_uses_profile_rules`。UI 重启恢复/连接保存待人工（清单 A9） | `mysql_live_smoke_test_connection_regressed_by_postgres`（PG 接入后 MySQL 连接回归）/ `mysql_connection_form_defaults_unchanged_by_postgres_fields` | 后端+真库已验证；重启恢复待人工(A9) |
+| F02 TLS/SSH/代理/超时 | T05：`pg_live_smoke_tls_verify_full`（verify-full 对/错 CA/错主机名）；T25：`PGSSLMODE=require` 报「server not support SSL」退出 2 验证 TLS 经 env 生效；SSH 隧道真库验证 `ssh -N -L 15432:<pg>:5432` 后 pg_dump(schema-only) 退出 0（F7 记录）。连接表单 TLS/SSH 回填待人工（A2/A3/A6）；SSH 桌面完整链路待人工（F7） | MySQL/Redis SSH 路径 `open_tunnel_with` 复用零改动回归 | 真库已验证；桌面 SSH/TLS 交互待人工(F7/A6) |
+| F03 树/分组/显示/断开 | T06 `pg_live_smoke_object_tree`（库/schema/表/视图三层真实 pg_catalog，同名跨 schema）；T20 `postgres_schema_level_buckets_tables_and_keeps_mysql_flat`；schema 树 UI 视觉待人工（B1–B3） | `replace_loaded_children_scopes_to_schema_for_postgres` 保 MySQL 扁平层级 | 真库+单测；UI 视觉待人工(B) |
+| F04 建库/删库 | T07 `pg_live_smoke_create_delete_database`（建库 ENCODING/locale→树可见→维护库保护拒绝删→删库）；`pg_create_database_sql_builds_options_and_quotes`；T20 建库 owner/template 扩展 | MySQL charset/collation 建库保持（既有测试） | 真库已验证；建库弹框 UI 待人工(B6/B7) |
+| F05 对象与注释 | T06/T08 `pg_live_smoke_table_info`（列/约束/注释逐 tab + DDL 重建）；目录查询普通用户可见；T14 补全带注释文档 | — | 真库已验证 |
+| F06 分页/排序/过滤 | T10 `pg_live_smoke_pagination_sort_and_filter`（limit has_more、稳定序、BETWEEN+LIKE、非法列报错）；`pg_order_by_clause_appends_primary_key_tiebreaker` 等 | — | 真库+单测；数据页交互待人工(D1) |
+| F07 数据编辑与提交 | T09/T11/T15：`pg_live_smoke_typed_read_binary_and_apply_changes`（三态 Update/插/删单事务）、`pg_live_smoke_generated_column_protection_and_rowcount_rollback`（行数检查+整批回滚）、`pg_live_smoke_apply_changes_returns_generated_identity`（RETURNING id）；`pg_insert_values_respects_three_state_intents` | MySQL 插入语义回归（insert_intents=None 走旧路径） | 真库+单测；编辑交互待人工(C5) |
+| F08 详情/JSON/时间/二进制 | T09 `pg_live_smoke_typed_read_binary...`（bytea 摘要/完整原始字节、numeric 保精、jsonb）；`load_cell_binary` 完整读取；单元格详情 UI 待人工(D2) | — | 真库已验证；详情交互待人工(D2) |
+| F09 查询/结果/进度/取消 | T13 `pg_live_smoke_aborted_transaction_skips_remaining`（25P02 停止+r 恢复）、`pg_live_smoke_empty_result_retains_columns`；取消 kill+wait 回收（代码走查）；结果标签/取消 UI 待人工(C3/C4) | — | 真库已验证；取消/停止 UI 待人工(C3) |
+| F10 格式化/参数/补全 | T12 分句：`split_sql_keeps_dollar_quoted_function_body_together`；T14 `pg_live_smoke_completion_metadata`/`_search_path_and_cross_schema`/`_cancel_returns_empty`/`_does_not_disturb_user_transaction`（跨 schema、重载签名、不影响用户事务） | MySQL 补全原测试回归（connect 别名/CTE 通过） | 真库+单测；补全交互待人工(C1/C2) |
+| F11 保存/历史/补偿/结果编辑 | T15 `pg_apply_changes_returns_generated_identity`、`pg_query_result_object_name_uses_schema_and_quoted_identifiers`、`pg_rollback_literals_use_dialect_quoting_and_types`、`history_marks_uncommitted_and_rolled_back_writes`、敏感语句不入历史；保存/历史 UI 待人工 | `legacy_rollback_snapshot_without_dialect_renders_mysql`（旧 MySQL 历史可读） | 后端+单测已验证；UI 待人工(C6/C7) |
+| F12 表信息与 DDL | T08 `pg_live_smoke_table_info`（结构逐 tab + DDL 重建 + 视图 DDL）；`build_table_ddl`/`pg_table_ddl`；`pg_load_constraints` 复合 FK 序位正确 | — | 真库已验证；表信息 UI 待人工 |
+| F13 新建/设计表 | T16 `postgres_create_table_ddl_rebuilds_equivalent_metadata`（隔离 schema 重建后元数据对等）、`postgres_create_table_rejects_mysql_only_and_inline_trigger`；T17 `postgres_design_diff_applies_atomically_and_blocks_stale_snapshot`（外部 DDL 后保存被拒、失败回滚） | `postgres_create_table_type_capabilities_hide_mysql_options`；MySQL 建表 SQL 快照保持 | 真库+单测已验证；建表向导 UI 待人工(D3/D4) |
+| F14 复制/重命名/清空/删除 | T18 `postgres_copy_table_gets_independent_sequence`（identity+生成列+独立序列）、`postgres_table_actions_are_schema_qualified_and_kind_aware`、`table_actions_invalidate_completion_index` | `mysql_table_actions_unchanged_by_postgres_provider` | 真库+单测已验证；危险操作对话框 UI 待人工(D5) |
+| F15 全部导出格式与范围 | T23 增量一~四：`postgres_export_literals_use_pg_bytea_and_jsonb`（SQL/INSERT 字面量）；`pg_live_smoke_export_pages_snapshot`（10000 行 REPEATABLE READ 一致快照分页、id 无重漏、提前取消）；桌面接入 export_pages + .partial 原子改名/取消清理。**各格式(CSV/JSON/XML/TXT)真库往返与行/选区用例待补**（未完成项） | MySQL 导出格式回归手测待人工（集中清单 E） | 快照分页+字面量已验证；全格式往返待补/UI 待人工 |
+| F16 SQL 文件执行 | T24：`pg_script_needs_native_mode` 检测；`pg_psql_invocation` 参数（密码仅 env）；psql 真库：COPY FROM STDIN 两行 count=2、ON_ERROR_STOP 退出 3、continue_on_error 退出 0（无 shell 插值） | MySQL SQL 文件流程不变 | 后端真库已验证；桌面 spawn 待人工(F3–F5) |
+| F17 备份及恢复验证 | T25：pg_dump plain+inserts 真库 dump→createdb→psql 恢复→比对 3 行/序列 last_value=3/identity id=4/视图/函数/索引；版本预检（pg_dump<服务器主版本拒绝）；PGSSLMODE/TLS 经 env；SSH 隧道真库验证。**custom 格式未提供→不实现 pg_restore**（设计条件符合）；桌面备份记录 UI 待人工(F1/F2) | MySQL 原生/逻辑备份回归手测待人工（清单 E） | 后端真库已验证；桌面 UI 待人工(F) |
+| F18 用户/角色/权限 | T26/T27：`pg_live_smoke_role_crud_and_membership`（建/列/成员 ADMIN/INHERIT/SET/改密/重命名/删）、`pg_live_smoke_object_grants_per_scope`（四类 scope+签名重载+NULL ACL=owner 默认）、`pg_live_smoke_role_effective_grants`（直接 vs owner/继承/PUBLIC 三态）、`pg_live_smoke_relation_grants_roundtrip`；本会话补齐 UI 改密/重命名入口（`user_admin_pg_edit_mode_defaults_and_clears`）。角色面板 UI/对象权限面板待人工（G1–G8/新 G4b–G4d） | MySQL user@host 全套保留（回归手测待人工 集中清单 E） | 后端真库+单测已验证；UI 交互/视觉待人工(G) |
+| F19 通用 UI、状态与主题 | 桌面 `cargo run -p fluxdb-desktop` 启动进入事件循环无 panic；loading/error/disabled/show_message 统一（T21）；迟到结果不覆盖（`replace_loaded_children` schema 作用域） | — | 启动已验证；明暗主题/Esc/外点/焦点/手形待人工(集中 A–G 通用标准) |
+| F20 配置与旧数据库兼容 | T02 旧枚举序列化不变、旧配置无新字段可加载、URI 解析；T28 MySQL 深度回归 `mysql_live_smoke_full_regression`（读/写/查询/补全/结构/导出全链路）+ `mysql_live_smoke_test_connection_regressed_by_postgres`；旧连接不路由 PG | 见左；SecretRef Debug 打码 `debug_redacts_inline_secret`；storage 19 测试 | 已验证 |
 | F20 配置与旧数据库兼容 | — | — | 未验证 |
 
 ## 6. 文档工作记录

@@ -26,6 +26,9 @@ fn pg_role_admin_content(
     if admin.creating_user {
         root = root.child(pg_create_role_form(tab_id, admin, this, window, colors, cx));
     }
+    if admin.pg_edit_mode != fluxdb_app::PgRoleEditMode::None {
+        root = root.child(pg_role_edit_form(tab_id, admin, this, window, colors, cx));
+    }
     root.child(
         div()
             .flex()
@@ -57,6 +60,8 @@ fn pg_role_toolbar(
     let deletable = selected_role
         .as_deref()
         .is_some_and(|name| name != "postgres" && !name.starts_with("pg_"));
+    // 与删除一致：postgres/pg_* 不提供改密/重命名入口（避免改坏集群关键角色）。
+    let editable = deletable;
     h_flex()
         .items_center()
         .gap_2()
@@ -90,6 +95,28 @@ fn pg_role_toolbar(
                     .rounded_md()
                     .on_click(cx.listener(move |this, _, _window, cx| {
                         this.pg_drop_selected_role(tab_id, cx);
+                    })),
+            )
+        })
+        .when(editable && !admin.creating_user && admin.pg_edit_mode == fluxdb_app::PgRoleEditMode::None, |this| {
+            this.child(
+                Button::new("pg-role-rename")
+                    .label("重命名")
+                    .small()
+                    .rounded_md()
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        this.dispatch(AppCommand::BeginUserAdminPgRename(tab_id), cx);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("pg-role-password")
+                    .label("改密")
+                    .small()
+                    .rounded_md()
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        this.dispatch(AppCommand::BeginUserAdminPgPassword(tab_id), cx);
+                        cx.notify();
                     })),
             )
         })
@@ -183,6 +210,110 @@ fn pg_create_role_form(
                     this.pg_cancel_create_role(tab_id, cx);
                 })),
         )
+}
+
+/// PG 角色内联编辑表单（重命名 / 改密）：
+/// - Rename：新角色名输入（复用 user_admin_pg_rename_input）→ RenamePgRole；
+/// - Password：新密码输入（复用 user_admin_new_password_input）→ AlterPgRolePassword。
+/// 两模式共用「确定 / 取消」，Esc/外点由既有弹框策略覆盖（此处直接渲染为工具条下表单行）。
+fn pg_role_edit_form(
+    tab_id: TabId,
+    admin: &UserAdminState,
+    this: &mut NavicatMain,
+    window: &mut Window,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let role = admin
+        .selected_user
+        .as_ref()
+        .map(|u| u.user.clone())
+        .unwrap_or_default();
+    match admin.pg_edit_mode {
+        fluxdb_app::PgRoleEditMode::Rename => h_flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(colors.border)
+            .bg(colors.panel_alt)
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(colors.muted)
+                    .child(format!("重命名 {role} 为:")),
+            )
+            .child(user_admin_form_input_box(
+                this.user_admin_pg_rename_input.clone(),
+                window,
+                colors,
+                cx,
+            ))
+            .child(
+                Button::new("pg-rename-confirm")
+                    .label("确定")
+                    .small()
+                    .rounded_md()
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        this.pg_rename_role(tab_id, cx);
+                    })),
+            )
+            .child(
+                Button::new("pg-rename-cancel")
+                    .label("取消")
+                    .small()
+                    .rounded_md()
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        this.dispatch(AppCommand::EndUserAdminPgEdit(tab_id), cx);
+                        this.start_user_admin_users_load(tab_id, cx);
+                        cx.notify();
+                    })),
+            ),
+        fluxdb_app::PgRoleEditMode::Password => h_flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(colors.border)
+            .bg(colors.panel_alt)
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(colors.muted)
+                    .child(format!("修改 {role} 密码:")),
+            )
+            .child(user_admin_password_row(
+                "新密码:",
+                this.user_admin_new_password_input.clone(),
+                this.user_admin_password_visible,
+                window,
+                colors,
+                cx,
+            ))
+            .child(
+                Button::new("pg-password-confirm")
+                    .label("确定")
+                    .small()
+                    .rounded_md()
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        this.pg_change_password(tab_id, cx);
+                    })),
+            )
+            .child(
+                Button::new("pg-password-cancel")
+                    .label("取消")
+                    .small()
+                    .rounded_md()
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        this.dispatch(AppCommand::EndUserAdminPgEdit(tab_id), cx);
+                        this.start_user_admin_users_load(tab_id, cx);
+                        cx.notify();
+                    })),
+            ),
+        fluxdb_app::PgRoleEditMode::None => div(),
+    }
 }
 
 /// 右侧：选中 PG 角色详情（角色标识 + 成员关系 + 对象权限）。
@@ -515,6 +646,94 @@ impl NavicatMain {
         self.dispatch(AppCommand::EndUserAdminCreateUser(tab_id), cx);
         self.start_user_admin_users_load(tab_id, cx);
         cx.notify();
+    }
+
+    /// 重命名当前选中 PG 角色 → RenamePgRole → 刷新成员/角色列表。
+    fn pg_rename_role(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        let Some(admin) = self.user_admin_state_for(tab_id) else {
+            return;
+        };
+        let Some(role) = admin.selected_user.clone() else {
+            return;
+        };
+        let connection_id = admin.connection_id;
+        let new_name = admin.pg_rename_new.trim().to_string();
+        if new_name.is_empty() {
+            self.show_message("新角色名不能为空", AppMessageKind::Warning, cx);
+            return;
+        }
+        let old_name = role.user.clone();
+        let event = self.dispatch(
+            AppCommand::RenamePgRole {
+                connection_id,
+                old_name: old_name.clone(),
+                new_name: new_name.clone(),
+            },
+            cx,
+        );
+        match event {
+            AppEvent::PgRoleChanged(_) => {
+                self.show_message(
+                    format!("已重命名 {old_name} → {new_name}"),
+                    AppMessageKind::Success,
+                    cx,
+                );
+                self.dispatch(AppCommand::EndUserAdminPgEdit(tab_id), cx);
+                self.start_user_admin_users_load(tab_id, cx);
+            }
+            AppEvent::Failed(error) => {
+                self.show_message(
+                    format!("重命名失败：{}", error.message),
+                    AppMessageKind::Error,
+                    cx,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// 修改当前选中 PG 角色密码 → AlterPgRolePassword → 结束编辑态。
+    fn pg_change_password(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        let Some(admin) = self.user_admin_state_for(tab_id) else {
+            return;
+        };
+        let Some(role) = admin.selected_user.clone() else {
+            return;
+        };
+        let connection_id = admin.connection_id;
+        let password = admin.new_password.trim().to_string();
+        if password.is_empty() {
+            self.show_message("密码不能为空", AppMessageKind::Warning, cx);
+            return;
+        }
+        let role_name = role.user.clone();
+        let event = self.dispatch(
+            AppCommand::AlterPgRolePassword {
+                connection_id,
+                name: role_name.clone(),
+                password,
+            },
+            cx,
+        );
+        match event {
+            AppEvent::PgRoleChanged(_) => {
+                self.show_message(
+                    format!("已修改 {role_name} 密码"),
+                    AppMessageKind::Success,
+                    cx,
+                );
+                self.dispatch(AppCommand::EndUserAdminPgEdit(tab_id), cx);
+                self.start_user_admin_users_load(tab_id, cx);
+            }
+            AppEvent::Failed(error) => {
+                self.show_message(
+                    format!("修改密码失败：{}", error.message),
+                    AppMessageKind::Error,
+                    cx,
+                );
+            }
+            _ => {}
+        }
     }
 
     /// 删除当前选中 PG 角色（连接器默认 RESTRICT：有依赖时服务端拒绝，不自动 DROP OWNED/CASCADE）。

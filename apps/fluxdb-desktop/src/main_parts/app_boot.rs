@@ -960,6 +960,8 @@ fn main() {
                             cx.new(|cx| InputState::new(window, cx).placeholder("对象名"));
                         let user_admin_pg_grant_signature_input = cx
                             .new(|cx| InputState::new(window, cx).placeholder("函数签名（如 a integer）"));
+                        let user_admin_pg_rename_input = cx
+                            .new(|cx| InputState::new(window, cx).placeholder("新角色名"));
                         let user_admin_max_queries_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("0"));
                         let user_admin_max_updates_input =
@@ -1659,6 +1661,22 @@ fn main() {
                                 }
                             },
                         );
+                        let user_admin_pg_rename_subscription = cx.subscribe(
+                            &user_admin_pg_rename_input,
+                            |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(tab_id) = this.active_user_admin_tab_id()
+                                {
+                                    this.dispatch(
+                                        AppCommand::SetUserAdminPgRenameNew {
+                                            tab_id,
+                                            value: input.read(cx).value().to_string(),
+                                        },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
                         let user_admin_new_password_subscription = cx.subscribe(
                             &user_admin_new_password_input,
                             |this: &mut NavicatMain, input, event: &InputEvent, cx| {
@@ -2290,6 +2308,8 @@ fn main() {
                             user_admin_pg_grant_signature_input,
                             _user_admin_pg_grant_signature_subscription:
                                 user_admin_pg_grant_signature_subscription,
+                            user_admin_pg_rename_input,
+                            _user_admin_pg_rename_subscription: user_admin_pg_rename_subscription,
                             user_admin_max_queries_input,
                             _user_admin_max_queries_subscription:
                                 user_admin_max_queries_subscription,
