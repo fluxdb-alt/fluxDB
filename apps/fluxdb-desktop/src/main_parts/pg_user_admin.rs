@@ -40,7 +40,7 @@ fn pg_role_admin_content(
                 div()
                     .flex_1()
                     .min_w(px(0.))
-                    .child(pg_role_detail(admin, colors)),
+                    .child(pg_role_detail(tab_id, admin, this, window, colors, cx)),
             ),
     )
 }
@@ -185,8 +185,15 @@ fn pg_create_role_form(
         )
 }
 
-/// 右侧：选中 PG 角色详情（角色标识 + 成员关系）。
-fn pg_role_detail(admin: &UserAdminState, colors: UiColors) -> Div {
+/// 右侧：选中 PG 角色详情（角色标识 + 成员关系 + 对象权限）。
+fn pg_role_detail(
+    tab_id: TabId,
+    admin: &UserAdminState,
+    this: &mut NavicatMain,
+    window: &mut Window,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
     let Some(selected) = admin.selected_user.clone() else {
         return div()
             .flex_1()
@@ -258,7 +265,206 @@ fn pg_role_detail(admin: &UserAdminState, colors: UiColors) -> Div {
             );
         }
     }
-    body
+
+    body.child(pg_role_privileges_panel(tab_id, admin, this, window, colors, cx))
+}
+
+/// 对象权限面板：目标选择（种类/schema/对象/签名）+ 读取 + 逐权限显示直接/继承与授权撤销。
+fn pg_role_privileges_panel(
+    tab_id: TabId,
+    admin: &UserAdminState,
+    this: &mut NavicatMain,
+    window: &mut Window,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let active_kind = admin.pg_grant_kind;
+
+    // 对象种类选择（紧凑按钮组）。
+    let mut kinds = h_flex().items_center().gap_1();
+    for kind in fluxdb_app::PgGrantObjectKind::all() {
+        let selected = kind == active_kind;
+        kinds = kinds.child(
+            Button::new(format!("pg-grant-kind-{}", kind.label()))
+                .label(kind.label())
+                .small()
+                .rounded_md()
+                .when(selected, |b| b.on_click(cx.listener(move |this, _, _window, cx| {
+                    this.dispatch(
+                        AppCommand::SetUserAdminPgGrantTarget {
+                            tab_id,
+                            kind,
+                            schema: this
+                                .user_admin_state_for(tab_id)
+                                .map(|a| a.pg_grant_schema)
+                                .unwrap_or_default(),
+                            object: this
+                                .user_admin_state_for(tab_id)
+                                .map(|a| a.pg_grant_object)
+                                .unwrap_or_default(),
+                            signature: this
+                                .user_admin_state_for(tab_id)
+                                .map(|a| a.pg_grant_signature)
+                                .unwrap_or_default(),
+                        },
+                        cx,
+                    );
+                    cx.notify();
+                }))),
+        );
+    }
+
+    let mut panel = div()
+        .mt_2()
+        .pt_3()
+        .border_t_1()
+        .border_color(colors.border)
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_size(px(13.))
+                .text_color(colors.text)
+                .child("对象权限（无需手写 SQL）"),
+        )
+        .child(kinds)
+        .child(
+            h_flex()
+                .items_center()
+                .gap_2()
+                .flex_wrap()
+                .child(user_admin_form_input_box(
+                    this.user_admin_pg_grant_schema_input.clone(),
+                    window,
+                    colors,
+                    cx,
+                ))
+                .child(user_admin_form_input_box(
+                    this.user_admin_pg_grant_object_input.clone(),
+                    window,
+                    colors,
+                    cx,
+                ))
+                .child(user_admin_form_input_box(
+                    this.user_admin_pg_grant_signature_input.clone(),
+                    window,
+                    colors,
+                    cx,
+                ))
+                .child(
+                    Button::new("pg-grant-load")
+                        .label("读取权限")
+                        .small()
+                        .rounded_md()
+                        .on_click(cx.listener(move |this, _, _window, cx| {
+                            this.start_pg_object_grants_load(tab_id, cx);
+                        })),
+                ),
+        );
+
+    if admin.loading_pg_grants {
+        panel = panel.child(
+            div()
+                .text_size(px(12.))
+                .text_color(colors.muted)
+                .child("正在读取权限…"),
+        );
+    } else if let Some(error) = &admin.pg_grants_error {
+        panel = panel.child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(0xff3b45))
+                .child(format!("读取失败：{}", error.message)),
+        );
+    } else if admin.pg_object_grants.is_none() {
+        panel = panel.child(
+            div()
+                .text_size(px(12.))
+                .text_color(colors.muted)
+                .child("选择目标后点「读取权限」。"),
+        );
+    } else {
+        // owner/默认权限概览（ACL 为 NULL 即默认权限，不是「无权限」）。
+        if let Some(grants) = &admin.pg_object_grants {
+            let summary = if grants.acl_is_null {
+                format!("属主 {}（默认权限：属主全权，其余无显式授权）", grants.owner)
+            } else {
+                format!("属主 {}", grants.owner)
+            };
+            panel = panel.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(colors.muted)
+                    .child(summary),
+            );
+        }
+        for grant in &admin.pg_effective_grants {
+            let (status, status_color) = if grant.direct {
+                ("直接授权（可撤销）", colors.text)
+            } else if grant.effective {
+                ("继承/PUBLIC/属主（不可直接撤销）", colors.muted)
+            } else {
+                ("无", colors.muted)
+            };
+            let privilege = grant.privilege.clone();
+            let direct = grant.direct;
+            let mut row = h_flex()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .w(px(120.))
+                        .text_size(px(13.))
+                        .text_color(colors.text)
+                        .child(privilege.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(12.))
+                        .text_color(status_color)
+                        .child(status),
+                );
+            if direct {
+                // 已直接授权：提供撤销（只撤销该角色直接授权，不动继承/属主）。
+                row = row.child(
+                    Button::new(format!("pg-revoke-{privilege}"))
+                        .label("撤销")
+                        .small()
+                        .rounded_md()
+                        .on_click(cx.listener(move |this, _, _window, cx| {
+                            this.pg_revoke_privilege(tab_id, privilege.clone(), cx);
+                        })),
+                );
+            } else {
+                // 未直接授权：提供授予（带/不带 GRANT OPTION）。闭包各持一份克隆避免移动冲突。
+                let grant_plain = privilege.clone();
+                let grant_option = privilege.clone();
+                row = row
+                    .child(
+                        Button::new(format!("pg-grant-{privilege}"))
+                            .label("授予")
+                            .small()
+                            .rounded_md()
+                            .on_click(cx.listener(move |this, _, _window, cx| {
+                                this.pg_grant_privilege(tab_id, grant_plain.clone(), false, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new(format!("pg-grant-opt-{privilege}"))
+                            .label("授予+可再授")
+                            .small()
+                            .rounded_md()
+                            .on_click(cx.listener(move |this, _, _window, cx| {
+                                this.pg_grant_privilege(tab_id, grant_option.clone(), true, cx);
+                            })),
+                    );
+            }
+            panel = panel.child(row);
+        }
+    }
+    panel
 }
 
 impl NavicatMain {
@@ -336,6 +542,94 @@ impl NavicatMain {
             AppEvent::Failed(error) => {
                 self.show_message(
                     format!("删除角色失败：{}", error.message),
+                    AppMessageKind::Error,
+                    cx,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+impl NavicatMain {
+    /// 读取当前目标的对象权限（后台线程 → 回填 pg_object_grants/pg_effective_grants）。
+    fn start_pg_object_grants_load(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        self.dispatch(AppCommand::StartUserAdminPgObjectGrantsLoad(tab_id), cx);
+        let mut controller = self.controller.clone();
+        let task = cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    match controller.dispatch(AppCommand::LoadUserAdminPgObjectGrants(tab_id)) {
+                        AppEvent::UserAdminPgObjectGrantsLoaded(_, result) => result,
+                        AppEvent::Failed(error) => Err(error),
+                        _ => Err(fluxdb_core::UserFacingError {
+                            title: "读取对象权限失败".to_string(),
+                            message: "对象权限读取没有返回结果".to_string(),
+                            detail: None,
+                            retryable: true,
+                        }),
+                    }
+                })
+                .await;
+            let _ = cx.update(|cx| {
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| {
+                    this.dispatch(
+                        AppCommand::FinishUserAdminPgObjectGrantsLoad { tab_id, result },
+                        cx,
+                    );
+                    cx.notify();
+                });
+            });
+        });
+        let _ = task;
+    }
+
+    /// 授予选中角色某权限（可选 GRANT OPTION），成功后重新读取。
+    fn pg_grant_privilege(
+        &mut self,
+        tab_id: TabId,
+        privilege: String,
+        grant_option: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let event = self.dispatch(
+            AppCommand::GrantUserAdminPgPrivilege {
+                tab_id,
+                privilege,
+                grant_option,
+            },
+            cx,
+        );
+        match event {
+            AppEvent::UserAdminPgGrantsChanged(_) => {
+                self.show_message("已授权", AppMessageKind::Success, cx);
+                self.start_pg_object_grants_load(tab_id, cx);
+            }
+            AppEvent::Failed(error) => {
+                self.show_message(
+                    format!("授权失败：{}", error.message),
+                    AppMessageKind::Error,
+                    cx,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// 撤销选中角色某权限（仅撤销直接授权），成功后重新读取。
+    fn pg_revoke_privilege(&mut self, tab_id: TabId, privilege: String, cx: &mut Context<Self>) {
+        let event = self.dispatch(AppCommand::RevokeUserAdminPgPrivilege { tab_id, privilege }, cx);
+        match event {
+            AppEvent::UserAdminPgGrantsChanged(_) => {
+                self.show_message("已撤销", AppMessageKind::Success, cx);
+                self.start_pg_object_grants_load(tab_id, cx);
+            }
+            AppEvent::Failed(error) => {
+                self.show_message(
+                    format!("撤销失败：{}", error.message),
                     AppMessageKind::Error,
                     cx,
                 );

@@ -75,7 +75,16 @@ pub trait Connector {
     fn revoke_role_membership(&self, _: ConnectionId, _: &str, _: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持撤销成员关系"))
     }
-    fn grant_object_privilege(&self, _: ConnectionId, _: &str, _: &str, _: &str) -> Result<()> {
+    /// 对象授权：`GRANT <privilege> ON <object> TO <grantee> [WITH GRANT OPTION]`。
+    /// `privilege` 为权限关键字，`object_sql` 为 `ON` 后的对象片段，`grant_option` 决定可否再授权。
+    fn grant_object_privilege(
+        &self,
+        _: ConnectionId,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: bool,
+    ) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持对象授权"))
     }
     fn revoke_object_privilege(&self, _: ConnectionId, _: &str, _: &str, _: &str) -> Result<()> {

@@ -2160,6 +2160,75 @@ impl AppController {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
                 }
             }
+            AppCommand::SetUserAdminPgGrantTarget {
+                tab_id,
+                kind,
+                schema,
+                object,
+                signature,
+            } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_grant_kind = kind;
+                    admin.pg_grant_schema = schema;
+                    admin.pg_grant_object = object;
+                    admin.pg_grant_signature = signature;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::LoadUserAdminPgObjectGrants(tab_id) => {
+                match self.load_pg_object_grants(tab_id) {
+                    Ok(result) => AppEvent::UserAdminPgObjectGrantsLoaded(tab_id, Ok(result)),
+                    Err(error) => AppEvent::UserAdminPgObjectGrantsLoaded(
+                        tab_id,
+                        Err(error.into()),
+                    ),
+                }
+            }
+            AppCommand::StartUserAdminPgObjectGrantsLoad(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.loading_pg_grants = true;
+                    admin.pg_grants_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::FinishUserAdminPgObjectGrantsLoad { tab_id, result } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.loading_pg_grants = false;
+                    match result {
+                        Ok((grants, effective)) => {
+                            admin.pg_object_grants = Some(grants);
+                            admin.pg_effective_grants = effective;
+                            admin.pg_grants_error = None;
+                        }
+                        Err(error) => {
+                            admin.pg_object_grants = None;
+                            admin.pg_effective_grants.clear();
+                            admin.pg_grants_error = Some(error);
+                        }
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::GrantUserAdminPgPrivilege {
+                tab_id,
+                privilege,
+                grant_option,
+            } => match self.apply_pg_grant(tab_id, &privilege, grant_option) {
+                Ok(()) => AppEvent::UserAdminPgGrantsChanged(tab_id),
+                Err(error) => self.fail(error),
+            },
+            AppCommand::RevokeUserAdminPgPrivilege { tab_id, privilege } => {
+                match self.apply_pg_revoke(tab_id, &privilege) {
+                    Ok(()) => AppEvent::UserAdminPgGrantsChanged(tab_id),
+                    Err(error) => self.fail(error),
+                }
+            }
             AppCommand::SelectUserAdminDetailTab { tab_id, detail_tab } => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
                     admin.active_detail_tab = detail_tab;

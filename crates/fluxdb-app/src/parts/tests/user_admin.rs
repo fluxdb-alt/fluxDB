@@ -198,3 +198,87 @@ fn user_admin_pg_can_login_defaults_and_reflects() {
     admin.pg_can_login = false;
     assert!(!admin.pg_can_login, "切换为 NOLOGIN 组角色应生效");
 }
+
+/// PG 权限面板：授权目标 scope 构造（表/视图/序列/函数/schema/数据库 + 空 schema 回退 public）。
+#[test]
+fn pg_grant_scope_from_state_maps_kinds_and_defaults_schema() {
+    assert_eq!(
+        pg_grant_scope_from_state(PgGrantObjectKind::Table, "s1", "t", ""),
+        PgObjectGrantScope::Relation {
+            schema: "s1".into(),
+            name: "t".into(),
+            kind: PgRelationKind::Table,
+        }
+    );
+    assert_eq!(
+        pg_grant_scope_from_state(PgGrantObjectKind::Sequence, "s1", "seq", ""),
+        PgObjectGrantScope::Relation {
+            schema: "s1".into(),
+            name: "seq".into(),
+            kind: PgRelationKind::Sequence,
+        }
+    );
+    assert_eq!(
+        pg_grant_scope_from_state(PgGrantObjectKind::Routine, "s1", "fn", "a integer"),
+        PgObjectGrantScope::Routine {
+            schema: "s1".into(),
+            name: "fn".into(),
+            signature: "a integer".into(),
+        }
+    );
+    assert_eq!(
+        pg_grant_scope_from_state(PgGrantObjectKind::Schema, "s1", "", ""),
+        PgObjectGrantScope::Schema { schema: "s1".into() }
+    );
+    assert_eq!(
+        pg_grant_scope_from_state(PgGrantObjectKind::Database, "", "appdb", ""),
+        PgObjectGrantScope::Database { database: "appdb".into() }
+    );
+    // 空 schema 回退 public。
+    assert_eq!(
+        pg_grant_scope_from_state(PgGrantObjectKind::Table, "  ", "t", ""),
+        PgObjectGrantScope::Relation {
+            schema: "public".into(),
+            name: "t".into(),
+            kind: PgRelationKind::Table,
+        }
+    );
+}
+
+/// PG 权限面板：GRANT/REVOKE 的 `ON <object>` 片段（双引号 + 关键字 + 函数签名）。
+#[test]
+fn pg_grant_object_sql_renders_keyword_and_quoting() {
+    let table = PgObjectGrantScope::Relation {
+        schema: "s".into(),
+        name: "t".into(),
+        kind: PgRelationKind::Table,
+    };
+    assert_eq!(pg_grant_object_sql(&table), "TABLE \"s\".\"t\"");
+    let seq = PgObjectGrantScope::Relation {
+        schema: "s".into(),
+        name: "q".into(),
+        kind: PgRelationKind::Sequence,
+    };
+    assert_eq!(pg_grant_object_sql(&seq), "SEQUENCE \"s\".\"q\"");
+    let routine = PgObjectGrantScope::Routine {
+        schema: "s".into(),
+        name: "fn".into(),
+        signature: "a integer".into(),
+    };
+    assert_eq!(pg_grant_object_sql(&routine), "FUNCTION \"s\".\"fn\"(a integer)");
+    assert_eq!(
+        pg_grant_object_sql(&PgObjectGrantScope::Schema { schema: "s".into() }),
+        "SCHEMA \"s\""
+    );
+    assert_eq!(
+        pg_grant_object_sql(&PgObjectGrantScope::Database { database: "d".into() }),
+        "DATABASE \"d\""
+    );
+    // 双引号标识符转义。
+    let quoted = PgObjectGrantScope::Relation {
+        schema: "s".into(),
+        name: "a\"b".into(),
+        kind: PgRelationKind::Table,
+    };
+    assert_eq!(pg_grant_object_sql(&quoted), "TABLE \"s\".\"a\"\"b\"");
+}

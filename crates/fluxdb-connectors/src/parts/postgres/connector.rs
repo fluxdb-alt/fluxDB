@@ -163,10 +163,11 @@ impl Connector for PostgresConnector {
         privilege: &str,
         object_sql: &str,
         grantee: &str,
+        grant_option: bool,
     ) -> fluxdb_core::Result<()> {
         let _ = connection_id;
         let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
-        pg_grant_object_privilege(config, privilege, object_sql, grantee)
+        pg_grant_object_privilege(config, privilege, object_sql, grantee, grant_option)
     }
 
     fn revoke_object_privilege(

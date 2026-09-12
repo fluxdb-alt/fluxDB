@@ -3830,6 +3830,52 @@ SELECT item_id, name FROM audit_log;"
             table_public.entries
         );
 
+        // 授权（含 GRANT OPTION）+ 撤销往返：经连接器 grant_object_privilege/revoke_object_privilege。
+        let tbl_scope = fluxdb_core::PgObjectGrantScope::Relation {
+            schema: "t26_sco".into(),
+            name: "tbl".into(),
+            kind: fluxdb_core::PgRelationKind::Table,
+        };
+        connector
+            .grant_object_privilege(
+                config.id,
+                "INSERT",
+                "TABLE \"t26_sco\".\"tbl\"",
+                &role,
+                true,
+            )
+            .expect("带 GRANT OPTION 授权应成功");
+        let after_grant = connector
+            .list_object_grants(config.id, &tbl_scope)
+            .expect("列表权限应成功");
+        assert!(
+            after_grant
+                .entries
+                .iter()
+                .any(|e| e.grantee == role && e.privilege == "INSERT" && e.grant_option),
+            "应含 {role} 的 INSERT（带 GRANT OPTION）：{:?}",
+            after_grant.entries
+        );
+        connector
+            .revoke_object_privilege(
+                config.id,
+                "INSERT",
+                "TABLE \"t26_sco\".\"tbl\"",
+                &role,
+            )
+            .expect("撤销授权应成功");
+        let after_revoke = connector
+            .list_object_grants(config.id, &tbl_scope)
+            .expect("列表权限应成功");
+        assert!(
+            !after_revoke
+                .entries
+                .iter()
+                .any(|e| e.grantee == role && e.privilege == "INSERT"),
+            "撤销后不应再有 {role} 的 INSERT：{:?}",
+            after_revoke.entries
+        );
+
         // 清理对象与角色。
         let mut cleanup = pg_query_request(&config, None);
         cleanup.text = "DROP SCHEMA t26_sco CASCADE".to_string();

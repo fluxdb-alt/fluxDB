@@ -864,6 +864,13 @@ struct NavicatMain {
     _user_admin_create_password_subscription: Subscription,
     user_admin_new_password_input: Entity<InputState>,
     _user_admin_new_password_subscription: Subscription,
+    // PG 对象权限面板（T27）：授权目标的 schema / 对象名 / 函数签名（区分重载）。
+    user_admin_pg_grant_schema_input: Entity<InputState>,
+    _user_admin_pg_grant_schema_subscription: Subscription,
+    user_admin_pg_grant_object_input: Entity<InputState>,
+    _user_admin_pg_grant_object_subscription: Subscription,
+    user_admin_pg_grant_signature_input: Entity<InputState>,
+    _user_admin_pg_grant_signature_subscription: Subscription,
     user_admin_max_queries_input: Entity<InputState>,
     _user_admin_max_queries_subscription: Subscription,
     user_admin_max_updates_input: Entity<InputState>,

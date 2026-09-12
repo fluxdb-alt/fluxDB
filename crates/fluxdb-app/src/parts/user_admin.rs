@@ -247,3 +247,154 @@ pub fn pg_groups_for_member(memberships: &[fluxdb_core::PgRoleMembership], membe
         .map(|m| m.grantee.clone())
         .collect()
 }
+
+/// 由 PG 权限面板状态构造连接器所需的授权目标 scope（纯函数，便于测试）。
+///
+/// 表/视图/序列归 Relation（带 PgRelationKind），函数归 Routine（schema+name+签名，区分重载），
+/// schema/数据库各自独立。空 schema 回退 public（PG 默认）。
+pub fn pg_grant_scope_from_state(
+    kind: PgGrantObjectKind,
+    schema: &str,
+    object: &str,
+    signature: &str,
+) -> PgObjectGrantScope {
+    let schema = if schema.trim().is_empty() { "public" } else { schema.trim() };
+    match kind {
+        PgGrantObjectKind::Table => PgObjectGrantScope::Relation {
+            schema: schema.to_string(),
+            name: object.trim().to_string(),
+            kind: PgRelationKind::Table,
+        },
+        PgGrantObjectKind::View => PgObjectGrantScope::Relation {
+            schema: schema.to_string(),
+            name: object.trim().to_string(),
+            kind: PgRelationKind::View,
+        },
+        PgGrantObjectKind::Sequence => PgObjectGrantScope::Relation {
+            schema: schema.to_string(),
+            name: object.trim().to_string(),
+            kind: PgRelationKind::Sequence,
+        },
+        PgGrantObjectKind::Schema => PgObjectGrantScope::Schema {
+            schema: schema.to_string(),
+        },
+        PgGrantObjectKind::Database => PgObjectGrantScope::Database {
+            database: object.trim().to_string(),
+        },
+        PgGrantObjectKind::Routine => PgObjectGrantScope::Routine {
+            schema: schema.to_string(),
+            name: object.trim().to_string(),
+            signature: signature.trim().to_string(),
+        },
+    }
+}
+
+impl AppController {
+    /// 读取 PG 对象权限：对象读模型（owner/默认/显式条目）+ 选中角色生效权限（直接 vs 继承）。
+    fn load_pg_object_grants(
+        &self,
+        tab_id: TabId,
+    ) -> fluxdb_core::Result<(fluxdb_core::PgObjectGrants, Vec<fluxdb_core::PgEffectivePrivilege>)> {
+        let admin = self
+            .user_admin_state(tab_id)
+            .ok_or_else(|| Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))?;
+        let role = admin
+            .selected_user
+            .as_ref()
+            .map(|u| u.user.clone())
+            .ok_or_else(|| Error::new(ErrorKind::Query, "请先选择角色"))?;
+        let scope = pg_grant_scope_from_state(
+            admin.pg_grant_kind,
+            &admin.pg_grant_schema,
+            &admin.pg_grant_object,
+            &admin.pg_grant_signature,
+        );
+        let connection_id = admin.connection_id;
+        let config = self
+            .connection_config(connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        role_operation_for_connection(&config, |connector| {
+            let grants = connector.list_object_grants(connection_id, &scope)?;
+            let effective = connector.role_effective_grants(connection_id, &scope, &role)?;
+            Ok((grants, effective))
+        })
+    }
+
+    /// 授予选中角色某权限（GRANT ... ON 目标 TO 角色）。仅对**直接授权**生效，不改继承/owner。
+    fn apply_pg_grant(
+        &self,
+        tab_id: TabId,
+        privilege: &str,
+        grant_option: bool,
+    ) -> fluxdb_core::Result<()> {
+        let admin = self
+            .user_admin_state(tab_id)
+            .ok_or_else(|| Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))?;
+        let role = admin
+            .selected_user
+            .as_ref()
+            .map(|u| u.user.clone())
+            .ok_or_else(|| Error::new(ErrorKind::Query, "请先选择角色"))?;
+        let scope = pg_grant_scope_from_state(
+            admin.pg_grant_kind,
+            &admin.pg_grant_schema,
+            &admin.pg_grant_object,
+            &admin.pg_grant_signature,
+        );
+        let connection_id = admin.connection_id;
+        let object_sql = pg_grant_object_sql(&scope);
+        let config = self
+            .connection_config(connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        role_operation_for_connection(&config, |connector| {
+            connector.grant_object_privilege(connection_id, privilege, &object_sql, &role, grant_option)
+        })
+    }
+
+    /// 撤销选中角色某权限（REVOKE ... ON 目标 FROM 角色）。只撤销该角色的**直接**授权。
+    fn apply_pg_revoke(&self, tab_id: TabId, privilege: &str) -> fluxdb_core::Result<()> {
+        let admin = self
+            .user_admin_state(tab_id)
+            .ok_or_else(|| Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))?;
+        let role = admin
+            .selected_user
+            .as_ref()
+            .map(|u| u.user.clone())
+            .ok_or_else(|| Error::new(ErrorKind::Query, "请先选择角色"))?;
+        let scope = pg_grant_scope_from_state(
+            admin.pg_grant_kind,
+            &admin.pg_grant_schema,
+            &admin.pg_grant_object,
+            &admin.pg_grant_signature,
+        );
+        let connection_id = admin.connection_id;
+        let object_sql = pg_grant_object_sql(&scope);
+        let config = self
+            .connection_config(connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        role_operation_for_connection(&config, |connector| {
+            connector.revoke_object_privilege(connection_id, privilege, &object_sql, &role)
+        })
+    }
+}
+
+/// 把授权目标渲染为 GRANT/REVOKE 的 `ON <object>` 片段（PG 双引号、函数带签名）。
+pub fn pg_grant_object_sql(scope: &PgObjectGrantScope) -> String {
+    fn q(name: &str) -> String {
+        format!("\"{}\"", name.replace('"', "\"\""))
+    }
+    match scope {
+        PgObjectGrantScope::Database { database } => format!("DATABASE {}", q(database)),
+        PgObjectGrantScope::Schema { schema } => format!("SCHEMA {}", q(schema)),
+        PgObjectGrantScope::Relation { schema, name, kind } => {
+            let keyword = match kind {
+                PgRelationKind::Sequence => "SEQUENCE",
+                PgRelationKind::Table | PgRelationKind::View => "TABLE",
+            };
+            format!("{keyword} {}.{}", q(schema), q(name))
+        }
+        PgObjectGrantScope::Routine { schema, name, signature } => {
+            format!("FUNCTION {}.{}({})", q(schema), q(name), signature)
+        }
+    }
+}

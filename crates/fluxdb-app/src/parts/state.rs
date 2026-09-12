@@ -186,6 +186,52 @@ pub struct UserAdminState {
     pub pending_sql: Option<UserAdminPendingSql>,
     /// PostgreSQL：新建角色是否可登录（LOGIN）/组角色（NOLOGIN）。仅 PG 场景使用。
     pub pg_can_login: bool,
+    /// PostgreSQL 对象权限（T27）：授权目标种类 + schema/对象/函数签名。
+    pub pg_grant_kind: PgGrantObjectKind,
+    pub pg_grant_schema: String,
+    pub pg_grant_object: String,
+    pub pg_grant_signature: String,
+    /// 选中对象权限的读取结果（owner/默认/显式条目）与角色生效权限（直接 vs 继承）。
+    pub pg_object_grants: Option<PgObjectGrants>,
+    pub pg_effective_grants: Vec<PgEffectivePrivilege>,
+    pub loading_pg_grants: bool,
+    pub pg_grants_error: Option<UserFacingError>,
+}
+
+/// PG 对象权限授权目标种类（UI 选择器用；映射到 `PgObjectGrantScope`）。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PgGrantObjectKind {
+    #[default]
+    Table,
+    View,
+    Sequence,
+    Schema,
+    Database,
+    Routine,
+}
+
+impl PgGrantObjectKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            PgGrantObjectKind::Table => "表",
+            PgGrantObjectKind::View => "视图",
+            PgGrantObjectKind::Sequence => "序列",
+            PgGrantObjectKind::Schema => "schema",
+            PgGrantObjectKind::Database => "数据库",
+            PgGrantObjectKind::Routine => "函数",
+        }
+    }
+
+    pub fn all() -> [PgGrantObjectKind; 6] {
+        [
+            PgGrantObjectKind::Table,
+            PgGrantObjectKind::View,
+            PgGrantObjectKind::Sequence,
+            PgGrantObjectKind::Schema,
+            PgGrantObjectKind::Database,
+            PgGrantObjectKind::Routine,
+        ]
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -255,6 +301,14 @@ impl UserAdminState {
             member_grant_edits: Vec::new(),
             pending_sql: None,
             pg_can_login: true,
+            pg_grant_kind: PgGrantObjectKind::default(),
+            pg_grant_schema: "public".to_string(),
+            pg_grant_object: String::new(),
+            pg_grant_signature: String::new(),
+            pg_object_grants: None,
+            pg_effective_grants: Vec::new(),
+            loading_pg_grants: false,
+            pg_grants_error: None,
         }
     }
 
@@ -1639,6 +1693,34 @@ pub enum AppCommand {
         tab_id: TabId,
         can_login: bool,
     },
+    /// PostgreSQL 对象权限：设置授权目标（种类/schema/对象/签名）。
+    SetUserAdminPgGrantTarget {
+        tab_id: TabId,
+        kind: PgGrantObjectKind,
+        schema: String,
+        object: String,
+        signature: String,
+    },
+    /// 读取当前授权目标的对象权限（owner/默认/显式条目 + 选中角色生效权限）。
+    LoadUserAdminPgObjectGrants(TabId),
+    /// 置对象权限面板为「加载中」。
+    StartUserAdminPgObjectGrantsLoad(TabId),
+    /// 对象权限读取完成回填（Ok 为对象读模型+生效权限；Err 为失败）。
+    FinishUserAdminPgObjectGrantsLoad {
+        tab_id: TabId,
+        result: Result<(PgObjectGrants, Vec<PgEffectivePrivilege>), UserFacingError>,
+    },
+    /// 授予选中角色某权限（可选 GRANT OPTION）。
+    GrantUserAdminPgPrivilege {
+        tab_id: TabId,
+        privilege: String,
+        grant_option: bool,
+    },
+    /// 撤销选中角色某权限。
+    RevokeUserAdminPgPrivilege {
+        tab_id: TabId,
+        privilege: String,
+    },
     SelectUserAdminDetailTab {
         tab_id: TabId,
         detail_tab: UserAdminDetailTab,
@@ -1809,6 +1891,13 @@ pub enum AppEvent {
     PgRolesLoaded(ConnectionId, Vec<fluxdb_core::PgRole>),
     /// PG 角色变更成功（CRUD 后 UI 重取列表）。
     PgRoleChanged(ConnectionId),
+    /// PG 对象权限读取完成（对象读模型 + 选中角色生效权限）；Err 为读取失败。
+    UserAdminPgObjectGrantsLoaded(
+        TabId,
+        Result<(PgObjectGrants, Vec<PgEffectivePrivilege>), UserFacingError>,
+    ),
+    /// PG 对象权限授予/撤销成功（UI 重新读取该对象权限）。
+    UserAdminPgGrantsChanged(TabId),
     DataLoaded(TabId, DataPage),
     /// 惰性补齐无用的事件：元信息已由控制器合并进 `editor.page`，只用于通知 UI 续补下一批可见行。
     RedisKeyMetadataLoaded {

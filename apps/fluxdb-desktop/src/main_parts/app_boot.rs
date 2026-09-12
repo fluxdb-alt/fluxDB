@@ -954,6 +954,12 @@ fn main() {
                         });
                         let user_admin_new_password_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("密码").masked(true));
+                        let user_admin_pg_grant_schema_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("schema（默认 public）"));
+                        let user_admin_pg_grant_object_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("对象名"));
+                        let user_admin_pg_grant_signature_input = cx
+                            .new(|cx| InputState::new(window, cx).placeholder("函数签名（如 a integer）"));
                         let user_admin_max_queries_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("0"));
                         let user_admin_max_updates_input =
@@ -1592,6 +1598,67 @@ fn main() {
                                 }
                             },
                         );
+                        // PG 对象权限目标三输入：各自变更时用当前状态其余字段拼出完整 target 下发。
+                        let user_admin_pg_grant_schema_subscription = cx.subscribe(
+                            &user_admin_pg_grant_schema_input,
+                            |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(tab_id) = this.active_user_admin_tab_id()
+                                    && let Some(admin) = this.user_admin_state_for(tab_id)
+                                {
+                                    this.dispatch(
+                                        AppCommand::SetUserAdminPgGrantTarget {
+                                            tab_id,
+                                            kind: admin.pg_grant_kind,
+                                            schema: input.read(cx).value().to_string(),
+                                            object: admin.pg_grant_object,
+                                            signature: admin.pg_grant_signature,
+                                        },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        let user_admin_pg_grant_object_subscription = cx.subscribe(
+                            &user_admin_pg_grant_object_input,
+                            |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(tab_id) = this.active_user_admin_tab_id()
+                                    && let Some(admin) = this.user_admin_state_for(tab_id)
+                                {
+                                    this.dispatch(
+                                        AppCommand::SetUserAdminPgGrantTarget {
+                                            tab_id,
+                                            kind: admin.pg_grant_kind,
+                                            schema: admin.pg_grant_schema,
+                                            object: input.read(cx).value().to_string(),
+                                            signature: admin.pg_grant_signature,
+                                        },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        let user_admin_pg_grant_signature_subscription = cx.subscribe(
+                            &user_admin_pg_grant_signature_input,
+                            |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(tab_id) = this.active_user_admin_tab_id()
+                                    && let Some(admin) = this.user_admin_state_for(tab_id)
+                                {
+                                    this.dispatch(
+                                        AppCommand::SetUserAdminPgGrantTarget {
+                                            tab_id,
+                                            kind: admin.pg_grant_kind,
+                                            schema: admin.pg_grant_schema,
+                                            object: admin.pg_grant_object,
+                                            signature: input.read(cx).value().to_string(),
+                                        },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
                         let user_admin_new_password_subscription = cx.subscribe(
                             &user_admin_new_password_input,
                             |this: &mut NavicatMain, input, event: &InputEvent, cx| {
@@ -2214,6 +2281,15 @@ fn main() {
                             user_admin_new_password_input,
                             _user_admin_new_password_subscription:
                                 user_admin_new_password_subscription,
+                            user_admin_pg_grant_schema_input,
+                            _user_admin_pg_grant_schema_subscription:
+                                user_admin_pg_grant_schema_subscription,
+                            user_admin_pg_grant_object_input,
+                            _user_admin_pg_grant_object_subscription:
+                                user_admin_pg_grant_object_subscription,
+                            user_admin_pg_grant_signature_input,
+                            _user_admin_pg_grant_signature_subscription:
+                                user_admin_pg_grant_signature_subscription,
                             user_admin_max_queries_input,
                             _user_admin_max_queries_subscription:
                                 user_admin_max_queries_subscription,

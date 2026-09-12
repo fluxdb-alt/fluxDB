@@ -262,20 +262,22 @@ fn pg_revoke_role_membership(
     pg_exec_role_sql(config, &sql)
 }
 
-/// 对象授权：GRANT priv TO grantee ON object。priv 为已知白名单关键字（SELECT/INSERT/…）。
-/// object 形如 `"schema"."table"` 或 `"database"`/`"schema"`；用闭包渲染以保持参数安全。
+/// 对象授权：GRANT priv ON object TO grantee [WITH GRANT OPTION]。priv 为白名单关键字
+/// （SELECT/INSERT/…）；object 形如 `TABLE "s"."t"` / `"db"` / `SCHEMA "s"`（由 app 侧渲染）。
 fn pg_grant_object_privilege(
     config: &ConnectionConfig,
     privilege: &str,
     object_sql: &str,
     grantee: &str,
+    grant_option: bool,
 ) -> fluxdb_core::Result<()> {
     if !is_pg_privilege_name(privilege) || !is_pg_identifier_name(grantee) {
         return Err(Error::new(ErrorKind::Query, "权限/授权对象名不合法"));
     }
+    let suffix = if grant_option { " WITH GRANT OPTION" } else { "" };
     let sql = format!(
-        "GRANT {} ON {} TO {};",
-        privilege, object_sql, grantee
+        "GRANT {} ON {} TO {}{};",
+        privilege, object_sql, grantee, suffix
     );
     pg_exec_role_sql(config, &sql)
 }
