@@ -3858,6 +3858,75 @@ SELECT item_id, name FROM audit_log;"
         }
     }
 
+    /// T23：一致快照导出分页——单 REPEATABLE READ 事务内完整、无重漏行、可取消。
+    #[test]
+    fn pg_live_smoke_export_pages_snapshot() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let path = ObjectPath {
+            connection_id: ConnectionId(1),
+            kind: ObjectKind::Table,
+            database: Some(db_name),
+            schema: Some("public".to_string()),
+            name: "t23_export".to_string(),
+        };
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t23_export CASCADE; \
+            CREATE TABLE t23_export(id integer PRIMARY KEY, payload text); \
+            INSERT INTO t23_export (id, payload) \
+                SELECT g, repeat('x', 50) FROM generate_series(1, 10000) g; \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建表+10000 行应成功");
+
+        // 完整导出：收集全部 id，验证无重漏。
+        let mut seen = std::collections::HashSet::new();
+        let mut pages: usize = 0;
+        let mut collected: usize = 0;
+        let cancel = || false;
+        let mut on_page = |page: DataPage| {
+            pages += 1;
+            for row in &page.rows {
+                if let CellValue::I64(id) = row.values[0] {
+                    seen.insert(id);
+                }
+            }
+            collected += page.rows.len();
+            true
+        };
+        pg_export_pages(&config, &path, &[], &[], &cancel, &mut on_page)
+            .expect("快照导出应成功");
+        assert_eq!(collected, 10000, "应完整导出全部行");
+        assert_eq!(seen.len(), 10000, "id 不应重复/缺失");
+        assert!(pages >= 3, "10000 行应跨多页：{pages}");
+
+        // 取消：导出少量后置 cancel → 提前结束。
+        let mut visited: usize = 0;
+        let cancel_early = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_flag = cancel_early.clone();
+        let mut on_page_cancel = |page: DataPage| {
+            visited += page.rows.len();
+            if visited >= 3000 {
+                cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                false // 提前停止
+            } else {
+                true
+            }
+        };
+        pg_export_pages(&config, &path, &[], &[], &cancel, &mut on_page_cancel)
+            .expect("取消导出不应报错");
+        assert!(visited < 10000, "取消后不应导出全部：{visited}");
+
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t23_export CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理表应成功");
+    }
+
     #[test]
     fn pg_live_smoke_create_delete_database() {
         let Some(params) = pg_smoke_params() else {
