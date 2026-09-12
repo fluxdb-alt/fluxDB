@@ -1764,6 +1764,121 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let _ = fs::remove_file(xml_path);
     }
 
+    /// T23：PG 导出各格式（SQL/CSV/JSON/XML/TXT）类型化值往返与方言渲染。
+    #[test]
+    fn postgres_table_data_export_formats_render_typed_values() {
+        let object = ObjectPath {
+            connection_id: ConnectionId(1),
+            database: Some("appdb".to_string()),
+            schema: Some("public".to_string()),
+            name: "items".to_string(),
+            kind: ObjectKind::Table,
+        };
+        let page = DataPage {
+            columns: vec![
+                GdbColumn {
+                    name: "id".to_string(),
+                    type_name: Some("integer".to_string()),
+                    nullable: false,
+                    primary_key: true,
+                    comment: None,
+                },
+                GdbColumn {
+                    name: "price".to_string(),
+                    type_name: Some("numeric".to_string()),
+                    nullable: true,
+                    primary_key: false,
+                    comment: None,
+                },
+                GdbColumn {
+                    name: "tags".to_string(),
+                    type_name: Some("jsonb".to_string()),
+                    nullable: true,
+                    primary_key: false,
+                    comment: None,
+                },
+                GdbColumn {
+                    name: "note".to_string(),
+                    type_name: Some("text".to_string()),
+                    nullable: true,
+                    primary_key: false,
+                    comment: None,
+                },
+            ],
+            rows: vec![fluxdb_core::Row {
+                values: vec![
+                    CellValue::I64(1),
+                    // numeric 保精：以精确十进制文本（不经 f64）。
+                    CellValue::Text("12.50".to_string()),
+                    CellValue::Json("{\"k\": 1}".to_string()),
+                    CellValue::Text("O'Brien".to_string()),
+                ],
+            }],
+            offset: 0,
+            limit: 100,
+            has_more: false,
+        };
+        let fields = vec![
+            "id".to_string(),
+            "price".to_string(),
+            "tags".to_string(),
+            "note".to_string(),
+        ];
+        let base = std::env::temp_dir().join(format!(
+            "gdb-pg-export-test-{}",
+            std::process::id()
+        ));
+        let write = |ext: &str, format: TableDataExportFormat| -> String {
+            let path = base.with_extension(ext);
+            let mut w = TableDataExportWriter::create(
+                &path,
+                format,
+                object.clone(),
+                fields.clone(),
+                DatabaseKind::Postgres,
+            )
+            .unwrap();
+            w.write_page(&page).unwrap();
+            w.finish().unwrap();
+            let text = fs::read_to_string(&path).unwrap();
+            let _ = fs::remove_file(&path);
+            text
+        };
+
+        // SQL：PG 双引号标识符限定 + 类型化字面量（jsonb 具名转换；文本单引号转义）。
+        let sql = write("sql", TableDataExportFormat::Sql);
+        assert!(sql.contains("\"public\".\"items\""), "PG 限定名应双引号：{sql}");
+        assert!(sql.contains("'12.50'"), "numeric 应以精确文本输出：{sql}");
+        assert!(sql.contains("O''Brien"), "文本单引号应转义：{sql}");
+        assert!(sql.contains("::jsonb"), "jsonb 应显式转换：{sql}");
+
+        // CSV：表头 + 值（含引号转义）。
+        let csv = write("csv", TableDataExportFormat::Csv);
+        assert!(csv.starts_with("id,price,tags,note\n"), "CSV 表头：{csv}");
+        assert!(csv.contains("12.50"), "numeric 值：{csv}");
+
+        // JSON：值以 JSON 呈现。
+        let json = write("json", TableDataExportFormat::Json);
+        assert!(json.contains("\"price\""), "JSON 列名：{json}");
+        assert!(json.contains("12.50"), "JSON numeric 值：{json}");
+
+        // XML：转义字段（撇号转 &apos;，双引号转 &quot;）。
+        let xml = write("xml", TableDataExportFormat::Xml);
+        assert!(
+            xml.contains("<field name=\"note\">O&apos;Brien</field>"),
+            "XML 文本字段应转义撇号：{xml}"
+        );
+        assert!(
+            xml.contains("&quot;k&quot;"),
+            "XML 文本字段应转义双引号：{xml}"
+        );
+
+        // TXT：制表符分隔。
+        let txt = write("txt", TableDataExportFormat::Txt);
+        assert!(txt.contains("12.50"), "TXT 值：{txt}");
+        assert!(txt.contains('\t'), "TXT 应为制表符分隔：{txt}");
+    }
+
     #[test]
     fn data_table_rows_tsv_uses_visible_row_order() {
         let rows = vec![
