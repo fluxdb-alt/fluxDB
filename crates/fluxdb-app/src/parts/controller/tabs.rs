@@ -186,10 +186,15 @@ impl AppController {
         };
         let database = connection.config.options.get("database").cloned();
         let tab_id = self.next_tab_id();
+        let mut admin = UserAdminState::new(connection_id, database, scope);
+        // PG：面板以「成员关系」为主视图，默认停在 MemberOf，选角色即自动加载成员（无 MySQL 权限页）。
+        if scope == PrivilegeScope::Postgres {
+            admin.active_detail_tab = UserAdminDetailTab::MemberOf;
+        }
         self.push_tab(TabState {
             id: tab_id,
             title: "用户与权限".to_string(),
-            kind: TabKind::UserAdmin(UserAdminState::new(connection_id, database, scope)),
+            kind: TabKind::UserAdmin(admin),
             dirty: false,
         });
         AppEvent::TabOpened(tab_id)
