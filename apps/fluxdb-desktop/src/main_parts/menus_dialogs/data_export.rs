@@ -645,35 +645,69 @@ fn run_table_data_export(
     };
     let mut writer =
         TableDataExportWriter::create(&path, form.format, form.object.clone(), fields, db_kind)?;
-    let mut offset = 0;
-    let mut exported = 0;
-    let started_at = Instant::now();
-    loop {
-        if cancel_flag.load(Ordering::Relaxed) {
-            writer.finish()?;
-            return Ok(TableDataExportResult { canceled: true });
+    // PostgreSQL 走一致快照导出（单 REPEATABLE READ 事务），其余按既有逐页手动循环。
+    if db_kind == DatabaseKind::Postgres {
+        let mut exported: u64 = 0;
+        let started_at = Instant::now();
+        let mut on_page = |page: DataPage| -> bool {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return false;
+            }
+            match writer.write_page(&page) {
+                Ok(rows) => {
+                    exported += rows as u64;
+                    let _ = sender.send(TableDataExportProgress {
+                        rows: rows as u64,
+                        elapsed_ms: started_at.elapsed().as_millis() as u64,
+                        message: format!("已导出 {} 行", exported),
+                    });
+                    true
+                }
+                Err(_) => false,
+            }
+        };
+        let on_cancel = || cancel_flag.load(Ordering::Relaxed);
+        match controller.export_pages_for_connection(&form.object, &sort, &filters, &on_cancel, &mut on_page) {
+            Ok(()) => {
+                writer.finish()?;
+                Ok(TableDataExportResult { canceled: cancel_flag.load(Ordering::Relaxed) })
+            }
+            Err(error) => {
+                writer.finish()?;
+                Err(anyhow::anyhow!("导出失败：{error}"))
+            }
         }
-        let page = controller.load_data_for_export(
-            &form.object,
-            offset,
-            DATA_EXPORT_BATCH_SIZE,
-            &sort,
-            &filters,
-        )?;
-        let rows = writer.write_page(&page)?;
-        exported += rows;
-        let _ = sender.send(TableDataExportProgress {
-            rows,
-            elapsed_ms: started_at.elapsed().as_millis() as u64,
-            message: format!("已导出第 {} 批，累计 {} 行", offset / DATA_EXPORT_BATCH_SIZE + 1, exported),
-        });
-        if rows == 0 || !page.has_more {
-            break;
+    } else {
+        let mut offset = 0;
+        let mut exported = 0;
+        let started_at = Instant::now();
+        loop {
+            if cancel_flag.load(Ordering::Relaxed) {
+                writer.finish()?;
+                return Ok(TableDataExportResult { canceled: true });
+            }
+            let page = controller.load_data_for_export(
+                &form.object,
+                offset,
+                DATA_EXPORT_BATCH_SIZE,
+                &sort,
+                &filters,
+            )?;
+            let rows = writer.write_page(&page)?;
+            exported += rows;
+            let _ = sender.send(TableDataExportProgress {
+                rows,
+                elapsed_ms: started_at.elapsed().as_millis() as u64,
+                message: format!("已导出第 {} 批，累计 {} 行", offset / DATA_EXPORT_BATCH_SIZE + 1, exported),
+            });
+            if rows == 0 || !page.has_more {
+                break;
+            }
+            offset += rows;
         }
-        offset += rows;
+        writer.finish()?;
+        Ok(TableDataExportResult { canceled: false })
     }
-    writer.finish()?;
-    Ok(TableDataExportResult { canceled: false })
 }
 
 fn table_data_export_set_path_on_ui(

@@ -63,6 +63,22 @@ impl AppController {
         self.load_data_page(object, Pagination::new(offset, limit), sort, filters)
     }
 
+    /// 一致快照分页导出（PG 经单 REPEATABLE READ 事务，其余默认逐页）。
+    /// 供桌面导出驱动对 PG 获得全量一致快照，避免并发写行间漂移。
+    pub fn export_pages_for_connection(
+        &self,
+        object: &ObjectPath,
+        sort: &[SortSpec],
+        filters: &[FilterSpec],
+        on_cancel: &dyn Fn() -> bool,
+        on_page: &mut dyn FnMut(DataPage) -> bool,
+    ) -> fluxdb_core::Result<()> {
+        let config = self
+            .connection_config(object.connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        export_pages_for_connection(&config, object, sort, filters, on_cancel, on_page)
+    }
+
     pub fn preview_data_export(
         &self,
         object: &ObjectPath,

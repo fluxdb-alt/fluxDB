@@ -692,6 +692,40 @@ fn load_data_for_connection(
     }
 }
 
+/// 一致快照分页导出路由：各后端调用其 `export_pages`（PG 覆写为单 REPEATABLE READ 事务快照，
+/// 其余用默认 load_data 逐页）。供桌面导出驱动接线。
+fn export_pages_for_connection(
+    config: &ConnectionConfig,
+    object: &ObjectPath,
+    sort: &[SortSpec],
+    filters: &[FilterSpec],
+    on_cancel: &dyn Fn() -> bool,
+    on_page: &mut dyn FnMut(DataPage) -> bool,
+) -> fluxdb_core::Result<()> {
+    if config
+        .options
+        .get("demo")
+        .is_some_and(|value| value == "true")
+    {
+        return MockConnector::new(config.kind).export_pages(
+            object, sort, filters, on_cancel, on_page,
+        );
+    }
+    match config.kind {
+        DatabaseKind::MySql | DatabaseKind::TiDb => {
+            MySqlConnector::with_config(config.clone()).export_pages(object, sort, filters, on_cancel, on_page)
+        }
+        DatabaseKind::Sqlite => {
+            SqliteConnector::with_config(config.clone()).export_pages(object, sort, filters, on_cancel, on_page)
+        }
+        DatabaseKind::Postgres => {
+            PostgresConnector::with_config(config.clone()).export_pages(object, sort, filters, on_cancel, on_page)
+        }
+        DatabaseKind::MongoDb => MockConnector::new(config.kind).export_pages(object, sort, filters, on_cancel, on_page),
+        DatabaseKind::Redis => RedisConnector::with_config(config.clone()).export_pages(object, sort, filters, on_cancel, on_page),
+    }
+}
+
 /// Redis Key 列表元信息懒加载的调度入口：批量补齐给定键名的类型/值/大小/TTL。
 /// demo 连接没有真实 Redis，直接返回空页（不会命中：demo 的 RedisDb 页本身也无真实键）。
 fn load_redis_key_metadata_for_connection(

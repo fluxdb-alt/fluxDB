@@ -133,6 +133,37 @@ pub trait Connector {
     ) -> Result<DataExportPreview> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持导出预览"))
     }
+    /// 一致快照分页导出：逐批回调 `on_page`（返回 false 提前停止），每批前检测 `on_cancel`。
+    ///
+    /// 默认实现经 `load_data` 逐页（各页独立会话，非跨页一致快照）；PostgreSQL 覆写为单
+    /// REPEATABLE READ 事务内分页（见 `pg_export_pages`），保证全量一致且内存有界。供导出驱动接线。
+    fn export_pages(
+        &self,
+        path: &ObjectPath,
+        sort: &[SortSpec],
+        filters: &[FilterSpec],
+        on_cancel: &dyn Fn() -> bool,
+        on_page: &mut dyn FnMut(DataPage) -> bool,
+    ) -> Result<()> {
+        // 默认：按 load_data 逐页（无跨页一致快照，与既有行为一致）。
+        let mut offset: u64 = 0;
+        loop {
+            if on_cancel() {
+                return Ok(());
+            }
+            let batch_size = 4096u64;
+            let page = self.load_data(path, offset, batch_size, sort, filters)?;
+            let count = page.rows.len() as u64;
+            let has_more = page.has_more;
+            if !on_page(page) {
+                return Ok(());
+            }
+            offset += count;
+            if count == 0 || !has_more {
+                return Ok(());
+            }
+        }
+    }
     fn apply_changes(&self, changes: &DataChangeSet) -> Result<AppliedChangeOutcome>;
     fn execute(&self, request: &QueryRequest) -> Result<QueryExecutionResult>;
     fn execute_command_workbench(

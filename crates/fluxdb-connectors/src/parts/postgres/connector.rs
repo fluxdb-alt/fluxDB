@@ -420,6 +420,24 @@ impl Connector for PostgresConnector {
         pg_preview_data_export(config, path, fields, sort, filters)
     }
 
+    /// PG 覆写为一致快照分页导出（单 REPEATABLE READ 事务），见 `pg_export_pages`。
+    fn export_pages(
+        &self,
+        path: &ObjectPath,
+        sort: &[SortSpec],
+        filters: &[FilterSpec],
+        on_cancel: &dyn Fn() -> bool,
+        on_page: &mut dyn FnMut(DataPage) -> bool,
+    ) -> fluxdb_core::Result<()> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 导出需要连接配置上下文",
+            ));
+        };
+        pg_export_pages(config, path, sort, filters, on_cancel, on_page)
+    }
+
     fn apply_changes(
         &self,
         changes: &DataChangeSet,
