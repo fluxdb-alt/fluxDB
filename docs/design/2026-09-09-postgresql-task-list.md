@@ -69,7 +69,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T22 | 新建/设计表及危险操作 UI | T17、T18、T21 | 实现完成，待人工验收 / FluxDB |
 | T23 | 所有现有数据导出格式与范围 | T10、T11、T13、T21 | 进行中（增量一/二/三：方言字面量 + 一致快照导出 + 桌面接入）/ FluxDB |
 | T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 进行中（增量一/二：原生检测+psql 参数+桌面接入）/ FluxDB |
-| T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一：PG 原生 pg_dump + 真库恢复验证）/ FluxDB |
+| T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一~三：pg_dump + 恢复验证 + 应用调用链/owner/ACL/版本）/ FluxDB |
 | T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 进行中（增量一~四：对象权限 + 敏感隔离 + ACL 语义/有效权限；T27 UI 待续）/ FluxDB |
 | T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 实现完成，待人工验收（增量一~五：角色 CRUD 表单 + 成员 + 对象权限面板）/ FluxDB |
 | T28 | 全矩阵联调、MySQL 回归与交付审查 | T01–T27 | 进行中（增量一：MySQL 真库回归测试 + 资源审查；剩余矩阵/手测待续）/ FluxDB |
@@ -470,7 +470,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T25 — 数据库备份和恢复验收
 
-- [ ] 完成 T25（增量一：PG 原生 pg_dump 备份路径 + 设置 + 真库恢复验证）
+- [ ] 完成 T25（增量一~三：pg_dump 路径 + 恢复验证 + 应用调用链/owner/ACL/范围/版本预检）
 - **开始前读**：设计 11.3；R13、R15、R18、R23、R26、R31。
 - **工作**：pg_dump 工具检测/版本、plain 格式与结构/数据/完整、对象/owner/ACL、目录/记录；有 custom 格式则同时实现 pg_restore；所有 I/O 经 app/connector/storage；取消、管道/进程回收、passfile/partial 清理；普通表逻辑导出准确标注范围。
 - **交付位置**：postgres/native_tools、app/transfer/backup、storage backup records、database_backup/backup_tab UI。
@@ -480,7 +480,9 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   验证（真库，docker `fluxdb-t09-pg` PG16.15）：构造隔离源库 `t25_dump_src`（serial 主键表 items + name 索引 + qty CHECK + 视图 items_v + 函数 items_total + 3 行数据 + 序列 last_value=3）→ 以与代码完全相同参数跑 `pg_dump --no-owner --no-acl --format=plain --inserts` 退出 0（stderr 空）→ dump 含 CREATE TABLE/VIEW/FUNCTION/INDEX/SEQUENCE + INSERT 三行 + `setval(seq,3)` → `createdb t25_dump_dst` + psql 恢复退出 0 → 比对：3 行数据/数值 12.50 保精、序列 last_value=3、新插入 `delta` 得 id=4（identity+sequence 独立可用）、视图 count=3、函数 items_total()=4、索引 items_pkey + idx_items_name 均在。源/目标库与临时文件已清理。
   增量二（本会话，子进程审计：TLS 模式 + 取消/失败清理）：`pg_psql_invocation` 增 `ssl_mode` 参数——TLS 模式经 `PGSSLMODE` 环境变量（psql/pg_dump 无 `--sslmode` CLI 开关；`-c sslmode=..` 会被当作用户 SQL，已修正）；新增 `pg_sslmode_value`（Disabled→disable/Require→require/VerifyCa→verify-ca/VerifyFull→verify-full/Prefer→None 省略）。desktop `run_native_pg_dump` 与原生脚本执行沿档案 `profile.tls.ssl_mode` 传 PGSSLMODE；pg_dump 取消或失败时删除半成品输出文件（防残留部分 dump 被备份扫描误当成功）。
   验证：作为竞争检查，`PGSSLMODE=disable` 连接成功（容器 ssl off）、`PGSSLMODE=require` 明确报「server does not support SSL, but SSL was required」退出 2——证明 TLS 模式经 env 正确生效且错误语义清晰。新单测 `pg_sslmode_value_maps_tls_modes`、更新 `pg_psql_invocation_keeps_password_out_of_argv`（密码与 sslmode 均只入 env 不入 argv）。工具全绿（connectors 141）。
-  未完成项：SSH 隧道下 pg_dump/psql 的原生子进程链路未落地（当前只传直连 host/port，未建子进程隧道；需 SSH 环境 + 主机工具，保留待验证，并入集中人工清单 F 节）；custom 格式 + pg_restore + 「目录/记录」备份记录管理；工具检测/版本差异与缺工具/权限不足的清晰错误；普通表逻辑导出准确标注范围的 PG 分支；MySQL 原生/逻辑备份回归手测（→ 集中人工清单 E 节）。
+  增量三（`0450d0e`，应用调用链 + owner/ACL/范围/版本）：connectors 新增 `pg_dump_invocation`（纯函数、可单测）——plain+inserts、结构/数据/完整（`PgDumpScope`）、owner/ACL 开关（默认 `--no-owner --no-acl` 便于跨环境恢复，勾选才保留）、表过滤 `-t`、密码/TLS 只入 env 不进 argv；`pg_dump_version_compatible`+`pg_tool_major_version`+`pg_server_major_version`。desktop `run_native_pg_dump` 改经连接器构造参数（不再手写 argv）；`run_backup` 加版本预检（pg_dump 主版本 < 服务端主版本明确报错，不假成功）；高级表单新增「包含属主 OWNER / ACL 权限（PG 原生）」。记录落盘时机已符合（`.meta.json` 仅成功写、失败/取消删残留文件）。
+  **custom 格式未提供**（`BackupForm` 无格式选择器，恒为 plain .sql）——按设计条件项，**不实现 pg_restore**，不为此延误既定功能。
+  未完成项：SSH 隧道下 pg_dump/psql 的原生子进程链路未落地（当前只传直连 host/port，未建子进程隧道；需 SSH 环境 + 主机工具，保留待验证，并入集中人工清单 F 节）；备份记录「耗时」字段与集群级角色边界说明（可加）；普通表逻辑导出准确标注范围的 PG 分支；MySQL 原生/逻辑备份回归手测（→ 集中人工清单 E 节）。
 
 ### T26 — 角色、用户和 ACL 后端
 
