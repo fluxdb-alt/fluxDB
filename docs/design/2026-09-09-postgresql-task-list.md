@@ -68,7 +68,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 | T21 | 数据/查询/详情与历史 UI 接入 | T10–T16、T20 | 实现完成，待人工验收 / FluxDB |
 | T22 | 新建/设计表及危险操作 UI | T17、T18、T21 | 实现完成，待人工验收 / FluxDB |
 | T23 | 所有现有数据导出格式与范围 | T10、T11、T13、T21 | 进行中（增量一：方言字面量）/ FluxDB |
-| T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 进行中（增量一：原生检测+psql 参数）/ FluxDB |
+| T24 | SQL 文件执行与 PostgreSQL 原生脚本路径 | T12、T13、T20、T21 | 进行中（增量一/二：原生检测+psql 参数+桌面接入）/ FluxDB |
 | T25 | 数据库备份、原生工具、记录和恢复验证 | T05、T16、T20、T23、T24 | 进行中（增量一：PG 原生 pg_dump + 真库恢复验证）/ FluxDB |
 | T26 | PostgreSQL 用户/角色/ACL provider 与命令 | T03、T05、T08、T13 | 进行中（增量一/二，ACL 解释与 T27 待续）/ FluxDB |
 | T27 | 用户/角色/权限 UI 与完整交互 | T20、T26 | 未开始 / — |
@@ -453,15 +453,16 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T24 — SQL 文件与原生脚本
 
-- [ ] 完成 T24（实现增量一：原生检测 + psql 参数）
+- [ ] 完成 T24（实现增量一/二：原生检测 + psql 参数 + app/桌面原生脚本执行接入；桌面真实子进程调用链待人工）
 - **开始前读**：设计 8.1–8.3、11.2；R14、R15、R24、R27、R31、R33。
 - **工作**：目标 database/schema、编码、流式分句、进度日志/继续错误/停止；检测 COPY STDIN/psql 元命令后提供明确原生模式，使用安全子进程参数、凭据/传输与生命周期；普通模式不误拆 dump。
 - **交付位置**：app/transfer/sql_file、postgres/native_tools、sql_file_execution UI 拆分职责。
 - **验收**：普通多语句/函数体/Unicode 与编码转换；中途失败及取消；COPY 数据中的分号不误执行；原生模式需明确执行动作；无 shell 插值或密码参数；psql 版本/不存在有清晰错误；原有 MySQL SQL 文件流程回归。
 - **完成记录**：进行中（FluxDB，2026-09-12）。
-  增量一（`aff447a`，原生检测 + psql 参数）：`postgres/native_tools.rs` 的 `pg_script_needs_native_mode` —— 先把单引号字符串/双引号标识符/行块注释掩成空格，再在代码掩码上检测「行首 `\` 的 psql 元命令」与「`COPY ... FROM STDIN`」，避免被字符串/注释内假象误判；`pg_psql_invocation` 构造 psql argv（`--no-psqlrc -q -v ON_ERROR_STOP=… -h -p -U -d -f`），密码只经 `PGPASSWORD` 环境变量、绝不进 argv，子进程不经 shell。
-  验证：`pg_script_native_mode_detection`（普通多语句/函数体/字符串与注释内假象不误判、真 COPY STDIN 与 `\copy`/`\set` 命中）、`pg_psql_invocation_keeps_password_out_of_argv`（密码不入 argv、ON_ERROR_STOP 开关、无密码不注入 env）；connectors 139 全过。
-  未完成项：本机未安装 psql/pg_dump → 子进程实际执行、psql 版本/不存在错误、凭据/传输与生命周期、真库原生脚本联调**未运行（缺环境）**；app 层 UI 接入（原生模式明确执行动作、进度/继续错误/停止、目标 database/schema、编码转换）待续；→ 集中人工验收清单 D/E 节。
+  增量一（`aff447a`）：`pg_script_needs_native_mode` + `pg_psql_invocation`（见本文件历史记录）。
+  增量二（本会话，app/桌面原生脚本执行接入）：`fluxdb-app` 对外再导出 `pg_script_needs_native_mode`/`pg_psql_invocation`/`PgPsqlInvocation`（桌面经 app 网关，遵循分层）；`sql_file_execution.rs` 的 `start_sql_file_execution` 在分句执行前调 `start_pg_native_sql_file_execution`——当连接为 PG 且 `pg_script_needs_native_mode(text)` 命中时改走 psql 子进程：`pg_psql_invocation(host,port,user,db,path,password,!continue_on_error)` 构造 argv（密码仅 PGPASSWORD 环境变量）、`run_pg_native_psql` 无 shell 执行并逐批检测取消 kill+wait 回收、stderr 尾段回填失败原因、成功后经 `record_sql_file_statement_summary` 记一条日志；目标库优先作用域库、缺省回退连接维护库。捕获 owned 副本避免借用逃逸。普通脚本（非原生模式）仍走原分句执行，MySQL 流程不变。
+  验证（真库，docker fluxdb-t09-pg PG16.15）：(1) 原生脚本（CREATE TABLE + COPY FROM STDIN + SELECT）以 `pg_psql_invocation` 完全相同的 argv 经 psql 执行退出 0，COPY 两行正确落入并 count=2——COAPY STDIN 分号不误拆、原生模式可行；(2) ON_ERROR_STOP=1 下唯一冲突使 psql 退出码 3（非零 → 判失败、中途停止），`continue_on_error`(ON_ERROR_STOP=off) 下报错但继续且退出 0——与 `!form.continue_on_error` 映射一致；(3) 错误 stderr 尾部回填。临时库/文件已清理。cargo test --workspace 全绿。
+  未完成项：桌面端真实调用链需主机有 psql（本机无 psql/pg_dump，已并入集中人工验收清单，容器内工具验证了后端但桌面实际 spawn 待人工）；psql 版本/不存在错误的 UI 呈现（spawn 失败有清晰「启动 psql 失败」错误，具体版本不符提示待人工）；目标 database/schema 下拉与编码转换在原生模式的深度验证。
 
 ### T25 — 数据库备份和恢复验收
 
