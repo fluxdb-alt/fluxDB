@@ -514,6 +514,33 @@ impl AppController {
                     Err(error) => self.fail(error),
                 }
             }
+            AppCommand::SetPgRoleLogin {
+                connection_id,
+                name,
+                can_login,
+            } => {
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.alter_role_options(
+                        connection_id,
+                        &name,
+                        Some(can_login),
+                        None, // is_superuser
+                        None, // can_create_db
+                        None, // can_create_role
+                        None, // inherit
+                        None, // is_replication
+                        None, // bypass_rls
+                        None, // connection_limit
+                        None, // valid_until
+                    )
+                }) {
+                    Ok(()) => AppEvent::PgRoleChanged(connection_id),
+                    Err(error) => self.fail(error),
+                }
+            }
             AppCommand::DeleteDatabase {
                 connection_id,
                 database,
@@ -1942,10 +1969,22 @@ impl AppController {
                 }
                 AppEvent::TabActivated(tab_id)
             }
-            AppCommand::LoadUserAdminUsers(tab_id) => match self.load_user_admin_users(tab_id) {
-                Ok(users) => AppEvent::UserAdminUsersLoaded(tab_id, users),
-                Err(error) => AppEvent::Failed(UserFacingError::from(error)),
-            },
+            AppCommand::LoadUserAdminUsers(tab_id) => {
+                // PG：同步角色 LOGIN 状态表（供角色选项切换展示）。
+                if let Some(connection_id) = self
+                    .user_admin_state(tab_id)
+                    .map(|admin| admin.connection_id)
+                    && self.connection_kind(connection_id) == Some(DatabaseKind::Postgres)
+                    && let Ok(login_map) = self.load_pg_role_login_map(connection_id)
+                    && let Some(admin) = self.user_admin_state_mut(tab_id)
+                {
+                    admin.pg_role_login = login_map;
+                }
+                match self.load_user_admin_users(tab_id) {
+                    Ok(users) => AppEvent::UserAdminUsersLoaded(tab_id, users),
+                    Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+                }
+            }
             AppCommand::StartUserAdminUsersLoad(tab_id) => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
                     admin.loading_users = true;

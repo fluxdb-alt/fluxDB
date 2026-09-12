@@ -316,6 +316,68 @@ fn pg_role_edit_form(
     }
 }
 
+/// 角色选项：可登录（LOGIN）切换。postgres/pg_* 只读（与删除/改密/重命名一致）。
+fn pg_role_login_toggle(
+    tab_id: TabId,
+    admin: &UserAdminState,
+    role: &str,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let editable = role != "postgres" && !role.starts_with("pg_");
+    let role_owned = role.to_string(); // move 闭包需要归属所有
+    let can_login = admin
+        .pg_role_login
+        .get(role)
+        .copied()
+        .unwrap_or(true); // 未知角色默认按 LOGIN 展示
+    h_flex()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(colors.muted)
+                .child("可登录 (LOGIN)"),
+        )
+        .child(
+            Switch::new(format!("pg-role-login-{role}"))
+                .checked(can_login)
+                .when(!editable, |s| s.disabled(true))
+                .on_click(cx.listener(move |this, _, _window, cx| {
+                    let role = role_owned.clone();
+                    let connection_id = this
+                        .user_admin_state_for(tab_id)
+                        .map(|a| a.connection_id);
+                    let Some(connection_id) = connection_id else {
+                        return;
+                    };
+                    let cur = this
+                        .user_admin_state_for(tab_id)
+                        .and_then(|a| a.pg_role_login.get(&role).copied())
+                        .unwrap_or(true);
+                    this.dispatch(
+                        AppCommand::SetPgRoleLogin {
+                            connection_id,
+                            name: role.clone(),
+                            can_login: !cur,
+                        },
+                        cx,
+                    );
+                    this.start_user_admin_users_load(tab_id, cx);
+                    cx.notify();
+                })),
+        )
+        .when(!editable, |d| {
+            d.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child("（内置角色只读）"),
+            )
+        })
+}
+
 /// 右侧：选中 PG 角色详情（角色标识 + 成员关系 + 对象权限）。
 fn pg_role_detail(
     tab_id: TabId,
@@ -360,6 +422,8 @@ fn pg_role_detail(
                         .child("集群级身份"),
                 ),
         )
+        // 角色选项：可登录 LOGIN 切换（postgres/pg_* 只读，避免改坏集群关键角色）。
+        .child(pg_role_login_toggle(tab_id, admin, &selected.user, colors, cx))
         .child(
             div()
                 .text_size(px(12.))

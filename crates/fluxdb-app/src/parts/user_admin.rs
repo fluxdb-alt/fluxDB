@@ -7,6 +7,15 @@ impl AppController {
         role_operation_for_connection(&config, |connector| connector.list_roles(connection_id))
     }
 
+    /// 经连接器列出 PG 角色 → 名称 → 是否可登录（LOGIN），供角色选项切换展示。
+    fn load_pg_role_login_map(
+        &self,
+        connection_id: ConnectionId,
+    ) -> fluxdb_core::Result<BTreeMap<String, bool>> {
+        let roles = self.list_pg_roles_for_connection(connection_id)?;
+        Ok(roles.into_iter().map(|r| (r.name, r.can_login)).collect())
+    }
+
     fn user_admin_state(&self, tab_id: TabId) -> Option<&UserAdminState> {
         self.find_tab(tab_id).and_then(|tab| match &tab.kind {
             TabKind::UserAdmin(admin) => Some(admin),

@@ -3687,6 +3687,49 @@ SELECT item_id, name FROM audit_log;"
             .revoke_role_membership(config.id, &group, &role)
             .expect("撤销成员关系应成功");
 
+        // 角色选项：经 alter_role_options 切换可登录 LOGIN，列表读回一致。
+        connector
+            .alter_role_options(
+                config.id,
+                &role,
+                Some(true), // can_login
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("切换 LOGIN 应成功");
+        let roles_after = connector.list_roles(config.id).expect("列角色应成功");
+        assert!(
+            roles_after.iter().any(|r| r.name == role && r.can_login),
+            "alter_role_options 后 LOGIN 应读回 true：{roles_after:?}"
+        );
+        // 再关闭 LOGIN，读回 false（离线账户语义，与 MySQL 禁用账号等价）。
+        connector
+            .alter_role_options(
+                config.id,
+                &role,
+                Some(false),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("关闭 LOGIN 应成功");
+        let roles_final = connector.list_roles(config.id).expect("列角色应成功");
+        assert!(
+            roles_final.iter().any(|r| r.name == role && !r.can_login),
+            "alter_role_options 后 LOGIN 应读回 false：{roles_final:?}"
+        );
+
         // 改密码 + 重命名。
         connector
             .alter_role_password(config.id, &role, "T26_pw_2")

@@ -759,6 +759,7 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
             pg_grants_error: admin.pg_grants_error.clone(),
             pg_edit_mode: admin.pg_edit_mode,
             pg_rename_new: admin.pg_rename_new.clone(),
+            pg_role_login: admin.pg_role_login.clone(),
         }),
         TabKind::Settings => TabKind::Settings,
     }

@@ -199,6 +199,8 @@ pub struct UserAdminState {
     /// PostgreSQL（T27）：角色「改密 / 重命名」内联编辑模式 + 重命名新名。
     pub pg_edit_mode: PgRoleEditMode,
     pub pg_rename_new: String,
+    /// PostgreSQL（T27）：角色名 → 是否可登录（LOGIN），来自 list_roles，供角色选项切换展示。
+    pub pg_role_login: BTreeMap<String, bool>,
 }
 
 /// PG 角色内联编辑模式（改密 / 重命名），复用后端 AlterPgRolePassword / RenamePgRole。
@@ -323,6 +325,7 @@ impl UserAdminState {
             pg_grants_error: None,
             pg_edit_mode: PgRoleEditMode::None,
             pg_rename_new: String::new(),
+            pg_role_login: BTreeMap::new(),
         }
     }
 
@@ -964,6 +967,12 @@ pub enum AppCommand {
     DropPgRole {
         connection_id: ConnectionId,
         name: String,
+    },
+    /// PostgreSQL：设置既有角色「可登录 LOGIN」选项（alter_role_options → can_login）。
+    SetPgRoleLogin {
+        connection_id: ConnectionId,
+        name: String,
+        can_login: bool,
     },
     DeleteDatabase {
         connection_id: ConnectionId,
