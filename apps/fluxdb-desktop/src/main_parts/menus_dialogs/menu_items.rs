@@ -111,6 +111,7 @@ fn menu_icon(icon: &'static str, destructive: bool, colors: UiColors) -> gpui::A
         "move-group" => Some(AppIcon::FolderInput),
         "ungroup" => Some(AppIcon::FolderUp),
         "folder" => Some(AppIcon::Folder),
+        "folder-open" => Some(AppIcon::Schema),
         "refresh" => Some(AppIcon::Refresh),
         "filter" => Some(AppIcon::Filter),
         "edit" => Some(AppIcon::Edit),
