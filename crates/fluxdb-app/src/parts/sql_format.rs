@@ -165,11 +165,23 @@ pub fn compress_sql_text(sql: &str) -> String {
     compressed.trim().to_string()
 }
 
-fn sql_text_for_execution(sql: &str, default_limit: u64) -> String {
-    apply_default_select_limit(
-        &strip_sql_comments(&normalize_double_quoted_sql_strings(sql)),
-        default_limit,
-    )
+/// 组装实际下发执行的 SQL：去掉注释、按分句追加默认 LIMIT。
+///
+/// `db_kind` 决定双引号语义：MySQL/TiDB（以及历史行为一致的 SQLite）默认把 `"` 当字符串
+/// 定界符，用户用 `"..."` 写字符串时归一化为 `'...'`；**PostgreSQL 的 `"` 是标识符引用**
+/// （`"public"."orders"`、`"amount"`），绝不能改写，否则合法语句被换成单引号字符串导致
+/// 语法错误（connection 里输入双引号、实际下发变单引号即此 bug）。
+fn sql_text_for_execution(sql: &str, default_limit: u64, db_kind: DatabaseKind) -> String {
+    let pipeline = if matches!(
+        db_kind,
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Sqlite
+    ) {
+        normalize_double_quoted_sql_strings(sql)
+    } else {
+        // PG/Redis/Mongo：如实保留 `"`，不做字符串归一。
+        sql.to_string()
+    };
+    apply_default_select_limit(&strip_sql_comments(&pipeline), default_limit)
 }
 
 fn strip_sql_comments(sql: &str) -> String {

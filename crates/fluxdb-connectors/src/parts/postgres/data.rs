@@ -484,22 +484,36 @@ fn pg_text_ok_column(column_type: &str) -> bool {
     )
 }
 
-/// 值为 Text/Json 且目标列非字符串列时，须**双重转换**占位：
-/// - 内层 `CAST($n AS text)` 让 PG 推断 $n 为 text，从而通过客户端 String ToSql 校验
-///   （tokio-postgres 无 numeric/bigdecimal 解码，文本无法直绑 numeric/jsonb/数组列）；
-/// - 外层 `AS <type>` 在服务端把 text 转成目标列类型，完成赋值。
+/// 目标列非字符串列（numeric/money/float/jsonb/数组/…）且绑定非 NULL 标量时，须用**文本参数桥接**：
+/// - 内层参数以 String（text）绑定，`CAST($n AS text)` 让 PG 推断 `$n` 为 text，从而通过
+///   客户端 String ToSql 校验——tokio-postgres 无 numeric/bigdecimal 解码，f64/i64 无法
+///   直接序列化到 numeric 等推断参数类型（网格编辑数值 → F64 绑定 numeric 会报
+///   `error serializing parameter 0`）；
+/// - 外层 `AS <type>` 在服务端把 text 转成目标列类型完成赋值。
+/// 字符串列（text/varchar/char/bpchar/name/citext）与整型列直绑原生值即可。
 fn pg_bind_sql(params: &mut Vec<Box<dyn ToSql + Sync>>, column: &Column, value: &CellValue) -> String {
-    let param = pg_next_param(params, value, pg_column_int_kind(column));
-    let is_text = matches!(value, CellValue::Text(_) | CellValue::Json(_));
-    let needs_cast = column
-        .type_name
-        .as_deref()
-        .is_some_and(|t| !pg_text_ok_column(t));
-    if is_text && needs_cast {
-        let ty = column.type_name.as_deref().unwrap_or("text");
-        format!("CAST(CAST({param} AS text) AS {ty})")
+    let type_name = column.type_name.as_deref().unwrap_or("");
+    let int_kind = pg_column_int_kind(column);
+    let base = pg_type_base(type_name);
+    // 整型列直绑原生整数；float 列由 F64 原生直绑（回归零）。
+    // 其余非字符串列（numeric/money/jsonb/数组/时间…）F64/I64 无法被 tokio-postgres
+    // 序列化到其推断参数类型，一律以 text 参数桥接。
+    let needs_text_bridge = !pg_text_ok_column(type_name)
+        && !matches!(
+            value,
+            CellValue::Null
+                | CellValue::Bytes(_)
+                | CellValue::BinarySummary(_)
+        )
+        && int_kind.is_none()
+        && !matches!(base, "float4" | "float8" | "real" | "double precision");
+    if needs_text_bridge {
+        let index = params.len() + 1;
+        params.push(Box::new(pg_text(value)));
+        let ty = type_name;
+        format!("CAST(CAST(${index} AS text) AS {ty})")
     } else {
-        param
+        pg_next_param(params, value, int_kind)
     }
 }
 

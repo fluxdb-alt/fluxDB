@@ -53,7 +53,8 @@ fn pg_execute_query_with_progress(
             }
             if let Some(error) = error {
                 let fatal = matches!(error.kind, ErrorKind::Connection | ErrorKind::Cancelled | ErrorKind::Timeout);
-                tracing::warn!(target: "fluxdb_connectors", kind = ?error.kind, "PostgreSQL 执行失败");
+                // 失败原因（含服务端 SQLSTATE/错误文本）必须在日志可见，否则排障只能靠重试。
+                tracing::warn!(target: "fluxdb_connectors", kind = ?error.kind, message = %error.message, sql = %statement, "PostgreSQL 执行失败");
                 push_query_summary(&mut execution,
                     failed_query_summary(statement, QueryStatementKind::Command, error.message, elapsed_ms(started)), on_summary);
                 if fatal || !request.options.continue_on_error { break; }

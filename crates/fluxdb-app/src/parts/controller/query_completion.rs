@@ -215,7 +215,12 @@ impl AppController {
                 database: editor.database.clone(),
                 session_id: None,
                 schema: editor.schema.clone(),
-                text: sql_text_for_execution(&text, fluxdb_core::Pagination::DEFAULT_LIMIT),
+                text: sql_text_for_execution(
+                    &text,
+                    fluxdb_core::Pagination::DEFAULT_LIMIT,
+                    self.connection_kind(editor.connection_id)
+                        .unwrap_or(DatabaseKind::MySql),
+                ),
                 mode: fluxdb_core::QueryMode::Selection,
                 options,
             }),
@@ -250,7 +255,11 @@ impl AppController {
             database,
             schema,
             session_id: None,
-            text: sql_text_for_execution(&text, fluxdb_core::Pagination::DEFAULT_LIMIT),
+            text: sql_text_for_execution(
+                &text,
+                fluxdb_core::Pagination::DEFAULT_LIMIT,
+                self.connection_kind(connection_id).unwrap_or(DatabaseKind::MySql),
+            ),
             mode: fluxdb_core::QueryMode::Selection,
             options,
         };

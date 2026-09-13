@@ -1725,7 +1725,12 @@ impl AppController {
                         // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
                         session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
                         schema: editor.schema.clone(),
-                        text: sql_text_for_execution(&editor.text, options.page_size),
+                        text: sql_text_for_execution(
+                            &editor.text,
+                            options.page_size,
+                            self.connection_kind(editor.connection_id)
+                                .unwrap_or(DatabaseKind::MySql),
+                        ),
                         mode: fluxdb_core::QueryMode::All,
                         options,
                     }),
@@ -1791,7 +1796,12 @@ impl AppController {
                         // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
                         session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
                         schema: editor.schema.clone(),
-                        text: sql_text_for_execution(&text, options.page_size),
+                        text: sql_text_for_execution(
+                            &text,
+                            options.page_size,
+                            self.connection_kind(editor.connection_id)
+                                .unwrap_or(DatabaseKind::MySql),
+                        ),
                         mode: fluxdb_core::QueryMode::Selection,
                         options,
                     }),
@@ -1891,7 +1901,12 @@ impl AppController {
                             // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
                             session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
                             schema: editor.schema.clone(),
-                            text: sql_text_for_execution(&editor.text, Pagination::DEFAULT_LIMIT),
+                            text: sql_text_for_execution(
+                                &editor.text,
+                                Pagination::DEFAULT_LIMIT,
+                                self.connection_kind(editor.connection_id)
+                                    .unwrap_or(DatabaseKind::MySql),
+                            ),
                             mode: fluxdb_core::QueryMode::All,
                             options: QueryExecutionOptions::default(),
                         })

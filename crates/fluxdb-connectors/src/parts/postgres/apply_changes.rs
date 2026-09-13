@@ -6,6 +6,19 @@
 // PG 不经过 sqlx QueryBuilder：SQL 自行拼接，值一律 `$n` 参数化绑定，标识符 `pg_quote_identifier`。
 // 二进制（bytea）写入以 `Vec<u8>` 直接绑定；Hex 编辑回写前由 app 转成 `CellValue::Bytes`。
 
+/// 把 tokio-postgres/PG 服务端错误转成可读文本。
+///
+/// 注意：tokio-postgres **外层** `Error` 的 Display 对 DB 错误只打常量 `"db error"`，
+/// 真正的服务端报文（`severity: message` + DETAIL + HINT）在底层 `DbError` 里，
+/// 必须经 `as_db_error()` 取到 `DbError` 用它显示，再前置 SQLSTATE 错误码。
+/// 若直接显示外层 error 会得到没头没尾的 "db error"。
+fn pg_db_error_text(error: &tokio_postgres::Error) -> String {
+    match error.as_db_error() {
+        Some(db) => format!("[SQLSTATE {}] {}", db.code().code(), db),
+        None => error.to_string(),
+    }
+}
+
 fn pg_apply_changes(
     config: &ConnectionConfig,
     changes: &DataChangeSet,
@@ -19,9 +32,10 @@ fn pg_apply_changes(
         .ok_or_else(|| Error::new(ErrorKind::Query, "缺少数据库名称"))?;
 
     pg_runtime().block_on(async {
+        let table = pg_qualified_table(database, changes.object.schema.as_deref(), &changes.object.name);
+        tracing::debug!(target: "fluxdb_connectors", table = %table, deletes = changes.deletes.len(), updates = changes.updates.len(), inserts = changes.inserts.len(), "pg_apply_changes:begin");
         let session = pg_connect(config, database).await?;
         let client = session.client.as_ref();
-        let table = pg_qualified_table(database, changes.object.schema.as_deref(), &changes.object.name);
         // 先取列元数据（元数据查询与事务解耦）。
         let columns = pg_columns(client, database, changes.object.schema.as_deref(), &changes.object.name)
             .await?;
@@ -32,7 +46,7 @@ fn pg_apply_changes(
         client
             .batch_execute("BEGIN")
             .await
-            .map_err(|error| Error::new(ErrorKind::Query, error.to_string()))?;
+            .map_err(|error| Error::new(ErrorKind::Query, pg_db_error_text(&error)))?;
 
         let result = async {
             pg_apply_deletes(client, &table, changes, &columns).await?;
@@ -47,14 +61,25 @@ fn pg_apply_changes(
 
         match result {
             Ok(outcome) => {
-                client
+                match client
                     .batch_execute("COMMIT")
                     .await
-                    .map_err(|error| Error::new(ErrorKind::Query, error.to_string()))?;
-                Ok(outcome)
+                    .map_err(|error| Error::new(ErrorKind::Query, pg_db_error_text(&error)))
+                {
+                    Ok(()) => {
+                        tracing::info!(target: "fluxdb_connectors", table = %table, deletes = changes.deletes.len(), updates = changes.updates.len(), inserts = changes.inserts.len(), "pg_apply_changes:commit");
+                        Ok(outcome)
+                    }
+                    Err(error) => {
+                        let _ = client.batch_execute("ROLLBACK").await;
+                        tracing::warn!(target: "fluxdb_connectors", table = %table, message = %error.message, "pg_apply_changes:commit-failed");
+                        Err(error)
+                    }
+                }
             }
             Err(error) => {
                 let _ = client.batch_execute("ROLLBACK").await;
+                tracing::warn!(target: "fluxdb_connectors", table = %table, message = %error.message, deletes = changes.deletes.len(), updates = changes.updates.len(), inserts = changes.inserts.len(), "pg_apply_changes:aborted");
                 Err(error)
             }
         }
@@ -149,7 +174,7 @@ async fn pg_apply_inserts(
             client
                 .execute(&sql, &pg_params_refs(&params))
                 .await
-                .map_err(|error| Error::new(ErrorKind::Query, error.to_string()))?;
+                .map_err(|error| Error::new(ErrorKind::Query, pg_db_error_text(&error)))?;
             continue;
         }
         let returning = primary_keys
@@ -161,7 +186,7 @@ async fn pg_apply_inserts(
         let returned = client
             .query(&sql, &pg_params_refs(&params))
             .await
-            .map_err(|error| Error::new(ErrorKind::Query, error.to_string()))?;
+            .map_err(|error| Error::new(ErrorKind::Query, pg_db_error_text(&error)))?;
         let Some(returned) = returned.into_iter().next() else {
             continue;
         };
@@ -204,7 +229,7 @@ async fn pg_apply_updates(
         let affected = client
             .execute(&sql, &pg_params_refs(&params))
             .await
-            .map_err(|error| Error::new(ErrorKind::Query, error.to_string()))?;
+            .map_err(|error| Error::new(ErrorKind::Query, pg_db_error_text(&error)))?;
         if affected != 1 {
             return Err(update_conflict_error(affected));
         }
@@ -228,7 +253,7 @@ async fn pg_apply_deletes(
         let affected = client
             .execute(&sql, &pg_params_refs(&params))
             .await
-            .map_err(|error| Error::new(ErrorKind::Query, error.to_string()))?;
+            .map_err(|error| Error::new(ErrorKind::Query, pg_db_error_text(&error)))?;
         if affected != 1 {
             return Err(update_conflict_error(affected));
         }
@@ -310,16 +335,19 @@ fn pg_identity_where(
 ) -> fluxdb_core::Result<String> {
     let mut clauses = Vec::new();
     for (column, value) in &identity.values {
-        let col = columns
-            .iter()
-            .find(|col| &col.name == column)
-            .ok_or_else(|| Error::new(ErrorKind::Query, "行身份引用了不存在的列"))?;
+        if !columns.iter().any(|col| &col.name == column) {
+            return Err(Error::new(ErrorKind::Query, "行身份引用了不存在的列"));
+        }
         let quoted = pg_quote_identifier(column);
         if matches!(value, CellValue::Null) {
             clauses.push(format!("{quoted} IS NULL"));
         } else {
-            let bound = pg_bind_sql(params, col, value);
-            // json 等没有相等运算符的类型按服务器文本比较，原始投影也来自服务器。
+            // 按服务器文本比较：列投影为 `::text`，参数也必须以 text 绑定。
+            // 若用数字类型绑定（整型 PK 会序列化为 int2/int4/int8），
+            // 与服务端因 `::text` 推断出的 text 参数类型不符，
+            // tokio-postgres 报 “error serializing parameter 0”。
+            let bound = format!("${}", params.len() + 1);
+            params.push(Box::new(pg_text(value)));
             clauses.push(format!("{quoted}::text IS NOT DISTINCT FROM ({bound})::text"));
         }
     }

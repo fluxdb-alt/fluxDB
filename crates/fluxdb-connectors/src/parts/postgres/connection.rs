@@ -440,6 +440,8 @@ fn pg_lock_error(
 /// 把 tokio-postgres 错误统一映射为 fluxdb 错误（认证 / 连接 / 查询分类）。
 fn pg_error(error: tokio_postgres::Error) -> Error {
     use tokio_postgres::error::SqlState;
+    // 错误文本统一带 SQLSTATE 前缀（severity+message+DETAIL+HINT 由 PG to_string 已带）。
+    let text = pg_db_error_text(&error);
     // 仅认证/授权类错误归为 Authentication；其余 DB 类错误一律 Query。
     // 早期实现把「SQLSTATE 首字符为 2」都当认证，误伤了 22 数据异常/23 完整性/25 事务态
     // （如唯一约束冲突、参数越界）——那些是查询/写入失败而非认证失败。
@@ -453,7 +455,7 @@ fn pg_error(error: tokio_postgres::Error) -> Error {
             )
             || code_str == "0P000";
         if is_auth {
-            return Error::new(ErrorKind::Authentication, error.to_string());
+            return Error::new(ErrorKind::Authentication, text);
         }
         // 连接层（08/09/0A/0B …）视为连接失败，其余为查询失败。
         let class_is_connection = code_str.starts_with("08");
@@ -463,9 +465,9 @@ fn pg_error(error: tokio_postgres::Error) -> Error {
             } else {
                 ErrorKind::Query
             },
-            error.to_string(),
+            text,
         );
     }
     // 无 SQLSTATE 的底层 IO/协议错误 → 连接层。
-    Error::new(ErrorKind::Connection, error.to_string())
+    Error::new(ErrorKind::Connection, text)
 }

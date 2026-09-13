@@ -4980,8 +4980,15 @@ SELECT item_id, name FROM audit_log;"
         let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
         let where_sql = pg_identity_where(&mut params, &identity, &columns).unwrap();
         // BTreeMap 按键升序迭代：deleted_at 在 id 之前。
-        assert_eq!(where_sql, " WHERE \"deleted_at\" IS NULL AND \"id\" = $1");
+        // 身份按服务器文本比较（列投影 `::text`，参数以 text 绑定），
+        // 匹配整型 PK → 数字序列化与服务端 text 推断不一致的修复。
+        assert_eq!(
+            where_sql,
+            " WHERE \"deleted_at\" IS NULL AND \"id\"::text IS NOT DISTINCT FROM ($1)::text"
+        );
         assert_eq!(params.len(), 1);
+        // 身份参数必须以 text（String）绑定，数字类型会触发 serialization 错误，
+        // 此处仅在 SQL 层面校验文本比较形式，实际绑定正确性由真库冒烟覆盖。
     }
 
     #[test]
@@ -6109,6 +6116,64 @@ SELECT item_id, name FROM audit_log;"
         cleanup.text = "DROP SCHEMA IF EXISTS t14_sa CASCADE; DROP SCHEMA IF EXISTS t14_sb CASCADE;"
             .to_string();
         connector.execute(&cleanup).expect("清理临时 schema 应成功");
+    }
+
+    /// 网格把数值编辑为 F64 时写 numeric/money 列，须文本参数桥接（否则
+    /// `error serializing parameter 0`，修改不生效）。回归约束该路径稳定。
+    #[test]
+    fn pg_live_smoke_numeric_edit_with_f64_value() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t09_num_f64 CASCADE; \
+            CREATE TABLE t09_num_f64(id integer PRIMARY KEY, amount numeric(10,2)); \
+            INSERT INTO t09_num_f64(id, amount) VALUES (1, 10.5); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建临时结构应成功");
+
+        let path = ObjectPath {
+            connection_id: config.id,
+            database: config.postgres_profile.as_ref().unwrap().basic.maintenance_database.clone().into(),
+            schema: Some("public".to_string()),
+            name: "t09_num_f64".to_string(),
+            kind: ObjectKind::Table,
+        };
+        // 与网格一致：identity 全列原值（读回 Text 表示），新值按数值输入解析为 F64。
+        let page = connector.load_data(&path, 0, 50, &[], &[]).expect("读数据");
+        let cols = page.columns.clone();
+        let row = page.rows.iter().find(|r| r.values[0] == CellValue::I64(1)).cloned().expect("id=1 行");
+        let mut identity = std::collections::BTreeMap::new();
+        for (c, v) in cols.iter().zip(&row.values) {
+            if !matches!(v, CellValue::BinarySummary(_)) { identity.insert(c.name.clone(), v.clone()); }
+        }
+        let changes = DataChangeSet {
+            object: path.clone(),
+            inserts: vec![],
+            updates: vec![RowUpdate {
+                identity: RowIdentity { values: identity },
+                cells: vec![CellUpdate { column: "amount".to_string(), value: CellValue::F64(500.11) }],
+            }],
+            deletes: vec![],
+            insert_intents: None,
+        };
+        connector.apply_changes(&changes).expect("F64 写 numeric 应成功");
+
+        let page2 = connector.load_data(&path, 0, 50, &[], &[]).expect("重读");
+        let i_amount = cols.iter().position(|c| c.name == "amount").unwrap();
+        let value = page2.rows.iter().find(|r| r.values[0] == CellValue::I64(1))
+            .map(|r| r.values[i_amount].display_label()).unwrap_or_default();
+        assert_eq!(value, "500.11", "numeric 应更新为 500.11，实际 {value:?}");
+
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t09_num_f64 CASCADE;".to_string();
+        connector.execute(&cleanup).expect("清理临时表");
     }
 }
 

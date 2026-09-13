@@ -301,6 +301,14 @@ CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不�
 
 **文本→类型化列的写入绑定（tokio-postgres 无 numeric/bigdecimal 解码）**：String/Json 值写入 numeric、money、json/jsonb、数组等非字符串列时，客户端会在发送前按推断参数类型校验 `ToSql`，文本无法直绑。采用**双重转换占位** `CAST(CAST($n AS text) AS <type>)`：内层 `AS text` 令 PG 推断 `$n` 为 text 从而通过客户端校验，外层 `AS <type>` 在服务端把 text 转成目标列类型完成赋值。字符串列（text/varchar/char/bpchar/name/citext）免转换；数组（`text[]`/`_text`）因参数被推断为数组类型，仍需上述双重转换。[T09]
 
+**行身份的文本绑定（更新/锁定路径修复）**：更新（`apply_changes` 的 `pg_identity_where`/`pg_lock_original_row`）把身份条件写成 `"col"::text IS NOT DISTINCT FROM ($n)::text` —— 列投影为 `::text`，使 PG 把 `$n` 推断为 **text** 参数类型。若仍以数字类型绑定整型主键（`CellValue::I64` → `i32`/`i64`），tokio-postgres 在发送前校验参数类型与 text 不符，报 `error serializing parameter 0`，导致**数据表内更新任何行都失败**（删除走 `=` 原生比较，不受影响）。修复：身份值一律以 `pg_text(value)` 的文本串绑定，与 `::text` 推断类型一致；更新/锁定/删除共用同一 `pg_identity_where`。回归：真库冒烟 `pg_live_smoke_typed_read_binary_and_apply_changes`（原修复前失败，修复后通过）。
+
+**数值标量写非字符串列的文本桥接（SET/INSERT 值修复）**：`pg_bind_sql` 对目标列非字符串/non-整型/non-float（numeric/money/jsonb/数组/时间…）时，任意标量（Text/Json/F64/I64/Bool）都应以 String（text）参数桥接 `CAST(CAST($n AS text) AS <type>)`。此前只有 Text/Json 桥接；网格把数值编辑成 `CellValue::F64` 后写 numeric 列会裸绑 `$n`（PG 推断 numeric → tokio-postgres 无法序列化 f64 → `error serializing parameter 0`），导致**网格保存静默不生效**。排除：整型列走原生 `i` 宽度直绑、float 列原生 F64、bytea 走 `Vec<u8>` 直绑（不得文本化摘要）。回归：真库冒烟 `pg_live_smoke_numeric_edit_with_f64_value`（F64 500.11 写 numeric(10,2)、全列原值身份、回读断言）、`pg_live_smoke_typed_read_binary_and_apply_changes`（bytea 直绑不回归）。
+
+**网格保存失败必须提示（desktop 提示层修复）**：网格「保存修改」确认后 dispatch `ApplyDataChanges`，返回 `AppEvent::Failed` 时该事件在 `confirm_apply_data_changes` 里只当 `!matches!(Failed)` 判断用，**Failed 未进入统一提示通道** → 保存失败静默（用户改了非法值 → apply 回滚 → 无任何提示）。修复：`confirm_apply_data_changes` 对 `Failed` 事件调用 `show_message(「标题：消息」, Error)`，走项目统一的**底部居中 toast**（`app_message_overlay`，gpui-component Alert + 自动消失），与页面其它操作（备份/用户管理保存失败）一致。连接器侧 `pg_bind_sql` F64 桥接、`pg_apply_changes` 三级日志同批落地。
+
+**PG 错误文本增强（SQLSTATE + 完整报文）**：连接器统一经 `pg_db_error_text` 生成错误文本，前置 `[SQLSTATE xxxxx]`。**坑**：tokio-postgres **外层** `Error` 的 `Display` 对 DB 错误只输出常量 `"db error"`，真实服务端报文（`severity: message` + `DETAIL:` + `HINT:`）在底层 `DbError`，**必须 `as_db_error()` 取 `DbError` 用它的 `Display`**——早期实现误用外层 `error`，导致 toast 显示 `[SQLSTATE 22007] db error`（有码无文）。修复后 `[SQLSTATE 22007] ERROR: invalid input syntax for type timestamp with time zone: "+zz"`。`apply_changes`（6 处）与 `pg_error`（连接/执行路径）统一走该 helper。
+
 ### 7.2 查询分页、排序与筛选
 
 表数据查询全限定对象名、已验证列、`LIMIT limit+1 OFFSET offset`，以额外一行计算 has_more；不默认 COUNT 全表。排序优先用户排序，追加主键作为稳定 tie breaker；无唯一键时展示分页可能随并发变化。offset/limit 转换受边界校验，不把 u64 无检查传入 PG 有符号整型。
@@ -337,6 +345,8 @@ CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不�
 必须识别 `'...'`、`E'...'`、双引号标识符、`$$...$$`/`$tag$...$tag$`、行注释、嵌套块注释，以及函数/DO 块内部的分号。美元标签区分大小写，UTF-8 光标范围准确。参数识别不能误把 PG `::type` 的冒号、`$1` 与 snippet tabstop 或 dollar quote 混淆。SQL 文件、当前语句、选区执行、格式化、历史拆分采用一致语义；格式化遇到不支持语法保留原文并提示，不破坏函数体。
 
 > **实现记录（T12 增量二）**：分句入口已分三处补齐 PG dollar-quote —— desktop 执行路径字节版 `split_statements` 与 snapshot 版 `split_statement_ranges_snapshot`、app 历史分句 `sql_statement_ranges`（`sql_format.rs`）。三者都识别 `$$...$$` 与 `$tag$...$tag$` 并跳过体内分号/引号；`$1` 参数、`$name` 以及 `::` 冒号因不满足开启符条件不计入。`E'...'` 由既有全局反斜杠转义覆盖无需特判。新建测试：desktop 3（字节、命名标签+参数、snapshot）+ app 2（`sql_text_statement_ranges` 函数体与命名标签+参数）。剩余增量：`::`/`$n` 与 snippet tabstop 消歧、复杂格式化保持函数体。
+
+> **修复记录（2026-09-13，app `sql_format::sql_text_for_execution`）**：执行下发的双引号归一化 `normalize_double_quoted_sql_strings`（把 `"..."` 改写成 `'...'`）原为全方言无条件执行，MySQL 系语义正确（`"` 当字符串），但 **PostgreSQL 的 `"` 是标识符引用** —— 用户在查询编辑器输入 `UPDATE "public"."orders" SET "amount" = 684 WHERE "id" = 1`，下发给服务端变成 `UPDATE 'public'.'orders' SET 'amount' = ...`，触发 `syntax error at or near "'public'"`，日志表现为 `PostgreSQL 执行失败 kind=Query`，每段语句（SELECT+UPDATE）各失败一次。修复：`sql_text_for_execution` 增加 `db_kind` 参数，仅 MySQL/TiDB/SQLite 做双引号→单引号归一，**PG/Redis/Mongo 保留 `"`**；5 处执行入口（dispatch 3 + query_completion 2）按 `connection_kind` 传入，未知回退 MySql 以保持 MySQL 行为。回归：app 单测 `execute_query_preserves_double_quoted_identifiers_for_postgres`（PG 双引号保留、MySQL 仍归一）；连接器 executor 失败日志补 `message=`+`sql=` 便于此类问题直接看到真实下发语句与 DB 错误。
 
 ### 8.2 执行与结果协议
 

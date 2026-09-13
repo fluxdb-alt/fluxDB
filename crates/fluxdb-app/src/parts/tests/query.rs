@@ -2497,21 +2497,38 @@
     #[test]
     fn execute_query_keeps_comment_tokens_inside_strings() {
         assert_eq!(
-            sql_text_for_execution("select '--keep', '#keep', '/*keep*/'", 100),
+            sql_text_for_execution("select '--keep', '#keep', '/*keep*/'", 100, DatabaseKind::MySql),
             "select '--keep', '#keep', '/*keep*/' LIMIT 100"
         );
+    }
+
+    #[test]
+    fn execute_query_preserves_double_quoted_identifiers_for_postgres() {
+        // 回归：PG 的 `"` 是标识符引用，绝不能像 MySQL 那样改写成 `'` 单引号字符串，
+        // 否则 `"public"."orders"` 会被换成 `'public'.'orders'` 导致语法错误。
+        let sql =
+            "UPDATE \"public\".\"orders\" SET \"amount\" = 684.01 WHERE \"id\" = 1;".to_string();
+        let text = sql_text_for_execution(&sql, 0, DatabaseKind::Postgres);
+        assert_eq!(
+            text,
+            "UPDATE \"public\".\"orders\" SET \"amount\" = 684.01 WHERE \"id\" = 1;"
+        );
+        // MySQL 系仍旧把 `"` 归一为 `'`（字符串语义），保持既有行为。
+        let mysql = sql_text_for_execution(&sql, 0, DatabaseKind::MySql);
+        assert!(!mysql.contains("\""), "MySQL 不应保留双引号：{mysql}");
+        assert!(mysql.contains("'public'.'orders'"), "MySQL 应归一为单引号：{mysql}");
     }
 
     #[test]
     fn default_limit_zero_does_not_append_or_force() {
         // 不限制（page_size=0）：无 LIMIT 不追加
         assert_eq!(
-            sql_text_for_execution("select * from Product", 0),
+            sql_text_for_execution("select * from Product", 0, DatabaseKind::MySql),
             "select * from Product"
         );
         // 不限制：用户已写 LIMIT 即使超过也不改写
         assert_eq!(
-            sql_text_for_execution("select * from Product limit 5000", 0),
+            sql_text_for_execution("select * from Product limit 5000", 0, DatabaseKind::MySql),
             "select * from Product limit 5000"
         );
     }
@@ -2563,7 +2580,7 @@
     fn default_limit_caps_existing_larger_limit() {
         // 用户 limit 200 > 配置 100 → 强制封顶为 100
         assert_eq!(
-            sql_text_for_execution("select * from Product limit 200", 100),
+            sql_text_for_execution("select * from Product limit 200", 100, DatabaseKind::MySql),
             "select * from Product LIMIT 100"
         );
     }
@@ -2572,12 +2589,12 @@
     fn default_limit_keeps_smaller_or_equal_limit() {
         // 用户 limit 20 <= 配置 100 → 保持
         assert_eq!(
-            sql_text_for_execution("select * from Product limit 20", 100),
+            sql_text_for_execution("select * from Product limit 20", 100, DatabaseKind::MySql),
             "select * from Product limit 20"
         );
         // 相等也保持
         assert_eq!(
-            sql_text_for_execution("select * from Product limit 100", 100),
+            sql_text_for_execution("select * from Product limit 100", 100, DatabaseKind::MySql),
             "select * from Product limit 100"
         );
     }
@@ -2585,7 +2602,7 @@
     #[test]
     fn default_limit_appends_when_missing() {
         assert_eq!(
-            sql_text_for_execution("select * from Product", 500),
+            sql_text_for_execution("select * from Product", 500, DatabaseKind::MySql),
             "select * from Product LIMIT 500"
         );
     }
@@ -2594,7 +2611,7 @@
     fn default_limit_caps_offset_syntax() {
         // `limit offset, count`：封顶 count
         assert_eq!(
-            sql_text_for_execution("select * from Product limit 10, 300", 100),
+            sql_text_for_execution("select * from Product limit 10, 300", 100, DatabaseKind::MySql),
             "select * from Product LIMIT 100"
         );
     }
@@ -2603,7 +2620,7 @@
     fn default_limit_caps_offset_clause() {
         // `limit count offset m`：封顶 count
         assert_eq!(
-            sql_text_for_execution("select * from Product limit 300 offset 5", 100),
+            sql_text_for_execution("select * from Product limit 300 offset 5", 100, DatabaseKind::MySql),
             "select * from Product LIMIT 100 offset 5"
         );
     }
@@ -2611,7 +2628,7 @@
     #[test]
     fn default_limit_does_not_limit_non_select() {
         assert_eq!(
-            sql_text_for_execution("update Product set name = 'A'", 100),
+            sql_text_for_execution("update Product set name = 'A'", 100, DatabaseKind::MySql),
             "update Product set name = 'A'"
         );
     }
