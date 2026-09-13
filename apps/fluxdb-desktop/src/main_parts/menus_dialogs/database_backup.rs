@@ -485,7 +485,7 @@ fn run_backup(
     let (host, port, user, password) = resolved_credentials(&config);
 
     let settings = controller.state().settings.clone();
-    let mode = match form.mode {
+    let mut mode = match form.mode {
         BackupMode::Native => BackupMode::Native,
         BackupMode::Logic => BackupMode::Logic,
         BackupMode::Auto => {
@@ -496,6 +496,12 @@ fn run_backup(
             }
         }
     };
+    // PostgreSQL 的逻辑备份即原生 pg_dump（本质是 SQL dump，且带准确 schema 范围）；
+    // 显式选「逻辑备份」也归一为原生 pg_dump，避免落入 MySQL 专用的逐表 run_logic_backup
+    // （其 `SET FOREIGN_KEY_CHECKS` 为 MySQL 语法，对 PG 非法）。
+    if config.kind == DatabaseKind::Postgres && mode == BackupMode::Logic {
+        mode = BackupMode::Native;
+    }
     let _ = sender.send(BackupTaskProgress {
         stage: "开始".to_string(),
         message: format!(

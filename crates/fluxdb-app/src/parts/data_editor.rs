@@ -616,6 +616,21 @@ fn original_editor_row_identity(editor: &DataEditorState, row: usize) -> fluxdb_
     let page = editor.page.as_ref().ok_or_else(|| Error::new(ErrorKind::Internal, "数据页未加载"))?;
     let current = page.rows.get(row).ok_or_else(|| Error::new(ErrorKind::Internal, "行不存在"))?;
     let original = editor.original_page.as_ref().unwrap_or(page);
+    // 会话内运行时追加列（如单元格 BLOB 详情列）会使 original 与当前页列结构不同，
+    // 整行相等比较失去列对齐前提（expected 比 current 少列）——此时退回按主键/首列身份定位，
+    // 主键行的防漂移保护（草稿态不换新值）不受影响，无键行整行比较原语义不变。
+    let columns_differ =
+        original.columns.len() != page.columns.len()
+            || original.columns.iter().any(|col| !page.columns.contains(col));
+    if columns_differ {
+        for (index, _) in original.rows.iter().enumerate() {
+            let identity = row_identity(original, index)?;
+            if page_contains_identity(page, &identity) {
+                return Ok(identity);
+            }
+        }
+        return Err(Error::new(ErrorKind::Query, "无法匹配原始行，请刷新后重试"));
+    }
     for (index, original_row) in original.rows.iter().enumerate() {
         let identity = row_identity(original, index)?;
         let mut expected = original_row.clone();

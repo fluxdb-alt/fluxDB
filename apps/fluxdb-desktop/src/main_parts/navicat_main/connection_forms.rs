@@ -368,6 +368,8 @@ impl NavicatMain {
             ConnectionToggleField::MysqlProxyEnabled => form.mysql_proxy_enabled = value,
             ConnectionToggleField::MysqlTcpKeepalive => form.mysql_tcp_keepalive = value,
             ConnectionToggleField::PgTcpKeepalive => form.pg_tcp_keepalive = value,
+            ConnectionToggleField::PgShowOtherDatabases => form.pg_show_other_databases = value,
+            ConnectionToggleField::PgShowSystemSchemas => form.pg_show_system_schemas = value,
         }
         cx.notify();
     }

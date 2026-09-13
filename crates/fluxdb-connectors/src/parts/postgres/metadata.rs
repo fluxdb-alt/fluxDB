@@ -28,7 +28,20 @@ fn pg_list_objects(
 }
 
 /// 数据库列表：维护库建连，按 CONNECT 权限返回用户可见的非模板库。
+///
+/// 档案 `scope.show_other_databases` 控制可见范围：关闭时仅返回维护库（本库），
+/// 打开时返回所有用户可 CONNECT 的非模板库。
 fn pg_list_databases(config: &ConnectionConfig) -> fluxdb_core::Result<Vec<ObjectSummary>> {
+    let show_others = config
+        .postgres_profile
+        .as_ref()
+        .map(|p| p.scope.show_other_databases)
+        .unwrap_or(false);
+    // 关闭"显示其他数据库"时，维护库即唯一可见库（对象树根只有本库）。
+    if !show_others {
+        let database = pg_request_database(config, None);
+        return Ok(vec![database_object(config.id, &database)]);
+    }
     let database = pg_request_database(config, None);
     pg_runtime().block_on(async {
         let session = pg_connect(config, &database).await?;
@@ -52,27 +65,47 @@ fn pg_list_databases(config: &ConnectionConfig) -> fluxdb_core::Result<Vec<Objec
     })
 }
 
-/// schema 列表：连接目标库，过滤系统 schema（`pg_*` 前缀与 information_schema）。
+/// schema 列表：连接目标库，默认过滤系统 schema（`pg_*` 前缀与 information_schema）。
+///
+/// 档案 `scope.show_system_schemas` 打开时一并显示系统 schema。
 fn pg_list_schemas(
     config: &ConnectionConfig,
     path: &ObjectPath,
 ) -> fluxdb_core::Result<Vec<ObjectSummary>> {
+    let show_system = config
+        .postgres_profile
+        .as_ref()
+        .map(|p| p.scope.show_system_schemas)
+        .unwrap_or(false);
     let database = path
         .database
         .clone()
         .unwrap_or_else(|| path.name.clone());
     pg_runtime().block_on(async {
         let session = pg_connect(config, &database).await?;
-        let rows = session
-            .client
-            .query(
-                "SELECT n.nspname FROM pg_catalog.pg_namespace n \
-                 WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' \
-                 ORDER BY n.nspname",
-                &[],
-            )
-            .await
-            .map_err(pg_error)?;
+        // 关闭时过滤系统 schema（默认行为）；打开时不加过滤条件，全部 schema 可见。
+        let rows = if show_system {
+            session
+                .client
+                .query(
+                    "SELECT n.nspname FROM pg_catalog.pg_namespace n \
+                     ORDER BY n.nspname",
+                    &[],
+                )
+                .await
+                .map_err(pg_error)?
+        } else {
+            session
+                .client
+                .query(
+                    "SELECT n.nspname FROM pg_catalog.pg_namespace n \
+                     WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' \
+                     ORDER BY n.nspname",
+                    &[],
+                )
+                .await
+                .map_err(pg_error)?
+        };
         let mut objects = Vec::with_capacity(rows.len());
         for row in rows {
             let name: String = row.get(0);

@@ -1085,6 +1085,7 @@ trait SqlCompletionDialect: Sync {
 
 struct MySqlCompletionDialect;
 struct SqliteCompletionDialect;
+struct PostgresCompletionDialect;
 struct GenericCompletionDialect;
 
 impl SqlCompletionDialect for MySqlCompletionDialect {
@@ -1119,6 +1120,22 @@ impl SqlCompletionDialect for SqliteCompletionDialect {
     }
 }
 
+/// PostgreSQL 方言：PG 亦具备过程（CALL/PROCEDURE）与触发器索引，
+/// 与 MySQL 一致地参与过程/触发器上下文建议（connector 侧 pg_catalog 已产出两类索引）。
+impl SqlCompletionDialect for PostgresCompletionDialect {
+    fn referenced_tables(&self, sql: &str) -> Vec<ReferencedTable> {
+        referenced_tables_from_statements(sql, false)
+    }
+
+    fn supports_procedures(&self) -> bool {
+        true
+    }
+
+    fn supports_triggers(&self) -> bool {
+        true
+    }
+}
+
 impl SqlCompletionDialect for GenericCompletionDialect {
     fn referenced_tables(&self, sql: &str) -> Vec<ReferencedTable> {
         referenced_tables_from_statements(sql, false)
@@ -1146,15 +1163,15 @@ fn referenced_tables_from_statements(
 
 static MYSQL_COMPLETION_DIALECT: MySqlCompletionDialect = MySqlCompletionDialect;
 static SQLITE_COMPLETION_DIALECT: SqliteCompletionDialect = SqliteCompletionDialect;
+static POSTGRES_COMPLETION_DIALECT: PostgresCompletionDialect = PostgresCompletionDialect;
 static GENERIC_COMPLETION_DIALECT: GenericCompletionDialect = GenericCompletionDialect;
 
 fn sql_completion_dialect(dialect: DatabaseKind) -> &'static dyn SqlCompletionDialect {
     match dialect {
         DatabaseKind::MySql | DatabaseKind::TiDb => &MYSQL_COMPLETION_DIALECT,
         DatabaseKind::Sqlite => &SQLITE_COMPLETION_DIALECT,
-        DatabaseKind::MongoDb | DatabaseKind::Redis | DatabaseKind::Postgres => {
-            &GENERIC_COMPLETION_DIALECT
-        }
+        DatabaseKind::Postgres => &POSTGRES_COMPLETION_DIALECT,
+        DatabaseKind::MongoDb | DatabaseKind::Redis => &GENERIC_COMPLETION_DIALECT,
     }
 }
 

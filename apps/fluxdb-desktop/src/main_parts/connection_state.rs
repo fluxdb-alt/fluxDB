@@ -350,6 +350,10 @@ enum ConnectionToggleField {
     MysqlTcpKeepalive,
     /// 是否启用 PostgreSQL TCP 保活
     PgTcpKeepalive,
+    /// 是否在对象树显示其他数据库（默认仅维护库/当前库）
+    PgShowOtherDatabases,
+    /// 是否显示系统 schema（pg_catalog/information_schema 等）
+    PgShowSystemSchemas,
 }
 
 #[derive(Clone, Debug)]
@@ -420,6 +424,10 @@ struct NewConnectionForm {
     pg_query_timeout_secs: String,
     /// TCP 保活
     pg_tcp_keepalive: bool,
+    /// 对象树是否显示其他数据库
+    pg_show_other_databases: bool,
+    /// 对象树是否显示系统 schema
+    pg_show_system_schemas: bool,
     sentinel_master_name: String,
     /// Sentinel 节点列表，换行分隔
     sentinel_endpoints: String,
@@ -543,6 +551,8 @@ impl NewConnectionForm {
             pg_connect_timeout_secs: "5".to_string(),
             pg_query_timeout_secs: "0".to_string(),
             pg_tcp_keepalive: false,
+            pg_show_other_databases: false,
+            pg_show_system_schemas: false,
             sentinel_master_name: String::new(),
             sentinel_endpoints: String::new(),
             cluster_start_nodes: String::new(),
@@ -702,6 +712,8 @@ impl NewConnectionForm {
         self.pg_connect_timeout_secs = profile.advanced.connect_timeout_secs.to_string();
         self.pg_query_timeout_secs = profile.advanced.query_timeout_secs.to_string();
         self.pg_tcp_keepalive = profile.advanced.tcp_keepalive;
+        self.pg_show_other_databases = profile.scope.show_other_databases;
+        self.pg_show_system_schemas = profile.scope.show_system_schemas;
         // 维护库回填「数据库」输入框（表单与档案保持同一事实来源）。
         if !profile.basic.maintenance_database.is_empty() {
             self.database = profile.basic.maintenance_database.clone();
@@ -1141,7 +1153,8 @@ impl NewConnectionForm {
             },
             scope: PostgresScopeOptions {
                 default_schema: self.pg_default_schema.trim().to_string(),
-                ..PostgresScopeOptions::default()
+                show_other_databases: self.pg_show_other_databases,
+                show_system_schemas: self.pg_show_system_schemas,
             },
             tls,
             transport,

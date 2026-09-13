@@ -863,13 +863,29 @@ fn postgres_advanced_form(
                 )),
         )
         .child(
-            h_form().label_width(px(112.)).child(toggle_row_light(
-                "TCP 保活",
-                ConnectionToggleField::PgTcpKeepalive,
-                form.pg_tcp_keepalive,
-                colors,
-                cx,
-            )),
+            h_form()
+                .label_width(px(112.))
+                .child(toggle_row_light(
+                    "TCP 保活",
+                    ConnectionToggleField::PgTcpKeepalive,
+                    form.pg_tcp_keepalive,
+                    colors,
+                    cx,
+                ))
+                .child(toggle_row_light(
+                    "显示其他数据库",
+                    ConnectionToggleField::PgShowOtherDatabases,
+                    form.pg_show_other_databases,
+                    colors,
+                    cx,
+                ))
+                .child(toggle_row_light(
+                    "显示系统 schema",
+                    ConnectionToggleField::PgShowSystemSchemas,
+                    form.pg_show_system_schemas,
+                    colors,
+                    cx,
+                )),
         )
 }
 
@@ -1490,6 +1506,8 @@ fn connection_toggle_id(field: ConnectionToggleField) -> &'static str {
         ConnectionToggleField::MysqlProxyEnabled => "new-connection-toggle-mysql-proxy",
         ConnectionToggleField::MysqlTcpKeepalive => "new-connection-toggle-mysql-tcp-keepalive",
         ConnectionToggleField::PgTcpKeepalive => "new-connection-toggle-pg-tcp-keepalive",
+        ConnectionToggleField::PgShowOtherDatabases => "new-connection-toggle-pg-show-other-databases",
+        ConnectionToggleField::PgShowSystemSchemas => "new-connection-toggle-pg-show-system-schemas",
     }
 }
 
