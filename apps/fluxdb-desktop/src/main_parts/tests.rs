@@ -3894,6 +3894,20 @@ fn postgres_connection_form_roundtrips_into_profile() {
     assert_eq!(restored.database, "appdb");
     assert_eq!(restored.tls_ca, "/etc/ssl/root.crt");
 
+    // 数据库留空：保存后保持为空，回填也显示空（不再强制回退 postgres）。
+    let mut empty_db_form = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
+    empty_db_form.host = "127.0.0.1".to_string();
+    empty_db_form.port = "5432".to_string();
+    empty_db_form.database.clear();
+    let empty_profile = empty_db_form.build_postgres_profile();
+    assert_eq!(empty_profile.basic.maintenance_database, "");
+    let mut empty_restored = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
+    empty_restored.apply_postgres_profile(&empty_profile);
+    assert_eq!(empty_restored.database, "");
+
+    // 空维护库拨号时仍回落 postgres 默认（连接/枚举正常）。
+    assert_eq!(empty_profile.maintenance_database(), "postgres");
+
     // SSH 隧道：启用后进入传输层并可回填。
     let mut ssh_form = NewConnectionForm::for_kind(DatabaseKind::Postgres, 1);
     ssh_form.ssh_enabled = true;

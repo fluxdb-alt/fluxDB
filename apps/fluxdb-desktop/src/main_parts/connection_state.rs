@@ -714,10 +714,8 @@ impl NewConnectionForm {
         self.pg_tcp_keepalive = profile.advanced.tcp_keepalive;
         self.pg_show_other_databases = profile.scope.show_other_databases;
         self.pg_show_system_schemas = profile.scope.show_system_schemas;
-        // 维护库回填「数据库」输入框（表单与档案保持同一事实来源）。
-        if !profile.basic.maintenance_database.is_empty() {
-            self.database = profile.basic.maintenance_database.clone();
-        }
+        // 维护库回填「数据库」输入框（表单与档案保持同一事实来源；留空则显示空）。
+        self.database = profile.basic.maintenance_database.clone();
 
         // 传输层：SSH / 代理复用共享字段（与 MySQL 表单一致的编辑位置）。
         if let Some(ssh) = profile.transport.iter().find_map(|layer| match layer {
@@ -1139,15 +1137,9 @@ impl NewConnectionForm {
                     .trim()
                     .parse::<u16>()
                     .unwrap_or_else(|_| database_default_port_u16(DatabaseKind::Postgres)),
-                // 维护库：表单「数据库」为空时回退 postgres（服务端默认维护库）。
-                maintenance_database: {
-                    let database = self.database.trim();
-                    if database.is_empty() {
-                        "postgres".to_string()
-                    } else {
-                        database.to_string()
-                    }
-                },
+                // 维护库：保留表单原文（允许留空）。留空时拨号由
+                // `PostgresConnectionProfile::maintenance_database()` 回落 postgres 默认。
+                maintenance_database: self.database.trim().to_string(),
                 username: self.username.trim().to_string(),
                 password: inline_secret(&self.password),
             },

@@ -413,7 +413,9 @@ impl PostgresConnectionProfile {
             ops.insert("host".into(), self.basic.host.clone());
         }
         ops.insert("port".into(), self.basic.port.to_string());
-        if self.basic.maintenance_database != "postgres" {
+        if !self.basic.maintenance_database.is_empty()
+            && self.basic.maintenance_database != "postgres"
+        {
             ops.insert("maintenance_database".into(), self.basic.maintenance_database.clone());
         }
         if !self.basic.username.is_empty() {

@@ -199,7 +199,7 @@ Redis 专属 `execute_command_workbench` 等不用于 PostgreSQL SQL 工作台�
 
 | 组 | 字段与语义 |
 | --- | --- |
-| Basic | host、port=5432、maintenance_database=postgres、username、password: SecretRef；database 在建连前确定，指定库不存在时准确报错，不静默换库 |
+| Basic | host、port=5432、maintenance_database=postgres、username、password: SecretRef；database 在建连前确定，指定库不存在时准确报错，不静默换库。表单「数据库」允许留空：空时拨号由 `maintenance_database()` 回落 postgres 默认，表单保存/回填均保留空（不强制回填 postgres），与 URI「无显式库走服务器默认」语义一致（见 postgres_profile.rs `from_uri` 空维护库分支） |
 | Scope | 可选默认 schema、显示其他 databases、系统 schema 可见性；默认保留服务器 search_path，用户选择 schema 后建立明确会话上下文 |
 | TLS | disable/prefer/require/verify-ca/verify-full、CA/客户端证书/私钥文件引用、可选 server_name；默认 prefer 兼容本地连接，界面明确展示实际加密/验证结果 |
 | Transport | direct/SSH/代理；SSH 密码或私钥+口令、已知主机校验；SOCKS5/HTTP CONNECT 按现有表单能力提供明确选项，禁止仅保存不执行 |
@@ -260,7 +260,7 @@ TLS 必须实现 require、verify-ca、verify-full 的差异；CA-only 验证证
 
 | 对象 | 来源与关键规则 |
 | --- | --- |
-| Databases | pg_database；datallowconn、datistemplate、CONNECT 权限；可选显示其他库。只加载列表，展开某库时才连接；无枚举权限仍可访问指定维护库 |
+| Databases | pg_database；datallowconn、datistemplate、CONNECT 权限；可选显示其他库。只加载列表，展开某库时才连接；无枚举权限仍可访问指定维护库。维护库留空时无单一"本库"可言，数据库树一律列出全部可 CONNECT 库（忽略`显示其他数据库`开关），避免回落 postgres 只显示一库 |
 | Schemas | pg_namespace；默认隐藏 pg_catalog/information_schema/pg_toast/临时 schema，支持显式显示；不能把名称含 pg 的用户 schema 全部滤掉 |
 | Tables/views | pg_class + pg_namespace + pg_description；r/p/v/m/f 分辨；reltuples 只作估计，不伪装精确总数；modified_at 未知时 None |
 | Columns | pg_attribute、pg_type、pg_attrdef、pg_constraint；attnum > 0、NOT attisdropped、format_type、pg_get_expr、col_description；attidentity/attgenerated |
