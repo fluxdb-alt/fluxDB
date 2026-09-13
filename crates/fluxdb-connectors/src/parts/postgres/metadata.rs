@@ -38,9 +38,15 @@ fn pg_list_databases(config: &ConnectionConfig) -> fluxdb_core::Result<Vec<Objec
         .map(|p| p.scope.show_other_databases)
         .unwrap_or(false);
     // 关闭"显示其他数据库"时，维护库即唯一可见库（对象树根只有本库）。
+    // 即便仅显示维护库，也必须在维护库建立一次真实连接以验证认证——
+    // 否则错误密码会在「保存并连接」时被误判成功（list 不建连直接返回库对象），
+    // 直到用户点开库才失败，与 MySQL「保存并连接立即报错」行为不一致。
     if !show_others {
         let database = pg_request_database(config, None);
-        return Ok(vec![database_object(config.id, &database)]);
+        return pg_runtime().block_on(async {
+            let _session = pg_connect(config, &database).await?;
+            Ok(vec![database_object(config.id, &database)])
+        });
     }
     let database = pg_request_database(config, None);
     pg_runtime().block_on(async {

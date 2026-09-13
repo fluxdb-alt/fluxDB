@@ -231,7 +231,7 @@ URI 导入只接受 postgres/postgresql scheme，解析至同一档案，处理 
 
 ## 5. 连接与传输实现
 
-`PgDialer` 步骤：校验档案 → storage 提供运行时凭据 → 选择 database → 建 transport → 使用独立 TLS server_name → PostgreSQL 握手/认证 → 读版本/当前库/当前用户/search_path → 绑定资源生命周期。测试连接也完成这条路径，不仅探测 TCP 端口。
+`PgDialer` 步骤：校验档案 → storage 提供运行时凭据 → 选择 database → 建 transport → 使用独立 TLS server_name → PostgreSQL 握手/认证 → 读版本/当前库/当前用户/search_path → 绑定资源生命周期。测试连接也完成这条路径，不仅探测 TCP 端口。「保存并连接 / 打开连接」同样在当前库（含仅显示维护库时）建立真实连接验证认证：错误密码必须立即报错，不得先保存成功、展开对象树时才失败（与 MySQL 行为一致）。
 
 TLS 必须实现 require、verify-ca、verify-full 的差异；CA-only 验证证书链而不检查 DNS，verify-full 两者都检查；`require` 不等于 verify-full。禁用/允许降级策略是明确配置，验证失败不自动降级。SSH 本地拨号地址与远端 TLS 名称分别保存，`hostaddr`/`connect_raw` 只改变传输路由。证书过期、错误 CA、错误主机名、客户端证书不配对都有独立测试。
 
