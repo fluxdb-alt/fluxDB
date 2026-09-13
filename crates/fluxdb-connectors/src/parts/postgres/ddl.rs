@@ -70,6 +70,12 @@ fn pg_create_database_sql(request: &CreateDatabaseRequest) -> fluxdb_core::Resul
             return Err(Error::new(ErrorKind::Query, "数据库模板名称不合法"));
         }
         statement.push_str(&format!(" TEMPLATE {}", pg_quote_identifier(template)));
+    } else if !collation.is_empty() {
+        // 显式指定 locale（LC_COLLATE/LC_CTYPE）时，若沿用默认模板 template1，
+        // 其 locale 与目标不一致会报「new collation is incompatible with the
+        // collation of the template database」。此时改用 template0（无 locale 依赖），
+        // 与 PG 官方 HINT 一致，保证任意 locale 都能建库。
+        statement.push_str(" TEMPLATE template0");
     }
 
     Ok(statement)
@@ -183,4 +189,45 @@ fn pg_delete_database(
 /// PostgreSQL 标识符引用：双引号包裹，内部 `"` 转义为 `""`。
 fn pg_quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+#[cfg(test)]
+mod create_database_tests {
+    use super::*;
+    use fluxdb_core::ConnectionId;
+
+    fn request(name: &str, collation: &str, template: &str) -> CreateDatabaseRequest {
+        CreateDatabaseRequest {
+            connection_id: ConnectionId(1),
+            name: name.to_string(),
+            charset: "UTF8".to_string(),
+            collation: collation.to_string(),
+            owner: String::new(),
+            template: template.to_string(),
+            path: None,
+        }
+    }
+
+    /// 显式 locale 且未指定模板 → 追加 TEMPLATE template0，规避模板 locale 冲突。
+    #[test]
+    fn collation_infers_template0() {
+        let sql = pg_create_database_sql(&request("db1", "C", "")).unwrap();
+        assert!(sql.contains(" LC_COLLATE 'C' LC_CTYPE 'C'"));
+        assert!(sql.contains(" TEMPLATE template0"));
+    }
+
+    /// 未指定 locale → 不加 TEMPLATE（沿用默认模板 template1）。
+    #[test]
+    fn no_collation_no_template_clause() {
+        let sql = pg_create_database_sql(&request("db1", "", "")).unwrap();
+        assert!(!sql.contains("TEMPLATE"));
+    }
+
+    /// 用户显式指定模板 → 尊重用户模板，不再自动改 template0。
+    #[test]
+    fn explicit_template_respected() {
+        let sql = pg_create_database_sql(&request("db1", "C", "my_template")).unwrap();
+        assert!(sql.contains("TEMPLATE \"my_template\""));
+        assert!(!sql.contains("template0"));
+    }
 }

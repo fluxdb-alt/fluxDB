@@ -273,7 +273,7 @@ TLS 必须实现 require、verify-ca、verify-full 的差异；CA-only 验证证
 
 ### 6.2 新建与删除数据库
 
-`CreateDatabaseRequest` 保留既有 MySQL charset/collation 兼容入口，新增带默认值的引擎选项枚举或 PG options，不能借用 `charset` 存 owner。PG 支持 name、owner、encoding、template、LC_COLLATE/LC_CTYPE，合法值来自服务端或校验白名单；locale/template 兼容性错误直接解释。
+`CreateDatabaseRequest` 保留既有 MySQL charset/collation 兼容入口，新增带默认值的引擎选项枚举或 PG options，不能借用 `charset` 存 owner。PG 支持 name、owner、encoding、template、LC_COLLATE/LC_CTYPE，合法值来自服务端或校验白名单；locale/template 兼容性错误直接解释。显式指定 locale 且未指定模板时自动追加 `TEMPLATE template0`（template1 的 locale 与目标不一致会报「new collation incompatible with template database」），用户显式指定模板则尊重不覆盖。
 
 CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不放进事务、不借当前查询会话。不能删除当前维护连接所在库；必要时用户明确选择另一个维护库。删除有业务确认和数据库名称校验；默认不 FORCE、不自动终止其他用户连接；有活动会话时报告失败。成功再清理该库标签/缓存/备份列表上下文，失败保留。schema 的创建/重命名/删除采用对象管理命令，默认 RESTRICT。[R05、R06、R20]
 
