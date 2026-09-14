@@ -181,6 +181,11 @@ fn delete_database_modal(
                     this.confirm_delete_database(cx);
                     cx.stop_propagation();
                 }))
+                .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
+                    // Esc 关闭（全局 escape→CancelDialog 绑定）
+                    this.cancel_delete_database(cx);
+                    cx.stop_propagation();
+                }))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
                     div()

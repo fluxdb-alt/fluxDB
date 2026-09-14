@@ -344,6 +344,11 @@ impl NavicatMain {
                         }
                     } else {
                         this.controller.merge_last_error_from(&controller);
+                        // 树加载失败（重载超时/断连等）静默会让用户误以为建表/刷新成功但树无变化，
+                        // 在共享失败路径统一给出反馈，覆盖建表重载、手动刷新、schema 展开等所有调用点。
+                        if let Some(error) = this.controller.state().last_error.clone() {
+                            this.show_message(error.message, AppMessageKind::Error, cx);
+                        }
                         false
                     };
                     this.loading_databases.remove(&task_key);
