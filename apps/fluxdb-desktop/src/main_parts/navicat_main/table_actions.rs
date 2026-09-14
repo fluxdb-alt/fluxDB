@@ -331,17 +331,7 @@ impl NavicatMain {
                             this.controller
                                 .merge_renamed_table_from(&controller, &object, &new_name);
                             this.pending_rename_table = None;
-                            if let Some(parent) = database_parent_path(&object) {
-                                let database = parent
-                                    .database
-                                    .clone()
-                                    .unwrap_or_else(|| parent.name.clone());
-                                this.load_database_children(
-                                    parent,
-                                    database_tree_key(object.connection_id, &database),
-                                    cx,
-                                );
-                            }
+                            this.refresh_database_children_for_table(&object, cx);
                             let tab_ids = this
                                 .controller
                                 .state()
@@ -422,17 +412,7 @@ impl NavicatMain {
                     match event {
                         AppEvent::TableCopied { object, new_name } => {
                             this.pending_copy_table = None;
-                            if let Some(parent) = database_parent_path(&object) {
-                                let database = parent
-                                    .database
-                                    .clone()
-                                    .unwrap_or_else(|| parent.name.clone());
-                                this.load_database_children(
-                                    parent,
-                                    database_tree_key(object.connection_id, &database),
-                                    cx,
-                                );
-                            }
+                            this.refresh_database_children_for_table(&object, cx);
                             this.show_message(
                                 format!("表已复制为 {new_name}"),
                                 AppMessageKind::Success,
@@ -550,6 +530,27 @@ impl NavicatMain {
     }
 
     fn refresh_database_children_for_table(&mut self, object: &ObjectPath, cx: &mut Context<Self>) {
+        // PG 按 schema 懒加载：只刷新该表所在 schema，避免 DB 级重载按 schema_scope=None
+        // 清空整库所有表/视图（见 replace_loaded_children）。复制/删除/清空等表操作统一走这里。
+        if self.table_database_kind(object) == Some(DatabaseKind::Postgres) {
+            let (Some(database), Some(schema)) = (object.database.clone(), object.schema.clone())
+            else {
+                return;
+            };
+            let key = schema_tree_key(object.connection_id, &database, &schema);
+            self.load_database_children(
+                ObjectPath {
+                    connection_id: object.connection_id,
+                    database: Some(database.clone()),
+                    schema: Some(schema.clone()),
+                    name: schema.clone(),
+                    kind: ObjectKind::Schema,
+                },
+                key,
+                cx,
+            );
+            return;
+        }
         if let Some(parent) = database_parent_path(object) {
             let database = parent
                 .database

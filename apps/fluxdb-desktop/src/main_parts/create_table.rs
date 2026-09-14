@@ -443,18 +443,40 @@ impl NavicatMain {
                                 cx,
                             );
                             if let Some(database) = database {
-                                let key = database_tree_key(connection_id, &database);
-                                this.load_database_children(
-                                    ObjectPath {
-                                        connection_id,
-                                        database: Some(database.clone()),
-                                        schema: None,
-                                        name: database,
-                                        kind: ObjectKind::Database,
-                                    },
-                                    key,
-                                    cx,
-                                );
+                                // PG 按 schema 懒加载：建表成功后只重载新表所在 schema，避免
+                                // 把整库（DB 级）表/视图行当 schema_scope=None 清空（见 replace_loaded_children）。
+                                if create.database_kind == DatabaseKind::Postgres {
+                                    let schema = if create.schema.trim().is_empty() {
+                                        "public"
+                                    } else {
+                                        &create.schema
+                                    };
+                                    let key = schema_tree_key(connection_id, &database, schema);
+                                    this.load_database_children(
+                                        ObjectPath {
+                                            connection_id,
+                                            database: Some(database.clone()),
+                                            schema: Some(schema.to_string()),
+                                            name: schema.to_string(),
+                                            kind: ObjectKind::Schema,
+                                        },
+                                        key,
+                                        cx,
+                                    );
+                                } else {
+                                    let key = database_tree_key(connection_id, &database);
+                                    this.load_database_children(
+                                        ObjectPath {
+                                            connection_id,
+                                            database: Some(database.clone()),
+                                            schema: None,
+                                            name: database,
+                                            kind: ObjectKind::Database,
+                                        },
+                                        key,
+                                        cx,
+                                    );
+                                }
                             }
                         }
                         Err(error) => this.show_message(error.message, AppMessageKind::Error, cx),

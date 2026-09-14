@@ -83,6 +83,13 @@ fn replace_loaded_children(
     // PostgreSQL 按 schema 懒加载：展开某一 schema 时只替换该 schema 的表/视图，
     // 不得清掉同库其他 schema 已加载的对象（跨 schema 同名同时保留）。
     let schema_scope = object_path_schema(parent);
+    // DB 级加载（schema_scope=None）时，仅当本次 children 真的是表/视图清单（MySQL/TiDB）
+    // 才按整库清单替换；若是 PG 返回的 schema 列表（不含表/视图），则不能据此清空整库表，
+    // 否则数据库节点上右键刷新会把所有已加载的表/视图误删。
+    let clears_database_tables = schema_scope.is_none()
+        && children
+            .iter()
+            .any(|child| matches!(child.path.kind, ObjectKind::Table | ObjectKind::View));
     current.retain(|object| {
         let same_database = object.path.database.as_deref().unwrap_or("main") == database;
         if !(same_database && matches!(object.path.kind, ObjectKind::Table | ObjectKind::View)) {
@@ -90,7 +97,7 @@ fn replace_loaded_children(
         }
         match schema_scope {
             Some(schema) => object.path.schema.as_deref() != Some(schema),
-            None => false,
+            None => !clears_database_tables,
         }
     });
     current.extend(children);
@@ -260,5 +267,18 @@ mod table_info_tests {
         replace_loaded_children(&mut current, &parent.path, children);
         assert_eq!(current.len(), 1);
         assert_eq!(current[0].path.name, "b");
+    }
+
+    #[test]
+    fn replace_loaded_children_database_level_postgres_schema_list_keeps_tables() {
+        // PG：数据库节点右键刷新返回的是该库的 schema 列表（不含表），不能据此清空已加载的表。
+        let mut current = vec![obj(Some("appdb"), Some("public"), "a", ObjectKind::Table)];
+        let parent = obj(Some("appdb"), None, "appdb", ObjectKind::Database);
+        let mut children = vec![obj(Some("appdb"), Some("public"), "public", ObjectKind::Schema)];
+        replace_loaded_children(&mut current, &parent.path, children);
+        // public 表 a 保留；仅并入新到的 schema 条目。
+        assert_eq!(current.len(), 2);
+        assert!(current.iter().any(|o| o.path.name == "a"));
+        assert!(current.iter().any(|o| o.path.name == "public"));
     }
 }
