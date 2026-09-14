@@ -62,7 +62,7 @@ fn tolerant_parse_never_hangs_or_panics_on_hostile_input() {
 #[test]
 fn referenced_tables_covers_union_both_sides() {
     let sql = "select a.id from customer a UNION select b.id from product b";
-    let tables = referenced_tables_from_statements(sql, true);
+    let tables = referenced_tables_from_statements(sql, true, DatabaseKind::MySql);
     let names: Vec<_> = tables.iter().map(|t| (t.name.as_str(), t.alias.as_deref())).collect();
     assert!(
         tables.iter().any(|t| t.name == "customer" && t.alias.as_deref() == Some("a")),
@@ -77,7 +77,7 @@ fn referenced_tables_covers_union_both_sides() {
 #[test]
 fn referenced_tables_covers_multi_statement_and_corelates_with_current_query() {
     let sql = "select * from users u; select * from orders o where id = 1";
-    let tables = referenced_tables_from_statements(sql, true);
+    let tables = referenced_tables_from_statements(sql, true, DatabaseKind::MySql);
     let names: Vec<_> = tables.iter().map(|t| t.name.as_str()).collect();
     // 两语句表都出现在 AST 级引用集合（当前语句隔离由 sql_completion_context 负责）。
     assert!(names.contains(&"users"), "缺少 users: {names:?}");

@@ -810,7 +810,7 @@ impl AppController {
                                     config,
                                     connection_id,
                                     table.database.as_deref().or(database),
-                                    None,
+                                    table.schema.as_deref(),
                                     &table.name,
                                     &|| batch_cancelled,
                                 )
@@ -880,7 +880,7 @@ impl AppController {
                                     config,
                                     connection_id,
                                     column_database,
-                                    None,
+                                    target.schema.as_deref(),
                                     &target.table,
                                     &|| batch_cancelled,
                                 )
@@ -889,7 +889,7 @@ impl AppController {
                                     config,
                                     connection_id,
                                     column_database,
-                                    None,
+                                    target.schema.as_deref(),
                                     &target.table,
                                     &|| batch_cancelled,
                                 )
@@ -968,7 +968,7 @@ impl AppController {
                     config,
                     editor.connection_id,
                     column_database,
-                    None,
+                    target.schema.as_deref(),
                     &target.table,
                     should_cancel,
                 )
@@ -1055,7 +1055,7 @@ impl AppController {
                 config,
                 editor.connection_id,
                 column_database,
-                None,
+                target.schema.as_deref(),
                 &target.table,
                 should_cancel,
             ) else {
@@ -1108,7 +1108,7 @@ impl AppController {
                 config,
                 editor.connection_id,
                 column_database,
-                None,
+                target.schema.as_deref(),
                 &target.table,
                 should_cancel,
             ) else {
@@ -2279,7 +2279,8 @@ pub enum CompletionDocumentationState {
 }
 
 fn query_history_tables(sql: &str) -> Vec<String> {
-    let mut tables = extract_referenced_tables(sql)
+    // 历史记录这里只消费表名，限定名按哪种方言拆分不影响结果。
+    let mut tables = extract_referenced_tables(sql, DatabaseKind::MongoDb)
         .into_iter()
         .map(|table| table.name)
         .collect::<BTreeSet<_>>();

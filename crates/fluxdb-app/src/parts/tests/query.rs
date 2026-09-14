@@ -43,11 +43,13 @@
             vec![
                 ReferencedTable {
                     database: Some("sales".to_string()),
+                    schema: None,
                     name: "orders".to_string(),
                     alias: Some("o".to_string()),
                 },
                 ReferencedTable {
                     database: None,
+                    schema: None,
                     name: "customers".to_string(),
                     alias: Some("c".to_string()),
                 },
@@ -57,6 +59,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "customers".to_string(),
                 alias: Some("c".to_string()),
             }]
@@ -289,6 +292,45 @@
             .find(|item| item.kind == QueryCompletionKind::Table && item.label == "orders")
             .expect("tenant_b.orders 候选");
         assert_eq!(orders.schema.as_deref(), Some("tenant_b"));
+    }
+
+    #[test]
+    fn postgres_schema_qualified_table_returns_columns_in_select_list() {
+        let mut controller = AppController::with_mock_data();
+        controller.state.connections[0].config.kind = DatabaseKind::Postgres;
+        controller.completion_index.lock().unwrap().replace_table_columns(
+            ConnectionId(1),
+            Some("fluxdb_manual"),
+            Some("tenant_a"),
+            "orders",
+            vec![CompletionColumn {
+                database: Some("fluxdb_manual".to_string()),
+                schema: Some("tenant_a".to_string()),
+                table: "orders".to_string(),
+                name: "amount".to_string(),
+                type_name: Some("numeric(10,2)".to_string()),
+                nullable: true,
+                primary_key: false,
+                comment: None,
+            }],
+            DatabaseKind::Postgres,
+        );
+
+        let sql = "SELECT am FROM tenant_a.orders";
+        let result = controller
+            .query_completions_for_text(
+                ConnectionId(1),
+                Some("fluxdb_manual".to_string()),
+                None,
+                sql.to_string(),
+                "SELECT am".len(),
+                false,
+            )
+            .unwrap();
+
+        assert!(result.items.iter().any(|item| {
+            item.kind == QueryCompletionKind::Column && item.label == "amount"
+        }));
     }
 
     /// 详情面板按候选携带的 schema 身份查列：schema 限定下的表（不在 search_path、
@@ -970,6 +1012,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "users".to_string(),
                 alias: Some("u".to_string()),
             }]
@@ -1025,6 +1068,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "orders".to_string(),
                 alias: Some("o".to_string()),
             }]
@@ -1042,6 +1086,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: Some("sales".to_string()),
+                schema: None,
                 table: "orders".to_string(),
                 alias: Some("r".to_string()),
             }]
@@ -1129,6 +1174,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "orders".to_string(),
                 alias: Some("u".to_string()),
             }]
@@ -1145,6 +1191,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "Product".to_string(),
                 alias: None,
             }]
@@ -1162,6 +1209,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "Product".to_string(),
                 alias: None,
             }]
@@ -1277,6 +1325,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "3d_user".to_string(),
                 alias: Some("u".to_string()),
             }]
