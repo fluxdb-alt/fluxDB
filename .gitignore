@@ -3,9 +3,4 @@
 target/
 .superspec/
 .claude/
-docs/design/*.md
-!docs/design/2026-09-09-postgresql-task-list.md
-!docs/design/2026-09-09-postgresql-detailed-design.md
-!docs/design/2026-09-12-postgresql-manual-acceptance.md
 apps/gdb-desktop/target/
-AGENTS.md

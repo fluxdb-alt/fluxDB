@@ -367,6 +367,15 @@ CREATE/DROP DATABASE 在维护数据库的独立 autocommit 连接运行，不�
 > **实现记录（T13 增量一：aborted 事务态停止继续）**：PG 执行器 `pg_run_statements` 增加会话 aborted 感知 —— 语句失败返回 `25P02 in_failed_sql_transaction` 时置 `aborted`；`continue_on_error` 下不再盲目执行后续语句，而是逐条产出「已跳过：需 ROLLBACK 后继续」摘要（不自动回滚，符合 R27），未开 continue_on_error 仍立即停止。恢复路径由用户显式 `ROLLBACK` 完成，其后会话恢复正常。（真实 CancelToken/结果流式/statement→result 索引等余项另增增量。）
 >
 > **实现记录（T13 增量二：空结果保留列头 + ordinal 读取）**：结果集语句先 `prepare` 取 RowDescription 再执行，空结果仍保留列头（§8.2）；无法 prepare 时退回从首行取列。值一律按 ordinal 读取不靠列名（`query_rows_to_page` 按 `enumerate` 索引取），同名列不串位。新建 `pg_live_smoke_empty_result_retains_columns`（空结果列头 + 同名列 ordinal）。
+>
+> **实现记录（T13 增量四：「停止」按钮接线 + 取消/跳过如实收尾）**：本节三条要求此前只有 connector 层的 CancelToken 与文档描述，UI 到执行器之间没有通路 —— 工具栏「停止」按钮是死按钮，app 执行入口 `execute_query` 等价 `should_cancel = || false`，取消标志无从下传（人工清单 D1「点击停止不生效」即此）。补齐：
+> 1. **取消通路（UI → app → connector）**：新增 `AppCommand::CancelQueryExecution` / `AppEvent::QueryCancelRequested`；`AppController` 持 `query_cancel_flags: Arc<Mutex<BTreeMap<TabId, Arc<AtomicBool>>>>`（`StartQueryExecution` 每次执行登记新标志、关标签释放并置位、去重时清理已关标签），执行经 `execute_query_with_cancel` → `execute_query_for_connection_with_progress` 把 `should_cancel` 一路下传；工具栏「停止」置位标志并提示「已请求停止执行」。标志必须放共享 `Arc`：UI 线程与后台执行线程各持一份 `AppController` 副本，只有共享 `Arc` 才能让两边看到同一个标志。
+> 2. **取消收尾不谎报**：`pg_run_statement` 回传取消来源（用户「停止」/查询超时），且只在语句确实以错误收尾时归属取消（取消与完成竞态仍以服务端结果为准）。用户取消的语句标「已取消：结果待核实」（历史据此把本次执行标为未知，不谎报成功、不断言回滚）；同批次**未发送**的语句逐条标「已取消：未执行」（不再静默丢弃、也不再盲发）；查询超时标「已超时：结果待核实」与用户取消区分（§3.3 要求）。
+> 3. **aborted 会话本地跳过**：补上本节「aborted 会话显示需要回滚」的落地 —— 语句返回 `[SQLSTATE 25P02]` 即置 `aborted`，`continue_on_error` 下后续**非恢复语句**不再发往服务端，本地逐条标「已跳过：需 ROLLBACK 后继续」（不自动回滚，R27）；ROLLBACK/COMMIT 等恢复语句照常下发，成功收尾后清除 `aborted`。
+>
+> 验证 — `pg_live_smoke_cancel_token_stops_long_query_promptly`（`SELECT pg_sleep(120)` 取消 ~1.2s 返回并标「结果待核实」，此前因摘要仍是原始 SQLSTATE 文本而失败）与 `pg_live_smoke_aborted_transaction_skips_remaining`（已跳过 + 显式 ROLLBACK 恢复，此前 25P02 逐条盲发而失败）均转通过；app 侧新增 `cancel_query_execution_reaches_the_executor`（置位后所有语句一条都不再发送）、`start_query_execution_resets_previous_cancel_flag`（上一次停止不污染下一次）、`cancel_query_execution_without_running_query_still_reports_event`。
+>
+> **实现记录（T13 增量四补：MySQL 单语句取消）**：MySQL executor 的 `execute_with_progress` 收到 `should_cancel` 但只在语句之间检查，单语句（`SELECT SLEEP`）无法中断。sqlx-mysql 不暴露 `KILL` 所需的连接 id（握手 connection_id 在 sqlx 中 `#[allow(unused)]` 用后即弃），按此实现：执行前 `SELECT CONNECTION_ID()` 取服务端 id，每语句用 `tokio::select!`（语句 future vs 100ms 取消轮询），取消时另开一条短连接下发 `KILL QUERY <id>`（只中止语句、主连接保留）；取消命中运行中语句标「已取消：结果待核实」、批次剩余标「已取消：未执行」。新增 `mysql_live_smoke_cancel_token_stops_long_query_promptly`（`FLUXDB_MYSQL_SMOKE` 门控）。
 
 ### 8.4 补全、结果编辑和历史
 

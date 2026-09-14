@@ -476,6 +476,19 @@ impl NavicatMain {
         true
     }
 
+    /// 工具栏「停止」：请求取消该标签正在执行的查询。
+    ///
+    /// 只置位取消标志交给后台执行线程（PG 会在检查点用 CancelToken 通知服务端），
+    /// 不复用 `_query_execute_tasks` 的取消：线程收尾后仍要走 `FinishQueryExecution`，
+    /// 结果区才能如实显示「已取消：结果待核实」，而不是把整块结果清空或谎报成功。
+    fn request_query_cancel(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        if !self._query_execute_tasks.contains_key(&tab_id.0) {
+            return;
+        }
+        self.dispatch(AppCommand::CancelQueryExecution(tab_id), cx);
+        self.show_message("已请求停止执行", AppMessageKind::Info, cx);
+    }
+
     fn start_query_execution(&mut self, tab_id: TabId, window: &mut Window, cx: &mut Context<Self>) {
         if self._query_execute_tasks.contains_key(&tab_id.0) {
             self.show_message("SQL 正在执行", AppMessageKind::Warning, cx);

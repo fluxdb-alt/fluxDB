@@ -167,8 +167,28 @@ fn quote_completion_insert_text(
 
 impl AppController {
     fn execute_query(&self, request: &QueryRequest) -> fluxdb_core::Result<QueryExecutionResult> {
+        self.execute_query_with_cancel(request, &|| false)
+    }
+
+    /// 带取消信号执行：`should_cancel` 返回 true 时执行器在检查点向服务端发送取消
+    /// （PG 走 CancelToken，不是本地硬超时），并按「已取消」收尾。
+    /// 查询编辑器标签把「停止」按钮的取消标志接到这里；其余调用方传 `|| false`，
+    /// 与 `execute_query` 旧路径行为一致（`execute` 与无取消的 `execute_with_progress` 等价）。
+    fn execute_query_with_cancel(
+        &self,
+        request: &QueryRequest,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<QueryExecutionResult> {
         let rollback_snapshots = self.query_history_rollback_snapshots(request)?;
-        let mut execution = self.execute_query_raw(request)?;
+        let config = self
+            .connection_config(request.connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        let mut execution = execute_query_for_connection_with_progress(
+            config,
+            request,
+            &mut |_| {},
+            should_cancel,
+        )?;
         execution.rollback_snapshots = rollback_snapshots;
         Ok(execution)
     }
@@ -213,7 +233,9 @@ impl AppController {
             TabKind::QueryEditor(editor) => Some(QueryRequest {
                 connection_id: editor.connection_id,
                 database: editor.database.clone(),
-                session_id: None,
+                // 查询编辑器标签拥有独占会话；带进度执行也必须复用该会话，
+                // 否则 BEGIN/COMMIT、临时表和 SET 会退化为每次新连接。
+                session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
                 schema: editor.schema.clone(),
                 text: sql_text_for_execution(
                     &text,

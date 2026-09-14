@@ -5,6 +5,133 @@ fn mysql_execute_query(
     mysql_execute_query_with_progress(config, request, &mut |_| {}, &|| false)
 }
 
+/// 单条 MySQL 语句的执行结局：服务端产出 + 失败 + 是否用户「停止」取消。
+struct MySqlStatementOutcome {
+    rows: Option<Vec<MySqlRow>>,
+    affected_rows: u64,
+    error: Option<fluxdb_core::Error>,
+    user_cancelled: bool,
+}
+
+const MYSQL_CANCELLED_OUTCOME_UNKNOWN: &str = "已取消：结果待核实";
+const MYSQL_CANCELLED_NOT_EXECUTED: &str = "已取消：未执行";
+
+/// MySQL 单语句取消：sqlx 不会在连接上暴露可 KILL 的 `CONNECTION_ID()`，
+/// 故按需读一次连接 id，取消时另开一条短连接下发 `KILL QUERY <id>` 中止服务端执行
+/// （sqlx 自身无 CancelToken，等效 PG 的 CancelToken）。`KILL` 只是中止服务端语句，
+/// 主连接本体保留、会话不被摧毁；驱动不记得 obsolescent connection_id，取一次即可。
+///
+/// `should_cancel` 返回 true 时机要求：语句必须整体交给服务端跑起来后，取消才可能
+/// 中断它——否则逐一 `KILL` 还没开始的语句反而把下一语句误杀。为对齐 PG 语义
+/// （用户取消后批次里**未发送**的语句标「未执行」），取消只对**正在跑**的那条生效：
+/// 调用方在语句之间检查 `should_cancel` 决定是否继续发下一条，本函数只在运行中的
+/// 语句上触发 kill。
+async fn mysql_run_statement_cancellable(
+    url: &str,
+    connection: &mut MySqlConnection,
+    conn_id: u64,
+    statement: &str,
+    should_cancel: &dyn Fn() -> bool,
+) -> MySqlStatementOutcome {
+    let returns_rows = statement_returns_rows(statement);
+    let run = async {
+        if returns_rows {
+            let rows = sqlx::query(statement)
+                .fetch_all(&mut *connection)
+                .await
+                .map(|rows| MySqlStatementOutcome {
+                    rows: Some(rows),
+                    affected_rows: 0,
+                    error: None,
+                    user_cancelled: false,
+                });
+            match rows {
+                Ok(outcome) => outcome,
+                Err(error) => MySqlStatementOutcome {
+                    rows: None,
+                    affected_rows: 0,
+                    error: Some(mysql_error(error)),
+                    user_cancelled: false,
+                },
+            }
+        } else {
+            let outcome = sqlx::query(statement)
+                .execute(&mut *connection)
+                .await
+                .map(|result| MySqlStatementOutcome {
+                    rows: None,
+                    affected_rows: result.rows_affected(),
+                    error: None,
+                    user_cancelled: false,
+                });
+            match outcome {
+                Ok(outcome) => outcome,
+                Err(error) => MySqlStatementOutcome {
+                    rows: None,
+                    affected_rows: 0,
+                    error: Some(mysql_error(error)),
+                    user_cancelled: false,
+                },
+            }
+        }
+    };
+    tokio::pin!(run);
+    let mut cancel_sent = false;
+    let mut cancel_succeeded = false;
+    loop {
+        tokio::select! {
+            outcome = &mut run => {
+                let mut outcome = outcome;
+                // 只有服务端确认接收 KILL，且主连接以错误结束时，才能认定本语句由
+                // 用户取消；若 KILL 没赶上而语句正常完成，仍保留真实成功结果。
+                outcome.user_cancelled = cancel_succeeded && outcome.error.is_some();
+                return outcome;
+            },
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                if !cancel_sent && should_cancel() {
+                    cancel_sent = true;
+                    // KILL QUERY 只中止当前语句，随后主连接会收到该语句超时/中断错误。
+                    match mysql_send_kill_query(url, conn_id).await {
+                        Ok(()) => {
+                            cancel_succeeded = true;
+                            tracing::info!(
+                                target: "fluxdb_connectors",
+                                connection_id = conn_id,
+                                "MySQL 已向服务端发送 KILL QUERY"
+                            );
+                        }
+                        Err(error) => tracing::warn!(
+                            target: "fluxdb_connectors",
+                            connection_id = conn_id,
+                            message = %error.message,
+                            "MySQL KILL QUERY 发送失败"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 另开一条短连接对 `conn_id` 下发 `KILL QUERY`（只中止语句、不关连接）。失败不冒泡，
+/// 由主连接收到的错误表达；避免 KILL 通了但因意外关闭 kill 连接而静默。
+async fn mysql_send_kill_query(url: &str, conn_id: u64) -> fluxdb_core::Result<()> {
+    let options = url
+        .parse::<MySqlConnectOptions>()
+        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let mut kill_conn = match tokio::time::timeout(Duration::from_secs(5), options.connect()).await {
+        Ok(Ok(connection)) => connection,
+        Ok(Err(error)) => return Err(mysql_error(error)),
+        Err(_) => return Err(Error::new(ErrorKind::Connection, "取消连接超时")),
+    };
+    let killed = sqlx::raw_sql(&format!("KILL QUERY {}", conn_id))
+        .execute(&mut kill_conn)
+        .await
+        .map_err(mysql_error);
+    let _ = kill_conn.close().await;
+    killed.map(|_| ())
+}
+
 fn mysql_execute_query_with_progress(
     config: &ConnectionConfig,
     request: &QueryRequest,
@@ -41,84 +168,120 @@ fn mysql_execute_query_with_progress(
                 .map_err(mysql_error)?;
         }
 
+        // 读取本连接的 server-side connection id，供取消时 `KILL QUERY` 定位。
+        // CONNECTION_ID() 的 MySQL 类型是 BIGINT UNSIGNED，必须用 u64 解码；使用 i64
+        // 会在用户 SQL 发出前触发 sqlx 类型不匹配，表现为结果与执行摘要同时为空。
+        let conn_id: u64 = sqlx::query_scalar("SELECT CONNECTION_ID()")
+            .fetch_one(&mut connection)
+            .await
+            .map_err(|error| {
+                let error = mysql_error(error);
+                tracing::warn!(
+                    target: "fluxdb_connectors",
+                    message = %error.message,
+                    "MySQL 读取 CONNECTION_ID() 失败"
+                );
+                error
+            })?;
+
         let mut execution = QueryExecutionResult {
             summaries: Vec::new(),
             results: Vec::new(),
             rollback_snapshots: Vec::new(),
         };
+        // 用户已停止：一旦取消生效，本批次剩下语句一律不再发送（与 should_cancel 是否仍为
+        // true 无关，避免取消标志被调用方复位后又继续往下跑）。
+        let mut stopped = false;
         for statement in statements {
-            if should_cancel() {
-                break;
+            if stopped || should_cancel() {
+                // 不再向服务端发送语句，逐条标注「未执行」保持与语句列表对齐。
+                let kind = if statement_returns_rows(&statement) {
+                    QueryStatementKind::ResultSet
+                } else {
+                    QueryStatementKind::Command
+                };
+                push_query_summary(
+                    &mut execution,
+                    failed_query_summary(
+                        statement,
+                        kind,
+                        MYSQL_CANCELLED_NOT_EXECUTED.to_string(),
+                        0,
+                    ),
+                    on_summary,
+                );
+                continue;
             }
             let started = std::time::Instant::now();
-            if statement_returns_rows(&statement) {
-                let rows = match sqlx::query(&statement).fetch_all(&mut connection).await {
-                    Ok(rows) => rows,
-                    Err(error) => {
-                        let error = mysql_error(error);
-                        push_query_summary(
-                            &mut execution,
-                            failed_query_summary(
-                                statement,
-                                QueryStatementKind::ResultSet,
-                                error.message,
-                                elapsed_ms(started),
-                            ),
-                            on_summary,
-                        );
-                        if !request.options.continue_on_error {
-                            break;
-                        }
-                        continue;
-                    }
-                };
-                let elapsed_ms = elapsed_ms(started);
-                let page = mysql_query_rows_to_page(rows, request.options.page_offset, request.options.page_size);
+            let outcome = mysql_run_statement_cancellable(
+                &url, &mut connection, conn_id, &statement, should_cancel,
+            )
+            .await;
+            let full_statement = statement.clone();
+            if outcome.user_cancelled {
+                // 取消命中正在运行的语句：服务端执行到哪一步未知，标「结果待核实」。
+                let returns_rows = statement_returns_rows(&full_statement);
+                push_query_summary(
+                    &mut execution,
+                    failed_query_summary(
+                        full_statement.clone(),
+                        if returns_rows {
+                            QueryStatementKind::ResultSet
+                        } else {
+                            QueryStatementKind::Command
+                        },
+                        MYSQL_CANCELLED_OUTCOME_UNKNOWN.to_string(),
+                        elapsed_ms(started),
+                    ),
+                    on_summary,
+                );
+                stopped = true;
+                continue;
+            }
+            if let Some(rows) = outcome.rows {
+                let page = mysql_query_rows_to_page(
+                    rows,
+                    request.options.page_offset,
+                    request.options.page_size,
+                );
                 push_query_summary(
                     &mut execution,
                     QueryExecutionSummary {
-                        sql: statement,
+                        sql: full_statement,
                         kind: QueryStatementKind::ResultSet,
                         success: true,
                         message: format!("返回 {} 行结果表", page.rows.len()),
                         returned_rows: page.rows.len() as u64,
                         affected_rows: 0,
-                        elapsed_ms,
+                        elapsed_ms: elapsed_ms(started),
                     },
                     on_summary,
                 );
                 execution.results.push(page);
-            } else {
-                let result = match sqlx::query(&statement).execute(&mut connection).await {
-                    Ok(result) => result,
-                    Err(error) => {
-                        let error = mysql_error(error);
-                        push_query_summary(
-                            &mut execution,
-                            failed_query_summary(
-                                statement,
-                                QueryStatementKind::Command,
-                                error.message,
-                                elapsed_ms(started),
-                            ),
-                            on_summary,
-                        );
-                        if !request.options.continue_on_error {
-                            break;
-                        }
-                        continue;
-                    }
+            } else if let Some(error) = outcome.error {
+                let error_kind = if statement_returns_rows(&full_statement) {
+                    QueryStatementKind::ResultSet
+                } else {
+                    QueryStatementKind::Command
                 };
-                let affected_rows = result.rows_affected();
+                push_query_summary(
+                    &mut execution,
+                    failed_query_summary(full_statement, error_kind, error.message, elapsed_ms(started)),
+                    on_summary,
+                );
+                if !request.options.continue_on_error {
+                    break;
+                }
+            } else {
                 push_query_summary(
                     &mut execution,
                     QueryExecutionSummary {
-                        sql: statement,
+                        sql: full_statement,
                         kind: QueryStatementKind::Command,
                         success: true,
                         message: "OK".to_string(),
                         returned_rows: 0,
-                        affected_rows,
+                        affected_rows: outcome.affected_rows,
                         elapsed_ms: elapsed_ms(started),
                     },
                     on_summary,
@@ -311,14 +474,14 @@ fn query_rows_to_page<R>(
     limit: u64,
     cell_value: fn(&R, usize, &Column) -> CellValue,
 ) -> DataPage {
-    let pagination = Pagination::new(offset, limit);
+    let pagination = query_execution_pagination(offset, limit);
     let offset = pagination.offset.min(rows.len() as u64) as usize;
-    let limit = pagination.limit as usize;
-    let has_more = rows.len().saturating_sub(offset) > limit;
+    let row_capacity = query_execution_row_capacity(pagination.limit);
+    let has_more = rows.len().saturating_sub(offset) > row_capacity;
     let rows = rows
         .into_iter()
         .skip(offset)
-        .take(limit)
+        .take(row_capacity)
         .map(|row| Row {
             values: columns
                 .iter()
@@ -333,6 +496,24 @@ fn query_rows_to_page<R>(
         offset: pagination.offset,
         limit: pagination.limit,
         has_more,
+    }
+}
+
+/// 查询编辑器约定 `limit == 0` 表示不限制；通用 `Pagination::new` 则会把 0
+/// 收敛为 1，适用于数据表分页但不适用于 SQL 查询结果。
+fn query_execution_pagination(offset: u64, limit: u64) -> Pagination {
+    if limit == 0 {
+        Pagination { offset, limit }
+    } else {
+        Pagination::new(offset, limit)
+    }
+}
+
+fn query_execution_row_capacity(limit: u64) -> usize {
+    if limit == 0 {
+        usize::MAX
+    } else {
+        usize::try_from(limit).unwrap_or(usize::MAX)
     }
 }
 

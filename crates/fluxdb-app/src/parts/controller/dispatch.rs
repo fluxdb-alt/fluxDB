@@ -1706,6 +1706,9 @@ impl AppController {
                 }
             }
             AppCommand::StartQueryExecution(tab_id) => {
+                // 每次执行前登记一个全新的取消标志：既重置上一次「停止」的残留置位，
+                // 也让后台执行线程能拿到与「停止」按钮同一个标志。
+                self.register_query_cancel_flag(tab_id);
                 if let Some(tab) = self.find_tab_mut(tab_id)
                     && let TabKind::QueryEditor(editor) = &mut tab.kind
                 {
@@ -1715,6 +1718,18 @@ impl AppController {
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"))
                 }
+            }
+            AppCommand::CancelQueryExecution(tab_id) => {
+                // 没有登记标志（该标签当前没有在执行的查询）时不报错，只如实记录，避免
+                // 「停止」按钮在竞态窗口内点两次就弹错误。
+                let had_running_query = self.request_query_cancel(tab_id);
+                tracing::info!(
+                    target: "fluxdb_app",
+                    tab_id = tab_id.0,
+                    had_running_query,
+                    "已请求取消查询执行"
+                );
+                AppEvent::QueryCancelRequested(tab_id)
             }
             AppCommand::ExecuteQuery(tab_id) => {
                 let options = self.default_query_execution_options();
@@ -1741,7 +1756,14 @@ impl AppController {
                     return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
                 };
 
-                match self.execute_query(&request) {
+                let cancel_flag = self.query_cancel_flag(tab_id);
+                let result = self.execute_query_with_cancel(&request, &|| {
+                    query_cancel_requested(&cancel_flag)
+                });
+                // 取消标志只属于本次执行。执行器已经返回后立即回收，不能等 UI 的异步
+                // Finish 命令，否则直接调用 App 层的入口会遗留已置位标志。
+                self.clear_query_cancel_flag(tab_id);
+                match result {
                     Ok(execution) => {
                         let result_editors = query_result_editors(self, &request, &execution);
                         let active_result_editor = result_editors.keys().next().copied();
@@ -1812,7 +1834,12 @@ impl AppController {
                     return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
                 };
 
-                match self.execute_query(&request) {
+                let cancel_flag = self.query_cancel_flag(tab_id);
+                let result = self.execute_query_with_cancel(&request, &|| {
+                    query_cancel_requested(&cancel_flag)
+                });
+                self.clear_query_cancel_flag(tab_id);
+                match result {
                     Ok(execution) => {
                         let result_editors = query_result_editors(self, &request, &execution);
                         let active_result_editor = result_editors.keys().next().copied();
@@ -1849,6 +1876,7 @@ impl AppController {
             }
             AppCommand::FinishQueryExecution { tab_id, result } => match result {
                 Ok(execution) => {
+                    self.clear_query_cancel_flag(tab_id);
                     let history_request = self.find_tab(tab_id).and_then(|tab| {
                         let TabKind::QueryEditor(editor) = &tab.kind else {
                             return None;
@@ -1891,6 +1919,7 @@ impl AppController {
                     AppEvent::QueryFinished(tab_id, execution)
                 }
                 Err(error) => {
+                    self.clear_query_cancel_flag(tab_id);
                     let history_request = self.find_tab(tab_id).and_then(|tab| {
                         let TabKind::QueryEditor(editor) = &tab.kind else {
                             return None;
@@ -2816,6 +2845,15 @@ impl AppController {
     /// 标签的查询会话 id 就是 `tab_id`（见各 `QueryRequest` 构造点）；标签关闭后连接由
     /// 服务端回收，未提交事务随之回滚——不这样做，连接会一直挂到空闲 TTL 才消失。
     fn release_tab_query_sessions(&mut self, tab_ids: &[TabId]) {
+        // 关标签先置位取消标志（标签关了就不该再让服务端跑下去），再从表里移除；
+        // 仍在收尾的执行线程持的是自己的 `Arc`，置位照常生效。
+        if let Ok(mut flags) = self.query_cancel_flags.lock() {
+            for tab_id in tab_ids {
+                if let Some(flag) = flags.remove(tab_id) {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
         for tab in &self.state.tabs {
             if !tab_ids.contains(&tab.id) {
                 continue;
@@ -3061,6 +3099,12 @@ COMMIT;");
         }
         Ok(())
     }
+}
+
+/// 查询取消判定：标志未登记（非编辑器执行/后台任务）视为不可取消，与旧行为一致。
+fn query_cancel_requested(flag: &Option<Arc<std::sync::atomic::AtomicBool>>) -> bool {
+    flag.as_ref()
+        .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 fn query_result_summary_has_result_tab(summary: &QueryExecutionSummary) -> bool {

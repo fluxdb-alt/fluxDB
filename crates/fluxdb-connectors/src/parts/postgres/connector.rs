@@ -510,6 +510,7 @@ impl Connector for PostgresConnector {
             target: "fluxdb_connectors",
             connection_id = ?request.connection_id,
             database = ?request.database,
+            session_id = ?request.session_id,
             sql = %truncate_sql_for_log(&request.text),
             "PostgreSQL SQL 执行开始"
         );

@@ -9,6 +9,53 @@ impl AppController {
             completion_index: Arc::new(Mutex::new(CompletionIndex::default())),
             completion_index_storage: None,
             recency: Arc::new(Mutex::new(RecencyFrequency::new())),
+            query_cancel_flags: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    /// 为标签登记一个新的查询取消标志（每次执行前调用），同时清掉已关闭标签的旧标志，
+    /// 避免长会话里标志表随历史标签单调增长。
+    fn register_query_cancel_flag(&mut self, tab_id: TabId) {
+        if let Ok(mut flags) = self.query_cancel_flags.lock() {
+            let open_tabs = self
+                .state
+                .tabs
+                .iter()
+                .map(|tab| tab.id)
+                .collect::<BTreeSet<_>>();
+            flags.retain(|tab_id, _| open_tabs.contains(tab_id));
+            flags.insert(
+                tab_id,
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            );
+        }
+    }
+
+    /// 取标签当前的取消标志；没有登记过（例如后台任务、测试直接派发执行）时返回 `None`，
+    /// 调用方按「不可取消」处理，与旧行为一致。
+    fn query_cancel_flag(&self, tab_id: TabId) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        self.query_cancel_flags
+            .lock()
+            .ok()
+            .and_then(|flags| flags.get(&tab_id).cloned())
+    }
+
+    /// 置位标签的取消标志：执行线程会在下一次检查点（每 100ms）发送服务端取消。
+    /// 返回是否确有在执行的查询（无标志 = 没有进行中的执行）。
+    fn request_query_cancel(&self, tab_id: TabId) -> bool {
+        let Some(flag) = self.query_cancel_flag(tab_id) else {
+            return false;
+        };
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
+    /// 查询完成后移除本次执行的取消标志，避免已经置位的旧标志污染后续不经过
+    /// `StartQueryExecution` 的执行入口。后台执行线程已经持有自己的 `Arc`，移除映射
+    /// 不会影响它正在进行的收尾。
+    fn clear_query_cancel_flag(&self, tab_id: TabId) {
+        if let Ok(mut flags) = self.query_cancel_flags.lock() {
+            flags.remove(&tab_id);
         }
     }
 

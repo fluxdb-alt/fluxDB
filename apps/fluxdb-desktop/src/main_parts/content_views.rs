@@ -4676,14 +4676,23 @@ fn query_toolbar(
                     }),
                 ),
         )
-        .child(query_toolbar_icon_button(
-            "停止",
-            AppIcon::Square,
-            editor.running,
-            false,
-            rgb(0xff5c5c),
-            colors,
-        ))
+        .child(
+            query_toolbar_icon_button(
+                "停止",
+                AppIcon::Square,
+                editor.running,
+                false,
+                rgb(0xff5c5c),
+                colors,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.request_query_cancel(tab_id, cx);
+                    cx.stop_propagation();
+                }),
+            ),
+        )
         .child(query_toolbar_icon_button(
             "解释",
             AppIcon::FileSearch,

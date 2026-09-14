@@ -2675,6 +2675,27 @@ SELECT 1;",
     }
 
     #[test]
+    fn query_result_page_size_zero_keeps_all_rows() {
+        let page = query_rows_to_page(
+            vec![Column {
+                name: "id".to_string(),
+                type_name: Some("INTEGER".to_string()),
+                nullable: false,
+                primary_key: true,
+                comment: None,
+            }],
+            vec![1_i64, 2, 3],
+            0,
+            0,
+            |value, _, _| CellValue::I64(*value),
+        );
+
+        assert_eq!(page.rows.len(), 3);
+        assert_eq!(page.limit, 0);
+        assert!(!page.has_more);
+    }
+
+    #[test]
     fn sqlite_execute_runs_real_select_and_update_with_summary() {
         let path = temp_sqlite_path("execute");
         let mut config = sqlite_config();
@@ -3464,6 +3485,57 @@ SELECT item_id, name FROM audit_log;"
 
         // 清理
         run("DROP TABLE IF EXISTS t28_reg");
+    }
+
+    /// T13 MySQL 单语句取消：`SELECT SLEEP(120)` 在用户「停止」后应经 `KILL QUERY` 立即
+    /// 中止（远早于硬超时），并如实标「已取消：结果待核实」，不误报 SQL 错误。
+    #[test]
+    fn mysql_live_smoke_cancel_token_stops_long_query_promptly() {
+        let Some(params) = mysql_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_MYSQL_SMOKE，跳过 MySQL 取消冒烟");
+            return;
+        };
+        let config = mysql_smoke_config(params);
+
+        let mut req = mysql_query_request(&config);
+        req.text = "SELECT SLEEP(120);".to_string();
+        let start = std::time::Instant::now();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let mut result = QueryExecutionResult {
+            summaries: Vec::new(),
+            results: Vec::new(),
+            rollback_snapshots: Vec::new(),
+        };
+        // 语句跑起来约 1.2s 后触发取消（模拟用户在长查询期间点「停止」）。
+        let err = mysql_execute_query_with_progress(
+            &config,
+            &req,
+            &mut |s| result.summaries.push(s),
+            &|| {
+                flag.store(
+                    start.elapsed() > std::time::Duration::from_millis(1200),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                flag.load(std::sync::atomic::Ordering::Relaxed)
+            },
+        )
+        .err();
+        let _ = cancelled;
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "真实取消应 <20s 返回（KILL QUERY 远早于 mysql 自身长超时）：{elapsed:?}"
+        );
+        assert!(
+            err.is_none(),
+            "取消应作为语句级结果（结果待核实）返回而非整体抛错：{err:?}"
+        );
+        assert!(
+            result.summaries.iter().any(|s| !s.success && s.message == "已取消：结果待核实"),
+            "应标记「已取消：结果待核实」：{:#?}",
+            result.summaries
+        );
     }
 
     /// 构造 MySQL QueryRequest（复用 smoke config 的连接与库）。
@@ -5555,6 +5627,19 @@ SELECT item_id, name FROM audit_log;"
             "应存在跳过摘要：{:#?}",
             result.summaries
         );
+        // 25P02 那条本身要让用户知道怎么恢复（人工清单 D4 的「标注需 ROLLBACK」）。
+        assert!(
+            result.summaries[3].message.contains("25P02")
+                && result.summaries[3].message.contains("需 ROLLBACK"),
+            "25P02 摘要应带恢复指引：{:#?}",
+            result.summaries[3]
+        );
+        // 其后的语句应是本地跳过（不再发往服务端 → 不会又收到一条 25P02）。
+        assert_eq!(
+            result.summaries[4].message, "已跳过：需 ROLLBACK 后继续",
+            "中止态后续语句应本地跳过：{:#?}",
+            result.summaries
+        );
 
         // 用户显式 ROLLBACK 恢复会话，随后仍可正常执行。
         let mut recover = pg_query_request(&config, None);
@@ -5615,9 +5700,11 @@ SELECT item_id, name FROM audit_log;"
         );
         assert!(!result.summaries.is_empty(), "应有取消摘要");
         assert!(
-            result.summaries.iter().any(|s| !s.success && s.message.contains("结果待核实"))
-                || result.summaries.iter().any(|s| s.message.contains("已取消")),
-            "应标记「已取消/结果待核实」：{:#?}",
+            result
+                .summaries
+                .iter()
+                .any(|s| !s.success && s.message == "已取消：结果待核实"),
+            "应标记「已取消：结果待核实」：{:#?}",
             result.summaries
         );
     }

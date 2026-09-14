@@ -14,7 +14,7 @@ use fluxdb_core::{
 use sqlx::{
     Column as SqlxColumn, ColumnIndex, ConnectOptions as _, Connection as _, MySql, QueryBuilder,
     Row as SqlxRow, Sqlite, TypeInfo as _,
-    mysql::{MySqlConnectOptions, MySqlRow, types::MySqlTime},
+    mysql::{MySqlConnectOptions, MySqlConnection, MySqlRow, types::MySqlTime},
     sqlite::{SqliteConnectOptions, SqliteRow},
     types::{
         BigDecimal,

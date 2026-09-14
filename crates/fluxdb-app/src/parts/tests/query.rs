@@ -2275,6 +2275,103 @@
     }
 
     #[test]
+    fn cancel_query_execution_reaches_the_executor() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        let text = "select * from Product;\nselect * from Product".to_string();
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: text.clone(),
+        });
+        // UI 在执行前派发 StartQueryExecution 登记取消标志，用户再点「停止」。
+        controller.dispatch(AppCommand::StartQueryExecution(TabId(1)));
+        let event = controller.dispatch(AppCommand::CancelQueryExecution(TabId(1)));
+        assert_eq!(event, AppEvent::QueryCancelRequested(TabId(1)));
+
+        let event = controller.dispatch(AppCommand::ExecuteQueryText {
+            tab_id: TabId(1),
+            text,
+        });
+
+        assert!(matches!(event, AppEvent::QueryFinished(TabId(1), _)));
+        // 取消标志必须下传到执行器：所有语句都不再发往服务端，而不是「点了没反应」照跑。
+        let editor = active_query_editor(&controller);
+        assert!(
+            editor.summaries.is_empty(),
+            "取消后不应有任何语句执行：{:#?}",
+            editor.summaries
+        );
+        assert_eq!(controller.state().query_history.len(), 0);
+    }
+
+    #[test]
+    fn start_query_execution_resets_previous_cancel_flag() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        let text = "select * from Product".to_string();
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: text.clone(),
+        });
+        controller.dispatch(AppCommand::StartQueryExecution(TabId(1)));
+        controller.dispatch(AppCommand::CancelQueryExecution(TabId(1)));
+        // 上一次的「停止」不能污染下一次执行：重新开始执行会换上新标志。
+        controller.dispatch(AppCommand::StartQueryExecution(TabId(1)));
+
+        let event = controller.dispatch(AppCommand::ExecuteQueryText {
+            tab_id: TabId(1),
+            text,
+        });
+
+        assert!(matches!(event, AppEvent::QueryFinished(TabId(1), _)));
+        let editor = active_query_editor(&controller);
+        assert_eq!(editor.summaries.len(), 1);
+        assert!(editor.summaries[0].success);
+    }
+
+    #[test]
+    fn completed_query_execution_clears_stale_cancel_flag() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        let text = "select * from Product".to_string();
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: text.clone(),
+        });
+        controller.dispatch(AppCommand::StartQueryExecution(TabId(1)));
+        controller.dispatch(AppCommand::CancelQueryExecution(TabId(1)));
+        let canceled = controller.dispatch(AppCommand::ExecuteQueryText {
+            tab_id: TabId(1),
+            text: text.clone(),
+        });
+        assert!(matches!(canceled, AppEvent::QueryFinished(TabId(1), _)));
+        assert!(active_query_editor(&controller).summaries.is_empty());
+
+        // 某些内部入口会直接执行；上一次已经结束的取消标志不能让它静默返回空结果。
+        let event = controller.dispatch(AppCommand::ExecuteQueryText {
+            tab_id: TabId(1),
+            text,
+        });
+
+        assert!(matches!(event, AppEvent::QueryFinished(TabId(1), _)));
+        let editor = active_query_editor(&controller);
+        assert_eq!(editor.summaries.len(), 1);
+        assert!(editor.summaries[0].success);
+    }
+
+    #[test]
+    fn cancel_query_execution_without_running_query_still_reports_event() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+
+        // 没有登记标志（没有在执行的查询）：不报错，只回事件，避免「停止」点两次就弹错误。
+        let event = controller.dispatch(AppCommand::CancelQueryExecution(TabId(1)));
+
+        assert_eq!(event, AppEvent::QueryCancelRequested(TabId(1)));
+        assert!(controller.state().last_error.is_none());
+    }
+
+    #[test]
     fn multi_result_query_tracks_editors_per_result_page() {
         let mut controller = AppController::with_mock_data();
         controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
@@ -2553,6 +2650,9 @@
             active_query_editor(&controller).summaries[0].sql,
             "select * from Product"
         );
+        let page = &active_query_editor(&controller).results[0];
+        assert_eq!(page.rows.len(), 2, "不限制时不能在结果转换层截成一行");
+        assert_eq!(page.limit, 0, "结果页必须保留 0=不限制的语义");
     }
 
     #[test]

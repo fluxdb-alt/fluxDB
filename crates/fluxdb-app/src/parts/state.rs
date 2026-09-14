@@ -1631,6 +1631,9 @@ pub enum AppCommand {
         origin: QueryOrigin,
     },
     StartQueryExecution(TabId),
+    /// 请求停止当前标签正在执行的查询（工具栏「停止」）。置位该标签的取消标志，
+    /// 执行线程在下一次检查点向服务端发送取消（PG CancelToken），不会强杀执行线程。
+    CancelQueryExecution(TabId),
     ExecuteQuery(TabId),
     ExecuteQueryText {
         tab_id: TabId,
@@ -2077,6 +2080,8 @@ pub enum AppEvent {
     },
     TabOpened(TabId),
     TabClosed(TabId),
+    /// 已置位某标签的查询取消标志（可能仍在等语句收尾）；UI 据此提示「已请求停止」。
+    QueryCancelRequested(TabId),
     TabCloseRequested(TabId),
     TabCloseCancelled(TabId),
     TabActivated(TabId),
@@ -2156,4 +2161,9 @@ pub struct AppController {
     /// T071/F004：可关闭的轻量个性化（recency/frequency）。默认关闭，
     /// 关闭时排序与确定性基线一致。只记匿名 label，不记完整 SQL/敏感值。
     recency: Arc<Mutex<RecencyFrequency>>,
+    /// 查询取消标志（按标签）。`StartQueryExecution` 登记新标志，后台执行线程克隆 `Arc`
+    /// 后轮询，「停止」按钮经 `CancelQueryExecution` 置位。必须放在共享 `Arc` 里而不是
+    /// `AppState`：UI 线程与后台执行线程各持一份 `AppController` 副本，只有共享 `Arc`
+    /// 才能让两边看到同一个标志。
+    query_cancel_flags: Arc<Mutex<BTreeMap<TabId, Arc<std::sync::atomic::AtomicBool>>>>,
 }

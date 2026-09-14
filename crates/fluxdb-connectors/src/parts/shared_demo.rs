@@ -67,7 +67,7 @@ fn mock_objects(connection_id: ConnectionId) -> Vec<ObjectSummary> {
 }
 
 fn mock_data_page(offset: u64, limit: u64) -> DataPage {
-    let pagination = Pagination::new(offset, limit);
+    let pagination = query_execution_pagination(offset, limit);
 
     DataPage {
         columns: vec![
