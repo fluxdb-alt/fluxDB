@@ -367,7 +367,11 @@ impl AppController {
                 );
                 Vec::new()
             });
-            items.extend(table_completion_items(tables, &context.prefix));
+            items.extend(table_completion_items(
+                tables,
+                &context.prefix,
+                table_schema.as_deref(),
+            ));
         }
 
         if context.suggest_schemas {
@@ -1004,6 +1008,7 @@ impl AppController {
             filter_text: Some("*".to_string()),
             sort_text: None,
             insert_text_format: InsertTextFormat::PlainText,
+            schema: None,
         }])
     }
 
@@ -1136,8 +1141,23 @@ impl AppController {
         let Some(storage) = &self.completion_index_storage else {
             return false;
         };
-        let Ok(Some(snapshot)) = storage.load_completion_index(config, database, schema) else {
-            return false;
+        let snapshot = match storage.load_completion_index(config, database, schema) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => return false,
+            // 快照读失败（文件损坏 / 旧版本格式）：按无快照处理，但必须留下可检索的痕迹，
+            // 否则「索引看起来从不落盘」只能靠翻代码猜。
+            Err(error) => {
+                tracing::warn!(
+                    target: "gdb_sql_completion",
+                    op = "completion_index_load",
+                    error = %error,
+                    connection_id = ?connection_id,
+                    database,
+                    schema,
+                    "补全索引快照读取失败，按无快照继续"
+                );
+                return false;
+            }
         };
         if snapshot.connection_id != connection_id {
             return false;
@@ -1174,7 +1194,21 @@ impl AppController {
         {
             return;
         }
-        let _ = storage.save_completion_index(config, database, schema, &snapshot);
+        if let Err(error) = storage.save_completion_index(config, database, schema, &snapshot) {
+            // 落盘失败不影响本次补全（内存索引仍可用），但下次冷启动会白跑一遍目录查询，
+            // 故必须告警而不是静默丢弃。
+            tracing::warn!(
+                target: "gdb_sql_completion",
+                op = "completion_index_save",
+                error = %error,
+                connection_id = ?connection_id,
+                database,
+                schema,
+                table_count = snapshot.tables.len(),
+                column_count = snapshot.columns.len(),
+                "补全索引快照落盘失败"
+            );
+        }
     }
 
     fn indexed_completion_tables(
@@ -2024,8 +2058,10 @@ impl AppController {
     }
 
     /// T054：选中项完整对象说明（懒加载）。候选构建时不调用；仅当选中的候选需要
-    /// 更完整说明（如表/视图的列清单）时按需解析。数据全部来自 `CompletionIndex`，
-    /// 无远程查询。对象不在索引 / 无可用描述返回 `Error`。
+    /// 更完整说明（如表/视图的列清单）时按需解析。表/视图优先读 `CompletionIndex`；
+    /// 索引未覆盖该对象（search_path 之外的表、索引刚被清空等）时按
+    /// `(库, schema, 表)` 的完整身份取一次列元数据并写回索引。取不到 / 无可用描述
+    /// 返回 `Error`。
     ///
     /// - 表/视图 → 结构元数据：列清单「列名  类型  注释」（注释为空省略）。
     /// - 列 → 内联注释（候选携带的 `documentation`）。
@@ -2035,16 +2071,32 @@ impl AppController {
         &self,
         connection_id: ConnectionId,
         database: Option<&str>,
+        schema: Option<&str>,
         item: &QueryCompletionItem,
         should_cancel: &dyn Fn() -> bool,
     ) -> CompletionDocumentationState {
         match item.kind {
             QueryCompletionKind::Table | QueryCompletionKind::View => {
-                let columns = self
-                    .completion_index
-                    .lock()
-                    .map(|index| index.table_columns(connection_id, database, None, &item.label))
-                    .unwrap_or_default();
+                // 已判废的请求直接返回 Loading：不占用线程/连接做无谓取数（latest-wins）。
+                if should_cancel() {
+                    return CompletionDocumentationState::Loading;
+                }
+                let (schema, table) = documentation_object_identity(schema, &item.label);
+                let columns = match self.documentation_table_columns(
+                    connection_id,
+                    database,
+                    schema,
+                    table,
+                    should_cancel,
+                ) {
+                    Ok(columns) => columns,
+                    // 元数据来源不可用与「对象没有列」是两回事，如实区分，不谎报成不存在。
+                    Err(reason) => {
+                        return CompletionDocumentationState::Error(format!(
+                            "列元数据不可用：{reason}"
+                        ));
+                    }
+                };
                 if columns.is_empty() {
                     return CompletionDocumentationState::Error("对象不在索引或没有列".to_string());
                 }
@@ -2084,6 +2136,134 @@ impl AppController {
             }
             _ => CompletionDocumentationState::Error("无可用文档".to_string()),
         }
+    }
+
+    /// 详情面板取某对象列清单的元数据来源，与列补全共用同一条链路：
+    /// 内存索引 → 盘上快照 → 已打开数据编辑页的列 → 连接器（取到后写回索引与快照）。
+    /// 因此同一张表「按需拉一次」之后，再次悬停即直接命中。
+    ///
+    /// `Err(原因)` 表示元数据来源不可用（连接不存在 / 拉取失败），与「对象确实没有列」
+    /// 区分开：调用方对前者提示「列元数据不可用」，对后者提示「对象不在索引或没有列」，
+    /// 不把连接故障谎报成对象不存在。
+    ///
+    /// 该路径不读 `settings.enable_completion_index`：详情是用户显式选中单个对象的
+    /// 动作，与「按前缀批量补全」不同，读写索引不会造成额外批量开销。
+    fn documentation_table_columns(
+        &self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        table: &str,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> Result<Vec<CompletionColumn>, String> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(index) = self.completion_index.lock() {
+            let columns = index.table_columns(connection_id, database, schema, table);
+            if !columns.is_empty() {
+                tracing::debug!(
+                    target: "gdb_sql_completion",
+                    op = "documentation_columns",
+                    connection_id = ?connection_id,
+                    database,
+                    schema,
+                    table,
+                    cache_hit = true,
+                    item_count = columns.len(),
+                    "详情列清单命中索引"
+                );
+                return Ok(columns);
+            }
+        }
+        let Some(config) = self.connection_config(connection_id) else {
+            tracing::warn!(
+                target: "gdb_sql_completion",
+                op = "documentation_columns",
+                connection_id = ?connection_id,
+                database,
+                schema,
+                table,
+                "连接不存在，详情无法取列元数据"
+            );
+            return Err("连接不存在".to_string());
+        };
+        // 内存索引会被 DDL / 执行查询等命令整体清空（见 should_clear_completion_cache），
+        // 但盘上快照仍在：先尝试恢复，避免用户每执行一次查询后悬停都重新建连取数。
+        if self.load_persisted_completion_index(&config, connection_id, database, schema)
+            && let Ok(index) = self.completion_index.lock()
+        {
+            let columns = index.table_columns(connection_id, database, schema, table);
+            if !columns.is_empty() {
+                tracing::debug!(
+                    target: "gdb_sql_completion",
+                    op = "documentation_columns",
+                    connection_id = ?connection_id,
+                    database,
+                    schema,
+                    table,
+                    cache_hit = true,
+                    source = "persisted",
+                    item_count = columns.len(),
+                    "详情列清单命中盘上快照"
+                );
+                return Ok(columns);
+            }
+        }
+        let started = std::time::Instant::now();
+        let columns = self
+            .indexed_table_completion_columns_with_cancel(
+                &config,
+                connection_id,
+                database,
+                schema,
+                table,
+                should_cancel,
+            )
+            .map_err(|error| {
+                tracing::warn!(
+                    target: "gdb_sql_completion",
+                    op = "documentation_columns",
+                    error = %error,
+                    connection_id = ?connection_id,
+                    database,
+                    schema,
+                    table,
+                    "详情列元数据不可用"
+                );
+                error.to_string()
+            })?;
+        tracing::debug!(
+            target: "gdb_sql_completion",
+            op = "documentation_columns",
+            connection_id = ?connection_id,
+            database,
+            schema,
+            table,
+            cache_hit = false,
+            item_count = columns.len(),
+            elapsed_us = started.elapsed().as_micros() as u64,
+            "详情列清单按需拉取（并写回索引）"
+        );
+        Ok(columns)
+    }
+}
+
+/// 详情查询用的对象身份：优先用候选携带的 schema 作用域；未携带时从限定的 label
+/// （`schema.table`，跨 schema 同名消歧时由补全项加前缀）里拆出 schema。
+///
+/// 拆 label 只是兜底：正常路径下（`FROM tenant_a.`）schema 由候选直接携带，
+/// 只有 search_path 多 schema 同名表这种消歧场景才会走到 label 拆分。
+fn documentation_object_identity<'a>(
+    schema: Option<&'a str>,
+    label: &'a str,
+) -> (Option<&'a str>, &'a str) {
+    if schema.is_some() {
+        return (schema, label);
+    }
+    match label.rsplit_once('.') {
+        Some((schema, table)) if !schema.is_empty() && !table.is_empty() => (Some(schema), table),
+        _ => (None, label),
     }
 }
 

@@ -529,10 +529,12 @@ impl AppController {
     }
 
     /// F005：选中补全项的说明文档（懒加载）。表/视图→列清单、列→注释、函数等→名称。
-    /// 全部来自内存 CompletionIndex，无远程查询；对象不在索引 / 无可用文档返回 Error。
+    /// 表/视图优先读内存 CompletionIndex，索引未覆盖该对象时按 (库, schema, 表) 取一次
+    /// 列元数据并写回索引；对象取不到列 / 无可用文档返回 Error。
     ///
     /// `comment` 为候选自带的内联注释，仅对 Column 有意义（懒加载详情面板不另存
-    /// 全文快照，沿用候选在补全时可得的注释文本）。
+    /// 全文快照，沿用候选在补全时可得的注释文本）。`schema` 为候选携带的对象 schema
+    /// 作用域（见 `QueryCompletionItem::schema`），是命中列身份的必要信息。
     pub fn completion_documentation_for(
         &self,
         connection_id: ConnectionId,
@@ -540,6 +542,7 @@ impl AppController {
         kind: fluxdb_core::QueryCompletionKind,
         label: String,
         comment: Option<String>,
+        schema: Option<String>,
     ) -> CompletionDocumentationState {
         let no_cancel = || false;
         self.completion_documentation_for_with_cancel(
@@ -548,15 +551,16 @@ impl AppController {
             kind,
             label,
             comment,
+            schema,
             &no_cancel,
         )
     }
 
     /// F005 变体：带 latest-wins 取消回调的详情解析。
     ///
-    /// 让 UI 在选中项切换时把 `should_cancel` 绑定到新请求 id，列清单逐行组装期间
-    /// 一旦最新请求 id 变化即提前返回 `Loading`（停止旧请求线程），保证旧详情结果
-    /// 不覆盖新选中项。数据仍全部来自内存 `CompletionIndex`，无远程查询。
+    /// 让 UI 在选中项切换时把 `should_cancel` 绑定到新请求 id：索引未命中而需要按需
+    /// 取元数据时，旧请求在建连/查询阶段即可提前收敛；列清单逐行组装期间一旦最新请求
+    /// id 变化也立即返回 `Loading`，保证旧详情不覆盖新选中项。
     pub fn completion_documentation_for_with_cancel(
         &self,
         connection_id: ConnectionId,
@@ -564,6 +568,7 @@ impl AppController {
         kind: fluxdb_core::QueryCompletionKind,
         label: String,
         comment: Option<String>,
+        schema: Option<String>,
         should_cancel: &dyn Fn() -> bool,
     ) -> CompletionDocumentationState {
         let item = QueryCompletionItem {
@@ -574,9 +579,16 @@ impl AppController {
             documentation: comment,
             filter_text: None,
             sort_text: None,
-                    ..Default::default()
-};
-        self.completion_item_documentation(connection_id, database.as_deref(), &item, should_cancel)
+            schema,
+            ..Default::default()
+        };
+        self.completion_item_documentation(
+            connection_id,
+            database.as_deref(),
+            item.schema.as_deref(),
+            &item,
+            should_cancel,
+        )
     }
 
     /// 侧栏表/视图节点悬停预览：加载字段清单，供浮层预览卡渲染。

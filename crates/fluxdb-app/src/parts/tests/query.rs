@@ -281,6 +281,195 @@
             item.kind == QueryCompletionKind::Table && item.label == "orders"
         }));
         assert!(result.items.iter().all(|item| item.label != "OrderItems"));
+
+        // 候选必须携带作用域 schema：它等于索引桶键，详情据此按 (库, schema, 表) 取列。
+        let orders = result
+            .items
+            .iter()
+            .find(|item| item.kind == QueryCompletionKind::Table && item.label == "orders")
+            .expect("tenant_b.orders 候选");
+        assert_eq!(orders.schema.as_deref(), Some("tenant_b"));
+    }
+
+    /// 详情面板按候选携带的 schema 身份查列：schema 限定下的表（不在 search_path、
+    /// 列只按 `(库, schema, 表)` 索引）也能解析出列清单，而不是报「对象不在索引」。
+    #[test]
+    fn table_documentation_resolves_by_candidate_schema_identity() {
+        let mut controller = AppController::with_mock_data();
+        controller.state.connections[0].config.kind = DatabaseKind::Postgres;
+        {
+            let mut index = controller.completion_index.lock().unwrap();
+            index.insert_tables(
+                ConnectionId(1),
+                Some("fluxdb_manual"),
+                Some("tenant_a"),
+                vec![CompletionTable {
+                    database: Some("fluxdb_manual".to_string()),
+                    schema: Some("tenant_a".to_string()),
+                    name: "orders".to_string(),
+                    kind: ObjectKind::Table,
+                    comment: None,
+                }],
+                DatabaseKind::Postgres,
+            );
+            index.replace_table_columns(
+                ConnectionId(1),
+                Some("fluxdb_manual"),
+                Some("tenant_a"),
+                "orders",
+                vec![CompletionColumn {
+                    database: Some("fluxdb_manual".to_string()),
+                    schema: Some("tenant_a".to_string()),
+                    table: "orders".to_string(),
+                    name: "amount".to_string(),
+                    type_name: Some("numeric(10,2)".to_string()),
+                    nullable: true,
+                    primary_key: false,
+                    comment: Some("金额".to_string()),
+                }],
+                DatabaseKind::Postgres,
+            );
+        }
+
+        let sql = "SELECT * FROM tenant_a.order";
+        let result = controller
+            .query_completions_for_text(
+                ConnectionId(1),
+                Some("fluxdb_manual".to_string()),
+                None,
+                sql.to_string(),
+                sql.len(),
+                false,
+            )
+            .unwrap();
+        let orders = result
+            .items
+            .iter()
+            .find(|item| item.kind == QueryCompletionKind::Table && item.label == "orders")
+            .expect("tenant_a.orders 候选");
+
+        // 带身份查询 → 命中 tenant_a 的列。
+        match controller.completion_item_documentation(
+            ConnectionId(1),
+            Some("fluxdb_manual"),
+            orders.schema.as_deref(),
+            orders,
+            &|| false,
+        ) {
+            CompletionDocumentationState::Ready(text) => {
+                assert!(text.contains("amount"), "应含列 amount: {text}");
+                assert!(text.contains("numeric(10,2)"), "应含类型: {text}");
+                assert!(text.contains("金额"), "应含列注释: {text}");
+            }
+            other => panic!("按身份查询应解析为 Ready, got {other:?}"),
+        }
+
+        // 反证：schema 身份丢失（None）时查不到该表的列（索引按 (库, schema, 表) 存），
+        // 说明身份必须从候选一路带到详情请求。
+        match controller.completion_item_documentation(
+            ConnectionId(1),
+            Some("fluxdb_manual"),
+            None,
+            orders,
+            &|| false,
+        ) {
+            CompletionDocumentationState::Ready(text) => {
+                assert!(!text.contains("amount"), "无身份不应命中 tenant_a 的列: {text}");
+            }
+            CompletionDocumentationState::Error(_) => {}
+            other => panic!("无身份时不应产出 tenant_a 的列清单, got {other:?}"),
+        }
+    }
+
+    /// 内存索引被清空（执行查询 / 刷新对象树等命令会整体清空）后，详情仍先读盘上快照：
+    /// 快照里的列能直接解析出来，不必重新建连取数。
+    /// 内存索引被清空（执行查询 / 刷新对象树等命令会整体清空）后，详情仍先读盘上快照：
+    /// 快照里独有的列能直接解析出来，不必重新建连取数。
+    #[test]
+    fn table_documentation_falls_back_to_persisted_snapshot() {
+        let storage_root = temp_sqlite_path("completion-doc-storage").with_extension("cache");
+        let storage = fluxdb_storage::FileStorage::new(storage_root);
+        let mut controller = AppController::with_mock_data();
+        controller.set_completion_index_storage(storage.clone());
+        let config = controller.state.connections[0].config.clone();
+        let now = unix_timestamp_secs();
+
+        // 盘上放一份「只有快照里有」的列（mock 连接器不会返回 snapshot_only）。
+        let snapshot = fluxdb_core::CompletionIndexSnapshot {
+            connection_id: ConnectionId(1),
+            database: Some("main".to_string()),
+            schema: None,
+            tables: vec![fluxdb_core::TableRef {
+                database: Some("main".to_string()),
+                schema: None,
+                name: "Product".to_string(),
+                kind: ObjectKind::Table,
+                rows: None,
+                comment: None,
+            }],
+            columns: vec![fluxdb_core::ColumnRef {
+                database: Some("main".to_string()),
+                schema: None,
+                table: "Product".to_string(),
+                column: "snapshot_only".to_string(),
+                type_name: Some("TEXT".to_string()),
+                nullable: true,
+                primary_key: false,
+                ordinal_position: Some(1),
+                comment: None,
+            }],
+            routines: Vec::new(),
+            triggers: Vec::new(),
+            meta: fluxdb_core::CompletionIndexMeta {
+                app_index_version: fluxdb_core::COMPLETION_INDEX_VERSION,
+                db_kind: DatabaseKind::MySql,
+                last_indexed_at: now,
+                last_verified_at: now,
+                ttl_seconds: COMPLETION_INDEX_TTL_SECONDS,
+                dirty: false,
+                table_count: 1,
+                table_fingerprints: Vec::new(),
+            },
+        };
+        storage
+            .save_completion_index(&config, Some("main"), None, &snapshot)
+            .expect("写入补全索引快照应成功");
+
+        assert!(
+            controller
+                .completion_index
+                .lock()
+                .unwrap()
+                .table_columns(ConnectionId(1), Some("main"), None, "Product")
+                .is_empty(),
+            "内存索引应为空（否则测不到快照回退）"
+        );
+
+        let item = QueryCompletionItem {
+            label: "Product".to_string(),
+            insert_text: "Product".to_string(),
+            kind: QueryCompletionKind::Table,
+            detail: None,
+            documentation: None,
+            filter_text: None,
+            sort_text: None,
+            ..Default::default()
+        };
+        match controller.completion_item_documentation(
+            ConnectionId(1),
+            Some("main"),
+            None,
+            &item,
+            &|| false,
+        ) {
+            CompletionDocumentationState::Ready(text) => {
+                assert!(
+                    text.contains("snapshot_only"),
+                    "应命中盘上快照的列，而不是回落连接器: {text}"
+                );
+            }
+            other => panic!("盘上快照应解析为 Ready, got {other:?}"),
+        }
     }
 
     #[test]
@@ -492,9 +681,11 @@
             kind: ObjectKind::Table,
             comment: Some("账户主表".into()),
         }];
-        let items = table_completion_items(tables, "");
+        let items = table_completion_items(tables, "", Some("public"));
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].documentation.as_deref(), Some("账户主表"));
+        // 候选身份必须携带作用域 schema，供详情按 (库, schema, 表) 命中索引。
+        assert_eq!(items[0].schema.as_deref(), Some("public"));
 
         // 无注释时不伪造文档。
         let no_comment = table_completion_items(
@@ -506,6 +697,7 @@
                 comment: None,
             }],
             "",
+            None,
         );
         assert!(no_comment[0].documentation.is_none(), "无注释不伪造文档");
     }
@@ -638,7 +830,7 @@
                 comment: None,
             },
         ];
-        let items = table_completion_items(tables, "");
+        let items = table_completion_items(tables, "", None);
         // 同名跨 schema：label 与 apply 文本都带 schema 前缀，避免插错对象。
         let dup: Vec<_> = items
             .iter()
@@ -1151,6 +1343,7 @@
                         filter_text: None,
                         sort_text: None,
                         insert_text_format: InsertTextFormat::PlainText,
+                        schema: None,
                     })
                     .collect::<Vec<_>>();
                 let started = Instant::now();
@@ -3111,6 +3304,7 @@
                 },
             ],
             "type",
+            None,
         );
 
         assert_eq!(items[0].insert_text, "type_config");
@@ -4095,7 +4289,7 @@
 
     #[test]
     fn lazy_completion_documentation_resolves_structure_or_error() {
-        // T054 验收 2：选中项详情懒加载，数据全部来自索引（无远程查询），
+        // T054 验收 2：选中项详情懒加载（索引优先，索引未覆盖该对象时按身份取一次），
         // 对象不在索引 / 无可用文档时返回 Error。
         let mut controller = AppController::with_mock_data();
         controller.dispatch(AppCommand::WarmCompletionIndex {
@@ -4117,6 +4311,7 @@
         let doc = controller.completion_item_documentation(
             ConnectionId(1),
             Some("main"),
+            None,
             &item("Product", QueryCompletionKind::Table, None),
             &|| false,
         );
@@ -4133,15 +4328,37 @@
             other => panic!("表项应解析为 Ready, got {other:?}"),
         }
 
-        // 索引中不存在的表 → Error。
+        // 索引未覆盖的表 → 按 (库, schema, 表) 取一次元数据并写回索引，不再是永久 Error。
         assert!(matches!(
             controller.completion_item_documentation(
                 ConnectionId(1),
                 Some("main"),
+                None,
                 &item("NopeMissing", QueryCompletionKind::Table, None),
                 &|| false
             ),
-            CompletionDocumentationState::Error(_)
+            CompletionDocumentationState::Ready(_)
+        ));
+        assert!(
+            !controller
+                .completion_index
+                .lock()
+                .unwrap()
+                .table_columns(ConnectionId(1), Some("main"), None, "NopeMissing")
+                .is_empty(),
+            "按需取到的列应写回索引，之后悬停直接命中"
+        );
+
+        // 取不到元数据来源（连接不存在）→ 如实报「元数据不可用」，不谎报成对象不存在。
+        assert!(matches!(
+            controller.completion_item_documentation(
+                ConnectionId(99),
+                Some("main"),
+                None,
+                &item("Product", QueryCompletionKind::Table, None),
+                &|| false
+            ),
+            CompletionDocumentationState::Error(reason) if reason.contains("列元数据不可用")
         ));
 
         // 列 → Ready 内联注释；无注释 → Error、不依赖索引。
@@ -4149,6 +4366,7 @@
             controller.completion_item_documentation(
                 ConnectionId(1),
                 Some("main"),
+                None,
                 &item("cust", QueryCompletionKind::Column, Some("客户编号")),
                 &|| false
             ),
@@ -4158,6 +4376,7 @@
             controller.completion_item_documentation(
                 ConnectionId(1),
                 Some("main"),
+                None,
                 &item("cust", QueryCompletionKind::Column, None),
                 &|| false
             ),
@@ -4169,6 +4388,7 @@
             controller.completion_item_documentation(
                 ConnectionId(1),
                 Some("main"),
+                None,
                 &item("normalize_price", QueryCompletionKind::Function, None),
                 &|| false
             ),
@@ -4180,6 +4400,7 @@
             controller.completion_item_documentation(
                 ConnectionId(1),
                 Some("main"),
+                None,
                 &item("select", QueryCompletionKind::Keyword, None),
                 &|| false
             ),
@@ -4203,6 +4424,7 @@
                 kind,
                 label.to_string(),
                 None,
+                None,
             )
         };
         // 列注释走 `comment` 参数（候选补全时可得的自带来内联注释）。
@@ -4213,6 +4435,7 @@
                 kind,
                 label.to_string(),
                 Some(comment.to_string()),
+                None,
             )
         };
 
@@ -4225,10 +4448,22 @@
             other => panic!("表项应解析为 Ready, got {other:?}"),
         }
 
-        // 索引中没有的表 → Error。
+        // 索引未覆盖的表 → 按需取一次（mock 兜底返回通用列）→ Ready，不再恒为 Error。
         assert!(matches!(
             doc(QueryCompletionKind::Table, "NopeMissing"),
-            CompletionDocumentationState::Error(_)
+            CompletionDocumentationState::Ready(_)
+        ));
+        // 取不到元数据来源（连接不存在）→ Error（如实说明原因）。
+        assert!(matches!(
+            controller.completion_documentation_for(
+                ConnectionId(99),
+                Some("main".to_string()),
+                QueryCompletionKind::Table,
+                "Product".to_string(),
+                None,
+                None,
+            ),
+            CompletionDocumentationState::Error(reason) if reason.contains("列元数据不可用")
         ));
 
         // 列 → Ready 内联注释（注释由 comment 参数带入）。
@@ -4272,6 +4507,7 @@
                 QueryCompletionKind::Table,
                 "Product".to_string(),
                 None,
+                None,
                 &|| true,
             ),
             CompletionDocumentationState::Loading
@@ -4283,6 +4519,7 @@
                 Some("main".to_string()),
                 QueryCompletionKind::Table,
                 "Product".to_string(),
+                None,
                 None,
                 &|| false,
             ),

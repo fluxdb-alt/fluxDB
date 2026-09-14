@@ -141,11 +141,12 @@ P0-1 之前：`BEGIN` 与 `COMMIT` 落在不同连接，事务必丢。**本组�
 | 步骤 | 操作 | 测试断言 |
 |---|---|---|
 | E1 | 新建查询，输入 `SELECT * FROM tenant_` 触发补全 | 出 `tenant_a`、`tenant_b` schema 候选；选中后插入 `schema.` |
-| E2 | 跨 schema：输入 `SELECT * FROM tenant_b.` | 出 `tenant_b` 内的表/视图（本手册数据为 `orders`），不混入 `tenant_a.orders` 或 `public."OrderItems"` |
+| E2 | 跨 schema：输入 `SELECT * FROM tenant_b.` | 出 `tenant_b` 内的表/视图（本手册数据为 `orders`），不混入 `tenant_a.orders` 或 `public."OrderItems"`；也**不出现小写关键字候选 `order`** |
 | E3 | 输入 `SELECT * FROM Or` 并选中 `OrderItems` 补全项 | 插入结果为 `SELECT * FROM "OrderItems"`；执行成功，不折叠成小写 |
 | E4 | 执行 `SELECT * FROM tenant_a.orders` → 结果表编辑改成某行 amount → 提交 | 单表简单 SELECT 可编辑并提交成功 |
 | E5 | 执行 JOIN/聚合查询 → 试图编辑结果 | 只读，编辑被禁用 |
 | E6 | 执行插入带 BEGIN 的 DML → 查历史 | 历史含该语句与「未提交/已提交/已回滚」状态；`SET PASSWORD`/`CREATE ROLE` 等敏感语句**不进历史** |
+| E7 | 输入 `SELECT * FROM tenant_a.order`，待补全浮层出现后把选中项停在 `orders` | 候选中只有 `orders`（无 `order` 关键字、无 `public."OrderItems"`）；右侧详情显示 `tenant_a.orders` 的列清单（`id`/`amount`/`note`）。首次悬停会拉一次列，再次悬停/切走切回应立即出现（索引已写回） |
 
 ---
 

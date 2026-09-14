@@ -909,7 +909,7 @@ mod tests {
     use fluxdb_core::{
         COMPLETION_INDEX_VERSION, ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot,
         ConnectionGroup, ConnectionGroupId, ConnectionId, DatabaseKind, Endpoint, LogLevel,
-        ObjectKind, SavedQuery, SidebarOrderEntry, TableRef, Theme,
+        ObjectKind, SavedQuery, SidebarOrderEntry, TableFingerprint, TableRef, Theme,
     };
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1200,6 +1200,34 @@ mod tests {
             storage.legacy_completion_index_path(&connection, Some("production"), None);
         fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
         fs::write(&legacy_path, toml::to_string_pretty(&snapshot).unwrap()).unwrap();
+
+        assert_eq!(
+            storage
+                .load_completion_index(&connection, Some("production"), None)
+                .unwrap(),
+            Some(snapshot)
+        );
+    }
+
+    /// 表指纹是 64 位哈希，取值范围可能超出 TOML 的 i64 整数上限：必须能落盘并原值读回。
+    ///
+    /// 回归：指纹曾按整数写入，哈希最高位为 1 时整份快照序列化即失败（错误一度被调用方
+    /// 吞掉，表现为「补全索引从不落盘、每次冷启动重查目录」）。
+    #[test]
+    fn completion_index_round_trips_table_fingerprints_beyond_i64() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let connection = sample_connections()[0].clone();
+        let mut snapshot = sample_completion_snapshot(connection.id);
+        snapshot.meta.table_fingerprints = vec![TableFingerprint {
+            database: Some("production".to_string()),
+            schema: None,
+            table: "Product".to_string(),
+            fingerprint: u64::MAX,
+        }];
+
+        storage
+            .save_completion_index(&connection, Some("production"), None, &snapshot)
+            .expect("溢出 i64 的指纹也必须能落盘");
 
         assert_eq!(
             storage

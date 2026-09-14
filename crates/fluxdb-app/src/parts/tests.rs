@@ -18,6 +18,7 @@ mod tests {
     include!("tests/data_editor.rs");
     include!("tests/sqlite_binary.rs");
     include!("tests/query.rs");
+    include!("tests/completion_postgres_live.rs");
     include!("tests/redis_overview.rs");
     include!("tests/redis_completion.rs");
     include!("tests/terminal_adapter.rs");

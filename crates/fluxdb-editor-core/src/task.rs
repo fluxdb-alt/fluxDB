@@ -92,6 +92,12 @@ impl CancellationToken {
         self.0.load(Ordering::Acquire)
     }
 
+    /// 内部计数器的共享句柄：供需要把「最新请求 id」跨线程传给 provider 做取消判断的
+    /// 场景使用（`Arc<AtomicU64>` 形态，等价于直接持有令牌本身，可长期保存）。
+    pub fn shared(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.0)
+    }
+
     /// 借出底层原子，兼容仍以 `&AtomicU64` 透传的旧式长任务检查点。
     /// `ponytail`: 低层 cancellable helper 仍是原始原子；协议类型只收敛到
     /// adapter 字段与边界。若未来统一 helper 签名可移除本方法。

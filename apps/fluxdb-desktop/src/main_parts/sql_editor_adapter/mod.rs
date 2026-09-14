@@ -143,15 +143,17 @@ pub enum SqlDocState {
     Error(String),
 }
 
-/// 详情解析回调：按候选 type/label/内联注释惰性解析完整 metadata。
+/// 详情解析回调：按候选 type/label/schema/内联注释惰性解析完整 metadata。
 ///
-/// 由宿主（table_state）绑定 fluxdb-app 的 `completion_documentation_for_with_cancel`，
-/// 数据全来自内存 CompletionIndex（无远程）；`latest_request`+`request_id` 做
-/// latest-wins，保证切换选中项时旧结果不覆盖新选择。UI 不直接访问数据库。
+/// 由宿主（table_state）绑定 fluxdb-app 的 `completion_documentation_for_with_cancel`：
+/// 优先读内存 CompletionIndex，索引未覆盖该对象时才按 (库, schema, 表) 取一次元数据并
+/// 写回索引。`latest_request`+`request_id` 做 latest-wins，保证切换选中项时旧结果不覆盖
+/// 新选择。UI 不直接访问数据库。
 pub type SqlDocumentationResolver = Arc<
     dyn Fn(
             fluxdb_editor_core::CompletionKind,
             String,
+            Option<String>,
             Option<String>,
             Arc<AtomicU64>,
             u64,
@@ -322,6 +324,7 @@ impl SqlAdapter {
         kind: fluxdb_editor_core::CompletionKind,
         label: &str,
         comment: Option<&str>,
+        schema: Option<&str>,
         latest_request: Arc<AtomicU64>,
         request_id: u64,
     ) -> SqlDocState {
@@ -332,6 +335,7 @@ impl SqlAdapter {
                 kind,
                 label.to_string(),
                 comment.map(str::to_string),
+                schema.map(str::to_string),
                 latest_request,
                 request_id,
             );
@@ -1524,7 +1528,18 @@ impl CompletionProvider for SqlAdapter {
                                 item
                             })
                             .collect::<Vec<_>>();
-                        items = merge_completion_items(items, fallback_items.as_ref().clone());
+                        // 上下文结果即权威答案：本地静态回退（整份方言关键字 + with_schema
+                        // 注入的 schema 上下文）只在 resolver 不可用 / 失败时降级使用（见下方
+                        // Err 分支）。成功路径并入它会把整套关键字（如 `order`）和其它 schema
+                        // 的表混进 `schema.` 的定向结果，故此处只并入查询内语义候选。
+                        tracing::debug!(
+                            target: "gdb_sql_completion",
+                            op = "completion_fallback_skipped",
+                            editor_id,
+                            request_id,
+                            fallback_count = fallback_items.len(),
+                            "resolver 已返回上下文候选，跳过本地静态回退候选"
+                        );
                         // DM-800~803：合并查询内语义候选（CTE/别名/派生表列）。
                         items = merge_completion_items(items, semantic_items.clone());
                         tracing::debug!(
@@ -1635,7 +1650,8 @@ impl CompletionProvider for SqlAdapter {
     }
 
     /// F005：候选项右侧 metadata 详情。由选中项/悬停切换在后台触发，latest-wins 取消。
-    /// 优先走宿主 resolver（fluxdb-app 内存 CompletionIndex，无远程查询）；回退到内联注释。
+    /// 优先走宿主 resolver（fluxdb-app：索引命中直接返回，未命中按身份取一次元数据）；
+    /// 无 resolver 时回退到候选内联注释。
     fn documentation(&self, request: fluxdb_editor_core::DocumentationRequest) -> Option<fluxdb_editor_core::DocumentationState> {
         use fluxdb_editor_core::DocumentationState as D;
         let kind = request.kind;
@@ -1643,6 +1659,7 @@ impl CompletionProvider for SqlAdapter {
             kind,
             request.label.as_str(),
             request.comment.as_deref(),
+            request.schema.as_deref(),
             request.latest_request,
             request.request_id,
         );
@@ -2055,6 +2072,52 @@ mod tests {
         assert_eq!(
             result.items.iter().filter(|item| item.label == "select").count(),
             1
+        );
+    }
+
+    /// resolver 成功时结果是权威上下文答案：不再并入本地静态回退（方言关键字 +
+    /// with_schema 注入的 schema 上下文），否则 `FROM tenant_a.` 会混进关键字 `order`
+    /// 和其它 schema 的表（如 public 的 OrderItems）。
+    #[test]
+    fn resolver_success_does_not_leak_local_fallback_candidates() {
+        let adapter = SqlAdapter::new(SqlDialect::Postgres)
+            .with_schema(SqlSchemaContext {
+                schemas: vec!["public".to_string()],
+                tables: vec!["orders".to_string(), "OrderItems".to_string()],
+                views: Vec::new(),
+                columns: vec![("orders".to_string(), "order".to_string())],
+                routines: Vec::new(),
+                types: Vec::new(),
+            })
+            .with_completion_resolver(Arc::new(|_, _, _, _, _| {
+                Ok(SqlCompletionResponse {
+                    items: vec![CompletionItem::new("orders", CompletionKind::Table)],
+                    has_more: false,
+                })
+            }));
+        let sql = "SELECT * FROM tenant_a.order";
+        let snapshot = fluxdb_editor_core::EditorBuffer::new_from(sql).snapshot();
+        let request = CompletionRequest {
+            request_id: 1,
+            buffer_version: snapshot.version(),
+            cursor: snapshot.len(),
+            query: "order".to_string(),
+            explicit: false,
+            document: Some(snapshot),
+            edit_id: 0,
+            continuation: None,
+        };
+
+        let result = futures::executor::block_on(adapter.complete(request)).unwrap();
+        let labels: Vec<&str> = result.items.iter().map(|item| item.label.as_str()).collect();
+        assert!(labels.contains(&"orders"), "上下文候选应保留: {labels:?}");
+        assert!(
+            !labels.contains(&"OrderItems"),
+            "注入的其它 schema 表不应混入: {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"order"),
+            "本地方言关键字不应混入: {labels:?}"
         );
     }
 
@@ -2743,20 +2806,20 @@ mod tests {
         let adapter = SqlAdapter::new(SqlDialect::Mysql);
         let req = || std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1));
         assert_eq!(
-            adapter.resolve_documentation(K::Column, "price".into(), Some("单价"), req(), 1),
+            adapter.resolve_documentation(K::Column, "price".into(), Some("单价"), None, req(), 1),
             SqlDocState::Ready("单价".into())
         );
         assert_eq!(
-            adapter.resolve_documentation(K::Column, "price".into(), None, req(), 1),
+            adapter.resolve_documentation(K::Column, "price".into(), None, None, req(), 1),
             SqlDocState::Error("无列注释".into())
         );
         assert_eq!(
-            adapter.resolve_documentation(K::Keyword, "SELECT".into(), None, req(), 1),
+            adapter.resolve_documentation(K::Keyword, "SELECT".into(), None, None, req(), 1),
             SqlDocState::Error("无可用文档".into())
         );
         // 表/视图等 → label 本身。
         assert_eq!(
-            adapter.resolve_documentation(K::Table, "orders".into(), None, req(), 1),
+            adapter.resolve_documentation(K::Table, "orders".into(), None, None, req(), 1),
             SqlDocState::Ready("orders".into())
         );
     }
@@ -2766,7 +2829,7 @@ mod tests {
     #[test]
     fn resolve_documentation_prefers_resolver_and_keeps_loading() {
         use fluxdb_editor_core::CompletionKind as K;
-        let resolver: SqlDocumentationResolver = std::sync::Arc::new(|_, label, _, _, _| {
+        let resolver: SqlDocumentationResolver = std::sync::Arc::new(|_, label, _, _, _, _| {
             if label == "hang" {
                 SqlDocState::Loading
             } else if label == "bad" {
@@ -2778,17 +2841,17 @@ mod tests {
         let adapter = SqlAdapter::new(SqlDialect::Mysql).with_documentation_resolver(resolver);
         let req = || std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1));
         assert_eq!(
-            adapter.resolve_documentation(K::Column, "c1".into(), Some("内联"), req(), 1),
+            adapter.resolve_documentation(K::Column, "c1".into(), Some("内联"), None, req(), 1),
             SqlDocState::Ready("doc:c1".into())
         );
         // 有内联注释也不回退：resolver 优先。
         assert_eq!(
-            adapter.resolve_documentation(K::Column, "bad".into(), Some("内联"), req(), 1),
+            adapter.resolve_documentation(K::Column, "bad".into(), Some("内联"), None, req(), 1),
             SqlDocState::Error("boom".into())
         );
         // Loading 保持，不回退到本地注释。
         assert_eq!(
-            adapter.resolve_documentation(K::Column, "hang".into(), Some("内联"), req(), 1),
+            adapter.resolve_documentation(K::Column, "hang".into(), Some("内联"), None, req(), 1),
             SqlDocState::Loading
         );
     }

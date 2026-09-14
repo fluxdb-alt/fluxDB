@@ -1052,6 +1052,7 @@ fn fk_join_completion_items(
             filter_text: Some(fk.ref_table.clone()),
             sort_text: None,
             insert_text_format: InsertTextFormat::PlainText,
+            schema: None,
         });
     }
     // 过滤：以参考表名匹配前缀。
@@ -2488,6 +2489,7 @@ fn function_completion_items_for(
             filter_text: None,
             sort_text: None,
             insert_text_format: InsertTextFormat::PlainText,
+            schema: None,
         })
         .collect::<Vec<_>>();
     items.sort_by(|left, right| {
@@ -2506,7 +2508,14 @@ fn function_completion_items_for(
 ///
 /// 同表名出现在多个 schema（PG search_path 多段）时，label 与 apply 文本加 `schema.` 前缀区分，
 /// 唯一表名保持裸名；`detail` 始终展示所属 schema/库，便于用户确认来源。
-fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<QueryCompletionItem> {
+/// `scope_schema` 是本次补全使用的 schema 作用域（`completion_namespace_scope` 的结果），
+/// 与表清单写入 CompletionIndex 的桶键一致；写进候选后，详情面板即可按
+/// (库, schema, 表) 命中该对象的完整列身份，而不是无条件用 schema=None 去查。
+fn table_completion_items(
+    tables: Vec<CompletionTable>,
+    prefix: &str,
+    scope_schema: Option<&str>,
+) -> Vec<QueryCompletionItem> {
     let mut tables = tables
         .into_iter()
         .filter(|table| matches_completion_fuzzy(&table.name, prefix))
@@ -2585,6 +2594,7 @@ fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<Que
                     .map(str::to_string),
                 filter_text: None,
                 sort_text: None,
+                schema: scope_schema.map(str::to_string),
                 ..Default::default()
             }
         })
@@ -2650,6 +2660,7 @@ fn routine_completion_items(
                     filter_text: None,
                     sort_text: None,
                     insert_text_format: InsertTextFormat::PlainText,
+                    schema: None,
                 }
             })
         })
@@ -2797,6 +2808,7 @@ fn schema_completion_items(
             filter_text: None,
             sort_text: None,
             insert_text_format: InsertTextFormat::PlainText,
+            schema: None,
         })
         .collect::<Vec<_>>();
     items.sort_by(|left, right| {
@@ -2873,6 +2885,7 @@ fn cte_column_completion_items(
                     filter_text: None,
                     sort_text: None,
                     insert_text_format: InsertTextFormat::PlainText,
+                    schema: None,
                 })
             })
         })
@@ -2901,6 +2914,7 @@ fn derived_column_completion_items(
                     filter_text: None,
                     sort_text: None,
                     insert_text_format: InsertTextFormat::PlainText,
+                    schema: None,
                 })
             })
         })
