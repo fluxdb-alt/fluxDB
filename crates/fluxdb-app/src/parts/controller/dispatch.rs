@@ -3085,6 +3085,9 @@ COMMIT;");
             .connection_config(create.connection_id)
             .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
         let current = table_ddl_for_connection(config, object)?;
+        // 打开设计器时基线经 format_sql_text_for_dialect 规整（load_table_info_for_connection 的 Ddl 路径）。
+        // 校验侧必须用同一步规整：否则原始 DDL 与规整 DDL 对同一表逐字不等，会把「自己保存的改动」误判为外部变化。
+        let current = format_sql_text_for_dialect(&current, config.kind);
         if current.trim() != original_ddl.trim() {
             tracing::warn!(
                 target: "gdb_create_table",

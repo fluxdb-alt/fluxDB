@@ -356,16 +356,32 @@ impl AppController {
             },
             AppCommand::FinishCreateTableApply { tab_id, result } => match result {
                 Ok(()) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id)
-                        && let TabKind::CreateTable(create) = &mut tab.kind
-                    {
-                        create.applying = false;
-                        create.apply_error = None;
-                        tab.dirty = false;
-                        AppEvent::CreateTableApplied(tab_id)
-                    } else {
-                        self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
+                    let refresh_pg = match self.find_tab_mut(tab_id) {
+                        Some(tab) => match &mut tab.kind {
+                            TabKind::CreateTable(create) => {
+                                create.applying = false;
+                                create.apply_error = None;
+                                tab.dirty = false;
+                                create.is_design()
+                                    && create.database_kind == DatabaseKind::Postgres
+                            }
+                            _ => false,
+                        },
+                        None => return self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在")),
+                    };
+                    // PG 设计表保存成功后按落库结构重建基线：否则 original_ddl 停留在打开时快照，
+                    // 下次保存会把「自己刚保存的改动」误判为外部变化而拒绝（§9.2）。
+                    if refresh_pg {
+                        if let Err(error) = self.refresh_design_table_after_apply(tab_id) {
+                            tracing::warn!(
+                                target: "gdb_create_table",
+                                ?tab_id,
+                                error = %error,
+                                "保存后刷新设计基线失败，保留当前编辑状态"
+                            );
+                        }
                     }
+                    AppEvent::CreateTableApplied(tab_id)
                 }
                 Err(error) => {
                     if let Some(tab) = self.find_tab_mut(tab_id)
@@ -1106,5 +1122,67 @@ impl AppController {
                 ))
             }
         }
+    }
+
+    /// PG 设计表保存成功后，用落库后的最新结构重建该 tab 的设计基线。
+    ///
+    /// 复用打开设计器的全部元数据加载路径（列/索引/外键/触发器/DDL），把 `original_ddl`
+    /// 与 `original` 快照推进到保存后的状态；否则下次保存会把本次已落库的改动与旧基线比较，
+    /// 误判为「表结构已在外部变化」而拒绝（§9.2 外部 DDL 保护）。
+    fn refresh_design_table_after_apply(&mut self, tab_id: TabId) -> fluxdb_core::Result<()> {
+        let (object, database_kind) = {
+            let Some(tab) = self.find_tab(tab_id) else {
+                return Err(Error::new(ErrorKind::Internal, "新建表标签页不存在"));
+            };
+            let TabKind::CreateTable(create) = &tab.kind else {
+                return Ok(());
+            };
+            let CreateTableMode::Design { object, .. } = &create.mode else {
+                return Ok(());
+            };
+            (object.clone(), create.database_kind)
+        };
+        let Some(config) = self.connection_config(object.connection_id) else {
+            return Err(Error::new(ErrorKind::Connection, "连接不存在"));
+        };
+        let columns = list_completion_columns_for_connection(
+            &config,
+            object.database.as_deref(),
+            object.schema.as_deref(),
+            &object.name,
+        )?;
+        let indexes = match load_table_info_for_connection(&config, &object, TableInfoTab::Indexes) {
+            Ok(TableInfoResult::Indexes(indexes)) => indexes,
+            _ => Vec::new(),
+        };
+        let foreign_keys = match load_table_info_for_connection(&config, &object, TableInfoTab::ForeignKeys)
+        {
+            Ok(TableInfoResult::ForeignKeys(foreign_keys)) => foreign_keys,
+            _ => Vec::new(),
+        };
+        let triggers = match load_table_info_for_connection(&config, &object, TableInfoTab::Triggers) {
+            Ok(TableInfoResult::Triggers(triggers)) => triggers,
+            _ => Vec::new(),
+        };
+        let ddl = match load_table_info_for_connection(&config, &object, TableInfoTab::Ddl) {
+            Ok(TableInfoResult::Ddl(ddl)) => Some(ddl),
+            _ => None,
+        };
+        let fresh = CreateTableState::design(
+            object,
+            database_kind,
+            columns,
+            indexes,
+            foreign_keys,
+            triggers,
+            ddl,
+        );
+        if let Some(tab) = self.find_tab_mut(tab_id)
+            && let TabKind::CreateTable(create) = &mut tab.kind
+        {
+            *create = fresh;
+            tab.dirty = false;
+        }
+        Ok(())
     }
 }

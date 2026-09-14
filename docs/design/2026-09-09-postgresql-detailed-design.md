@@ -442,7 +442,7 @@ PG 不显示 engine/charset/unsigned/zerofill/ON UPDATE 时间/索引前缀长�
 
 常规结构变更放同一事务，失败整体回滚；CREATE INDEX CONCURRENTLY 等禁止事务包裹的行为只在明确选项下生成独立执行计划并反馈部分执行状态，不默认加入。执行前重查结构指纹；变化时要求刷新/重新预览，不能拿过期快照覆盖他人 DDL。[R08、R22]
 
-实现记录（T17）：`app/parts/create_table_postgres_design.rs` 做设计状态与打开时快照的差异，生成有序 PG 动作并只发差异——表改名、先丢旧主键约束再加新主键、列增删改名/类型/默认值/可空/identity/注释、索引独立 `CREATE [UNIQUE] INDEX` 与 `DROP INDEX "schema"."name"`、FK/CHECK 走 `ADD/DROP CONSTRAINT`、触发器 `CREATE TRIGGER … EXECUTE FUNCTION` 与 `DROP TRIGGER … ON 表`、表注释 `COMMENT ON TABLE`。类型变更不自动编造 `USING`（隐式转换成功，需要显式转换时由服务端报错提示用户补写），避免静默截断数据；主键约束名从展示 DDL 解析（取不到回退 `<table>_pkey`）。整表重建一律不生成，分区/RLS/排除约束等编辑器不能表示的定义因此保留。执行侧把建表与设计保存统一到单批 `BEGIN … COMMIT` 路径（PG 建表保存原先走 MySQL/SQLite 的拆分路径会丢触发器），失败不提交、连接释放即回滚；保存前重查表 DDL 与打开设计器时逐字比对，外部 DDL 后拒绝应用过期设计。
+实现记录（T17）：`app/parts/create_table_postgres_design.rs` 做设计状态与打开时快照的差异，生成有序 PG 动作并只发差异——表改名、先丢旧主键约束再加新主键、列增删改名/类型/默认值/可空/identity/注释、索引独立 `CREATE [UNIQUE] INDEX` 与 `DROP INDEX "schema"."name"`、FK/CHECK 走 `ADD/DROP CONSTRAINT`、触发器 `CREATE TRIGGER … EXECUTE FUNCTION` 与 `DROP TRIGGER … ON 表`、表注释 `COMMENT ON TABLE`。类型变更不自动编造 `USING`（隐式转换成功，需要显式转换时由服务端报错提示用户补写），避免静默截断数据；主键约束名从展示 DDL 解析（取不到回退 `<table>_pkey`）。整表重建一律不生成，分区/RLS/排除约束等编辑器不能表示的定义因此保留。执行侧把建表与设计保存统一到单批 `BEGIN … COMMIT` 路径（PG 建表保存原先走 MySQL/SQLite 的拆分路径会丢触发器），失败不提交、连接释放即回滚；保存前重查表 DDL 与打开设计器时比对，外部 DDL 后拒绝应用过期设计。比对两侧须走同一 `format_sql_text_for_dialect` 规整——打开设计器时基线经 `load_table_info_for_connection` 的 Ddl 路径已规整（关键字大写、identity 括号规整、语句间隔统一），若校验侧用原始 catalog DDL 逐字比较，同一表两形态必不等，会把自己保存的改动误判为外部变化而误拒绝；保存成功后通过 `refresh_design_table_after_apply`（复用打开设计器的元数据加载）把 `original_ddl`/`original` 基线推进到落库后的结构，避免下次保存再次误拒。
 
 ### 9.3 复制、重命名、清空与删除
 

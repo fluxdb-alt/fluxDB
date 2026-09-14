@@ -409,7 +409,11 @@ fn postgres_design_diff_applies_atomically_and_blocks_stale_snapshot() {
     );
 
     // 刷新后（按最新 DDL 重建基线）可以正常保存，差异在事务内执行。
-    let refreshed_ddl = connector.table_ddl(&object).expect("重新读取 DDL 应成功");
+    // 与真实打开路径一致：基线 DDL 需经 format_sql_text_for_dialect 规整，否则与校验侧不一致。
+    let refreshed_ddl = format_sql_text_for_dialect(
+        &connector.table_ddl(&object).expect("重新读取 DDL 应成功"),
+        DatabaseKind::Postgres,
+    );
     let mut refreshed = create.clone();
     if let CreateTableMode::Design {
         original_ddl,
@@ -676,5 +680,158 @@ fn postgres_copy_table_gets_independent_sequence() {
 
     request.text =
         "DROP SCHEMA IF EXISTS t18_smoke CASCADE;".to_string();
+    connector.execute(&request).expect("清理隔离 schema 应成功");
+}
+
+/// 复现：设计器内加索引后直接保存（无外部 DDL 改动），不应误判为「外部变化」。
+#[test]
+fn postgres_design_save_without_external_change_succeeds() {
+    let Some(params) = postgres_create_table_smoke_params() else {
+        tracing::warn!(target: "fluxdb_app", "未设置 FLUXDB_PG_SMOKE，跳过复现冒烟");
+        return;
+    };
+    let config = postgres_create_table_smoke_config(&params);
+    let mut controller = AppController::with_mock_data();
+    let AppEvent::ConnectionCreated(registered) = controller.dispatch(AppCommand::CreateConnection(
+        ConnectionDraft {
+            name: "PG REPRO Smoke".to_string(),
+            kind: DatabaseKind::Postgres,
+            endpoint: config.endpoint.clone(),
+            credential_ref: None,
+            options: Default::default(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: config.postgres_profile.clone(),
+        },
+    )) else {
+        panic!("注册 PG 连接应成功");
+    };
+    let connector = PostgresConnector::with_config(registered.clone());
+    let database = params.4.clone();
+
+    let mut request = QueryRequest {
+        connection_id: registered.id,
+        database: Some(database.clone()),
+        session_id: None,
+        schema: None,
+        text: "\
+            DROP SCHEMA IF EXISTS repro_smoke CASCADE; \
+            CREATE SCHEMA repro_smoke; \
+            CREATE TABLE repro_smoke.customers(id integer PRIMARY KEY, name text); \
+            CREATE TABLE repro_smoke.orders(\
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, \
+                phone text COLLATE \"C\", \
+                full_name text GENERATED ALWAYS AS (phone) STORED, \
+                email text, note text, customer_id integer, \
+                CONSTRAINT fk_orders_customer FOREIGN KEY (customer_id) \
+                    REFERENCES repro_smoke.customers(id) ON DELETE SET NULL, \
+                CONSTRAINT uq_orders_email UNIQUE (email)); \
+            COMMENT ON TABLE repro_smoke.orders IS '订单'; \
+            COMMENT ON COLUMN repro_smoke.orders.note IS '备注'; \
+            CREATE INDEX idx_orders_note ON repro_smoke.orders(note); \
+        "
+        .to_string(),
+        mode: fluxdb_core::QueryMode::All,
+        options: QueryExecutionOptions::default(),
+    };
+    connector.execute(&request).expect("准备隔离 schema 应成功");
+
+    let object = ObjectPath {
+        connection_id: registered.id,
+        database: Some(database.clone()),
+        schema: Some("repro_smoke".to_string()),
+        name: "orders".to_string(),
+        kind: ObjectKind::Table,
+    };
+    let columns = connector
+        .list_completion_columns(Some(&database), Some("repro_smoke"), "orders")
+        .expect("读取列元数据应成功");
+    // 打开设计器的真实路径经 controller 的 load_table_info_for_connection 返回规整后的 DDL
+    //（format_sql_text_for_dialect）。测试需与之一致，否则基线形态对不上校验侧。
+    let ddl = format_sql_text_for_dialect(
+        &connector.table_ddl(&object).expect("读取 DDL 应成功"),
+        DatabaseKind::Postgres,
+    );
+    let indexes = connector.list_indexes(&object).expect("读取索引应成功");
+    let mut create = CreateTableState::design(
+        object.clone(),
+        DatabaseKind::Postgres,
+        columns,
+        indexes,
+        Vec::new(),
+        Vec::new(),
+        Some(ddl.clone()),
+    );
+
+    // 设计器里加唯一索引（与用户操作一致），不改外部结构。
+    create.indexes.push(CreateTableIndex {
+        id: 99,
+        name: "idx_phone".to_string(),
+        columns: vec![CreateTableIndexColumn {
+            name: "phone".to_string(),
+            sub_part: String::new(),
+            sort_order: String::new(),
+        }],
+        index_type: "UNIQUE".to_string(),
+        index_method: String::new(),
+        comment: String::new(),
+    });
+
+    let design_tab = push_create_table_tab(&mut controller, create.clone());
+    match controller.dispatch(AppCommand::ApplyCreateTable(design_tab)) {
+        AppEvent::CreateTableApplied(_) => {}
+        other => panic!("无外部变化时保存应成功：{other:?}"),
+    }
+    // 走完真实 UI 流程：保存成功后通知控制器刷新设计基线。
+    match controller.dispatch(AppCommand::FinishCreateTableApply {
+        tab_id: design_tab,
+        result: Ok(()),
+    }) {
+        AppEvent::CreateTableApplied(_) => {}
+        other => panic!("保存收尾应成功：{other:?}"),
+    }
+
+    // 校验：保存后刷新基线，新 DDL 基线应已包含刚落库的 idx_phone 索引。
+    let refreshed_ddl = controller
+        .state
+        .tabs
+        .iter()
+        .find(|tab| tab.id == design_tab)
+        .and_then(|tab| match &tab.kind {
+            TabKind::CreateTable(create) => match &create.mode {
+                CreateTableMode::Design { original_ddl, .. } => original_ddl.clone(),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("设计基线 DDL 应存在");
+    assert!(
+        refreshed_ddl.contains("idx_phone"),
+        "保存后基线 DDL 应包含已落库索引：\n{refreshed_ddl}"
+    );
+
+    // 同一设计器再加一个索引（未重开），不应被当成「外部变化」拒绝。
+    if let Some(tab) = controller.state.tabs.iter_mut().find(|tab| tab.id == design_tab)
+        && let TabKind::CreateTable(state) = &mut tab.kind
+    {
+        state.indexes.push(CreateTableIndex {
+            id: 100,
+            name: "idx_note".to_string(),
+            columns: vec![CreateTableIndexColumn {
+                name: "note".to_string(),
+                sub_part: String::new(),
+                sort_order: String::new(),
+            }],
+            index_type: String::new(),
+            index_method: String::new(),
+            comment: String::new(),
+        });
+    }
+    match controller.dispatch(AppCommand::ApplyCreateTable(design_tab)) {
+        AppEvent::CreateTableApplied(_) => {}
+        other => panic!("同设计器连续保存第二处改动应成功：{other:?}"),
+    }
+
+    request.text = "DROP SCHEMA IF EXISTS repro_smoke CASCADE;".to_string();
     connector.execute(&request).expect("清理隔离 schema 应成功");
 }
