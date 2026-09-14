@@ -26,7 +26,9 @@ fn main() {
             let saved_settings = saved_settings.clone();
             register_shortcuts(cx, &saved_settings);
             set_app_menus(cx);
-            let mut controller = AppController::with_mock_data();
+            // 从空连接启动：首启不注入 demo 假连接，侧边栏真实连接完全来自持久化存储，
+            // 无持久连接时保持为空（空连接不造假数据显示）。
+            let mut controller = AppController::new();
             controller.set_completion_index_storage(storage.clone());
             let theme_mode = theme_mode_from_app_theme(saved_settings.theme);
             let _ = controller.dispatch(AppCommand::SaveSettings(saved_settings));

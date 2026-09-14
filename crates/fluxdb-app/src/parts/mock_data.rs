@@ -38,6 +38,16 @@ fn demo_connection_options() -> BTreeMap<String, String> {
     options
 }
 
+/// 未实现的连接类型（MongoDB）没有真实 connector，对象浏览如实报错、
+/// 返回「不支持」而非 mock 假数据；仅 demo 标记（`with_mock_data` 测试）
+/// 仍走 MockConnector 造数据。
+fn unsupported_mongodb_error() -> fluxdb_core::Error {
+    Error::new(
+        ErrorKind::Unsupported,
+        "MongoDB 连接尚未支持，不展示对象数据",
+    )
+}
+
 fn mock_objects(connection_id: ConnectionId) -> Vec<ObjectSummary> {
     // demo 元数据集（T081）：4 张关联表，与 fluxdb-connectors/shared.rs 的 mock_objects 保持一致。
     vec![
@@ -105,7 +115,7 @@ fn test_connection(config: &ConnectionConfig) -> fluxdb_core::Result<()> {
         DatabaseKind::MySql | DatabaseKind::TiDb => MySqlConnector::new().test_connection(config),
         DatabaseKind::Sqlite => SqliteConnector::new().test_connection(config),
         DatabaseKind::Postgres => PostgresConnector::new().test_connection(config),
-        DatabaseKind::MongoDb => MockConnector::new(config.kind).test_connection(config),
+        DatabaseKind::MongoDb => Err(unsupported_mongodb_error()),
         DatabaseKind::Redis => RedisConnector::new().test_connection(config),
     }
 }
@@ -128,7 +138,7 @@ fn list_objects_for_connection(
         }
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).list_objects(path),
         DatabaseKind::Postgres => PostgresConnector::with_config(config.clone()).list_objects(path),
-        DatabaseKind::MongoDb => MockConnector::new(config.kind).list_objects(path),
+        DatabaseKind::MongoDb => Err(unsupported_mongodb_error()),
         DatabaseKind::Redis => RedisConnector::with_config(config.clone()).list_objects(path),
     }
 }
@@ -675,13 +685,7 @@ fn load_data_for_connection(
             sort,
             filters,
         ),
-        DatabaseKind::MongoDb => MockConnector::new(config.kind).load_data(
-            object,
-            pagination.offset,
-            pagination.limit,
-            sort,
-            filters,
-        ),
+        DatabaseKind::MongoDb => Err(unsupported_mongodb_error()),
         DatabaseKind::Redis => RedisConnector::with_config(config.clone()).load_data(
             object,
             pagination.offset,
@@ -721,7 +725,7 @@ fn export_pages_for_connection(
         DatabaseKind::Postgres => {
             PostgresConnector::with_config(config.clone()).export_pages(object, sort, filters, on_cancel, on_page)
         }
-        DatabaseKind::MongoDb => MockConnector::new(config.kind).export_pages(object, sort, filters, on_cancel, on_page),
+        DatabaseKind::MongoDb => Err(unsupported_mongodb_error()),
         DatabaseKind::Redis => RedisConnector::with_config(config.clone()).export_pages(object, sort, filters, on_cancel, on_page),
     }
 }
@@ -806,7 +810,7 @@ fn apply_data_changes_for_connection(
         }
         DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).apply_changes(changes),
         DatabaseKind::Postgres => PostgresConnector::with_config(config.clone()).apply_changes(changes),
-        DatabaseKind::MongoDb => MockConnector::new(config.kind).apply_changes(changes),
+        DatabaseKind::MongoDb => Err(unsupported_mongodb_error()),
         DatabaseKind::Redis => RedisConnector::with_config(config.clone()).apply_changes(changes),
     }
 }
