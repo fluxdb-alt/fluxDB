@@ -480,11 +480,20 @@ impl Render for NavicatMain {
                 ))
             })
             .when_some(self.pending_danger_table_action.clone(), |this, form| {
+                // 危险表（删/清空）弹框：判断是否 PG 必须在 render 内直接读 self 字段，
+                // 不能经 `cx.entity().read(cx)` 自读（render 时 NavicatMain 已被租用会 panic）。
+                let is_postgres = self
+                    .controller
+                    .state()
+                    .connections
+                    .iter()
+                    .any(|c| c.config.id == form.object_path.connection_id && c.config.kind == DatabaseKind::Postgres);
                 this.child(danger_table_modal(
                     form.clone(),
                     self.danger_table_sql_for_form(&form),
                     self.danger_table_foreign_key_check_select.clone(),
                     self._danger_table_task.is_some(),
+                    is_postgres,
                     self.focus_handle.clone(),
                     window,
                     colors,

@@ -3,6 +3,7 @@ fn danger_table_modal(
     sql_preview: Result<String, String>,
     foreign_key_check_select: Entity<SelectState<SearchableVec<String>>>,
     running: bool,
+    is_postgres: bool,
     focus_handle: FocusHandle,
     window: &mut Window,
     colors: UiColors,
@@ -14,16 +15,11 @@ fn danger_table_modal(
     };
     let error = form.error.clone().or(validation_error);
     let can_submit = !running && form.acknowledged && sql.is_some() && error.is_none();
-    // PG：外键检查选择器为 MySQL 专属，PG 不适用（with_foreign_key_check 会拒绝），隐藏；
-    // 清空表提供「重置自增值 RESTART IDENTITY」显式选项（默认 CONTINUE IDENTITY）。
-    let is_postgres = cx
-        .entity()
-        .read(cx)
-        .controller
-        .state()
-        .connections
-        .iter()
-        .any(|c| c.config.id == form.object_path.connection_id && c.config.kind == DatabaseKind::Postgres);
+    // 注意：不能在 builder 内 `cx.entity().read(cx)` 自读判断 PG——此 builder 在 NavicatMain::render
+    // 期间被同步执行，此时 NavicatMain 已被租用，自读会触发 double-lease panic（read while updating）。
+    // PG 由调用方在 render 内直接读取字段后传入（render.rs）。PG：外键检查选择器为 MySQL 专属，
+    // PG 不适用（with_foreign_key_check 会拒绝），隐藏；清空表提供「重置自增值 RESTART IDENTITY」
+    // 显式选项（默认 CONTINUE IDENTITY）。
     let is_truncate = form.action == DangerTableAction::Truncate;
     let pg_restart_identity = is_postgres && is_truncate;
 

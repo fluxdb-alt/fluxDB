@@ -33,7 +33,20 @@ impl NavicatMain {
                 self.copy_connection(connection_id, cx);
             }
             ConnectionMenuAction::Refresh => {
-                self.open_connection_from_sidebar(connection_id, cx);
+                // 已展开连接：刷新连接树，只换第一层并保留已加载的表/视图（避免 open_connection_from_sidebar
+                // 整体重开把已加载的深层表清空）；未展开时才视为首次打开。
+                let expanded = self
+                    .controller
+                    .state()
+                    .connections
+                    .iter()
+                    .find(|c| c.config.id == connection_id)
+                    .is_some_and(|c| c.expanded);
+                if expanded {
+                    self.refresh_connection_tree(cx);
+                } else {
+                    self.open_connection_from_sidebar(connection_id, cx);
+                }
             }
             ConnectionMenuAction::SelectDatabases => {
                 self.show_display_database_modal(connection_id, window, cx);

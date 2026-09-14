@@ -434,7 +434,9 @@ impl NavicatMain {
                         AppMessageKind::Success
                     };
                     this.show_message(message, kind, cx);
-                    this.open_connection_from_sidebar(connection_id, cx);
+                    // SQL 含 DDL（如 CREATE TABLE）时刷新连接树：保留已加载的表/视图，
+                    // 不用 open_connection_from_sidebar 整体重开（那会清空已加载的深层表）。
+                    this.refresh_connection_tree(cx);
                     cx.notify();
                 });
             });
@@ -543,7 +545,6 @@ impl NavicatMain {
         if let Some(addr) = &hostaddr {
             invocation.env.extend(fluxdb_app::pg_hostaddr_env(addr, connect_port));
         }
-        let connection_id = form.connection_id;
         let file_label = sql_file_name(path);
         // 捕获 owned 副本，避免借用逃逸到 spawn 的后台任务生命周期外。
         let cancel_for_spawn = cancel_flag.clone();
@@ -626,7 +627,9 @@ impl NavicatMain {
                         },
                         cx,
                     );
-                    this.open_connection_from_sidebar(connection_id, cx);
+                    // SQL 含 DDL（如 CREATE TABLE）时刷新连接树：只换第一层并保留已加载的表/视图，
+                    // 不用 open_connection_from_sidebar 整体重开（那会清空已加载的深层表）。
+                    this.refresh_connection_tree(cx);
                     cx.notify();
                 });
             });

@@ -601,7 +601,9 @@ impl AppController {
                         self.state.last_error = None;
                         connection.connected = true;
                         connection.expanded = true;
-                        connection.objects = objects;
+                        // 删除库后重拉连接第一层：只替换库/schema 层并保留仍存活库下已加载的表/视图，
+                        // 避免整体替换把其他已展开库的深层对象（表/视图）一并清掉。
+                        replace_connection_level0(connection, objects);
                         AppEvent::DatabaseDeleted {
                             connection_id,
                             database,
@@ -638,7 +640,9 @@ impl AppController {
                             let config = connection.config.clone();
                             match list_objects_for_connection(&config, None) {
                                 Ok(objects) => {
-                                    connection.objects = objects.clone();
+                                    // 刷新连接第一层：保留仍存活库下已加载的表/视图，避免整体替换
+                                    // 把其他已展开库的深层对象（表/视图）一并清掉。
+                                    replace_connection_level0(connection, objects.clone());
                                     all_objects.extend(objects);
                                 }
                                 Err(error) => return self.fail(error),
