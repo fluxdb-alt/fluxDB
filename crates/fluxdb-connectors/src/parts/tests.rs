@@ -2645,6 +2645,23 @@ SELECT 1;",
     }
 
     #[test]
+    fn split_sql_keeps_adjacent_dollar_blocks_as_separate_statements() {
+        // 回归：相邻的美元引用块（DO / 函数）后的分号不得被吞掉。
+        // 旧实现用 chars.nth(len-1) 跳过结束标签，Peekable::nth 会多消费一个元素，
+        // 把块后的 `;` 吞掉，导致多个 DO 黏成一条，PG 以 prepare 执行时报
+        // 「cannot insert multiple commands into a prepared statement」(SQLSTATE 42601)。
+        let statements = split_sql_statements(
+            "CREATE TABLE t2 (LIKE t INCLUDING ALL);\n\
+             DO $$ DECLARE r record; BEGIN a := 1; END $$;\n\
+             DO $$ BEGIN b := 2; END $$;",
+        );
+        assert_eq!(statements.len(), 3);
+        assert!(statements[0].starts_with("CREATE TABLE"));
+        assert!(statements[1].starts_with("DO $$") && statements[1].contains("a := 1"));
+        assert!(statements[2].starts_with("DO $$") && statements[2].contains("b := 2"));
+    }
+
+    #[test]
     fn execute_with_progress_reports_summaries_and_honors_cancel() {
         let connector = MockConnector::sqlite();
         let seen = std::cell::Cell::new(0);

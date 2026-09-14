@@ -36,7 +36,10 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
         if let Some(active_delim) = dollar_tag {
             // 处于 $tag$…$tag$ 美元引号体内：只认配对的结束标签，忽略内部任何 ; 与引号。
             if sql[index..].starts_with(active_delim) {
-                chars.nth(active_delim.len() - 1);
+                // 当前字符是结束标签的第一个 `$`，跳过剩余 len-1 个字符（Peekable::nth(n) 会
+                // 再消耗一个元素，故用 len-2 才能恰好停在标签之后，否则会吞掉标签后的 `;`，
+                // 导致相邻的 DO/函数块黏成一条、prepare 时报多命令错）。
+                chars.nth(active_delim.len() - 2);
                 dollar_tag = None;
             }
             continue;
@@ -56,7 +59,9 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
             // PostgreSQL 美元引用 $tag$…$tag$（含无标签 $$）：开启时忽略体内分号。
             '$' => {
                 if let Some(len) = dollar_quote_len(&sql[index..]) {
-                    chars.nth(len - 1);
+                    // 与闭合逻辑同理：当前字符是起始标签的第一个 `$`，跳过剩余 len-1 个字符
+                    // 需用 len-2（Peekable::nth(n) 多消耗一个元素），否则会吞掉标签后的首字符。
+                    chars.nth(len - 2);
                     dollar_tag = Some(&sql[index..index + len]);
                 }
             }
