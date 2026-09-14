@@ -769,6 +769,12 @@ impl NavicatMain {
             cx.notify();
             return;
         }
+        // 「执行 SQL 文件」为独立的 gpui-component Dialog 层（window.open_dialog），
+        // 不在 NavicatMain 子树内，Esc 的 CancelDialog 只能靠这里兜底关闭。
+        if self.sql_file_modal.borrow().dialog_open {
+            self.request_close_sql_file_dialog(window, cx);
+            return;
+        }
         if self.query_history_quick_open {
             self.query_history_quick_open = false;
             cx.notify();
