@@ -10,6 +10,21 @@ impl NavicatMain {
             .unwrap_or(DatabaseKind::MySql)
     }
 
+    /// 数据展示（DataEditor）tab 的数据库类型，用于该页筛选/排序 SQL 预览按方言引用标识符。
+    fn data_editor_database_kind(&self, tab_id: TabId) -> DatabaseKind {
+        self.controller
+            .state()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .and_then(|tab| match &tab.kind {
+                TabKind::DataEditor(editor) => Some(editor),
+                _ => None,
+            })
+            .map(|editor| self.connection_database_kind(editor.object.connection_id))
+            .unwrap_or(DatabaseKind::MySql)
+    }
+
     fn query_editor_database_kind(&self, tab_id: TabId) -> DatabaseKind {
         let connection_id = self
             .controller

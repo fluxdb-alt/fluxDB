@@ -5096,25 +5096,77 @@ SELECT item_id, name FROM audit_log;"
         // 无用户排序：追加主键 ASC 作为稳定 tie breaker。
         assert_eq!(
             pg_order_by_clause(&[], &columns),
-            " ORDER BY \"id\"",
+            " ORDER BY \"__fluxdb_source\".\"id\"",
             "无用户排序时应只按主键稳定排序"
         );
         // 用户排序与主键不同列：主键追加在末尾，逗号分隔。
         let sort = [SortSpec { field: "score".to_string(), direction: SortDirection::Desc }];
         assert_eq!(
             pg_order_by_clause(&sort, &columns),
-            " ORDER BY \"score\" DESC, \"id\"",
+            " ORDER BY \"__fluxdb_source\".\"score\" DESC, \"__fluxdb_source\".\"id\"",
             "同值行应按主键稳定排序"
         );
         // 用户已按主键排：不重复追加。
         let sort = [SortSpec { field: "id".to_string(), direction: SortDirection::Asc }];
         assert_eq!(
             pg_order_by_clause(&sort, &columns),
-            " ORDER BY \"id\" ASC"
+            " ORDER BY \"__fluxdb_source\".\"id\" ASC"
         );
         // 无主键表：保持共享排序原样，不额外 ORDER。
         let no_pk = vec![mkcol("score", false)];
         assert_eq!(pg_order_by_clause(&[], &no_pk), "");
+    }
+
+    #[test]
+    fn pg_data_sort_qualifies_source_column_to_avoid_text_alias_ordering() {
+        assert_eq!(
+            pg_data_source_column("id"),
+            "\"__fluxdb_source\".\"id\""
+        );
+        assert_eq!(
+            pg_data_source_column("a\"b"),
+            "\"__fluxdb_source\".\"a\"\"b\""
+        );
+    }
+
+    #[test]
+    fn mysql_order_by_clause_qualifies_source_column_to_avoid_text_alias_ordering() {
+        let mkcol = |name: &str, pk: bool| Column {
+            name: name.to_string(),
+            type_name: Some("int".to_string()),
+            nullable: false,
+            primary_key: pk,
+            comment: None,
+        };
+        let columns = vec![
+            mkcol("id", true),
+            mkcol("score", false),
+            mkcol("name", false),
+        ];
+        // 排序列必须通过源表别名引用真实列，避免命中 CAST 成 CHAR 的同名输出别名。
+        assert_eq!(
+            mysql_order_by_clause(&[], &columns),
+            " ORDER BY `__fluxdb_source`.`id`",
+            "无用户排序时应只按主键稳定排序"
+        );
+        let sort = [SortSpec { field: "score".to_string(), direction: SortDirection::Desc }];
+        assert_eq!(
+            mysql_order_by_clause(&sort, &columns),
+            " ORDER BY `__fluxdb_source`.`score` DESC, `__fluxdb_source`.`id`",
+            "同值行应按主键稳定排序"
+        );
+        let sort = [SortSpec { field: "id".to_string(), direction: SortDirection::Asc }];
+        assert_eq!(
+            mysql_order_by_clause(&sort, &columns),
+            " ORDER BY `__fluxdb_source`.`id` ASC"
+        );
+        let no_pk = vec![mkcol("score", false)];
+        assert_eq!(mysql_order_by_clause(&[], &no_pk), "");
+        // 引用需要转义（如含反引号的列名），别名限定不破坏转义。
+        assert_eq!(
+            mysql_data_source_column("a`b"),
+            "`__fluxdb_source`.`a``b`"
+        );
     }
 
     #[test]
@@ -5434,6 +5486,34 @@ SELECT item_id, name FROM audit_log;"
             connector.load_data(&path, 0, 50, &[], &bad).is_err(),
             "引用不存在的过滤列应报错"
         );
+
+        // 数据页会把整数投影为文本再解析回 CellValue；ORDER BY 必须引用源列，不能命中
+        // 同名文本输出别名，否则会出现 999 排在 5000 前面的字典序错误。
+        let mut append = pg_query_request(&config, None);
+        append.text = "INSERT INTO t10_page (id, score, name) VALUES (999, 60, 'x'), (5000, 70, 'y')"
+            .to_string();
+        connector.execute(&append).expect("追加排序边界数据应成功");
+        let id_desc = connector
+            .load_data(
+                &path,
+                0,
+                2,
+                &[SortSpec {
+                    field: "id".to_string(),
+                    direction: SortDirection::Desc,
+                }],
+                &[],
+            )
+            .expect("主键降序读取应成功");
+        let ids: Vec<i64> = id_desc
+            .rows
+            .iter()
+            .map(|row| match row.values[0] {
+                CellValue::I64(value) => value,
+                _ => panic!("id 应为整数"),
+            })
+            .collect();
+        assert_eq!(ids, vec![5000, 999]);
 
         // 清理。
         let mut cleanup = pg_query_request(&config, None);

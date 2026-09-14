@@ -823,17 +823,58 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         );
 
         assert_eq!(rules.len(), 2);
-        assert_eq!(data_sort_rules_text(&rules), "`id` ASC, `name` DESC");
+        assert_eq!(data_sort_rules_text(&rules, DatabaseKind::MySql), "`id` ASC, `name` DESC");
 
         let rules = data_sort_rules_after_header_sort(
             &rules,
             "id".to_string(),
             Some(DataTableSortDirection::Descending),
         );
-        assert_eq!(data_sort_rules_text(&rules), "`id` DESC, `name` DESC");
+        assert_eq!(data_sort_rules_text(&rules, DatabaseKind::MySql), "`id` DESC, `name` DESC");
 
         let rules = data_sort_rules_after_header_sort(&rules, "id".to_string(), None);
-        assert_eq!(data_sort_rules_text(&rules), "`name` DESC");
+        assert_eq!(data_sort_rules_text(&rules, DatabaseKind::MySql), "`name` DESC");
+    }
+
+    #[test]
+    fn postgres_filter_and_sort_text_round_trip_double_quoted_identifiers() {
+        let filter_rules = vec![
+            data_filter_rule(
+                "display AND \"name\"",
+                DataFilterOperator::Eq,
+                &["Alice"],
+                false,
+            ),
+            data_filter_rule("active", DataFilterOperator::IsNotNull, &[], false),
+        ];
+        let filter_text = data_filter_rules_sql_pretty(&filter_rules, DatabaseKind::Postgres);
+        assert_eq!(
+            parse_data_filter_rules_text(&filter_text),
+            Some(filter_rules)
+        );
+
+        let sort_rules = vec![
+            DataSortRule {
+                enabled: true,
+                field: "id".to_string(),
+                ascending: false,
+            },
+            DataSortRule {
+                enabled: true,
+                field: "display, \"name\"".to_string(),
+                ascending: true,
+            },
+        ];
+        let sort_text = data_sort_rules_text(&sort_rules, DatabaseKind::Postgres);
+        assert_eq!(parse_data_sort_rules_text(&sort_text), Some(sort_rules));
+
+        let sql = format!(
+            "SELECT * FROM \"tenant_a\".\"orders\" WHERE {filter_text} ORDER BY {sort_text} LIMIT 1000"
+        );
+        let parsed = parse_data_editor_sql_text(&sql).expect("PostgreSQL SQL should parse");
+        assert_eq!(parsed.filter_text, filter_text);
+        assert_eq!(parsed.sort_text, sort_text);
+        assert_eq!(parsed.limit, Some(1000));
     }
 
     #[test]
@@ -862,13 +903,13 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             Some(DataTableSortDirection::Descending),
         );
 
-        assert_eq!(data_sort_rules_text(&rules[&first]), "`id` ASC");
-        assert_eq!(data_sort_rules_text(&rules[&second]), "`id` DESC");
+        assert_eq!(data_sort_rules_text(&rules[&first], DatabaseKind::MySql), "`id` ASC");
+        assert_eq!(data_sort_rules_text(&rules[&second], DatabaseKind::MySql), "`id` DESC");
 
         apply_query_result_header_sort(&mut rules, first, "id".to_string(), None);
 
         assert!(!rules.contains_key(&first));
-        assert_eq!(data_sort_rules_text(&rules[&second]), "`id` DESC");
+        assert_eq!(data_sort_rules_text(&rules[&second], DatabaseKind::MySql), "`id` DESC");
     }
 
     #[test]
@@ -2359,9 +2400,102 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             "",
             100,
             100,
+            DatabaseKind::MySql,
         );
 
         assert_eq!(sql, "SELECT * FROM `main`.`users` LIMIT 100 OFFSET 100");
+    }
+
+    #[test]
+    fn data_editor_sql_preview_postgres_uses_double_quotes_and_real_column_names() {
+        // PG：三段对象名用双引号（schema/表），排序用真实字段名（主键不带 “  PK” 后缀），
+        // 字段带双引号且内部引号转义为 ""。
+        let mut object = ObjectPath {
+            connection_id: ConnectionId(1),
+            database: Some("fluxdb_manual".to_string()),
+            schema: Some("tenant_a".to_string()),
+            name: "orders".to_string(),
+            kind: ObjectKind::Table,
+        };
+        let sort_rules = vec![DataSortRule {
+            enabled: true,
+            field: "id".to_string(),
+            ascending: false,
+        }];
+        // 主键字段升序。
+        let primary_key_rules = vec![DataSortRule {
+            field: "id".to_string(),
+            ascending: true,
+            ..sort_rules[0].clone()
+        }];
+
+        let pg_version = data_editor_sql_preview(
+            &object,
+            &[],
+            &sort_rules,
+            DataFilterMode::Builder,
+            "",
+            "",
+            0,
+            1000,
+            DatabaseKind::Postgres,
+        );
+        assert_eq!(
+            pg_version,
+            "SELECT * FROM \"tenant_a\".\"orders\" ORDER BY \"id\" DESC LIMIT 1000"
+        );
+
+        // 主键字段（真实名 id）升序。
+        let pk_asc = data_editor_sql_preview(
+            &object,
+            &[],
+            &primary_key_rules,
+            DataFilterMode::Builder,
+            "",
+            "",
+            0,
+            1000,
+            DatabaseKind::Postgres,
+        );
+        assert_eq!(
+            pk_asc,
+            "SELECT * FROM \"tenant_a\".\"orders\" ORDER BY \"id\" ASC LIMIT 1000"
+        );
+
+        // 无 schema 时 PG 只用表名双引号。
+        object.schema = None;
+        let no_schema = data_editor_sql_preview(
+            &object,
+            &[],
+            &[],
+            DataFilterMode::Builder,
+            "",
+            "",
+            0,
+            1000,
+            DatabaseKind::Postgres,
+        );
+        assert_eq!(
+            no_schema,
+            "SELECT * FROM \"orders\" LIMIT 1000"
+        );
+
+        // MySQL 保持反引号行为不被破坏。
+        let mysql_version = data_editor_sql_preview(
+            &object,
+            &[],
+            &sort_rules,
+            DataFilterMode::Builder,
+            "",
+            "",
+            0,
+            1000,
+            DatabaseKind::MySql,
+        );
+        assert_eq!(
+            mysql_version,
+            "SELECT * FROM `fluxdb_manual`.`orders` ORDER BY `id` DESC LIMIT 1000"
+        );
     }
 
     #[test]
@@ -3689,7 +3823,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
     }
 
     fn assert_data_filter_round_trip(rules: Vec<DataFilterRule>) {
-        let sql = data_filter_rules_sql_pretty(&rules);
+        let sql = data_filter_rules_sql_pretty(&rules, DatabaseKind::MySql);
         let parsed = parse_data_filter_rules_text(&sql).expect("should parse");
         assert_eq!(parsed, rules);
     }

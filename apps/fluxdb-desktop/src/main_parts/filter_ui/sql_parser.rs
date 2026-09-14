@@ -1,5 +1,4 @@
-fn data_filter_rule_sql(rule: &DataFilterRule) -> Option<String> {
-    let db_kind = DatabaseKind::MySql;
+fn data_filter_rule_sql(rule: &DataFilterRule, db_kind: DatabaseKind) -> Option<String> {
     if !rule.enabled {
         return None;
     }
@@ -96,7 +95,7 @@ fn data_filter_multi_value_sql(
     }
 }
 
-fn data_filter_rules_sql(rules: &[DataFilterRule]) -> String {
+fn data_filter_rules_sql(rules: &[DataFilterRule], db_kind: DatabaseKind) -> String {
     let mut clauses = Vec::new();
     let mut index = 0;
     while index < rules.len() {
@@ -104,7 +103,7 @@ fn data_filter_rules_sql(rules: &[DataFilterRule]) -> String {
         if rule.grouped {
             let mut group_clauses = Vec::new();
             while index < rules.len() && rules[index].grouped {
-                if let Some(sql) = data_filter_rule_sql(&rules[index]) {
+                if let Some(sql) = data_filter_rule_sql(&rules[index], db_kind) {
                     group_clauses.push(sql);
                 }
                 index += 1;
@@ -113,7 +112,7 @@ fn data_filter_rules_sql(rules: &[DataFilterRule]) -> String {
                 clauses.push(format!("({})", group_clauses.join(" AND ")));
             }
         } else {
-            if let Some(sql) = data_filter_rule_sql(rule) {
+            if let Some(sql) = data_filter_rule_sql(rule, db_kind) {
                 clauses.push(sql);
             }
             index += 1;
@@ -122,7 +121,7 @@ fn data_filter_rules_sql(rules: &[DataFilterRule]) -> String {
     clauses.join(" AND ")
 }
 
-fn data_filter_rules_sql_pretty(rules: &[DataFilterRule]) -> String {
+fn data_filter_rules_sql_pretty(rules: &[DataFilterRule], db_kind: DatabaseKind) -> String {
     let mut lines = Vec::new();
     let mut index = 0;
     while index < rules.len() {
@@ -130,7 +129,7 @@ fn data_filter_rules_sql_pretty(rules: &[DataFilterRule]) -> String {
             let group_start = index;
             let mut group_lines = Vec::new();
             while index < rules.len() && rules[index].grouped {
-                if let Some(sql) = data_filter_rule_sql(&rules[index]) {
+                if let Some(sql) = data_filter_rule_sql(&rules[index], db_kind) {
                     group_lines.push(sql);
                 }
                 index += 1;
@@ -152,7 +151,7 @@ fn data_filter_rules_sql_pretty(rules: &[DataFilterRule]) -> String {
                 lines.push(")".to_string());
             }
         } else {
-            if let Some(sql) = data_filter_rule_sql(&rules[index]) {
+            if let Some(sql) = data_filter_rule_sql(&rules[index], db_kind) {
                 lines.push(if lines.is_empty() {
                     sql
                 } else {
@@ -268,12 +267,13 @@ fn split_top_level_sql_parts<'a>(
     let mut index = 0usize;
     let mut in_single_quote = false;
     let mut in_backtick = false;
+    let mut in_double_quote = false;
     let mut between_pending = false;
 
     while index < text.len() {
         let ch = text[index..].chars().next().unwrap();
         match ch {
-            '\'' if !in_backtick => {
+            '\'' if !in_backtick && !in_double_quote => {
                 if in_single_quote && text[index + 1..].starts_with('\'') {
                     index += 2;
                     continue;
@@ -282,7 +282,7 @@ fn split_top_level_sql_parts<'a>(
                 index += ch.len_utf8();
                 continue;
             }
-            '`' if !in_single_quote => {
+            '`' if !in_single_quote && !in_double_quote => {
                 if in_backtick && text[index + 1..].starts_with('`') {
                     index += 2;
                     continue;
@@ -291,12 +291,23 @@ fn split_top_level_sql_parts<'a>(
                 index += ch.len_utf8();
                 continue;
             }
-            '(' if !in_single_quote && !in_backtick => depth += 1,
-            ')' if !in_single_quote && !in_backtick => depth = (depth - 1).max(0),
+            '"' if !in_single_quote && !in_backtick => {
+                if in_double_quote && text[index + 1..].starts_with('"') {
+                    index += 2;
+                    continue;
+                }
+                in_double_quote = !in_double_quote;
+                index += ch.len_utf8();
+                continue;
+            }
+            '(' if !in_single_quote && !in_backtick && !in_double_quote => depth += 1,
+            ')' if !in_single_quote && !in_backtick && !in_double_quote => {
+                depth = (depth - 1).max(0)
+            }
             _ => {}
         }
 
-        if depth == 0 && !in_single_quote && !in_backtick {
+        if depth == 0 && !in_single_quote && !in_backtick && !in_double_quote {
             if skip_between && is_sql_word_at(text, index, "BETWEEN") {
                 between_pending = true;
             }
@@ -594,11 +605,12 @@ fn split_top_level_sql_list(text: &str) -> Vec<&str> {
     let mut index = 0usize;
     let mut in_single_quote = false;
     let mut in_backtick = false;
+    let mut in_double_quote = false;
 
     while index < text.len() {
         let ch = text[index..].chars().next().unwrap();
         match ch {
-            '\'' if !in_backtick => {
+            '\'' if !in_backtick && !in_double_quote => {
                 if in_single_quote && text[index + 1..].starts_with('\'') {
                     index += 2;
                     continue;
@@ -607,7 +619,7 @@ fn split_top_level_sql_list(text: &str) -> Vec<&str> {
                 index += ch.len_utf8();
                 continue;
             }
-            '`' if !in_single_quote => {
+            '`' if !in_single_quote && !in_double_quote => {
                 if in_backtick && text[index + 1..].starts_with('`') {
                     index += 2;
                     continue;
@@ -616,7 +628,16 @@ fn split_top_level_sql_list(text: &str) -> Vec<&str> {
                 index += ch.len_utf8();
                 continue;
             }
-            ',' if !in_single_quote && !in_backtick => {
+            '"' if !in_single_quote && !in_backtick => {
+                if in_double_quote && text[index + 1..].starts_with('"') {
+                    index += 2;
+                    continue;
+                }
+                in_double_quote = !in_double_quote;
+                index += ch.len_utf8();
+                continue;
+            }
+            ',' if !in_single_quote && !in_backtick && !in_double_quote => {
                 let item = text[start..index].trim();
                 if !item.is_empty() {
                     items.push(item);
@@ -678,7 +699,8 @@ fn is_sql_word_at(text: &str, index: usize, word: &str) -> bool {
 }
 
 fn data_filter_rule_text_signature(rule: &DataFilterRule) -> String {
-    data_filter_rule_sql(rule)
+    // 签名会归一化反引号和双引号，因此可固定用 MySQL 生成期望文本。
+    data_filter_rule_sql(rule, DatabaseKind::MySql)
         .map(|sql| sql_fragment_signature(trim_wrapping_parentheses(sql.as_str())))
         .unwrap_or_default()
 }
@@ -688,18 +710,32 @@ fn sql_fragment_signature(text: &str) -> String {
     let mut index = 0usize;
     let mut in_single_quote = false;
     let mut in_backtick = false;
+    let mut in_double_quote = false;
 
     while index < text.len() {
         let ch = text[index..].chars().next().unwrap();
         match ch {
-            '\'' if !in_backtick => {
+            '\'' if !in_backtick && !in_double_quote => {
                 in_single_quote = !in_single_quote;
                 out.push(ch);
             }
-            '`' if !in_single_quote => {
+            '`' if !in_single_quote && !in_double_quote => {
+                if in_backtick && text[index + 1..].starts_with('`') {
+                    out.push('`');
+                    index += 2;
+                    continue;
+                }
                 in_backtick = !in_backtick;
             }
-            _ if in_single_quote || in_backtick => {
+            '"' if !in_single_quote && !in_backtick => {
+                if in_double_quote && text[index + 1..].starts_with('"') {
+                    out.push('"');
+                    index += 2;
+                    continue;
+                }
+                in_double_quote = !in_double_quote;
+            }
+            _ if in_single_quote || in_backtick || in_double_quote => {
                 out.push(ch);
             }
             _ if ch.is_whitespace() => {}
@@ -718,12 +754,20 @@ fn parse_data_sort_rules_text(text: &str) -> Option<Vec<DataSortRule>> {
     }
 
     let mut rules = Vec::new();
-    for part in text.split(',') {
+    for part in split_top_level_sql_list(text) {
         let part = part.trim();
         if part.is_empty() {
             continue;
         }
-        let (field, direction) = split_last_whitespace(part).unwrap_or((part, "ASC"));
+        let (field, direction) = match split_last_whitespace(part) {
+            Some((field, direction))
+                if direction.eq_ignore_ascii_case("ASC")
+                    || direction.eq_ignore_ascii_case("DESC") =>
+            {
+                (field, direction)
+            }
+            _ => (part, "ASC"),
+        };
         let field = parse_sql_identifier(field)?;
         let ascending = !direction.eq_ignore_ascii_case("DESC");
         rules.push(DataSortRule {
@@ -839,12 +883,13 @@ fn find_top_level_sql_keyword(text: &str, keyword: &str) -> Option<usize> {
     let mut depth = 0i32;
     let mut in_single_quote = false;
     let mut in_backtick = false;
+    let mut in_double_quote = false;
     let mut index = 0usize;
 
     while index < text.len() {
         let ch = text[index..].chars().next().unwrap();
         match ch {
-            '\'' if !in_backtick => {
+            '\'' if !in_backtick && !in_double_quote => {
                 if in_single_quote && text[index + 1..].starts_with('\'') {
                     index += 2;
                     continue;
@@ -853,7 +898,7 @@ fn find_top_level_sql_keyword(text: &str, keyword: &str) -> Option<usize> {
                 index += ch.len_utf8();
                 continue;
             }
-            '`' if !in_single_quote => {
+            '`' if !in_single_quote && !in_double_quote => {
                 if in_backtick && text[index + 1..].starts_with('`') {
                     index += 2;
                     continue;
@@ -862,14 +907,26 @@ fn find_top_level_sql_keyword(text: &str, keyword: &str) -> Option<usize> {
                 index += ch.len_utf8();
                 continue;
             }
-            '(' if !in_single_quote && !in_backtick => depth += 1,
-            ')' if !in_single_quote && !in_backtick => depth = (depth - 1).max(0),
+            '"' if !in_single_quote && !in_backtick => {
+                if in_double_quote && text[index + 1..].starts_with('"') {
+                    index += 2;
+                    continue;
+                }
+                in_double_quote = !in_double_quote;
+                index += ch.len_utf8();
+                continue;
+            }
+            '(' if !in_single_quote && !in_backtick && !in_double_quote => depth += 1,
+            ')' if !in_single_quote && !in_backtick && !in_double_quote => {
+                depth = (depth - 1).max(0)
+            }
             _ => {}
         }
 
         if depth == 0
             && !in_single_quote
             && !in_backtick
+            && !in_double_quote
             && upper_text[index..].starts_with(&upper_keyword)
             && sql_keyword_boundary(text, index, keyword.len())
         {
@@ -887,7 +944,7 @@ fn sql_keyword_boundary(text: &str, start: usize, len: usize) -> bool {
 }
 
 fn is_sql_identifier_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || ch == '_' || ch == '`'
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '`' || ch == '"'
 }
 
 fn data_sort_rules_after_header_sort(
@@ -917,8 +974,7 @@ fn data_sort_rules_after_header_sort(
     rules
 }
 
-fn data_sort_rules_text(rules: &[DataSortRule]) -> String {
-    let db_kind = DatabaseKind::MySql;
+fn data_sort_rules_text(rules: &[DataSortRule], db_kind: DatabaseKind) -> String {
     rules
         .iter()
         .filter(|rule| rule.enabled)
@@ -978,6 +1034,8 @@ fn parse_sql_identifier(text: &str) -> Option<String> {
     }
     if text.starts_with('`') && text.ends_with('`') && text.len() >= 2 {
         Some(text[1..text.len() - 1].replace("``", "`"))
+    } else if text.starts_with('"') && text.ends_with('"') && text.len() >= 2 {
+        Some(text[1..text.len() - 1].replace("\"\"", "\""))
     } else if text.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
         Some(text.to_string())
     } else {
@@ -1028,33 +1086,14 @@ fn data_filter_like_sql(
         .join(format!(" {joiner} ").as_str())
 }
 
-/// 按方言限定对象名：PG 为 `"schema"."name"`（不生成跨库三段名，设计 §4.2）；其余 `db`.`schema`.`name`。
+/// 按方言限定对象名（标识符引用规则统一收敛到 `SqlDialect::qualified_object_name`）。
 fn sql_qualified_object_name(object: &ObjectPath, db_kind: DatabaseKind) -> String {
-    let mut parts = Vec::new();
-    if db_kind == DatabaseKind::Postgres {
-        if let Some(schema) = object.schema.as_deref().filter(|s| !s.is_empty()) {
-            parts.push(sql_quote_ident(schema, db_kind));
-        }
-        parts.push(sql_quote_ident(&object.name, db_kind));
-        return parts.join(".");
-    }
-    if let Some(database) = object.database.as_deref() {
-        parts.push(sql_quote_ident(database, db_kind));
-    }
-    if let Some(schema) = object.schema.as_deref() {
-        parts.push(sql_quote_ident(schema, db_kind));
-    }
-    parts.push(sql_quote_ident(&object.name, db_kind));
-    parts.join(".")
+    sql_dialect(db_kind).qualified_object_name(object)
 }
 
-/// 按方言引用标识符：PG 双引号（内部 `"`→`""`）；其余反引号。
+/// 按方言引用标识符（引用规则统一收敛到 `SqlDialect::quote_identifier`）。
 fn sql_quote_ident(value: &str, db_kind: DatabaseKind) -> String {
-    if db_kind == DatabaseKind::Postgres {
-        format!("\"{}\"", value.replace('"', "\"\""))
-    } else {
-        format!("`{}`", value.replace('`', "``"))
-    }
+    sql_dialect(db_kind).quote_identifier(value)
 }
 
 fn sql_quote_literal(value: &str) -> String {

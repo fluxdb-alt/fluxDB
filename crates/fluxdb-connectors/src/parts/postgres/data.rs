@@ -12,6 +12,10 @@
 
 use tokio_postgres::types::ToSql;
 
+/// 数据页投影会把部分类型转成文本并沿用原列名作为输出别名；排序必须通过源表别名
+/// 引用真实列，否则 PostgreSQL 会优先按 SELECT 输出别名排序，整数会退化为字典序。
+const PG_DATA_SOURCE_ALIAS: &str = "__fluxdb_source";
+
 fn pg_load_data(
     config: &ConnectionConfig,
     path: &ObjectPath,
@@ -36,7 +40,10 @@ fn pg_load_data(
         let (select_list, positions) = pg_select_list_and_positions(&columns);
         let table = pg_qualified_table(database, path.schema.as_deref(), &path.name);
 
-        let mut sql = format!("SELECT {select_list}\nFROM {table}");
+        let mut sql = format!(
+            "SELECT {select_list}\nFROM {table} AS {}",
+            pg_quote_identifier(PG_DATA_SOURCE_ALIAS)
+        );
         let (where_sql, params) = pg_where_params(filters, &columns)?;
         sql.push_str(&where_sql);
         sql.push_str(&pg_order_by_clause(sort, &columns));
@@ -45,6 +52,17 @@ fn pg_load_data(
         if pagination.offset > 0 {
             sql.push_str(&format!(" OFFSET {}", pagination.offset));
         }
+
+        tracing::debug!(
+            target: "fluxdb_connectors",
+            database,
+            schema = path.schema.as_deref().unwrap_or("public"),
+            table = path.name.as_str(),
+            sort_count = sort.len(),
+            filter_count = filters.len(),
+            sql = sql.as_str(),
+            "PostgreSQL 数据页查询"
+        );
 
         let rows = tokio::time::timeout(
             Duration::from_secs(30),
@@ -314,12 +332,12 @@ fn pg_qualified_table(database: &str, schema: Option<&str>, table: &str) -> Stri
 /// 用户排序后面追加主键作为稳定 tie breaker（设计 7.2），避免同值行分页随并发漂移。
 /// 主键列若已在用户排序中出现则跳过；无主键时保持共享排序原样。
 fn pg_order_by_clause(sort: &[SortSpec], columns: &[Column]) -> String {
-    let user_clause = data_order_by_clause(sort, columns, pg_quote_identifier);
+    let user_clause = data_order_by_clause(sort, columns, pg_data_source_column);
     let sorted: Vec<&str> = sort.iter().map(|spec| spec.field.as_str()).collect();
     let tie: Vec<String> = columns
         .iter()
         .filter(|column| column.primary_key && !sorted.contains(&column.name.as_str()))
-        .map(|column| pg_quote_identifier(&column.name))
+        .map(|column| pg_data_source_column(&column.name))
         .collect();
     if tie.is_empty() {
         return user_clause;
@@ -331,6 +349,14 @@ fn pg_order_by_clause(sort: &[SortSpec], columns: &[Column]) -> String {
     } else {
         format!("{}, {tie_list}", user_clause.trim_end())
     }
+}
+
+fn pg_data_source_column(column: &str) -> String {
+    format!(
+        "{}.{}",
+        pg_quote_identifier(PG_DATA_SOURCE_ALIAS),
+        pg_quote_identifier(column)
+    )
 }
 
 /// 拼参数化 WHERE 与绑定参数（`$1..$n`）。
@@ -594,7 +620,8 @@ pub fn pg_export_pages(
                 }
                 // 用 offset 游标；每页取多一行探测 has_more。
                 let sql = format!(
-                    "SELECT {select_list}\nFROM {table}{where_sql}{order} LIMIT {} OFFSET {}",
+                    "SELECT {select_list}\nFROM {table} AS {}{where_sql}{order} LIMIT {} OFFSET {}",
+                    pg_quote_identifier(PG_DATA_SOURCE_ALIAS),
                     batch + 1,
                     offset
                 );

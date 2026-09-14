@@ -41,8 +41,8 @@ use fluxdb_core::{
     RowIdentity, SavedQuery, ScrollbarMode, Settings, SidebarOrderEntry, SortDirection, SortSpec,
     Theme as AppTheme, TriggerInfo, UiDensity, UserResourceLimits, WorkbenchHistoryItem,
     WorkbenchHistoryScope, WorkbenchHistoryStore, data_table_page_size_max,
-    database_user_admin_provider, role_memberships_from_grants, sqlite_attached_database_path,
-    supports_database_user_admin,
+    database_user_admin_provider, role_memberships_from_grants, sql_dialect,
+    sqlite_attached_database_path, supports_database_user_admin,
 };
 use fluxdb_storage::{
     FileStorage, QueryHistoryRecord, RedisKeySearchHistoryRecord, RedisWorkbenchHistoryRecord,

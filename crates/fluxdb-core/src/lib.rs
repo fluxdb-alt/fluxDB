@@ -24,4 +24,5 @@ include!("parts/connector.rs");
 include!("parts/command_workbench.rs");
 include!("parts/workbench_history.rs");
 include!("parts/terminal.rs");
+include!("parts/sql_dialect.rs");
 include!("parts/tests.rs");

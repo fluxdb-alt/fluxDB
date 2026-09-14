@@ -684,6 +684,7 @@ fn data_editor_content(
     // 非 Redis 编辑器则原样借用，不影响其它数据页。
     let display_page = this.data_page_for_display(tab_id, page);
     let page = display_page.as_ref();
+    let db_kind = this.connection_database_kind(editor.object.connection_id);
     let sql = data_editor_sql_preview(
         &editor.object,
         filter_rules.as_slice(),
@@ -693,6 +694,7 @@ fn data_editor_content(
         sort_text.as_str(),
         page.offset,
         page.limit,
+        db_kind,
     );
     let all_field_names = page
         .columns

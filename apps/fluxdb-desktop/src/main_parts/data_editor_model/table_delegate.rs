@@ -256,7 +256,9 @@ impl TableDelegate for DataPageTableDelegate {
             Some(DataTableSortDirection::Descending) => "↓",
             None => "↕",
         };
-        let column_name = column.name.to_string();
+        // 排序/复制/列操作使用的都是真实字段名（Column.key），而非展示标题（Column.name，
+        // 如主键会带 “  PK” 后缀），否则传给 connector 的 SortSpec.field 会匹配不到列。
+        let column_name = column.key.to_string();
         let copy_column_name = column_name.clone();
         let action_column_name = column_name.clone();
         let tooltip_meta = meta.clone();
