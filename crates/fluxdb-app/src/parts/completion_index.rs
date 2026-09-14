@@ -640,11 +640,26 @@ impl CompletionIndex {
 
     /// 收集该连接在索引中出现过的 (database, schema) 名称，用于骨架级 schema 补全（P1.5）。
     fn database_schemas(&self, connection_id: ConnectionId) -> Vec<(Option<String>, Option<String>)> {
-        self.tables_by_db
-            .keys()
-            .filter(|key| key.connection_id == connection_id)
-            .map(|key| (key.database.clone(), key.schema.clone()))
-            .collect()
+        let mut schemas = BTreeSet::new();
+        for (key, table_ids) in &self.tables_by_db {
+            if key.connection_id != connection_id {
+                continue;
+            }
+            if table_ids.is_empty() {
+                schemas.insert((key.database.clone(), key.schema.clone()));
+                continue;
+            }
+            for table_id in table_ids {
+                let Some(table) = self.tables.get(table_id.0) else {
+                    continue;
+                };
+                schemas.insert((
+                    table.database.clone().or_else(|| key.database.clone()),
+                    table.schema.clone().or_else(|| key.schema.clone()),
+                ));
+            }
+        }
+        schemas.into_iter().collect()
     }
 
     fn push_column(&mut self, source: ColumnRef) -> ColumnId {

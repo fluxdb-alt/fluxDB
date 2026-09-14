@@ -350,7 +350,8 @@ impl AppController {
                     replace_end: context.replace_end,
                 });
             }
-            let (table_database, table_schema) = completion_namespace_scope(&context, database);
+            let (table_database, table_schema) =
+                completion_namespace_scope(&context, database, config.kind);
             let tables = self.indexed_completion_tables_with_cancel(
                 config,
                 editor.connection_id,
@@ -1581,28 +1582,55 @@ impl AppController {
         Ok(tables)
     }
 
-    /// 收集 schema 候选（P1.5）：索引中已索引的 (database, schema) > 已加载对象 > 当前库名。
+    /// 收集 schema 候选（P1.5）：合并索引中的 namespace 与对象树已加载的 schema。
+    ///
+    /// 索引只覆盖已预热的表（PostgreSQL 通常是 search_path 内的表），
+    /// 不能因为索引非空就丢掉对象树中已加载的其他 schema。
     fn completion_schemas(
         &self,
-        _config: &ConnectionConfig,
+        config: &ConnectionConfig,
         connection_id: ConnectionId,
         database: Option<&str>,
     ) -> fluxdb_core::Result<Vec<(Option<String>, Option<String>)>> {
+        let database_matches = |candidate: Option<&str>| {
+            config.kind != DatabaseKind::Postgres
+                || database.is_none_or(|database| {
+                    candidate.is_none_or(|candidate| candidate.eq_ignore_ascii_case(database))
+                })
+        };
+
+        let mut schemas = Vec::new();
         if let Ok(index) = self.completion_index.lock() {
-            let schemas = index.database_schemas(connection_id);
-            if !schemas.is_empty() {
-                return Ok(schemas);
-            }
+            schemas.extend(
+                index
+                    .database_schemas(connection_id)
+                    .into_iter()
+                    .filter(|(candidate, _)| database_matches(candidate.as_deref())),
+            );
         }
-        let mut schemas: Vec<(Option<String>, Option<String>)> = loaded_completion_tables(
-            &self.state,
-            connection_id,
-            None,
-            None,
-        )
-        .into_iter()
-        .map(|table| (table.database, table.schema))
-        .collect();
+
+        if let Some(connection) = self
+            .state
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == connection_id)
+        {
+            schemas.extend(connection.objects.iter().filter_map(|object| {
+                if !database_matches(object.path.database.as_deref()) {
+                    return None;
+                }
+                match object.path.kind {
+                    ObjectKind::Schema => {
+                        Some((object.path.database.clone(), Some(object.path.name.clone())))
+                    }
+                    ObjectKind::Table | ObjectKind::View => {
+                        Some((object.path.database.clone(), object.path.schema.clone()))
+                    }
+                    _ => None,
+                }
+            }));
+        }
+
         if schemas.is_empty() {
             if let Some(database) = database {
                 schemas.push((Some(database.to_string()), None));

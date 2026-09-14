@@ -133,15 +133,27 @@
         let default_sql = "select * from ";
         let default = sql_completion_context(default_sql, default_sql.len(), DatabaseKind::MySql);
         assert_eq!(
-            completion_namespace_scope(&default, Some("main")),
+            completion_namespace_scope(&default, Some("main"), DatabaseKind::MySql),
             (Some("main".to_string()), None)
         );
 
         let qualified_sql = "select * from sales.public.";
         let qualified = sql_completion_context(qualified_sql, qualified_sql.len(), DatabaseKind::MySql);
         assert_eq!(
-            completion_namespace_scope(&qualified, Some("main")),
+            completion_namespace_scope(&qualified, Some("main"), DatabaseKind::MySql),
             (Some("sales".to_string()), Some("public".to_string()))
+        );
+
+        let postgres_sql = "select * from tenant_b.";
+        let postgres =
+            sql_completion_context(postgres_sql, postgres_sql.len(), DatabaseKind::Postgres);
+        assert_eq!(
+            completion_namespace_scope(
+                &postgres,
+                Some("fluxdb_manual"),
+                DatabaseKind::Postgres,
+            ),
+            (Some("fluxdb_manual".to_string()), Some("tenant_b".to_string()))
         );
     }
 
@@ -166,6 +178,109 @@
         assert_eq!(items.len(), 2);
         assert!(items.iter().any(|item| item.label == "public"));
         assert!(items.iter().any(|item| item.label == "hr"));
+    }
+
+    #[test]
+    fn postgres_schema_completion_merges_loaded_schema_nodes_with_partial_index() {
+        let mut controller = AppController::with_mock_data();
+        controller.state.connections[0].config.kind = DatabaseKind::Postgres;
+        controller.state.connections[0].objects.extend(
+            ["tenant_a", "tenant_b"].into_iter().map(|name| ObjectSummary {
+                path: ObjectPath {
+                    connection_id: ConnectionId(1),
+                    database: Some("fluxdb_manual".to_string()),
+                    schema: None,
+                    name: name.to_string(),
+                    kind: ObjectKind::Schema,
+                },
+                rows: None,
+                modified_at: None,
+                comment: None,
+            }),
+        );
+        controller.state.connections[0].objects.push(ObjectSummary {
+            path: ObjectPath {
+                connection_id: ConnectionId(1),
+                database: Some("other_database".to_string()),
+                schema: None,
+                name: "tenant_other".to_string(),
+                kind: ObjectKind::Schema,
+            },
+            rows: None,
+            modified_at: None,
+            comment: None,
+        });
+        controller.completion_index.lock().unwrap().insert_tables(
+            ConnectionId(1),
+            Some("fluxdb_manual"),
+            None,
+            vec![CompletionTable {
+                database: Some("fluxdb_manual".to_string()),
+                schema: Some("public".to_string()),
+                name: "existing_table".to_string(),
+                kind: ObjectKind::Table,
+                comment: None,
+            }],
+            DatabaseKind::Postgres,
+        );
+
+        let config = controller.state.connections[0].config.clone();
+        let schemas = controller
+            .completion_schemas(&config, ConnectionId(1), Some("fluxdb_manual"))
+            .unwrap();
+        assert!(schemas.iter().any(|(_, schema)| schema.as_deref() == Some("public")));
+        assert!(
+            schemas
+                .iter()
+                .all(|(_, schema)| schema.as_deref() != Some("tenant_other"))
+        );
+        let items = schema_completion_items(schemas, "tenant_");
+
+        assert_eq!(
+            items.iter().map(|item| item.label.as_str()).collect::<Vec<_>>(),
+            vec!["tenant_a", "tenant_b"]
+        );
+        assert!(items.iter().all(|item| item.kind == QueryCompletionKind::Schema));
+    }
+
+    #[test]
+    fn postgres_schema_qualified_from_completion_only_returns_that_schema_tables() {
+        let mut controller = AppController::with_mock_data();
+        controller.state.connections[0].config.kind = DatabaseKind::Postgres;
+        let mut index = controller.completion_index.lock().unwrap();
+        for (schema, table) in [("tenant_b", "orders"), ("public", "OrderItems")] {
+            index.insert_tables(
+                ConnectionId(1),
+                Some("fluxdb_manual"),
+                Some(schema),
+                vec![CompletionTable {
+                    database: Some("fluxdb_manual".to_string()),
+                    schema: Some(schema.to_string()),
+                    name: table.to_string(),
+                    kind: ObjectKind::Table,
+                    comment: None,
+                }],
+                DatabaseKind::Postgres,
+            );
+        }
+        drop(index);
+
+        let sql = "SELECT * FROM tenant_b.or";
+        let result = controller
+            .query_completions_for_text(
+                ConnectionId(1),
+                Some("fluxdb_manual".to_string()),
+                None,
+                sql.to_string(),
+                sql.len(),
+                false,
+            )
+            .unwrap();
+
+        assert!(result.items.iter().any(|item| {
+            item.kind == QueryCompletionKind::Table && item.label == "orders"
+        }));
+        assert!(result.items.iter().all(|item| item.label != "OrderItems"));
     }
 
     #[test]

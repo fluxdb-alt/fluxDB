@@ -4,10 +4,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fluxdb_connectors::{
-    MockConnector, MySqlConnector, PostgresConnector, RedisConnector, RedisStreamRange,
-    SqliteConnector,
-};
+#[cfg(test)]
+use fluxdb_connectors::{PostgresConnector, SqliteConnector};
+use fluxdb_connectors::{RedisConnector, RedisStreamRange, connector_for};
 // 对外再导出建 Key 相关的连接器类型，供桌面端（fluxdb-desktop）匹配/构造 AppCommand 使用。
 pub use fluxdb_connectors::{
     PgDumpInvocation, PgDumpScope, PgPsqlInvocation, PubSubMessage, PubSubPollOutcome,

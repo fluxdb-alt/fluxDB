@@ -37,6 +37,7 @@ include!("parts/mysql.rs");
 include!("parts/postgres.rs");
 include!("parts/redis.rs");
 include!("parts/sqlite.rs");
+include!("parts/factory.rs");
 include!("parts/shared_cells.rs");
 include!("parts/shared_write.rs");
 include!("parts/shared_read_exec.rs");

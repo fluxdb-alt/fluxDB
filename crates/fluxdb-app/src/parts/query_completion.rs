@@ -1859,13 +1859,17 @@ fn type_family_compatible(expected: TypeFamily, candidate: TypeFamily) -> bool {
 }
 
 /// 把 table context 中的限定路径映射到 completion index 的两级 key。
-/// 单段路径沿用历史语义（按 database 查询），两段路径按 `database.schema` 查询。
+/// PostgreSQL 的单段限定符是 schema，MySQL/SQLite 的单段限定符是 database。
 fn completion_namespace_scope(
     context: &SqlCompletionContext,
     default_database: Option<&str>,
+    kind: DatabaseKind,
 ) -> (Option<String>, Option<String>) {
     match context.qualifier_path.as_slice() {
         [] => (default_database.map(str::to_string), None),
+        [namespace] if kind == DatabaseKind::Postgres => {
+            (default_database.map(str::to_string), Some(namespace.clone()))
+        }
         [database] => (Some(database.clone()), None),
         [database, schema, ..] => (Some(database.clone()), Some(schema.clone())),
     }
