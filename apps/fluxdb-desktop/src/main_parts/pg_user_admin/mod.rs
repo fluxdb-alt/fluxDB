@@ -96,7 +96,7 @@ fn pg_role_admin_content(
                                 pg_privileges_panel(tab_id, admin, this, window, colors, cx)
                             }
                             UserAdminDetailTab::SqlPreview => {
-                                pg_sql_preview_panel(tab_id, admin, this, window, colors, cx)
+                                pg_sql_preview_panel(tab_id, admin, this, colors, cx)
                             }
                         }),
                 ),
@@ -1095,6 +1095,9 @@ impl NavicatMain {
 
     /// 后台加载全量成员关系（含服务端成员选项版本探测）。
     fn start_pg_memberships_load(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        if self._user_admin_pg_membership_tasks.contains_key(&tab_id) {
+            return;
+        }
         self.dispatch(AppCommand::StartPgMembershipsLoad(tab_id), cx);
         let mut controller = self.controller.clone();
         let task = cx.spawn(async move |view, cx| {
@@ -1119,6 +1122,7 @@ impl NavicatMain {
                     return;
                 };
                 view.update(cx, |this, cx| {
+                    this._user_admin_pg_membership_tasks.remove(&tab_id);
                     let (memberships, supported) = match result {
                         Ok((memberships, supported)) => (Ok(memberships), supported),
                         Err(error) => (Err(error), false),
@@ -1135,7 +1139,8 @@ impl NavicatMain {
                 });
             });
         });
-        let _ = task;
+        // GPUI Task 被丢弃会取消异步工作；必须持有到回写完成，否则成员页始终显示空态。
+        self._user_admin_pg_membership_tasks.insert(tab_id, task);
     }
 
     /// 保存：App 构建（校验）变更计划并单事务应用；失败保留草稿。
@@ -1218,6 +1223,9 @@ impl NavicatMain {
 
     /// 生成脱敏 SQL 预览（与执行共用 connector 渲染规则）。
     fn start_pg_plan_preview(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        if self._user_admin_preview_tasks.contains_key(&tab_id) {
+            return;
+        }
         tracing::warn!(target: "pg_user_admin", "preview: task start");
         self.dispatch(AppCommand::StartPgPlanPreview(tab_id), cx);
         let mut controller = self.controller.clone();
@@ -1251,6 +1259,7 @@ impl NavicatMain {
                     return;
                 };
                 view.update(cx, |this, cx| {
+                    this._user_admin_preview_tasks.remove(&tab_id);
                     this.dispatch(
                         AppCommand::FinishPgPlanPreview { tab_id, result },
                         cx,
@@ -1259,7 +1268,8 @@ impl NavicatMain {
                 });
             });
         });
-        let _ = task;
+        // GPUI Task 被丢弃会取消异步工作；持有到回调完成，否则预览会一直停在 loading。
+        self._user_admin_preview_tasks.insert(tab_id, task);
     }
 
     /// 保存按钮可用性：无草稿变更/保存中/新建无角色名时禁用。

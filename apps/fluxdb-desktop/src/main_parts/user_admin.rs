@@ -692,7 +692,6 @@ fn user_admin_content(
             pending,
             admin.applying,
             admin.apply_error.as_ref(),
-            window,
             colors,
             cx,
         ));
@@ -1206,7 +1205,7 @@ fn user_admin_detail(
                 user_admin_privileges_panel(tab_id, state, admin, this, colors, cx)
             }
             UserAdminDetailTab::SqlPreview => {
-                user_admin_sql_preview_panel(tab_id, state, admin, window, colors, cx)
+                user_admin_sql_preview_panel(tab_id, state, admin, colors)
             }
         })
 }
@@ -1981,9 +1980,7 @@ fn user_admin_sql_preview_panel(
     tab_id: TabId,
     state: &AppState,
     admin: &UserAdminState,
-    window: &mut Window,
     colors: UiColors,
-    cx: &mut Context<NavicatMain>,
 ) -> Div {
     let sql = state
         .connections
@@ -2006,9 +2003,7 @@ fn user_admin_sql_preview_panel(
             user_admin_sql_preview_code_view(
                 SharedString::from(format!("user-admin-sql-preview-tab-{}", tab_id.0)),
                 &sql,
-                window,
                 colors,
-                cx,
             )
         })
 }
@@ -2016,26 +2011,8 @@ fn user_admin_sql_preview_panel(
 fn user_admin_sql_preview_code_view(
     editor_key: SharedString,
     sql: &str,
-    window: &mut Window,
     colors: UiColors,
-    cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let editor = window.use_keyed_state(editor_key, cx, {
-        let sql = sql.to_string();
-        move |window, cx| {
-            InputState::new(window, cx)
-                .code_editor(SQL_HIGHLIGHT_LANGUAGE)
-                .line_number(false)
-                .legacy_soft_wrap(false)
-                .default_value(sql)
-        }
-    });
-    editor.update(cx, |state, cx| {
-        if state.value().to_string() != sql {
-            state.set_value(sql.to_string(), window, cx);
-        }
-    });
-
     div()
         .size_full()
         .rounded(colors.radius)
@@ -2044,16 +2021,28 @@ fn user_admin_sql_preview_code_view(
         .bg(colors.input_bg)
         .overflow_hidden()
         .child(
-            Input::new(&editor)
-                .appearance(false)
-                .bordered(false)
-                .focus_bordered(false)
-                .disabled(true)
+            TextView::markdown(editor_key, user_admin_sql_preview_markdown(sql))
+                .selectable(true)
+                .scrollable(true)
                 .text_size(px(12.))
                 .font_family(EDITOR_FONT)
-                .p_3()
                 .size_full(),
         )
+}
+
+/// 用 fenced code block 交给 TextView 展示，保留 SQL 高亮、选择复制与双向滚动。
+/// fence 长度大于 SQL 中连续反引号的最大长度，避免特殊标识符截断代码块。
+fn user_admin_sql_preview_markdown(sql: &str) -> String {
+    let fence_len = sql
+        .as_bytes()
+        .split(|byte| *byte != b'`')
+        .map(<[u8]>::len)
+        .max()
+        .unwrap_or(0)
+        .max(2)
+        + 1;
+    let fence = "`".repeat(fence_len);
+    format!("{fence}sql\n{sql}\n{fence}")
 }
 
 fn user_admin_form_input_box(
@@ -2206,7 +2195,6 @@ fn user_admin_sql_preview_modal(
     pending: &fluxdb_app::UserAdminPendingSql,
     applying: bool,
     error: Option<&fluxdb_core::UserFacingError>,
-    window: &mut Window,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -2298,9 +2286,7 @@ fn user_admin_sql_preview_modal(
                         .child(user_admin_sql_preview_code_view(
                             SharedString::from(format!("user-admin-sql-preview-modal-{}", tab_id.0)),
                             &sql,
-                            window,
                             colors,
-                            cx,
                         )),
                 )
                 .when_some(error, |this, error| {

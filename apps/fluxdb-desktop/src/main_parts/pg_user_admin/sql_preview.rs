@@ -8,7 +8,6 @@ fn pg_sql_preview_panel(
     tab_id: TabId,
     admin: &UserAdminState,
     this: &mut NavicatMain,
-    window: &mut Window,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> gpui::AnyElement {
@@ -35,7 +34,7 @@ fn pg_sql_preview_panel(
         .flex_col()
         .gap_2();
 
-    // 头部：变更摘要 + 生成/刷新预览。
+    // 预览在进入页签时自动生成，头部只保留变更摘要。
     let role_name = admin.pg_effective_grantee_name();
     let database_label = if admin.pg_grant_database.is_empty() {
         "（无对象授权）".to_string()
@@ -58,17 +57,7 @@ fn pg_sql_preview_panel(
                         stmts.len(),
                     )),
             )
-            .child(div().flex_1())
-            .child(
-                user_admin_button("生成/刷新预览", AppIcon::Refresh, false, !has_changes, colors)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.start_pg_plan_preview(tab_id, cx);
-                            cx.stop_propagation();
-                        }),
-                    ),
-            ),
+            .child(div().flex_1()),
     );
 
     if admin.pg_plan_preview_masked && !sql.is_empty() {
@@ -98,9 +87,7 @@ fn pg_sql_preview_panel(
                 .child(user_admin_sql_preview_code_view(
                     SharedString::from(format!("pg-user-admin-sql-preview-{}", tab_id.0)),
                     &sql,
-                    window,
                     colors,
-                    cx,
                 )),
         );
     }

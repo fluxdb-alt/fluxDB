@@ -85,6 +85,7 @@ use gpui_component::{
     switch::Switch,
     tab::{Tab, TabBar},
     table::{Column as TableColumn, DataTable, TableDelegate, TableEvent, TableState},
+    text::TextView,
     tooltip::Tooltip,
     v_virtual_list,
 };

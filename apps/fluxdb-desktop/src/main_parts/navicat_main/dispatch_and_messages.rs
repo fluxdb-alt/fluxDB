@@ -745,9 +745,11 @@ impl NavicatMain {
                 self._table_info_tasks
                     .retain(|(task_tab_id, _), _| task_tab_id != tab_id);
                 self._user_admin_users_tasks.remove(tab_id);
+                self._user_admin_pg_membership_tasks.remove(tab_id);
                 self._user_admin_grants_tasks.remove(tab_id);
                 self._user_admin_member_grants_tasks.remove(tab_id);
                 self._user_admin_apply_tasks.remove(tab_id);
+                self._user_admin_preview_tasks.remove(tab_id);
                 self._cell_binary_download_tasks
                     .retain(|(task_tab_id, _, _), _| task_tab_id != tab_id);
                 self.data_filter_panels.remove(tab_id);

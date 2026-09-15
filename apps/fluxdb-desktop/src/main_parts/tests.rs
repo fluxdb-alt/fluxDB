@@ -56,6 +56,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn pg_user_admin_preview_is_automatic_and_keeps_its_task_alive() {
+        let panel = include_str!("pg_user_admin/sql_preview.rs");
+        assert!(!panel.contains("生成/刷新预览"));
+
+        let controller = include_str!("pg_user_admin/mod.rs");
+        assert!(controller.contains("this.start_pg_plan_preview(tab_id, cx);"));
+        assert!(controller.contains("self._user_admin_preview_tasks.insert(tab_id, task);"));
+        assert!(controller.contains("this._user_admin_preview_tasks.remove(&tab_id);"));
+    }
+
+    #[test]
+    fn pg_user_admin_membership_load_keeps_its_task_alive() {
+        let controller = include_str!("pg_user_admin/mod.rs");
+        assert!(controller.contains("self._user_admin_pg_membership_tasks.insert(tab_id, task);"));
+        assert!(controller.contains("this._user_admin_pg_membership_tasks.remove(&tab_id);"));
+    }
+
     /// gutter 行号列的「宽度」与「绘制」必须同源判断：只关其一会让行号列宽算成 0、
     /// 行号照画，行号就压在正文左缘（关闭行号的只读 DDL 预览曾出现该重叠）。
     #[test]
@@ -742,13 +760,30 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         assert!(source.contains("AppCommand::AddUserAdminPrivilegeRow"));
         assert!(source.contains("fn user_admin_privileges_sql_preview("));
         assert!(source.contains("fn user_admin_sql_preview_panel("));
-        assert!(source.contains(".code_editor(SQL_HIGHLIGHT_LANGUAGE)"));
-        assert!(source.contains(".disabled(true)"));
+        assert!(source.contains("TextView::markdown(editor_key, user_admin_sql_preview_markdown(sql))"));
+        assert!(source.contains(".selectable(true)"));
+        assert!(source.contains(".scrollable(true)"));
+        assert!(!source.contains("Input::new(&editor)"));
         assert!(source.contains("fn start_user_admin_database_options_load("));
         assert!(source.contains("this.start_user_admin_database_options_load(tab_id, cx)"));
         assert!(source.contains("AppCommand::ToggleUserAdminPrivilegeRowPrivilege"));
         assert!(source.contains("AppCommand::SetUserAdminPrivilegeRowDatabase"));
         assert!(source.contains("Grant Option"));
+    }
+
+    #[test]
+    fn user_admin_sql_preview_markdown_preserves_lines_and_escapes_fences() {
+        let sql = "GRANT `reader` TO `alice`;\nGRANT `writer` TO `alice`;";
+        let markdown = user_admin_sql_preview_markdown(sql);
+        assert_eq!(
+            markdown,
+            "```sql\nGRANT `reader` TO `alice`;\nGRANT `writer` TO `alice`;\n```"
+        );
+
+        let sql_with_fence = "SELECT ```quoted``` FROM t;";
+        let markdown = user_admin_sql_preview_markdown(sql_with_fence);
+        assert!(markdown.starts_with("````sql\n"));
+        assert!(markdown.ends_with("\n````"));
     }
 
     #[test]

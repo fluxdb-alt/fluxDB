@@ -2581,9 +2581,11 @@ fn main() {
                             _completion_index_tasks: BTreeMap::new(),
                             _table_info_tasks: BTreeMap::new(),
                             _user_admin_users_tasks: BTreeMap::new(),
+                            _user_admin_pg_membership_tasks: BTreeMap::new(),
                             _user_admin_grants_tasks: BTreeMap::new(),
                             _user_admin_member_grants_tasks: BTreeMap::new(),
                             _user_admin_apply_tasks: BTreeMap::new(),
+                            _user_admin_preview_tasks: BTreeMap::new(),
                             _create_table_apply_tasks: BTreeMap::new(),
                             _create_table_reference_columns_tasks: BTreeMap::new(),
                             _cell_binary_download_tasks: BTreeMap::new(),
@@ -2788,4 +2790,3 @@ fn main() {
             cx.activate(true);
         });
 }
-
