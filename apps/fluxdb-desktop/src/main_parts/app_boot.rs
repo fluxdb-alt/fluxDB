@@ -1806,7 +1806,7 @@ fn main() {
                                 if let (Some(tab_id), Some(db)) =
                                     (this.active_user_admin_tab_id(), value)
                                 {
-                                    this.start_pg_grant_targets_load_for(
+                                    this.set_pg_grant_database(
                                         tab_id,
                                         db.clone(),
                                         cx,
@@ -2582,6 +2582,8 @@ fn main() {
                             _table_info_tasks: BTreeMap::new(),
                             _user_admin_users_tasks: BTreeMap::new(),
                             _user_admin_pg_membership_tasks: BTreeMap::new(),
+                            _user_admin_pg_target_tasks: BTreeMap::new(),
+                            _user_admin_pg_object_grant_tasks: BTreeMap::new(),
                             _user_admin_grants_tasks: BTreeMap::new(),
                             _user_admin_member_grants_tasks: BTreeMap::new(),
                             _user_admin_apply_tasks: BTreeMap::new(),

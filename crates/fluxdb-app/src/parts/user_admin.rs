@@ -318,14 +318,26 @@ impl AppController {
             &admin.pg_grant_signature,
         );
         let connection_id = admin.connection_id;
-        let config = self
+        let mut config = self
             .connection_config(connection_id)
-            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
-        role_operation_for_connection(&config, |connector| {
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?
+            .clone();
+        // 权限接口使用连接上下文的库；仅调整本次请求副本，不能把所选库对象查到维护库。
+        if !admin.pg_grant_database.is_empty() {
+            let profile = config.postgres_profile.as_mut()
+                .ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 连接档案缺失"))?;
+            profile.basic.maintenance_database = admin.pg_grant_database.clone();
+        }
+        let result = role_operation_for_connection(&config, |connector| {
             let grants = connector.list_object_grants(connection_id, &scope)?;
             let effective = connector.role_effective_grants(connection_id, &scope, &role)?;
             Ok((grants, effective))
-        })
+        });
+        if let Err(error) = &result {
+            tracing::warn!(target: "pg_user_admin", database = %admin.pg_grant_database,
+                ?scope, error = %error, "读取 PostgreSQL 对象权限失败");
+        }
+        result
     }
 
     /// 由草稿 diff 出本次保存的结构化变更计划（预览与执行共用）。

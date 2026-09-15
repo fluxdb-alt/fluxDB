@@ -337,3 +337,168 @@ fn pg_grant_object_sql_rejects_injected_routine_signature() {
         );
     }
 }
+
+/// PG 权限页目标必须由用户显式选择；默认不得隐式选中 public。
+#[test]
+fn pg_privilege_targets_start_without_selection() {
+    let admin = UserAdminState::new(ConnectionId(1), None, PrivilegeScope::Postgres);
+    assert_eq!(admin.pg_grant_database, "");
+    assert_eq!(admin.pg_grant_schema, "");
+    assert_eq!(admin.pg_grant_object, "");
+    assert_eq!(admin.pg_grant_signature, "");
+    assert_eq!(admin.pg_loaded_target, "");
+}
+
+/// 切换角色或刷新后，右侧会话态回到干净初始态：目标、权限读取、草稿变更和预览都清空。
+#[test]
+fn pg_role_editor_session_reset_clears_targets_and_draft_changes() {
+    fn role(name: &str) -> PgRole {
+        PgRole {
+            name: name.into(),
+            can_login: true,
+            is_superuser: false,
+            can_create_db: false,
+            can_create_role: false,
+            inherit: true,
+            is_replication: false,
+            bypass_rls: false,
+            connection_limit: -1,
+            valid_until: None,
+            comment: None,
+        }
+    }
+
+    let mut admin = UserAdminState::new(ConnectionId(1), None, PrivilegeScope::Postgres);
+    admin.pg_roles = vec![role("tenant_a"), role("tenant_b")];
+    admin.pg_selected_role = Some("tenant_a".into());
+    admin.pg_reset_draft_from_baseline();
+    admin.pg_grant_database = "fluxdb_manual".into();
+    admin.pg_grant_schema = "tenant_b".into();
+    admin.pg_grant_object = "orders".into();
+    admin.pg_grant_signature = "integer".into();
+    admin.pg_grant_edits.push(PgRoleChange::GrantObject {
+        privilege: "SELECT".into(),
+        scope: PgObjectGrantScope::Relation {
+            schema: "tenant_b".into(),
+            name: "orders".into(),
+            kind: PgRelationKind::Table,
+        },
+        grantee: "tenant_a".into(),
+        grant_option: false,
+    });
+    admin.pg_memberships.push(PgRoleMembership {
+        grantee: "app_group".into(),
+        member: "tenant_a".into(),
+        admin_option: false,
+        inherit_option: true,
+        set_option: true,
+    });
+    admin.pg_memberships_loaded = true;
+    admin.active_detail_tab = UserAdminDetailTab::Privileges;
+
+    admin.pg_reset_role_editor_session();
+    admin.pg_reset_draft_from_baseline();
+
+    assert_eq!(admin.pg_grant_database, "");
+    assert_eq!(admin.pg_grant_schema, "");
+    assert_eq!(admin.pg_grant_object, "");
+    assert_eq!(admin.pg_grant_signature, "");
+    assert_eq!(admin.pg_grant_edits, Vec::new());
+    assert_eq!(admin.pg_membership_edits, Vec::new());
+    assert_eq!(admin.pg_memberships, Vec::new());
+    assert!(!admin.pg_memberships_loaded);
+    assert_eq!(admin.pg_object_grants, None);
+    assert_eq!(admin.pg_effective_grants, Vec::new());
+    assert_eq!(admin.active_detail_tab, UserAdminDetailTab::General);
+    assert!(!admin.pg_has_draft_changes());
+}
+
+/// 只读集成回归：维护库与目标库不同，逐个读取多个表和序列的权限。
+#[test]
+#[ignore = "需要 FLUXDB_PG_SMOKE 指定包含多个表和序列的测试库"]
+fn pg_object_grants_multiple_targets_in_selected_database() {
+    let params = completion_smoke_params().expect("需要 FLUXDB_PG_SMOKE");
+    let mut config = completion_smoke_config(&params);
+    config.postgres_profile.as_mut().unwrap().basic.maintenance_database = "postgres".into();
+    let connection_id = config.id;
+    let mut controller = AppController::new();
+    controller.dispatch(AppCommand::ReplaceConnections(vec![config]));
+    let AppEvent::TabOpened(tab_id) = controller.dispatch(AppCommand::OpenUserAdmin(connection_id)) else {
+        panic!("应打开权限页");
+    };
+    let AppEvent::UserAdminPgGrantTargetsLoaded(_, targets) = controller.dispatch(
+        AppCommand::LoadPgGrantTargets { tab_id, database: params.4.clone() }
+    ) else { panic!("应读取目标库对象"); };
+    assert!(targets.tables.len() > 1, "测试库需要多个表");
+    assert!(targets.sequences.len() > 1, "测试库需要多个序列");
+    controller.dispatch(AppCommand::SetPgGrantDatabase { tab_id, database: params.4 });
+    controller.user_admin_state_mut(tab_id).unwrap().pg_selected_role = Some(params.2);
+    for (kind, objects) in [(PgGrantObjectKind::Table, targets.tables), (PgGrantObjectKind::Sequence, targets.sequences)] {
+        for object in objects {
+            let (schema, name) = object.split_once('.').unwrap();
+            controller.dispatch(AppCommand::SetUserAdminPgGrantTarget {
+                tab_id, kind, schema: schema.into(), object: name.into(), signature: String::new(),
+            });
+            controller.dispatch(AppCommand::StartUserAdminPgObjectGrantsLoad(tab_id));
+            let fingerprint = pg_grant_target_fingerprint(controller.user_admin_state(tab_id).unwrap());
+            let AppEvent::UserAdminPgObjectGrantsLoaded(_, result) = controller.dispatch(AppCommand::LoadUserAdminPgObjectGrants(tab_id)) else {
+                panic!("应返回权限读取结果");
+            };
+            assert!(result.is_ok(), "{object}: {result:?}");
+            assert!(!result.as_ref().unwrap().1.is_empty());
+            controller.dispatch(AppCommand::FinishUserAdminPgObjectGrantsLoad { tab_id, target_fingerprint: fingerprint.clone(), result });
+            let admin = controller.user_admin_state(tab_id).unwrap();
+            assert!(!admin.loading_pg_grants);
+            assert_eq!(admin.pg_loaded_target, fingerprint);
+        }
+    }
+    assert_eq!(controller.connection_config(connection_id).unwrap().postgres_profile.as_ref().unwrap().basic.maintenance_database, "postgres");
+}
+
+/// 多对象快速切换时，旧请求回调不得结束新对象的 loading 或覆盖其基线。
+#[test]
+fn pg_stale_object_grants_result_does_not_finish_current_load() {
+    let tab_id = TabId(1);
+    let mut admin = UserAdminState::new(ConnectionId(1), None, PrivilegeScope::Postgres);
+    admin.pg_grant_kind = PgGrantObjectKind::Table;
+    admin.pg_grant_schema = "tenant_a".into();
+    admin.pg_grant_object = "orders".into();
+    let stale_fingerprint = pg_grant_target_fingerprint(&admin);
+
+    admin.pg_grant_object = "customers".into();
+    admin.loading_pg_grants = true;
+    admin.pg_object_grants = Some(PgObjectGrants {
+        owner: "current_owner".into(),
+        acl_is_null: true,
+        entries: Vec::new(),
+    });
+
+    let mut controller = AppController::new();
+    controller.state.tabs.push(TabState {
+        id: tab_id,
+        title: "用户与权限".into(),
+        kind: TabKind::UserAdmin(admin),
+        dirty: false,
+    });
+    controller.dispatch(AppCommand::FinishUserAdminPgObjectGrantsLoad {
+        tab_id,
+        target_fingerprint: stale_fingerprint,
+        result: Ok((
+            PgObjectGrants {
+                owner: "stale_owner".into(),
+                acl_is_null: false,
+                entries: Vec::new(),
+            },
+            Vec::new(),
+        )),
+    });
+
+    let TabKind::UserAdmin(admin) = &controller.state.tabs[0].kind else {
+        panic!("应为用户与权限标签页");
+    };
+    assert!(admin.loading_pg_grants);
+    assert_eq!(
+        admin.pg_object_grants.as_ref().map(|grants| grants.owner.as_str()),
+        Some("current_owner")
+    );
+}

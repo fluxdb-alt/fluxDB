@@ -645,9 +645,10 @@ fn pg_effective_query(sqlgen: &ObjectGrantSql, scope: &PgObjectGrantScope) -> fl
         }),
         PgObjectGrantScope::Relation { kind, .. } => {
             let has_fn = match kind {
-                PgRelationKind::Sequence => "has_sequence_privilege($1, $2 || '.' || $3, p.priv)",
+                // has_* 接收 regclass 文本，必须引用标识符以保留大小写及名称中的点。
+                PgRelationKind::Sequence => "has_sequence_privilege($1, quote_ident($2) || '.' || quote_ident($3), p.priv)",
                 PgRelationKind::Table | PgRelationKind::View => {
-                    "has_table_privilege($1, $2 || '.' || $3, p.priv)"
+                    "has_table_privilege($1, quote_ident($2) || '.' || quote_ident($3), p.priv)"
                 }
             };
             let privs = kind
@@ -1027,8 +1028,10 @@ pub fn pg_list_grant_targets(
     if config.kind != DatabaseKind::Postgres {
         return Err(Error::new(ErrorKind::Connection, "连接类型不支持权限目标枚举"));
     }
+    // 首次进入权限页还没有数据库选择；用连接档案的维护库完成目标枚举。
+    let database = pg_request_database(config, Some(database));
     pg_runtime().block_on(async {
-        let session = pg_connect(config, database).await?;
+        let session = pg_connect(config, &database).await?;
         let client = session.client.as_ref();
         let mut lists = PgGrantTargetLists::default();
         let rows = client

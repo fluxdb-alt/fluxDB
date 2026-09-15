@@ -26,8 +26,9 @@ fn pg_privileges_panel(
         String::new()
     };
     let stale = target_complete && admin.pg_loaded_target != current_fingerprint;
-    // 目标完整且基线过期（或无基线）时自动读取；读取中不重复触发。
-    if stale && !admin.loading_pg_grants {
+    // 失败后保留错误等待手动重试，避免每次渲染重新请求并把错误遮成 loading。
+    let should_load = stale && admin.pg_grants_error.is_none();
+    if should_load && !admin.loading_pg_grants {
         this.start_pg_object_grants_load(tab_id, cx);
     }
 
@@ -65,7 +66,7 @@ fn pg_privileges_panel(
     }
 
     // ===== 权限表 =====
-    if admin.loading_pg_grants || stale {
+    if admin.loading_pg_grants || should_load {
         body = body.child(user_admin_empty_row("正在读取权限…", colors));
     } else if let Some(error) = &admin.pg_grants_error {
         body = body
@@ -80,18 +81,16 @@ fn pg_privileges_panel(
                 ),
             );
     } else if admin.pg_object_grants.is_none() || !target_complete {
-        body = body.child(user_admin_empty_row("选择数据库、对象类型与对象后自动读取权限。", colors));
+        body = body.child(user_admin_empty_row(
+            "选择数据库、对象类型与对象后自动读取权限。",
+            colors,
+        ));
     } else {
         body = body.child(pg_privilege_table(tab_id, admin, colors, cx));
-        body = body.child(
-            div()
-                .text_size(px(11.))
-                .text_color(colors.muted)
-                .child(
-                    "说明：「当前有效」包含直接授权、成员继承、PUBLIC、属主与超级用户来源；\
+        body = body.child(div().text_size(px(11.)).text_color(colors.muted).child(
+            "说明：「当前有效」包含直接授权、成员继承、PUBLIC、属主与超级用户来源；\
                      撤销直接授权后仍可能因其他来源保持有效。函数 EXECUTE 默认授予 PUBLIC。",
-                ),
-        );
+        ));
     }
 
     // ===== 待保存的授权变更 =====
@@ -99,17 +98,47 @@ fn pg_privileges_panel(
         let mut edits = div().flex().flex_col().gap_1();
         for (index, edit) in admin.pg_grant_edits.iter().enumerate() {
             let text = match edit {
-                PgRoleChange::GrantObject { privilege, scope, grantee, grant_option: true } => {
-                    format!("+ GRANT {privilege} ON {} TO {grantee} WITH GRANT OPTION", pg_scope_display(scope))
+                PgRoleChange::GrantObject {
+                    privilege,
+                    scope,
+                    grantee,
+                    grant_option: true,
+                } => {
+                    format!(
+                        "+ GRANT {privilege} ON {} TO {grantee} WITH GRANT OPTION",
+                        pg_scope_display(scope)
+                    )
                 }
-                PgRoleChange::GrantObject { privilege, scope, grantee, .. } => {
-                    format!("+ GRANT {privilege} ON {} TO {grantee}", pg_scope_display(scope))
+                PgRoleChange::GrantObject {
+                    privilege,
+                    scope,
+                    grantee,
+                    ..
+                } => {
+                    format!(
+                        "+ GRANT {privilege} ON {} TO {grantee}",
+                        pg_scope_display(scope)
+                    )
                 }
-                PgRoleChange::RevokeObject { privilege, scope, grantee } => {
-                    format!("- REVOKE {privilege} ON {} FROM {grantee}", pg_scope_display(scope))
+                PgRoleChange::RevokeObject {
+                    privilege,
+                    scope,
+                    grantee,
+                } => {
+                    format!(
+                        "- REVOKE {privilege} ON {} FROM {grantee}",
+                        pg_scope_display(scope)
+                    )
                 }
-                PgRoleChange::RevokeGrantOption { privilege, scope, grantee } => {
-                    format!("~ REVOKE GRANT OPTION FOR {privilege} ON {} FROM {grantee}", pg_scope_display(scope))
+                PgRoleChange::RevokeGrantOption {
+                    privilege,
+                    scope,
+                    grantee,
+                } => {
+                    format!(
+                        "~ REVOKE GRANT OPTION FOR {privilege} ON {} FROM {grantee}",
+                        pg_scope_display(scope)
+                    )
                 }
                 _ => continue,
             };
@@ -193,15 +222,32 @@ fn pg_grant_target_selector(
         let selected = candidate == kind;
         kinds = kinds.child(
             div()
-                .id(SharedString::from(format!("pg-grant-kind-{}", candidate.label())))
+                .id(SharedString::from(format!(
+                    "pg-grant-kind-{}",
+                    candidate.label()
+                )))
                 .px_2()
                 .h(px(24.))
                 .rounded(colors.radius)
                 .cursor_pointer()
                 .border_1()
-                .border_color(if selected { rgb(0x2563eb) } else { colors.border })
-                .bg(if selected { colors.tree_selected } else { colors.panel_bg })
-                .hover(move |style| style.bg(if selected { colors.tree_selected } else { colors.hover }))
+                .border_color(if selected {
+                    rgb(0x2563eb)
+                } else {
+                    colors.border
+                })
+                .bg(if selected {
+                    colors.tree_selected
+                } else {
+                    colors.panel_bg
+                })
+                .hover(move |style| {
+                    style.bg(if selected {
+                        colors.tree_selected
+                    } else {
+                        colors.hover
+                    })
+                })
                 .flex()
                 .items_center()
                 .text_size(px(12.))
@@ -243,23 +289,28 @@ fn pg_grant_target_selector(
                         .child("Schema"),
                 )
                 .child(
-                    div()
-                        .w(px(160.))
-                        .child(Select::new(&this.pg_grant_schema_select).w_full().h(px(30.))),
+                    div().w(px(160.)).child(
+                        Select::new(&this.pg_grant_schema_select)
+                            .w_full()
+                            .h(px(30.)),
+                    ),
                 )
             })
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(colors.muted)
-                    .child("对象"),
-            )
-            .child(
-                div()
-                    .min_w(px(220.))
-                    .flex_1()
-                    .child(Select::new(&this.pg_grant_object_select).w_full().h(px(30.))),
-            )
+            .when(pg_grant_uses_object_selector(kind), |row| {
+                row.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors.muted)
+                        .child("对象"),
+                )
+                .child(
+                    div().min_w(px(220.)).flex_1().child(
+                        Select::new(&this.pg_grant_object_select)
+                            .w_full()
+                            .h(px(30.)),
+                    ),
+                )
+            })
             .when(targets_loading, |row| {
                 row.child(
                     div()
@@ -311,21 +362,25 @@ fn pg_privilege_table(
         );
     for grant in &admin.pg_effective_grants {
         let privilege = grant.privilege.clone();
-        let edit = admin
-            .pg_grant_edits
-            .iter()
-            .find_map(|edit| match edit {
-                PgRoleChange::GrantObject { privilege: p, scope: s, grant_option, .. }
-                    if p == &privilege && s == &scope =>
-                    Some(("grant", *grant_option)),
-                PgRoleChange::RevokeObject { privilege: p, scope: s, .. }
-                    if p == &privilege && s == &scope =>
-                    Some(("revoke", false)),
-                PgRoleChange::RevokeGrantOption { privilege: p, scope: s, .. }
-                    if p == &privilege && s == &scope =>
-                    Some(("revoke_option", false)),
-                _ => None,
-            });
+        let edit = admin.pg_grant_edits.iter().find_map(|edit| match edit {
+            PgRoleChange::GrantObject {
+                privilege: p,
+                scope: s,
+                grant_option,
+                ..
+            } if p == &privilege && s == &scope => Some(("grant", *grant_option)),
+            PgRoleChange::RevokeObject {
+                privilege: p,
+                scope: s,
+                ..
+            } if p == &privilege && s == &scope => Some(("revoke", false)),
+            PgRoleChange::RevokeGrantOption {
+                privilege: p,
+                scope: s,
+                ..
+            } if p == &privilege && s == &scope => Some(("revoke_option", false)),
+            _ => None,
+        });
         // 草稿覆盖后的展示值。
         let draft_direct = match edit {
             Some(("grant", _)) => true,
@@ -396,7 +451,11 @@ fn pg_privilege_table(
                         .w(px(88.))
                         .flex()
                         .justify_center()
-                        .text_color(if grant.effective { colors.text } else { colors.muted })
+                        .text_color(if grant.effective {
+                            colors.text
+                        } else {
+                            colors.muted
+                        })
                         .child(if grant.effective { "是" } else { "否" }.to_string()),
                 )
                 .child(
@@ -422,7 +481,9 @@ fn pg_privilege_checkbox(
     cx: &mut Context<NavicatMain>,
 ) -> Stateful<Div> {
     div()
-        .id(SharedString::from(format!("pg-priv-direct-{privilege}-{checked}")))
+        .id(SharedString::from(format!(
+            "pg-priv-direct-{privilege}-{checked}"
+        )))
         .w(px(88.))
         .h_full()
         .cursor_pointer()
@@ -467,7 +528,9 @@ fn pg_privilege_grantable_checkbox(
     cx: &mut Context<NavicatMain>,
 ) -> Stateful<Div> {
     div()
-        .id(SharedString::from(format!("pg-priv-grantable-{privilege}-{checked}")))
+        .id(SharedString::from(format!(
+            "pg-priv-grantable-{privilege}-{checked}"
+        )))
         .w(px(88.))
         .h_full()
         .cursor_pointer()
@@ -514,7 +577,11 @@ fn pg_scope_display(scope: &PgObjectGrantScope) -> String {
             PgRelationKind::Sequence => format!("SEQUENCE {schema}.{name}"),
             PgRelationKind::Table | PgRelationKind::View => format!("TABLE {schema}.{name}"),
         },
-        PgObjectGrantScope::Routine { schema, name, signature } => {
+        PgObjectGrantScope::Routine {
+            schema,
+            name,
+            signature,
+        } => {
             format!("FUNCTION {schema}.{name}({signature})")
         }
     }
@@ -523,6 +590,14 @@ fn pg_scope_display(scope: &PgObjectGrantScope) -> String {
 impl NavicatMain {
     /// 读取当前目标的对象权限（后台线程 → 回填 pg_object_grants/pg_effective_grants）。
     fn start_pg_object_grants_load(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        if self._user_admin_pg_object_grant_tasks.contains_key(&tab_id) {
+            return;
+        }
+        let target_fingerprint = self
+            .user_admin_state_for(tab_id)
+            .as_ref()
+            .map(|admin| fluxdb_app::pg_grant_target_fingerprint(admin))
+            .unwrap_or_default();
         self.dispatch(AppCommand::StartUserAdminPgObjectGrantsLoad(tab_id), cx);
         let mut controller = self.controller.clone();
         let task = cx.spawn(async move |view, cx| {
@@ -545,27 +620,47 @@ impl NavicatMain {
                     return;
                 };
                 view.update(cx, |this, cx| {
+                    // 完成后立即释放任务槽；否则下次切换目标会被旧 Task 挡住，永远停在读取中。
+                    this._user_admin_pg_object_grant_tasks.remove(&tab_id);
                     this.dispatch(
-                        AppCommand::FinishUserAdminPgObjectGrantsLoad { tab_id, result },
+                        AppCommand::FinishUserAdminPgObjectGrantsLoad {
+                            tab_id,
+                            target_fingerprint,
+                            result,
+                        },
                         cx,
                     );
                     cx.notify();
                 });
             });
         });
-        let _ = task;
+        // GPUI Task 被丢弃会取消异步工作；必须持有到回写完成，否则权限页永远停留 loading。
+        self._user_admin_pg_object_grant_tasks.insert(tab_id, task);
+    }
+
+    /// 目标切换会作废正在进行的对象权限读取；GPUI Task 移除后旧请求立即取消。
+    fn cancel_pg_object_grants_load(&mut self, tab_id: &TabId) {
+        self._user_admin_pg_object_grant_tasks.remove(tab_id);
     }
 
     /// 切换对象种类：清空对象选择，schema 保留（同 schema 内切换常见）。
-    fn set_pg_grant_kind(&mut self, tab_id: TabId, kind: PgGrantObjectKind, cx: &mut Context<Self>) {
+    fn set_pg_grant_kind(
+        &mut self,
+        tab_id: TabId,
+        kind: PgGrantObjectKind,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_pg_object_grants_load(&tab_id);
         let (schema, object, signature) = self
             .user_admin_state_for(tab_id)
             .map(|admin| {
-                (
-                    admin.pg_grant_schema.clone(),
-                    String::new(),
-                    String::new(),
-                )
+                let object = match kind {
+                    // schema/数据库本身是目标；前两个选择器选中后即满足目标完整。
+                    PgGrantObjectKind::Schema => admin.pg_grant_schema.clone(),
+                    PgGrantObjectKind::Database => admin.pg_grant_database.clone(),
+                    _ => String::new(),
+                };
+                (admin.pg_grant_schema.clone(), object, String::new())
             })
             .unwrap_or_default();
         self.dispatch(
@@ -583,16 +678,23 @@ impl NavicatMain {
 
     /// 切换 schema：清空对象选择。
     fn set_pg_grant_schema(&mut self, tab_id: TabId, schema: String, cx: &mut Context<Self>) {
+        self.cancel_pg_object_grants_load(&tab_id);
         let kind = self
             .user_admin_state_for(tab_id)
             .map(|admin| admin.pg_grant_kind)
             .unwrap_or_default();
+        // Schema 类型没有第三个对象选择器：schema 选择本身要成为授权目标。
+        let object = if kind == PgGrantObjectKind::Schema {
+            schema.clone()
+        } else {
+            String::new()
+        };
         self.dispatch(
             AppCommand::SetUserAdminPgGrantTarget {
                 tab_id,
                 kind,
                 schema,
-                object: String::new(),
+                object,
                 signature: String::new(),
             },
             cx,
@@ -602,6 +704,7 @@ impl NavicatMain {
 
     /// 选择对象（`schema.name` / `schema.name(签名)`）：解析并写入目标，自动触发权限读取。
     fn set_pg_grant_object(&mut self, tab_id: TabId, object: String, cx: &mut Context<Self>) {
+        self.cancel_pg_object_grants_load(&tab_id);
         let Some(admin) = self.user_admin_state_for(tab_id) else {
             return;
         };

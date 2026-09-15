@@ -498,7 +498,7 @@ impl UserAdminState {
             pending_sql: None,
             pending_delete_user: None,
             pg_grant_kind: PgGrantObjectKind::default(),
-            pg_grant_schema: "public".to_string(),
+            pg_grant_schema: String::new(),
             pg_grant_object: String::new(),
             pg_grant_signature: String::new(),
             pg_object_grants: None,
@@ -561,6 +561,38 @@ impl UserAdminState {
     /// 干净草稿与基线 diff 为空，不计入未保存变更。
     pub fn pg_reset_draft_from_baseline(&mut self) {
         self.pg_draft = self.pg_baseline_role().map(PgRoleDraft::from_role);
+    }
+
+    /// 清空权限页目标选择及其读取结果；数据库/Schema/对象都必须由用户重新显式选择。
+    pub fn pg_reset_grant_target_session(&mut self) {
+        self.pg_grant_kind = PgGrantObjectKind::default();
+        self.pg_grant_database.clear();
+        self.pg_grant_schema.clear();
+        self.pg_grant_object.clear();
+        self.pg_grant_signature.clear();
+        self.pg_grant_targets = None;
+        self.pg_loading_targets = false;
+        self.pg_targets_error = None;
+        self.pg_object_grants = None;
+        self.pg_effective_grants.clear();
+        self.loading_pg_grants = false;
+        self.pg_grants_error = None;
+        self.pg_grant_edits.clear();
+        self.pg_loaded_target.clear();
+    }
+
+    /// 右侧角色编辑会话回到初始态：选中角色/角色列表保留，目标、成员、草稿编辑和预览清空。
+    pub fn pg_reset_role_editor_session(&mut self) {
+        self.pg_membership_edits.clear();
+        self.pg_memberships.clear();
+        self.pg_memberships_loaded = false;
+        self.pg_reset_grant_target_session();
+        self.pg_pending_switch = None;
+        self.pg_plan_preview = None;
+        self.pg_preview_loading = false;
+        self.pg_plan_preview_masked = false;
+        self.pg_plan_error = None;
+        self.active_detail_tab = UserAdminDetailTab::General;
     }
 
     /// 预定义角色（pg_ 前缀）：不提供属性编辑/删除，仅可查看权限与按授权能力管理成员。
@@ -2111,6 +2143,7 @@ pub enum AppCommand {
     /// 对象权限读取完成回填（Ok 为对象读模型+生效权限；Err 为失败）。
     FinishUserAdminPgObjectGrantsLoad {
         tab_id: TabId,
+        target_fingerprint: String,
         result: Result<(PgObjectGrants, Vec<PgEffectivePrivilege>), UserFacingError>,
     },
     SelectUserAdminDetailTab {

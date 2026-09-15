@@ -13,6 +13,40 @@ fn pg_valid_until_mode_options() -> Vec<String> {
     ]
 }
 
+/// 只有关系/函数需要第三个“对象”选择器；schema 和数据库本身就是授权目标。
+fn pg_grant_uses_object_selector(kind: PgGrantObjectKind) -> bool {
+    matches!(
+        kind,
+        PgGrantObjectKind::Table
+            | PgGrantObjectKind::View
+            | PgGrantObjectKind::Sequence
+            | PgGrantObjectKind::Routine
+    )
+}
+
+/// 权限页对象选项必须跟随 Schema 收窄；schema/数据库由前两个选择器直接作为目标。
+fn pg_grant_object_options(
+    kind: PgGrantObjectKind,
+    schema: &str,
+    targets: &PgGrantTargetLists,
+) -> Vec<String> {
+    if !pg_grant_uses_object_selector(kind) {
+        return Vec::new();
+    }
+    let options = match kind {
+        PgGrantObjectKind::Table => targets.tables.clone(),
+        PgGrantObjectKind::View => targets.views.clone(),
+        PgGrantObjectKind::Sequence => targets.sequences.clone(),
+        PgGrantObjectKind::Routine => targets.routines.clone(),
+        PgGrantObjectKind::Schema | PgGrantObjectKind::Database => Vec::new(),
+    };
+    let prefix = format!("{schema}.");
+    options
+        .into_iter()
+        .filter(|qualified| qualified.starts_with(&prefix))
+        .collect()
+}
+
 /// 密码操作选项：新建为「不设置密码/设置新密码」，既有角色为「保持不变/设置新密码/清除密码」。
 fn pg_password_op_options(create: bool) -> Vec<String> {
     if create {
@@ -524,6 +558,21 @@ fn pg_user_admin_tab_strip(
                         if detail_tab == UserAdminDetailTab::SqlPreview {
                             this.start_pg_plan_preview(tab_id, cx);
                         }
+                        // 权限页首次进入时预加载目标库；数据库列表本身由这份目标元数据回填。
+                        if detail_tab == UserAdminDetailTab::Privileges {
+                            let should_load_targets = this
+                                .user_admin_state_for(tab_id)
+                                .is_some_and(|admin| {
+                                    admin.pg_grant_targets.is_none() && !admin.pg_loading_targets
+                                });
+                            if should_load_targets {
+                                let database = this
+                                    .user_admin_state_for(tab_id)
+                                    .map(|admin| admin.pg_grant_database.clone())
+                                    .unwrap_or_default();
+                                this.start_pg_grant_targets_load_for(tab_id, database, cx);
+                            }
+                        }
                         cx.stop_propagation();
                     }),
                 )
@@ -864,14 +913,8 @@ impl NavicatMain {
         // 下拉选项与选中值（带指纹）。
         let _selected = admin.pg_effective_grantee_name();
         let targets = admin.pg_grant_targets.clone().unwrap_or_default();
-        let object_options: Vec<String> = match admin.pg_grant_kind {
-            PgGrantObjectKind::Table => targets.tables.clone(),
-            PgGrantObjectKind::View => targets.views.clone(),
-            PgGrantObjectKind::Sequence => targets.sequences.clone(),
-            PgGrantObjectKind::Routine => targets.routines.clone(),
-            PgGrantObjectKind::Schema => targets.schemas.clone(),
-            PgGrantObjectKind::Database => targets.databases.clone(),
-        };
+        let object_options =
+            pg_grant_object_options(admin.pg_grant_kind, &admin.pg_grant_schema, &targets);
         let object_selected = if admin.pg_grant_object.is_empty() {
             String::new()
         } else {
@@ -918,15 +961,11 @@ impl NavicatMain {
             });
         }
         // 选中值每次渲染都同步（set_items 会重置选择，不能只靠指纹门控）。
-        self.pg_grant_db_select.update(cx, |select, cx| {
-            select.set_selected_value(&admin.pg_grant_database.clone(), window, cx);
-        });
-        self.pg_grant_schema_select.update(cx, |select, cx| {
-            select.set_selected_value(&admin.pg_grant_schema.clone(), window, cx);
-        });
-        self.pg_grant_object_select.update(cx, |select, cx| {
-            select.set_selected_value(&object_selected, window, cx);
-        });
+        // 可搜索下拉的 set_selected_value 会清空搜索词；只有目标值变化时才同步，
+        // 避免权限页下拉每次重渲染都把搜索框清空/夺走输入。
+        sync_select_value(&self.pg_grant_db_select, &admin.pg_grant_database, window, cx);
+        sync_select_value(&self.pg_grant_schema_select, &admin.pg_grant_schema, window, cx);
+        sync_select_value(&self.pg_grant_object_select, &object_selected, window, cx);
         // 成员下拉是「选择要授予的组角色」选择器：不回填当前角色（其已被排除出选项），
         // set_items 重置后显示占位符。
         // 密码操作/有效期模式选项随 create 变化，选中值随草稿回写。
@@ -938,6 +977,16 @@ impl NavicatMain {
         self.pg_valid_until_mode_select.update(cx, |select, cx| {
             select.set_selected_value(&draft.valid_until_mode_label(), window, cx);
         });
+    }
+
+    /// 用户选择数据库：Database 类型同时把该库作为授权目标。
+    fn set_pg_grant_database(
+        &mut self,
+        tab_id: TabId,
+        database: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_pg_grant_targets_load_for(tab_id, database, cx);
     }
 
     /// 切换数据库后加载权限目标列表（一期同批只允许一个数据库）。
@@ -954,6 +1003,24 @@ impl NavicatMain {
             },
             cx,
         );
+        // Database 类型同样没有第三个对象选择器；数据库选择本身要成为授权目标。
+        if let Some(kind) = self
+            .user_admin_state_for(tab_id)
+            .map(|admin| admin.pg_grant_kind)
+            .filter(|kind| *kind == PgGrantObjectKind::Database)
+        {
+            self.cancel_pg_object_grants_load(&tab_id);
+            self.dispatch(
+                AppCommand::SetUserAdminPgGrantTarget {
+                    tab_id,
+                    kind,
+                    schema: String::new(),
+                    object: database.clone(),
+                    signature: String::new(),
+                },
+                cx,
+            );
+        }
         self.dispatch(AppCommand::StartPgGrantTargetsLoad(tab_id), cx);
         let mut controller = self.controller.clone();
         let task = cx.spawn(async move |view, cx| {
@@ -976,6 +1043,7 @@ impl NavicatMain {
                     return;
                 };
                 view.update(cx, |this, cx| {
+                    this._user_admin_pg_target_tasks.remove(&tab_id);
                     this.dispatch(
                         AppCommand::FinishPgGrantTargetsLoad { tab_id, result },
                         cx,
@@ -984,7 +1052,9 @@ impl NavicatMain {
                 });
             });
         });
-        let _ = task;
+        // GPUI Task 被丢弃会取消异步工作；必须持有到回写完成，否则数据库下拉始终为空。
+        // 重复选择数据库时替换旧 Task：旧请求立即取消，保证最新选择最终回写。
+        self._user_admin_pg_target_tasks.insert(tab_id, task);
     }
 
     /// 请求选择角色；有未保存草稿时先弹确认（确认后走 DiscardPgDraftAndSelect）。

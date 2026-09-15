@@ -967,6 +967,8 @@ struct NavicatMain {
     _table_info_tasks: BTreeMap<(TabId, TableInfoTab), Task<()>>,
     _user_admin_users_tasks: BTreeMap<TabId, Task<()>>,
     _user_admin_pg_membership_tasks: BTreeMap<TabId, Task<()>>,
+    _user_admin_pg_target_tasks: BTreeMap<TabId, Task<()>>,
+    _user_admin_pg_object_grant_tasks: BTreeMap<TabId, Task<()>>,
     _user_admin_grants_tasks: BTreeMap<TabId, Task<()>>,
     _user_admin_member_grants_tasks: BTreeMap<TabId, Task<()>>,
     _user_admin_apply_tasks: BTreeMap<TabId, Task<()>>,

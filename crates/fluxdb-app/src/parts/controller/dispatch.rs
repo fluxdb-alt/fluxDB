@@ -2271,20 +2271,10 @@ impl AppController {
             AppCommand::SelectPgRole { tab_id, name } => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
                     admin.pg_selected_role = Some(name.clone());
+                    // 切换角色是新的编辑会话：目标选择、成员/授权草稿和预览都不能带到新角色。
+                    admin.pg_reset_role_editor_session();
                     // 从基线派生干净草稿：右侧面板始终以草稿渲染；干净草稿不计脏。
                     admin.pg_reset_draft_from_baseline();
-                    admin.pg_membership_edits.clear();
-                    admin.pg_grant_edits.clear();
-                    admin.pg_pending_switch = None;
-                    admin.pg_object_grants = None;
-                    admin.pg_effective_grants.clear();
-                    admin.pg_grants_error = None;
-                    admin.pg_plan_preview = None;
-                    admin.pg_plan_preview_masked = false;
-                    admin.pg_plan_error = None;
-                    admin.pg_loaded_target.clear();
-                    // 切换选中角色后回到常规页，保持「先看基本信息」的默认路径。
-                    admin.active_detail_tab = UserAdminDetailTab::General;
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
@@ -2309,15 +2299,8 @@ impl AppController {
             AppCommand::DiscardPgDraftAndSelect { tab_id, name } => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
                     admin.pg_selected_role = Some(name.clone());
+                    admin.pg_reset_role_editor_session();
                     admin.pg_reset_draft_from_baseline();
-                    admin.pg_membership_edits.clear();
-                    admin.pg_grant_edits.clear();
-                    admin.pg_pending_switch = None;
-                    admin.pg_object_grants = None;
-                    admin.pg_effective_grants.clear();
-                    admin.pg_plan_preview = None;
-                    admin.pg_loaded_target.clear();
-                    admin.active_detail_tab = UserAdminDetailTab::General;
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
@@ -2325,15 +2308,10 @@ impl AppController {
             }
             AppCommand::PgBeginCreateRole(tab_id) => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
-                    admin.pg_draft = Some(PgRoleDraft::new_create());
+                    // 新建也是独立编辑会话；旧角色的权限目标/成员状态不能带入新建表单。
                     admin.pg_selected_role = None;
-                    admin.pg_pending_switch = None;
-                    admin.pg_membership_edits.clear();
-                    admin.pg_grant_edits.clear();
-                    admin.pg_object_grants = None;
-                    admin.pg_effective_grants.clear();
-                    admin.pg_plan_preview = None;
-                    admin.active_detail_tab = UserAdminDetailTab::General;
+                    admin.pg_reset_role_editor_session();
+                    admin.pg_draft = Some(PgRoleDraft::new_create());
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
@@ -2457,20 +2435,10 @@ impl AppController {
                                 admin.pg_roles.iter().map(|role| role.name.clone()).collect();
                             if !names.iter().any(|name| Some(name) == admin.pg_selected_role.as_ref()) {
                                 admin.pg_selected_role = names.first().cloned();
-                                admin.pg_draft = None;
-                                admin.pg_membership_edits.clear();
-                                admin.pg_grant_edits.clear();
                             }
-                            // 首次选中 / 保存完成后补齐编辑草稿；已选角色且有**干净**草稿时
-                            // 用新基线重建（服务端可能已被外部修改）；脏草稿保留不覆盖。
-                            if admin.pg_selected_role.is_some()
-                                && (admin.pg_draft.is_none()
-                                    || !admin.pg_has_draft_changes())
-                            {
-                                admin.pg_reset_draft_from_baseline();
-                            }
-                            // 对象权限基线已过期：清指纹，权限页下次渲染自动重读。
-                            admin.pg_loaded_target.clear();
+                            // 刷新是重新读取服务端基线：右侧会话态与权限目标都回到初始态。
+                            admin.pg_reset_role_editor_session();
+                            admin.pg_reset_draft_from_baseline();
                         }
                         Err(error) => {
                             // 失败保留旧数据（UI 标记未刷新），显示错误并可重试。
@@ -2581,13 +2549,11 @@ impl AppController {
             AppCommand::SetPgGrantDatabase { tab_id, database } => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
                     // 一期同批只允许一个数据库：切换数据库前 UI 已确认保存或放弃授权草稿；
-                    // 这里直接清空目标缓存与授权草稿，避免跨库提交被误当成原子操作。
+                    // 目标选择也必须清空，避免旧库的 schema/object 被带到新库。对象种类保留。
+                    let kind = admin.pg_grant_kind;
+                    admin.pg_reset_grant_target_session();
+                    admin.pg_grant_kind = kind;
                     admin.pg_grant_database = database;
-                    admin.pg_grant_targets = None;
-                    admin.pg_grant_edits.clear();
-                    admin.pg_object_grants = None;
-                    admin.pg_effective_grants.clear();
-                    admin.pg_grants_error = None;
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
@@ -2852,6 +2818,9 @@ impl AppController {
                     admin.pg_grant_schema = schema;
                     admin.pg_grant_object = object;
                     admin.pg_grant_signature = signature;
+                    // 目标已变化：旧请求结果不可用；桌面层同时取消旧 Task，避免悬挂 loading。
+                    admin.loading_pg_grants = false;
+                    admin.pg_grants_error = None;
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
@@ -2875,21 +2844,29 @@ impl AppController {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
                 }
             }
-            AppCommand::FinishUserAdminPgObjectGrantsLoad { tab_id, result } => {
+            AppCommand::FinishUserAdminPgObjectGrantsLoad {
+                tab_id,
+                target_fingerprint,
+                result,
+            } => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
-                    admin.loading_pg_grants = false;
-                    match result {
-                        Ok((grants, effective)) => {
-                            admin.pg_object_grants = Some(grants);
-                            admin.pg_effective_grants = effective;
-                            admin.pg_grants_error = None;
-                            // 记录已加载目标指纹，供 UI 判断选择器目标是否已过期需重取。
-                            admin.pg_loaded_target = pg_grant_target_fingerprint(admin);
-                        }
-                        Err(error) => {
-                            admin.pg_object_grants = None;
-                            admin.pg_effective_grants.clear();
-                            admin.pg_grants_error = Some(error);
+                    // 读取期间目标可能已被用户切换；过期结果不能结束新目标的
+                    // loading，也不能覆盖新目标状态。
+                    if pg_grant_target_fingerprint(admin) == target_fingerprint {
+                        admin.loading_pg_grants = false;
+                        match result {
+                            Ok((grants, effective)) => {
+                                admin.pg_object_grants = Some(grants);
+                                admin.pg_effective_grants = effective;
+                                admin.pg_grants_error = None;
+                                // 记录已加载目标指纹，供 UI 判断选择器目标是否已过期需重取。
+                                admin.pg_loaded_target = target_fingerprint;
+                            }
+                            Err(error) => {
+                                admin.pg_object_grants = None;
+                                admin.pg_effective_grants.clear();
+                                admin.pg_grants_error = Some(error);
+                            }
                         }
                     }
                     AppEvent::TabActivated(tab_id)

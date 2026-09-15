@@ -74,6 +74,65 @@ mod tests {
         assert!(controller.contains("this._user_admin_pg_membership_tasks.remove(&tab_id);"));
     }
 
+    #[test]
+    fn pg_user_admin_privilege_targets_load_keeps_its_task_alive() {
+        let controller = include_str!("pg_user_admin/mod.rs");
+        assert!(controller.contains("if detail_tab == UserAdminDetailTab::Privileges {"));
+        assert!(controller.contains("this.start_pg_grant_targets_load_for(tab_id, database, cx);"));
+        assert!(controller.contains("self._user_admin_pg_target_tasks.insert(tab_id, task);"));
+        assert!(controller.contains("this._user_admin_pg_target_tasks.remove(&tab_id);"));
+    }
+
+    #[test]
+    fn pg_user_admin_object_grants_load_keeps_its_task_alive() {
+        let privileges = include_str!("pg_user_admin/privileges.rs");
+        assert!(privileges.contains("let target_fingerprint = self"));
+        assert!(privileges.contains("target_fingerprint,"));
+        assert!(privileges.contains("self._user_admin_pg_object_grant_tasks.insert(tab_id, task);"));
+        assert!(privileges.contains("this._user_admin_pg_object_grant_tasks.remove(&tab_id);"));
+        // 三类目标切换（种类/schema/对象）都必须取消旧请求，否则新目标会被旧任务槽阻塞。
+        assert_eq!(
+            privileges
+                .matches("self.cancel_pg_object_grants_load(&tab_id);")
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn pg_grant_object_options_follow_selected_schema() {
+        let targets = PgGrantTargetLists {
+            tables: vec![
+                "public.orders".to_string(),
+                "tenant_a.orders".to_string(),
+                "tenant_b.orders".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let options = pg_grant_object_options(PgGrantObjectKind::Table, "tenant_b", &targets);
+        assert_eq!(options, vec!["tenant_b.orders".to_string()]);
+        // schema/数据库自身就是目标，不能再显示同名“对象”下拉。
+        assert!(pg_grant_uses_object_selector(PgGrantObjectKind::Table));
+        assert!(!pg_grant_uses_object_selector(PgGrantObjectKind::Schema));
+        assert!(!pg_grant_uses_object_selector(PgGrantObjectKind::Database));
+        assert!(pg_grant_object_options(PgGrantObjectKind::Schema, "tenant_b", &targets).is_empty());
+        assert!(pg_grant_object_options(PgGrantObjectKind::Database, "tenant_b", &targets).is_empty());
+    }
+
+    #[test]
+    fn pg_user_admin_searchable_selects_preserve_active_queries() {
+        let shared = include_str!("user_admin.rs");
+        let controller = include_str!("pg_user_admin/mod.rs");
+        assert!(controller.contains("sync_select_value(&self.pg_grant_db_select"));
+        assert!(controller.contains("sync_select_value(&self.pg_grant_schema_select"));
+        assert!(controller.contains("sync_select_value(&self.pg_grant_object_select"));
+        assert!(!controller.contains("self.pg_grant_db_select.update(cx, |select, cx| {\n            select.set_selected_value"));
+        // 未选中目标（数据库/对象初始为空）也必须跳过 set_selected_value；
+        // 该方法会清空搜索词，导致空值下拉的搜索框无法输入。
+        assert!(shared.contains("expected.is_empty() && selected.is_none()"));
+    }
+
     /// gutter 行号列的「宽度」与「绘制」必须同源判断：只关其一会让行号列宽算成 0、
     /// 行号照画，行号就压在正文左缘（关闭行号的只读 DDL 预览曾出现该重叠）。
     #[test]

@@ -780,7 +780,8 @@ fn sync_select_value(
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) {
-    if select.read(cx).selected_value().is_some_and(|value| value == expected) {
+    let selected = select.read(cx).selected_value().map(String::as_str);
+    if selected == Some(expected) || (expected.is_empty() && selected.is_none()) {
         return;
     }
     select.update(cx, |select, cx| {
