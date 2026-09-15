@@ -17,8 +17,7 @@ fn database_backup_objects_body(
     let view_tables = form.all_view_names.len();
     // 统计展示：已选表数 + （勾选视图则计入视图数）。
     let selected_tables = form.selected_tables.len();
-    let selected_objects = selected_tables
-        + if form.include_views { view_tables } else { 0 };
+    let selected_objects = selected_tables + if form.include_views { view_tables } else { 0 };
     let total_objects = form.all_table_names.len() + view_tables;
 
     let has_tables = !form.all_table_names.is_empty();
@@ -39,7 +38,11 @@ fn database_backup_objects_body(
                 div()
                     .text_size(px(13.))
                     .text_color(colors.muted)
-                    .child(if has_tables { "未找到匹配的表" } else { "暂无可备份对象" }),
+                    .child(if has_tables {
+                        "未找到匹配的表"
+                    } else {
+                        "暂无可备份对象"
+                    }),
             )
             .child(
                 div()
@@ -90,6 +93,7 @@ fn database_backup_objects_body(
         .child(
             div()
                 .id("backup-object-search")
+                .track_focus(&object_search_input.read(cx).focus_handle(cx))
                 .flex_none()
                 .h(px(34.))
                 .px_2()
@@ -97,18 +101,29 @@ fn database_backup_objects_body(
                 .border_1()
                 .border_color(colors.border)
                 .hover(move |s| s.border_color(colors.muted))
-                .within_focus(move |s| s.border_color(if colors.is_dark { rgb(0x8ab4ff) } else { rgb(0x111111) }))
+                .focus(move |s| {
+                    s.border_color(if colors.is_dark {
+                        rgb(0x8ab4ff)
+                    } else {
+                        rgb(0x111111)
+                    })
+                })
                 .bg(colors.input_bg)
                 .flex()
                 .items_center()
                 .gap_2()
                 .child(app_icon(AppIcon::Search, 15., colors.muted))
                 .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .child(Input::new(&object_search_input).appearance(false).focus_bordered(false).cleanable(true).w_full().h_full().text_size(px(13.))),
-                )
+                    div().flex_1().min_w(px(0.)).child(
+                        Input::new(&object_search_input)
+                            .appearance(false)
+                            .focus_bordered(false)
+                            .cleanable(true)
+                            .w_full()
+                            .h_full()
+                            .text_size(px(13.)),
+                    ),
+                ),
         )
         // 批量操作工具条：全选复选框 + 结果数量 + 清空按钮。
         .child(
@@ -125,7 +140,9 @@ fn database_backup_objects_body(
                         .disabled(filtered_tables.is_empty())
                         .checked(
                             !filtered_tables.is_empty()
-                                && filtered_tables.iter().all(|n| form.selected_tables.contains(n)),
+                                && filtered_tables
+                                    .iter()
+                                    .all(|n| form.selected_tables.contains(n)),
                         )
                         .on_click({
                             let view = view.clone();
@@ -144,7 +161,10 @@ fn database_backup_objects_body(
                     div()
                         .text_size(px(11.))
                         .text_color(colors.muted)
-                        .child(format!("{} 项 · 已选 {selected_objects}/{total_objects}", filtered_tables.len())),
+                        .child(format!(
+                            "{} 项 · 已选 {selected_objects}/{total_objects}",
+                            filtered_tables.len()
+                        )),
                 )
                 .child(div().flex_1())
                 .child(
@@ -177,15 +197,18 @@ fn database_backup_objects_body(
         )
         // 视图分组：数据模型为单一开关（include_views），非逐视图勾选，故只渲染一行。
         .when(view_tables > 0, |this| {
-            this.child(div().h(px(28.)).flex_none().flex().items_center().child(
-                Checkbox::new("backup-include-views")
-                    .label(format!("包含视图（{view_tables}）"))
-                    .checked(form.include_views).cursor_pointer()
-                    .on_click(move |checked, _, cx| {
-                        view.update(cx, |this, cx| this.set_backup_include_views(*checked, cx));
-                        cx.stop_propagation();
-                    }),
-            ))
+            this.child(
+                div().h(px(28.)).flex_none().flex().items_center().child(
+                    Checkbox::new("backup-include-views")
+                        .label(format!("包含视图（{view_tables}）"))
+                        .checked(form.include_views)
+                        .cursor_pointer()
+                        .on_click(move |checked, _, cx| {
+                            view.update(cx, |this, cx| this.set_backup_include_views(*checked, cx));
+                            cx.stop_propagation();
+                        }),
+                ),
+            )
         })
         // 底部提示：次级文字 + 图标，说明对象选择仅对逻辑备份生效。
         .child(
@@ -210,7 +233,7 @@ fn database_backup_table_row(
     checked: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> impl IntoElement {
+) -> gpui_component::list::ListItem {
     let view = cx.entity();
     let name_string = name.to_string();
     gpui_component::list::ListItem::new(format!("backup-obj-row-{name_string}"))
@@ -235,32 +258,34 @@ fn database_backup_table_row(
                 cx.stop_propagation();
             }
         })
-        .child(div().flex().items_center().gap_2().child(
-            Checkbox::new(format!("backup-table-{name}"))
-                .checked(checked)
-                .accessibility_label(name_string.clone())
-                .cursor_pointer()
-                .on_click({
-                    let toggle_name = name_string.clone();
-                    move |_, _, cx| {
-                        let _ = view.update(cx, |this, cx| {
-                            this.toggle_backup_table(&toggle_name, cx);
-                        });
-                        cx.stop_propagation();
-                    }
-                }),
-        )
         .child(
             div()
-                .flex_1()
-                .min_w(px(0.))
+                .flex()
+                .items_center()
+                .gap_2()
                 .child(
-                    div()
-                        .truncate()
-                        .text_size(px(13.))
-                        .text_color(colors.text)
-                        .child(name_string),
+                    Checkbox::new(format!("backup-table-{name}"))
+                        .checked(checked)
+                        .accessibility_label(name_string.clone())
+                        .cursor_pointer()
+                        .on_click({
+                            let toggle_name = name_string.clone();
+                            move |_, _, cx| {
+                                let _ = view.update(cx, |this, cx| {
+                                    this.toggle_backup_table(&toggle_name, cx);
+                                });
+                                cx.stop_propagation();
+                            }
+                        }),
+                )
+                .child(
+                    div().flex_1().min_w(px(0.)).child(
+                        div()
+                            .truncate()
+                            .text_size(px(13.))
+                            .text_color(colors.text)
+                            .child(name_string),
+                    ),
                 ),
-        ))
+        )
 }
-

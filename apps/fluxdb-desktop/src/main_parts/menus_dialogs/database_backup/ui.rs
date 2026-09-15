@@ -505,7 +505,6 @@ fn database_backup_advanced_body(
 
 #[derive(Clone, Copy)]
 enum BackupCheckboxField {
-    IncludeViews,
     LockTables,
     SingleTransaction,
     IncludeRoutines,
@@ -540,9 +539,6 @@ fn database_backup_checkbox_row(
                     let field = field;
                     let _ = view.update(cx, |this, cx| {
                         match field {
-                            BackupCheckboxField::IncludeViews => {
-                                this.set_backup_include_views(value, cx)
-                            }
                             BackupCheckboxField::LockTables => this.set_backup_lock_tables(value, cx),
                             BackupCheckboxField::SingleTransaction => {
                                 this.set_backup_single_transaction(value, cx)
@@ -623,6 +619,9 @@ fn database_backup_task_card(
         .gap_2()
         .child(
             div()
+                .w_full()
+                .min_w(px(0.))
+                .flex_none()
                 .rounded(colors.radius)
                 .border_1()
                 .border_color(colors.border)
@@ -630,28 +629,29 @@ fn database_backup_task_card(
                 .flex()
                 .flex_col()
                 .gap_2()
+                .when(!filename.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .w_full()
+                            .min_w(px(0.))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_size(px(13.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(filename),
+                    )
+                })
+                // 状态独占受约束的一行；超长错误在区域内滚动，保留日志区的可用高度。
                 .child(
                     div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
+                        .w_full()
+                        .min_w(px(0.))
+                        .max_h(px(120.))
+                        .overflow_y_scrollbar()
                         .child(
                             div()
-                                .flex_1()
-                                .min_w(px(0.))
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .text_size(px(13.))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child(filename),
-                        )
-                        // 状态文本（含失败原因）可能很长：自动换行完整展示，避免单行截断。
-                        .child(
-                            div()
-                                .flex_none()
-                                .ml_2()
+                                .w_full()
                                 .text_size(px(12.))
-                                .text_right()
                                 .whitespace_normal()
                                 .text_color(if task.error.is_some() {
                                     rgb(0xd64545)
