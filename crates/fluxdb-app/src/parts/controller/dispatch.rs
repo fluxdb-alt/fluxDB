@@ -527,33 +527,6 @@ impl AppController {
                     Err(error) => self.fail(error),
                 }
             }
-            AppCommand::SetPgRoleLogin {
-                connection_id,
-                name,
-                can_login,
-            } => {
-                let Some(config) = self.connection_config(connection_id).cloned() else {
-                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
-                };
-                match role_operation_for_connection(&config, |connector| {
-                    connector.alter_role_options(
-                        connection_id,
-                        &name,
-                        Some(can_login),
-                        None, // is_superuser
-                        None, // can_create_db
-                        None, // can_create_role
-                        None, // inherit
-                        None, // is_replication
-                        None, // bypass_rls
-                        None, // connection_limit
-                        None, // valid_until
-                    )
-                }) {
-                    Ok(()) => AppEvent::PgRoleChanged(connection_id),
-                    Err(error) => self.fail(error),
-                }
-            }
             AppCommand::DeleteDatabase {
                 connection_id,
                 database,
@@ -2065,16 +2038,6 @@ impl AppController {
                 AppEvent::TabActivated(tab_id)
             }
             AppCommand::LoadUserAdminUsers(tab_id) => {
-                // PG：同步角色 LOGIN 状态表（供角色选项切换展示）。
-                if let Some(connection_id) = self
-                    .user_admin_state(tab_id)
-                    .map(|admin| admin.connection_id)
-                    && self.connection_kind(connection_id) == Some(DatabaseKind::Postgres)
-                    && let Ok(login_map) = self.load_pg_role_login_map(connection_id)
-                    && let Some(admin) = self.user_admin_state_mut(tab_id)
-                {
-                    admin.pg_role_login = login_map;
-                }
                 match self.load_user_admin_users(tab_id) {
                     Ok(users) => AppEvent::UserAdminUsersLoaded(tab_id, users),
                     Err(error) => AppEvent::Failed(UserFacingError::from(error)),
@@ -2305,48 +2268,573 @@ impl AppController {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
                 }
             }
-            AppCommand::SetUserAdminPgCanLogin { tab_id, can_login } => {
+            AppCommand::SelectPgRole { tab_id, name } => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
-                    admin.pg_can_login = can_login;
+                    admin.pg_selected_role = Some(name.clone());
+                    // 从基线派生干净草稿：右侧面板始终以草稿渲染；干净草稿不计脏。
+                    admin.pg_reset_draft_from_baseline();
+                    admin.pg_membership_edits.clear();
+                    admin.pg_grant_edits.clear();
+                    admin.pg_pending_switch = None;
+                    admin.pg_object_grants = None;
+                    admin.pg_effective_grants.clear();
+                    admin.pg_grants_error = None;
+                    admin.pg_plan_preview = None;
+                    admin.pg_plan_preview_masked = false;
+                    admin.pg_plan_error = None;
+                    admin.pg_loaded_target.clear();
+                    // 切换选中角色后回到常规页，保持「先看基本信息」的默认路径。
+                    admin.active_detail_tab = UserAdminDetailTab::General;
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
                 }
             }
-            AppCommand::BeginUserAdminPgRename(tab_id) => {
+            AppCommand::SetPgRoleSwitchPending { tab_id, target } => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
-                    admin.pg_edit_mode = PgRoleEditMode::Rename;
-                    admin.pg_rename_new = admin
-                        .selected_user
-                        .as_ref()
-                        .map(|u| u.user.clone())
-                        .unwrap_or_default();
+                    admin.pg_pending_switch = Some(target);
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
                 }
             }
-            AppCommand::BeginUserAdminPgPassword(tab_id) => {
+            AppCommand::PgCancelSwitchRole(tab_id) => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
-                    admin.pg_edit_mode = PgRoleEditMode::Password;
-                    admin.new_password.clear();
+                    admin.pg_pending_switch = None;
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
                 }
             }
-            AppCommand::SetUserAdminPgRenameNew { tab_id, value } => {
+            AppCommand::DiscardPgDraftAndSelect { tab_id, name } => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
-                    admin.pg_rename_new = value;
+                    admin.pg_selected_role = Some(name.clone());
+                    admin.pg_reset_draft_from_baseline();
+                    admin.pg_membership_edits.clear();
+                    admin.pg_grant_edits.clear();
+                    admin.pg_pending_switch = None;
+                    admin.pg_object_grants = None;
+                    admin.pg_effective_grants.clear();
+                    admin.pg_plan_preview = None;
+                    admin.pg_loaded_target.clear();
+                    admin.active_detail_tab = UserAdminDetailTab::General;
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
                 }
             }
-            AppCommand::EndUserAdminPgEdit(tab_id) => {
+            AppCommand::PgBeginCreateRole(tab_id) => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
-                    admin.pg_edit_mode = PgRoleEditMode::None;
-                    admin.pg_rename_new.clear();
+                    admin.pg_draft = Some(PgRoleDraft::new_create());
+                    admin.pg_selected_role = None;
+                    admin.pg_pending_switch = None;
+                    admin.pg_membership_edits.clear();
+                    admin.pg_grant_edits.clear();
+                    admin.pg_object_grants = None;
+                    admin.pg_effective_grants.clear();
+                    admin.pg_plan_preview = None;
+                    admin.active_detail_tab = UserAdminDetailTab::General;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgCancelDraft(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_draft = None;
+                    admin.pg_membership_edits.clear();
+                    admin.pg_grant_edits.clear();
+                    admin.pg_plan_preview = None;
+                    admin.pg_plan_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftName { tab_id, name } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    if let Some(draft) = admin.pg_draft.as_mut() {
+                        draft.name = name;
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftCanLogin { tab_id, can_login } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    if let Some(draft) = admin.pg_draft.as_mut() {
+                        draft.can_login = can_login;
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftAttr { tab_id, field, value } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && let Some(draft) = admin.pg_draft.as_mut()
+                {
+                    match field {
+                        PgDraftAttrField::IsSuperuser => draft.is_superuser = value,
+                        PgDraftAttrField::CanCreateDb => draft.can_create_db = value,
+                        PgDraftAttrField::CanCreateRole => draft.can_create_role = value,
+                        PgDraftAttrField::Inherit => draft.inherit = value,
+                        PgDraftAttrField::IsReplication => draft.is_replication = value,
+                        PgDraftAttrField::BypassRls => draft.bypass_rls = value,
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftConnectionLimit { tab_id, value } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && let Some(draft) = admin.pg_draft.as_mut()
+                {
+                    draft.connection_limit_text = value;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftValidUntil { tab_id, op } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && let Some(draft) = admin.pg_draft.as_mut()
+                {
+                    draft.valid_until = op;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftPasswordOp { tab_id, op } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && let Some(draft) = admin.pg_draft.as_mut()
+                {
+                    draft.password = op;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftPassword { tab_id, password } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && let Some(draft) = admin.pg_draft.as_mut()
+                {
+                    draft.password = PgPasswordOp::Set(password);
+                }
+                AppEvent::TabActivated(tab_id)
+            }
+            AppCommand::StartUserAdminPgRolesLoad(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_roles_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::LoadUserAdminPgRoles(tab_id) => {
+                let Some(connection_id) = self
+                    .user_admin_state(tab_id)
+                    .map(|admin| admin.connection_id)
+                else {
+                    return self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"));
+                };
+                match self.list_pg_roles_for_connection(connection_id) {
+                    Ok(roles) => AppEvent::UserAdminPgRolesLoaded(tab_id, roles),
+                    Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+                }
+            }
+            AppCommand::FinishUserAdminPgRolesLoad { tab_id, result } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    match result {
+                        Ok(roles) => {
+                            admin.pg_roles = roles;
+                            admin.pg_roles_error = None;
+                            // 选中角色被删除后回退到第一个角色；无角色则清空选择。
+                            let names: Vec<String> =
+                                admin.pg_roles.iter().map(|role| role.name.clone()).collect();
+                            if !names.iter().any(|name| Some(name) == admin.pg_selected_role.as_ref()) {
+                                admin.pg_selected_role = names.first().cloned();
+                                admin.pg_draft = None;
+                                admin.pg_membership_edits.clear();
+                                admin.pg_grant_edits.clear();
+                            }
+                            // 首次选中 / 保存完成后补齐编辑草稿；已选角色且有**干净**草稿时
+                            // 用新基线重建（服务端可能已被外部修改）；脏草稿保留不覆盖。
+                            if admin.pg_selected_role.is_some()
+                                && (admin.pg_draft.is_none()
+                                    || !admin.pg_has_draft_changes())
+                            {
+                                admin.pg_reset_draft_from_baseline();
+                            }
+                            // 对象权限基线已过期：清指纹，权限页下次渲染自动重读。
+                            admin.pg_loaded_target.clear();
+                        }
+                        Err(error) => {
+                            // 失败保留旧数据（UI 标记未刷新），显示错误并可重试。
+                            admin.pg_roles_error = Some(error.clone());
+                        }
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::StartPgMembershipsLoad(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_memberships_loaded = false;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::LoadPgMemberships(tab_id) => {
+                let Some(connection_id) = self
+                    .user_admin_state(tab_id)
+                    .map(|admin| admin.connection_id)
+                else {
+                    return self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"));
+                };
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                let member_options_supported = role_operation_for_connection(&config, |connector| {
+                    connector.supports_member_options(connection_id)
+                })
+                .unwrap_or(false);
+                match self.list_pg_memberships_for_connection(connection_id) {
+                    Ok(memberships) => AppEvent::UserAdminPgMembershipsLoaded(
+                        tab_id,
+                        memberships,
+                        member_options_supported,
+                    ),
+                    Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+                }
+            }
+            AppCommand::FinishPgMembershipsLoad { tab_id, result, member_options_supported } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_member_options_supported = Some(member_options_supported);
+                    match result {
+                        Ok(memberships) => {
+                            admin.pg_memberships = memberships;
+                            admin.pg_memberships_loaded = true;
+                        }
+                        Err(error) => {
+                            // 失败保留旧数据并标记未加载，不显示为「无成员」。
+                            admin.pg_memberships_loaded = false;
+                            admin.pg_plan_error = Some(error.clone());
+                        }
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgMembershipGrant { tab_id, role, member, admin: admin_option, inherit, set } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    let edit = PgRoleChange::GrantMembership {
+                        role: role.clone(),
+                        member: member.clone(),
+                        admin: admin_option,
+                        inherit,
+                        set,
+                    };
+                    // 同 (role, member) 只保留一条最新变更，避免重复提交。
+                    if let Some(index) = admin.pg_membership_edit_index(&role, &member) {
+                        admin.pg_membership_edits[index] = edit;
+                    } else {
+                        admin.pg_membership_edits.push(edit);
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgMembershipRevoke { tab_id, role, member } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    let edit = PgRoleChange::RevokeMembership {
+                        role: role.clone(),
+                        member: member.clone(),
+                    };
+                    if let Some(index) = admin.pg_membership_edit_index(&role, &member) {
+                        admin.pg_membership_edits[index] = edit;
+                    } else {
+                        admin.pg_membership_edits.push(edit);
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgMembershipRemoveEdit { tab_id, index } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && index < admin.pg_membership_edits.len()
+                {
+                    admin.pg_membership_edits.remove(index);
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    AppEvent::TabActivated(tab_id)
+                }
+            }
+            AppCommand::SetPgGrantDatabase { tab_id, database } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    // 一期同批只允许一个数据库：切换数据库前 UI 已确认保存或放弃授权草稿；
+                    // 这里直接清空目标缓存与授权草稿，避免跨库提交被误当成原子操作。
+                    admin.pg_grant_database = database;
+                    admin.pg_grant_targets = None;
+                    admin.pg_grant_edits.clear();
+                    admin.pg_object_grants = None;
+                    admin.pg_effective_grants.clear();
+                    admin.pg_grants_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::StartPgGrantTargetsLoad(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_loading_targets = true;
+                    admin.pg_targets_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::LoadPgGrantTargets { tab_id, database } => {
+                let Some(connection_id) = self
+                    .user_admin_state(tab_id)
+                    .map(|admin| admin.connection_id)
+                else {
+                    return self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"));
+                };
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.list_grant_targets(connection_id, &database)
+                }) {
+                    Ok(lists) => AppEvent::UserAdminPgGrantTargetsLoaded(tab_id, lists),
+                    Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+                }
+            }
+            AppCommand::FinishPgGrantTargetsLoad { tab_id, result } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_loading_targets = false;
+                    match result {
+                        Ok(lists) => admin.pg_grant_targets = Some(lists),
+                        Err(error) => admin.pg_targets_error = Some(error),
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgToggleGrant { tab_id, privilege, scope, op, grant_option } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    let edit = match op {
+                        PgGrantEditOp::Grant => PgRoleChange::GrantObject {
+                            privilege: privilege.clone(),
+                            scope: scope.clone(),
+                            grantee: admin.pg_effective_grantee_name(),
+                            grant_option,
+                        },
+                        PgGrantEditOp::Revoke => PgRoleChange::RevokeObject {
+                            privilege: privilege.clone(),
+                            scope: scope.clone(),
+                            grantee: admin.pg_effective_grantee_name(),
+                        },
+                        PgGrantEditOp::RevokeGrantOption => PgRoleChange::RevokeGrantOption {
+                            privilege: privilege.clone(),
+                            scope: scope.clone(),
+                            grantee: admin.pg_effective_grantee_name(),
+                        },
+                    };
+                    if let Some(index) = admin.pg_grant_edit_index(&privilege, &scope) {
+                        admin.pg_grant_edits[index] = edit;
+                    } else {
+                        admin.pg_grant_edits.push(edit);
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgRemoveGrantEdit { tab_id, index } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && index < admin.pg_grant_edits.len()
+                {
+                    admin.pg_grant_edits.remove(index);
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    AppEvent::TabActivated(tab_id)
+                }
+            }
+            AppCommand::StartPgPlanPreview(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_preview_loading = true;
+                    admin.pg_plan_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::LoadPgPlanPreview(tab_id) => match self.build_pg_role_plan(tab_id) {
+                Ok(plan) => {
+                    if plan.is_empty() {
+                        AppEvent::UserAdminPgPlanPreview(tab_id, Vec::new())
+                    } else {
+                        let connection_id = self
+                            .user_admin_state(tab_id)
+                            .map(|admin| admin.connection_id);
+                        let Some(connection_id) = connection_id else {
+                            return self
+                                .fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"));
+                        };
+                        let Some(config) = self.connection_config(connection_id).cloned() else {
+                            return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                        };
+                        match role_operation_for_connection(&config, |connector| {
+                            connector.render_role_plan(connection_id, &plan, true)
+                        }) {
+                            Ok(stmts) => AppEvent::UserAdminPgPlanPreview(tab_id, stmts),
+                            Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+                        }
+                    }
+                }
+                Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+            },
+            AppCommand::FinishPgPlanPreview { tab_id, result } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_preview_loading = false;
+                    match result {
+                        Ok(stmts) => {
+                            admin.pg_plan_preview = Some(stmts.clone());
+                            admin.pg_plan_preview_masked = admin
+                                .pg_draft
+                                .as_ref()
+                                .is_some_and(|draft| {
+                                    matches!(&draft.password, PgPasswordOp::Set(_))
+                                });
+                            admin.pg_plan_error = None;
+                        }
+                        Err(error) => {
+                            admin.pg_plan_preview = None;
+                            admin.pg_plan_error = Some(error);
+                        }
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::StartPgPlanApply(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    if admin.pg_save_status == PgRoleSaveStatus::Saving {
+                        return AppEvent::TabActivated(tab_id);
+                    }
+                    admin.pg_save_status = PgRoleSaveStatus::Saving;
+                    admin.pg_plan_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::ApplyPgRolePlan(tab_id) => {
+                // 由 App 构建（校验）计划并单事务应用；结果无论成败都带计划回传 Finish。
+                match self.build_pg_role_plan(tab_id) {
+                    Ok(plan) => {
+                        let Some(connection_id) = self
+                            .user_admin_state(tab_id)
+                            .map(|admin| admin.connection_id)
+                        else {
+                            return self
+                                .fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"));
+                        };
+                        let Some(config) = self.connection_config(connection_id).cloned() else {
+                            return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                        };
+                        let result =
+                            role_operation_for_connection(&config, |connector| {
+                                connector.apply_role_plan(connection_id, &plan)
+                            });
+                        match result {
+                            Ok(_) => {
+                                AppEvent::UserAdminPgRolePlanFinished(tab_id, plan, Ok(Vec::new()))
+                            }
+                            Err(error) => AppEvent::UserAdminPgRolePlanFinished(
+                                tab_id,
+                                plan,
+                                Err(UserFacingError::from(error)),
+                            ),
+                        }
+                    }
+                    Err(error) => AppEvent::UserAdminPgRolePlanFinished(
+                        tab_id,
+                        PgRoleSavePlan {
+                            database: None,
+                            role_name: String::new(),
+                            changes: Vec::new(),
+                        },
+                        Err(UserFacingError::from(error)),
+                    ),
+                }
+            }
+            AppCommand::FinishPgRolePlanApply { tab_id, plan, result } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    match result {
+                        Ok(_) => {
+                            admin.pg_save_status = PgRoleSaveStatus::Idle;
+                            admin.pg_draft = None;
+                            admin.pg_membership_edits.clear();
+                            admin.pg_grant_edits.clear();
+                            admin.pg_plan_preview = None;
+                            // 应用成功后对象权限基线已变化，标记过期等待重新读取。
+                            admin.pg_loaded_target.clear();
+                            // 改名后选中角色跟随新身份。
+                            admin.pg_selected_role = Some(plan.role_name.clone());
+                        }
+                        Err(error) => {
+                            // 失败保留草稿；结果不确定时（连接中断）标记待核实，不直接重试。
+                            admin.pg_save_status = if error.retryable {
+                                PgRoleSaveStatus::Idle
+                            } else {
+                                PgRoleSaveStatus::NeedsVerify
+                            };
+                            admin.pg_plan_error = Some(error.clone());
+                        }
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgBeginDeleteRole(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    if let Some(name) = admin
+                        .pg_selected_role
+                        .clone()
+                        .filter(|name| !UserAdminState::pg_is_predefined_role(name))
+                    {
+                        admin.pg_pending_delete = Some(name);
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgCancelDeleteRole(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_pending_delete = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgRoleFilter { tab_id, filter } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_role_filter = filter;
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
@@ -2395,6 +2883,8 @@ impl AppController {
                             admin.pg_object_grants = Some(grants);
                             admin.pg_effective_grants = effective;
                             admin.pg_grants_error = None;
+                            // 记录已加载目标指纹，供 UI 判断选择器目标是否已过期需重取。
+                            admin.pg_loaded_target = pg_grant_target_fingerprint(admin);
                         }
                         Err(error) => {
                             admin.pg_object_grants = None;
@@ -2405,20 +2895,6 @@ impl AppController {
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
-                }
-            }
-            AppCommand::GrantUserAdminPgPrivilege {
-                tab_id,
-                privilege,
-                grant_option,
-            } => match self.apply_pg_grant(tab_id, &privilege, grant_option) {
-                Ok(()) => AppEvent::UserAdminPgGrantsChanged(tab_id),
-                Err(error) => self.fail(error),
-            },
-            AppCommand::RevokeUserAdminPgPrivilege { tab_id, privilege } => {
-                match self.apply_pg_revoke(tab_id, &privilege) {
-                    Ok(()) => AppEvent::UserAdminPgGrantsChanged(tab_id),
-                    Err(error) => self.fail(error),
                 }
             }
             AppCommand::SelectUserAdminDetailTab { tab_id, detail_tab } => {

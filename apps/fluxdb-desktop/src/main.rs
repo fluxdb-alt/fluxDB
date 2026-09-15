@@ -22,7 +22,8 @@ use fluxdb_app::{
     CreateTableIndexColumnField, CreateTableIndexField, CreateTableOptionField,
     CreateTablePartitionField, CreateTableState, CreateTableTab, CreateTableTrigger,
     CreateTableTriggerEvent, CreateTableTriggerField, DataEditorState, ForeignKeyCheckMode,
-    LoadState, ObjectListState, QueryEditorState, QueryHistoryEntry, QueryHistoryKind,
+    LoadState, ObjectListState, PgDraftAttrField, PgGrantEditOp, PgGrantObjectKind,
+    PgRoleDraftUiExt, PgRoleSaveStatus, QueryEditorState, QueryHistoryEntry, QueryHistoryKind,
     QueryHistoryTransactionState, QueryOrigin, RedisAddKeyKind, RedisAddKeyRequest,
     RedisConnectionOverview, RedisListDirection, RedisWorkbenchState, TabId, TabKind, TabState,
     TabWorkspace, TableInfoState, TableInfoTab, UserAdminDetailTab, UserAdminState,
@@ -36,11 +37,12 @@ use fluxdb_core::{
     ConnectionDraft, ConnectionGroupId, ConnectionId, CreateDatabaseRequest, CreatePrincipalInput,
     DATA_TABLE_PAGE_SIZE_CHOICES, DataChangeSet, DataExportPreview, DataPage, DatabaseKind,
     DatabaseUserIdentity, Endpoint, FilterOp, FilterSpec, ForeignKeyInfo, IndexInfo, LogLevel,
-    ObjectKind, ObjectPath, ObjectSummary, PostgresSslMode, QueryExecutionOptions,
-    QueryExecutionSummary, RedisHashFieldTtl, RedisServerVersion, ResultsPlacement, Row,
-    RowIdentity, SavedQuery, ScrollbarMode, Settings, SidebarOrderEntry, SortDirection, SortSpec,
-    Theme as AppTheme, TriggerInfo, UiDensity, UserResourceLimits, WorkbenchHistoryItem,
-    WorkbenchHistoryScope, WorkbenchHistoryStore, data_table_page_size_max,
+    ObjectKind, ObjectPath, ObjectSummary, PgObjectGrantScope, PgPasswordOp, PgRelationKind,
+    PgRole, PgRoleChange, PgRoleDraft, PgRoleMembership, PgValidUntilOp, PostgresSslMode,
+    QueryExecutionOptions, QueryExecutionSummary, RedisHashFieldTtl, RedisServerVersion,
+    ResultsPlacement, Row, RowIdentity, SavedQuery, ScrollbarMode, Settings, SidebarOrderEntry,
+    SortDirection, SortSpec, Theme as AppTheme, TriggerInfo, UiDensity, UserResourceLimits,
+    WorkbenchHistoryItem, WorkbenchHistoryScope, WorkbenchHistoryStore, data_table_page_size_max,
     database_user_admin_provider, role_memberships_from_grants, sql_dialect,
     sqlite_attached_database_path, supports_database_user_admin,
 };
@@ -144,7 +146,12 @@ include!("main_parts/tabs_workspace.rs");
 include!("main_parts/sidebar.rs");
 include!("main_parts/menus_dialogs.rs");
 include!("main_parts/user_admin.rs");
-include!("main_parts/pg_user_admin.rs");
+include!("main_parts/pg_user_admin/mod.rs");
+include!("main_parts/pg_user_admin/general.rs");
+include!("main_parts/pg_user_admin/advanced.rs");
+include!("main_parts/pg_user_admin/membership.rs");
+include!("main_parts/pg_user_admin/privileges.rs");
+include!("main_parts/pg_user_admin/sql_preview.rs");
 include!("main_parts/user_admin_privileges.rs");
 include!("main_parts/create_table.rs");
 include!("main_parts/content_views.rs");

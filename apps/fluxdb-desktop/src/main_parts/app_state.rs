@@ -864,16 +864,44 @@ struct NavicatMain {
     _user_admin_create_password_subscription: Subscription,
     user_admin_new_password_input: Entity<InputState>,
     _user_admin_new_password_subscription: Subscription,
-    // PG 对象权限面板（T27）：授权目标的 schema / 对象名 / 函数签名（区分重载）。
-    user_admin_pg_grant_schema_input: Entity<InputState>,
-    _user_admin_pg_grant_schema_subscription: Subscription,
-    user_admin_pg_grant_object_input: Entity<InputState>,
-    _user_admin_pg_grant_object_subscription: Subscription,
-    user_admin_pg_grant_signature_input: Entity<InputState>,
-    _user_admin_pg_grant_signature_subscription: Subscription,
-    // PG 角色「重命名」新名输入（T27）。
-    user_admin_pg_rename_input: Entity<InputState>,
-    _user_admin_pg_rename_subscription: Subscription,
+    // ===== PG 用户与角色工作台（改版）输入与选择器 =====
+    /// 常规页：角色名。
+    pg_role_name_input: Entity<InputState>,
+    _pg_role_name_subscription: Subscription,
+    /// 常规页：新密码（脱敏输入；确认密码不一致时保存禁用）。
+    pg_password_input: Entity<InputState>,
+    _pg_password_subscription: Subscription,
+    /// 常规页：确认密码（仅桌面层校验一致性，明文不进 App 状态）。
+    pg_password_confirm_input: Entity<InputState>,
+    _pg_password_confirm_subscription: Subscription,
+    /// 高级页：连接数限制文本（"-1" = 不限）。
+    pg_connection_limit_input: Entity<InputState>,
+    _pg_connection_limit_subscription: Subscription,
+    /// 常规页：自定义密码截止时间输入（选择「自定义截止时间」时显示）。
+    pg_valid_until_input: Entity<InputState>,
+    _pg_valid_until_subscription: Subscription,
+    /// 常规页：密码有效期模式选择（保持/清除/自定义）。
+    pg_valid_until_mode_select: Entity<SelectState<SearchableVec<String>>>,
+    _pg_valid_until_mode_select_subscription: Subscription,
+    /// 常规页：密码操作选择（保持不变/设置新密码/清除密码）。
+    pg_password_op_select: Entity<SelectState<SearchableVec<String>>>,
+    _pg_password_op_select_subscription: Subscription,
+    /// 权限页：目标数据库选择。
+    pg_grant_db_select: Entity<SelectState<SearchableVec<String>>>,
+    _pg_grant_db_select_subscription: Subscription,
+    /// 权限页：schema 选择。
+    pg_grant_schema_select: Entity<SelectState<SearchableVec<String>>>,
+    _pg_grant_schema_select_subscription: Subscription,
+    /// 权限页：对象选择（随对象种类变化）。
+    pg_grant_object_select: Entity<SelectState<SearchableVec<String>>>,
+    _pg_grant_object_select_subscription: Subscription,
+    /// 成员关系页：待添加的组角色（所属方向）选择。
+    pg_member_of_role_select: Entity<SelectState<SearchableVec<String>>>,
+    _pg_member_of_role_select_subscription: Subscription,
+    /// 成员关系页：ADMIN OPTION 开关（仅作用于新添加的成员授权草稿）。
+    pg_member_new_admin: bool,
+    /// 成员关系页：选项列表的数据指纹（避免每次渲染重建 select items）。
+    pg_select_items_fingerprint: String,
     user_admin_max_queries_input: Entity<InputState>,
     _user_admin_max_queries_subscription: Subscription,
     user_admin_max_updates_input: Entity<InputState>,

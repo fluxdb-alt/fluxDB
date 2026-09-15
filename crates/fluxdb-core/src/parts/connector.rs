@@ -107,6 +107,10 @@ pub trait Connector {
     fn list_role_membership(&self, _: ConnectionId) -> Result<Vec<PgRoleMembership>> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持读取成员关系"))
     }
+    /// 服务端是否支持成员级 INHERIT/SET 选项（PG16+）。PG≤15 返回 false。
+    fn supports_member_options(&self, _: ConnectionId) -> Result<bool> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持探测成员选项版本"))
+    }
     /// 列对象权限：(grantee, privilege, grant_option)；grantee 空表示 PUBLIC。
     fn list_relation_grants(
         &self,
@@ -142,6 +146,30 @@ pub trait Connector {
             ErrorKind::Unsupported,
             "暂不支持读取角色有效权限",
         ))
+    }
+    /// 渲染 PG 角色变更计划为有序 SQL 列表（预览与执行共用同一渲染规则）。
+    ///
+    /// `mask_secrets=true` 时密码语句以占位符输出（脱敏预览，不能直接执行）；
+    /// false 时输出真实可执行语句（仅供连接器执行路径使用，不得进入日志/历史）。
+    fn render_role_plan(
+        &self,
+        _: ConnectionId,
+        _plan: &PgRoleSavePlan,
+        _mask_secrets: bool,
+    ) -> Result<Vec<String>> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持渲染角色变更计划"))
+    }
+    /// 在**同一数据库会话的单事务**内应用角色变更计划（失败整批回滚）。
+    ///
+    /// 替代「循环调用单项接口」的伪原子提交：角色 DDL、成员关系与对象 ACL 全部
+    /// 在一个 BEGIN/COMMIT 中执行，任何一条失败即回滚，不产生半完成状态。
+    fn apply_role_plan(&self, _: ConnectionId, _: &PgRoleSavePlan) -> Result<Vec<String>> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持应用角色变更计划"))
+    }
+    /// 列权限页可选目标：数据库 / schema / 表·视图·序列 / 函数（含签名）。
+    /// 关系与函数返回 `schema.name`（函数为 `schema.name(参数类型列表)`）形式字符串。
+    fn list_grant_targets(&self, _: ConnectionId, _database: &str) -> Result<PgGrantTargetLists> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持读取权限目标列表"))
     }
     fn delete_database(&self, _: ConnectionId, _: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持删除数据库"))

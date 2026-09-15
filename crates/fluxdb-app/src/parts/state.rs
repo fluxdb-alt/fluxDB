@@ -255,8 +255,6 @@ pub struct UserAdminState {
     pub pending_sql: Option<UserAdminPendingSql>,
     /// 待确认删除的用户（MySQL 用户与权限删除确认弹框）。
     pub pending_delete_user: Option<DatabaseUserIdentity>,
-    /// PostgreSQL：新建角色是否可登录（LOGIN）/组角色（NOLOGIN）。仅 PG 场景使用。
-    pub pg_can_login: bool,
     /// PostgreSQL 对象权限（T27）：授权目标种类 + schema/对象/函数签名。
     pub pg_grant_kind: PgGrantObjectKind,
     pub pg_grant_schema: String,
@@ -267,20 +265,133 @@ pub struct UserAdminState {
     pub pg_effective_grants: Vec<PgEffectivePrivilege>,
     pub loading_pg_grants: bool,
     pub pg_grants_error: Option<UserFacingError>,
-    /// PostgreSQL（T27）：角色「改密 / 重命名」内联编辑模式 + 重命名新名。
-    pub pg_edit_mode: PgRoleEditMode,
-    pub pg_rename_new: String,
-    /// PostgreSQL（T27）：角色名 → 是否可登录（LOGIN），来自 list_roles，供角色选项切换展示。
-    pub pg_role_login: BTreeMap<String, bool>,
+    // ===== PG 用户与角色工作台（改版）：角色列表 / 草稿 / 成员 / 授权草稿 / 保存状态 =====
+    /// 全量角色列表（权威数据，替代 DatabaseUserIdentity[host=""] 承载）。
+    pub pg_roles: Vec<PgRole>,
+    /// 角色列表加载错误（失败不显示为「无角色」）。
+    pub pg_roles_error: Option<UserFacingError>,
+    /// 当前选中角色名。
+    pub pg_selected_role: Option<String>,
+    /// 当前编辑/新建草稿；None 表示无未保存编辑会话。
+    pub pg_draft: Option<PgRoleDraft>,
+    /// 全量成员关系（pg_auth_members），供「所属角色 / 此角色的成员」双向展示。
+    pub pg_memberships: Vec<PgRoleMembership>,
+    /// 成员关系是否已加载完成（区分「无成员」与「未加载」）。
+    pub pg_memberships_loaded: bool,
+    /// 成员关系草稿变更（Grant/Revoke），保存时并入变更计划。
+    pub pg_membership_edits: Vec<PgRoleChange>,
+    /// 权限页目标数据库（一期同批只允许一个数据库的对象授权）。
+    pub pg_grant_database: String,
+    /// 权限页可选目标（数据库/schema/表·视图·序列/函数）。
+    pub pg_grant_targets: Option<PgGrantTargetLists>,
+    pub pg_loading_targets: bool,
+    pub pg_targets_error: Option<UserFacingError>,
+    /// 对象授权草稿变更（Grant/Revoke/RevokeGrantOption）。
+    pub pg_grant_edits: Vec<PgRoleChange>,
+    /// 保存状态：空闲 / 提交中 / 结果待核实（提交时断线等不确定结果）。
+    pub pg_save_status: PgRoleSaveStatus,
+    /// 变更计划构建/渲染错误。
+    pub pg_plan_error: Option<UserFacingError>,
+    /// SQL 预览页内容（脱敏渲染结果）；None 表示尚未生成。
+    pub pg_plan_preview: Option<Vec<String>>,
+    /// 预览生成中（后台任务未返回）。
+    pub pg_preview_loading: bool,
+    /// 预览中是否包含被脱敏的密码语句（UI 标注「不能直接执行」）。
+    pub pg_plan_preview_masked: bool,
+    /// 角色列表筛选：all / login / nologin / predefined。
+    pub pg_role_filter: String,
+    /// 待确认删除的角色（PG 删除确认弹框）。
+    pub pg_pending_delete: Option<String>,
+    /// 有草稿时切换角色：待确认的目标角色（确认后丢弃草稿并切换）。
+    pub pg_pending_switch: Option<String>,
+    /// 服务端是否支持成员级 INHERIT/SET 选项（PG16+；None = 未探测）。
+    pub pg_member_options_supported: Option<bool>,
+    /// 最近一次对象权限读取的目标指纹（kind|schema|object|signature），用于过期检测。
+    pub pg_loaded_target: String,
 }
 
-/// PG 角色内联编辑模式（改密 / 重命名），复用后端 AlterPgRolePassword / RenamePgRole。
+/// PG 变更计划保存状态。
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum PgRoleEditMode {
+pub enum PgRoleSaveStatus {
     #[default]
-    None,
-    Rename,
-    Password,
+    Idle,
+    /// 提交中（禁用重复保存）。
+    Saving,
+    /// 提交结果不确定（如提交时断线）：先重新读取核实，不直接重试。
+    NeedsVerify,
+}
+
+/// PG 草稿布尔属性字段（高级页开关行）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PgDraftAttrField {
+    IsSuperuser,
+    CanCreateDb,
+    CanCreateRole,
+    Inherit,
+    IsReplication,
+    BypassRls,
+}
+
+/// PG 对象授权草稿操作。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PgGrantEditOp {
+    /// 授予权限（grant_option 决定是否带 GRANT OPTION）。
+    Grant,
+    /// 撤销基础权限。
+    Revoke,
+    /// 仅取消可再授权（REVOKE GRANT OPTION FOR），不动基础权限。
+    RevokeGrantOption,
+}
+
+/// PgRoleDraft 的 UI 扩展（app 层专属展示辅助；外部类型不能写 inherent impl，用 trait 扩展）。
+pub trait PgRoleDraftUiExt {
+    /// 读取布尔属性字段（UI 开关行通用取值）。
+    fn attr(&self, field: PgDraftAttrField) -> bool;
+    /// 密码操作下拉的当前标签（与 UI 选项一致）。
+    fn password_label(&self) -> String;
+    /// 密码有效期模式下拉的当前标签。
+    fn valid_until_mode_label(&self) -> String;
+}
+
+impl PgRoleDraftUiExt for fluxdb_core::PgRoleDraft {
+    fn attr(&self, field: PgDraftAttrField) -> bool {
+        match field {
+            PgDraftAttrField::IsSuperuser => self.is_superuser,
+            PgDraftAttrField::CanCreateDb => self.can_create_db,
+            PgDraftAttrField::CanCreateRole => self.can_create_role,
+            PgDraftAttrField::Inherit => self.inherit,
+            PgDraftAttrField::IsReplication => self.is_replication,
+            PgDraftAttrField::BypassRls => self.bypass_rls,
+        }
+    }
+
+    fn password_label(&self) -> String {
+        if self.create {
+            match &self.password {
+                PgPasswordOp::Set(_) => "设置新密码".to_string(),
+                _ => "不设置密码".to_string(),
+            }
+        } else {
+            match &self.password {
+                PgPasswordOp::Set(_) => "设置新密码".to_string(),
+                PgPasswordOp::Clear => "清除密码".to_string(),
+                PgPasswordOp::Keep => "保持不变".to_string(),
+            }
+        }
+    }
+
+    fn valid_until_mode_label(&self) -> String {
+        match &self.valid_until {
+            PgValidUntilOp::Clear => "清除截止时间（永不过期）".to_string(),
+            PgValidUntilOp::At(_) => "自定义截止时间…".to_string(),
+            PgValidUntilOp::Keep => "保持不变".to_string(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn _assert_pg_role_draft_ui_ext_usable() {
+    // 仅为保证 trait 扩展编译可用；不参与运行时逻辑。
 }
 
 /// PG 对象权限授权目标种类（UI 选择器用；映射到 `PgObjectGrantScope`）。
@@ -386,7 +497,6 @@ impl UserAdminState {
             member_grant_edits: Vec::new(),
             pending_sql: None,
             pending_delete_user: None,
-            pg_can_login: true,
             pg_grant_kind: PgGrantObjectKind::default(),
             pg_grant_schema: "public".to_string(),
             pg_grant_object: String::new(),
@@ -395,9 +505,28 @@ impl UserAdminState {
             pg_effective_grants: Vec::new(),
             loading_pg_grants: false,
             pg_grants_error: None,
-            pg_edit_mode: PgRoleEditMode::None,
-            pg_rename_new: String::new(),
-            pg_role_login: BTreeMap::new(),
+            pg_roles: Vec::new(),
+            pg_roles_error: None,
+            pg_selected_role: None,
+            pg_draft: None,
+            pg_memberships: Vec::new(),
+            pg_memberships_loaded: false,
+            pg_membership_edits: Vec::new(),
+            pg_grant_database: String::new(),
+            pg_grant_targets: None,
+            pg_loading_targets: false,
+            pg_targets_error: None,
+            pg_grant_edits: Vec::new(),
+            pg_save_status: PgRoleSaveStatus::Idle,
+            pg_plan_error: None,
+            pg_plan_preview: None,
+            pg_preview_loading: false,
+            pg_plan_preview_masked: false,
+            pg_role_filter: "all".to_string(),
+            pg_pending_delete: None,
+            pg_pending_switch: None,
+            pg_member_options_supported: None,
+            pg_loaded_target: String::new(),
         }
     }
 
@@ -418,6 +547,102 @@ impl UserAdminState {
         self.ssl_cipher.clear();
         self.ssl_issuer.clear();
         self.ssl_subject.clear();
+    }
+
+    // ===== PG 用户与角色工作台辅助（改版）=====
+
+    /// 选中角色的基线数据（来自 pg_roles）；新建草稿时为 None。
+    pub fn pg_baseline_role(&self) -> Option<&PgRole> {
+        let selected = self.pg_selected_role.as_deref()?;
+        self.pg_roles.iter().find(|role| role.name == selected)
+    }
+
+    /// 从基线派生编辑草稿（选中角色后右侧面板以草稿渲染）。
+    /// 干净草稿与基线 diff 为空，不计入未保存变更。
+    pub fn pg_reset_draft_from_baseline(&mut self) {
+        self.pg_draft = self.pg_baseline_role().map(PgRoleDraft::from_role);
+    }
+
+    /// 预定义角色（pg_ 前缀）：不提供属性编辑/删除，仅可查看权限与按授权能力管理成员。
+    pub fn pg_is_predefined_role(name: &str) -> bool {
+        name.starts_with("pg_")
+    }
+
+    /// 草稿角色名（新建待填时为空串）。
+    pub fn pg_draft_name(&self) -> Option<&str> {
+        self.pg_draft.as_ref().map(|draft| draft.name.trim())
+    }
+
+    /// 授权/成员变更的受影响角色名：新建草稿用草稿名（保存时先建角色再授权），
+    /// 编辑既有角色用选中名。
+    pub fn pg_effective_grantee_name(&self) -> String {
+        self.pg_draft_name()
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .or_else(|| self.pg_selected_role.clone())
+            .unwrap_or_default()
+    }
+
+    /// 是否存在未保存的草稿变更（常规/高级/成员/授权任一）。
+    ///
+    /// 纯函数判断：与基线 diff + 密码/有效期操作 + 成员与授权草稿列表非空。
+    pub fn pg_has_draft_changes(&self) -> bool {
+        let Some(draft) = &self.pg_draft else {
+            return false;
+        };
+        if !self.pg_membership_edits.is_empty() || !self.pg_grant_edits.is_empty() {
+            return true;
+        }
+        if draft.password != PgPasswordOp::Keep || draft.valid_until != PgValidUntilOp::Keep {
+            return true;
+        }
+        if draft.create {
+            return true;
+        }
+        let Some(baseline) = self.pg_baseline_role() else {
+            return !draft.name.trim().is_empty();
+        };
+        draft.name.trim() != baseline.name
+            || fluxdb_core::pg_role_attributes_diff(Some(baseline), draft).is_some()
+    }
+
+    /// 「所属角色」：当前角色直接所在的组角色（读取 pg_auth_members 过滤）。
+    pub fn pg_member_of_roles(&self) -> Vec<&PgRoleMembership> {
+        let selected = self.pg_selected_role.as_deref();
+        self.pg_memberships
+            .iter()
+            .filter(|m| Some(m.member.as_str()) == selected)
+            .collect()
+    }
+
+    /// 「此角色的成员」：把当前角色授予了哪些成员。
+    pub fn pg_members_of_role(&self) -> Vec<&PgRoleMembership> {
+        let selected = self.pg_selected_role.as_deref();
+        self.pg_memberships
+            .iter()
+            .filter(|m| Some(m.grantee.as_str()) == selected)
+            .collect()
+    }
+
+    /// 成员关系草稿是否已包含对该 (role, member) 的变更（避免重复条目）。
+    pub fn pg_membership_edit_index(&self, role: &str, member: &str) -> Option<usize> {
+        self.pg_membership_edits.iter().position(|edit| match edit {
+            PgRoleChange::GrantMembership { role: r, member: m, .. }
+            | PgRoleChange::RevokeMembership { role: r, member: m } => r == role && m == member,
+            _ => false,
+        })
+    }
+
+    /// 对象授权草稿定位：同 privilege + 同 scope 的既有变更条目。
+    pub fn pg_grant_edit_index(&self, privilege: &str, scope: &PgObjectGrantScope) -> Option<usize> {
+        self.pg_grant_edits.iter().position(|edit| match edit {
+            PgRoleChange::GrantObject { privilege: p, scope: s, .. }
+            | PgRoleChange::RevokeObject { privilege: p, scope: s, .. }
+            | PgRoleChange::RevokeGrantOption { privilege: p, scope: s, .. } => {
+                p == privilege && s == scope
+            }
+            _ => false,
+        })
     }
 
     pub fn effective_role_memberships(&self) -> Vec<UserRoleMembership> {
@@ -985,12 +1210,6 @@ pub enum AppCommand {
     DropPgRole {
         connection_id: ConnectionId,
         name: String,
-    },
-    /// PostgreSQL：设置既有角色「可登录 LOGIN」选项（alter_role_options → can_login）。
-    SetPgRoleLogin {
-        connection_id: ConnectionId,
-        name: String,
-        can_login: bool,
     },
     DeleteDatabase {
         connection_id: ConnectionId,
@@ -1735,22 +1954,148 @@ pub enum AppCommand {
     BeginUserAdminCreateUser(TabId),
     /// 结束「新建」态（取消新建或提交完成），回到选中既有对象。
     EndUserAdminCreateUser(TabId),
-    /// PostgreSQL：新建角色是否可登录（LOGIN/NOLOGIN）切换。
-    SetUserAdminPgCanLogin {
+    // ===== PG 用户与角色工作台（改版）=====
+    /// 切换选中 PG 角色（UI 在有草稿时先弹确认，确认后走 DiscardPgDraftAndSelect）。
+    SelectPgRole {
+        tab_id: TabId,
+        name: String,
+    },
+    /// 挂起「切换角色」等待用户确认丢弃草稿。
+    SetPgRoleSwitchPending {
+        tab_id: TabId,
+        target: String,
+    },
+    /// 取消切换（留在当前角色，草稿保留）。
+    PgCancelSwitchRole(TabId),
+    /// 丢弃当前草稿并切换到目标角色（切换确认框确认后）。
+    DiscardPgDraftAndSelect {
+        tab_id: TabId,
+        name: String,
+    },
+    /// 开始「新建角色」草稿（角色名留空待填，不自动误建）。
+    PgBeginCreateRole(TabId),
+    /// 取消/关闭当前草稿（仅清理本地草稿，不写库）。
+    PgCancelDraft(TabId),
+    SetPgDraftName {
+        tab_id: TabId,
+        name: String,
+    },
+    SetPgDraftCanLogin {
         tab_id: TabId,
         can_login: bool,
     },
-    /// PostgreSQL（T27）：进入角色「重命名」内联编辑模式（选中角色）。
-    BeginUserAdminPgRename(TabId),
-    /// PostgreSQL（T27）：进入角色「改密」内联编辑模式（选中角色）。
-    BeginUserAdminPgPassword(TabId),
-    /// PostgreSQL（T27）：更新重命名新名输入值。
-    SetUserAdminPgRenameNew {
+    /// 布尔属性草稿切换（SUPERUSER/CREATEDB/CREATEROLE/INHERIT/REPLICATION/BYPASSRLS）。
+    SetPgDraftAttr {
+        tab_id: TabId,
+        field: PgDraftAttrField,
+        value: bool,
+    },
+    SetPgDraftConnectionLimit {
         tab_id: TabId,
         value: String,
     },
-    /// PostgreSQL（T27）：结束任何内联编辑模式（取消/完成）。
-    EndUserAdminPgEdit(TabId),
+    /// 密码有效期操作：Keep/Clear(infinity)/At(绝对时间)。
+    SetPgDraftValidUntil {
+        tab_id: TabId,
+        op: PgValidUntilOp,
+    },
+    /// 密码操作：Keep/Set/Clear。
+    SetPgDraftPasswordOp {
+        tab_id: TabId,
+        op: PgPasswordOp,
+    },
+    /// 录入新密码明文（仅内存；写入 Set 操作）。
+    SetPgDraftPassword {
+        tab_id: TabId,
+        password: String,
+    },
+    /// 开始加载 PG 角色列表（权威 pg_roles 数据）。
+    StartUserAdminPgRolesLoad(TabId),
+    LoadUserAdminPgRoles(TabId),
+    FinishUserAdminPgRolesLoad {
+        tab_id: TabId,
+        result: Result<Vec<PgRole>, UserFacingError>,
+    },
+    /// 加载全量成员关系（双向展示用；同时探测服务端成员选项版本支持）。
+    StartPgMembershipsLoad(TabId),
+    LoadPgMemberships(TabId),
+    FinishPgMembershipsLoad {
+        tab_id: TabId,
+        result: Result<Vec<PgRoleMembership>, UserFacingError>,
+        member_options_supported: bool,
+    },
+    /// 成员关系草稿：授予 role → member（含 ADMIN/INHERIT/SET 选项）。
+    PgMembershipGrant {
+        tab_id: TabId,
+        role: String,
+        member: String,
+        admin: bool,
+        inherit: bool,
+        set: bool,
+    },
+    /// 成员关系草稿：撤销 role ← member。
+    PgMembershipRevoke {
+        tab_id: TabId,
+        role: String,
+        member: String,
+    },
+    /// 移除一条成员关系草稿变更。
+    PgMembershipRemoveEdit {
+        tab_id: TabId,
+        index: usize,
+    },
+    /// 权限页：切换目标数据库（一期同批只允许一个数据库）。
+    SetPgGrantDatabase {
+        tab_id: TabId,
+        database: String,
+    },
+    /// 开始加载权限页目标列表（数据库/schema/对象/函数）。
+    StartPgGrantTargetsLoad(TabId),
+    LoadPgGrantTargets {
+        tab_id: TabId,
+        database: String,
+    },
+    FinishPgGrantTargetsLoad {
+        tab_id: TabId,
+        result: Result<PgGrantTargetLists, UserFacingError>,
+    },
+    /// 对象授权草稿：授予/撤销/仅取消可再授权。
+    PgToggleGrant {
+        tab_id: TabId,
+        privilege: String,
+        scope: PgObjectGrantScope,
+        /// Grant（可带 grant_option）/ Revoke / RevokeGrantOption。
+        op: PgGrantEditOp,
+        grant_option: bool,
+    },
+    /// 移除一条对象授权草稿变更。
+    PgRemoveGrantEdit {
+        tab_id: TabId,
+        index: usize,
+    },
+    /// 生成脱敏 SQL 预览（渲染与执行共用 connector 规则）。
+    StartPgPlanPreview(TabId),
+    LoadPgPlanPreview(TabId),
+    FinishPgPlanPreview {
+        tab_id: TabId,
+        result: Result<Vec<String>, UserFacingError>,
+    },
+    /// 保存：以单事务应用全部草稿变更（App 内部构建计划并执行）。
+    StartPgPlanApply(TabId),
+    ApplyPgRolePlan(TabId),
+    FinishPgRolePlanApply {
+        tab_id: TabId,
+        plan: PgRoleSavePlan,
+        result: Result<Vec<String>, UserFacingError>,
+    },
+    /// 删除角色确认框。
+    PgBeginDeleteRole(TabId),
+    PgCancelDeleteRole(TabId),
+    /// 角色列表筛选：all / login / nologin / predefined。
+    SetPgRoleFilter {
+        tab_id: TabId,
+        filter: String,
+    },
     /// PostgreSQL 对象权限：设置授权目标（种类/schema/对象/签名）。
     SetUserAdminPgGrantTarget {
         tab_id: TabId,
@@ -1767,17 +2112,6 @@ pub enum AppCommand {
     FinishUserAdminPgObjectGrantsLoad {
         tab_id: TabId,
         result: Result<(PgObjectGrants, Vec<PgEffectivePrivilege>), UserFacingError>,
-    },
-    /// 授予选中角色某权限（可选 GRANT OPTION）。
-    GrantUserAdminPgPrivilege {
-        tab_id: TabId,
-        privilege: String,
-        grant_option: bool,
-    },
-    /// 撤销选中角色某权限。
-    RevokeUserAdminPgPrivilege {
-        tab_id: TabId,
-        privilege: String,
     },
     SelectUserAdminDetailTab {
         tab_id: TabId,
@@ -1960,6 +2294,22 @@ pub enum AppEvent {
     ),
     /// PG 对象权限授予/撤销成功（UI 重新读取该对象权限）。
     UserAdminPgGrantsChanged(TabId),
+    /// PG 角色列表加载完成回填（改版工作台）。
+    UserAdminPgRolesLoaded(TabId, Vec<PgRole>),
+    /// PG 成员关系加载完成回填（含服务端是否支持成员级 INHERIT/SET 选项）。
+    UserAdminPgMembershipsLoaded(TabId, Vec<PgRoleMembership>, bool),
+    /// PG 权限目标列表加载完成回填。
+    UserAdminPgGrantTargetsLoaded(TabId, PgGrantTargetLists),
+    /// PG 变更计划脱敏预览生成完成。
+    UserAdminPgPlanPreview(TabId, Vec<String>),
+    /// PG 变更计划应用完成（含计划本体，供 Finish 回填；Err 为失败/结果不确定）。
+    UserAdminPgRolePlanFinished(
+        TabId,
+        PgRoleSavePlan,
+        Result<Vec<String>, UserFacingError>,
+    ),
+    /// PG 变更计划应用成功（UI 刷新角色列表并清空草稿）。
+    UserAdminPgRolePlanApplied(TabId),
     DataLoaded(TabId, DataPage),
     /// 惰性补齐无用的事件：元信息已由控制器合并进 `editor.page`，只用于通知 UI 续补下一批可见行。
     RedisKeyMetadataLoaded {

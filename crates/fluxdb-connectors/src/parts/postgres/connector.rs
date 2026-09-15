@@ -196,6 +196,11 @@ impl Connector for PostgresConnector {
         pg_list_role_membership(config)
     }
 
+    fn supports_member_options(&self, _connection_id: ConnectionId) -> fluxdb_core::Result<bool> {
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色管理需要连接配置上下文"))?;
+        pg_supports_member_options(config)
+    }
+
     fn list_relation_grants(
         &self,
         connection_id: ConnectionId,
@@ -224,6 +229,37 @@ impl Connector for PostgresConnector {
     ) -> fluxdb_core::Result<Vec<fluxdb_core::PgEffectivePrivilege>> {
         let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色有效权限需要连接配置上下文"))?;
         pg_role_effective_grants(config, scope, role)
+    }
+
+    fn render_role_plan(
+        &self,
+        _connection_id: ConnectionId,
+        plan: &fluxdb_core::PgRoleSavePlan,
+        mask_secrets: bool,
+    ) -> fluxdb_core::Result<Vec<String>> {
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色变更计划需要连接配置上下文"))?;
+        // 成员选项语句按服务端版本渲染（PG16+ 才有 INHERIT/SET/ADMIN FALSE）；
+        // 预览需要一次版本探测，保证预览 SQL 与实际执行一致。
+        let member_options = pg_supports_member_options(config)?;
+        pg_render_role_plan(plan, mask_secrets, member_options)
+    }
+
+    fn apply_role_plan(
+        &self,
+        _connection_id: ConnectionId,
+        plan: &fluxdb_core::PgRoleSavePlan,
+    ) -> fluxdb_core::Result<Vec<String>> {
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 角色变更计划需要连接配置上下文"))?;
+        pg_apply_role_plan(config, plan)
+    }
+
+    fn list_grant_targets(
+        &self,
+        _connection_id: ConnectionId,
+        database: &str,
+    ) -> fluxdb_core::Result<fluxdb_core::PgGrantTargetLists> {
+        let config = self.config.as_ref().ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 权限目标枚举需要连接配置上下文"))?;
+        pg_list_grant_targets(config, database)
     }
 
     fn list_indexes(&self, path: &ObjectPath) -> fluxdb_core::Result<Vec<IndexInfo>> {

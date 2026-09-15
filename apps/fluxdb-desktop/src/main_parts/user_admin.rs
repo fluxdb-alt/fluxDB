@@ -277,6 +277,18 @@ impl NavicatMain {
             _ => None,
         };
         if let Some(tab_id) = tab_id {
+            // PG：走角色工作台加载（PgRole 权威列表 + 成员关系），不进 MySQL 用户加载路径。
+            let is_postgres = self
+                .controller
+                .state()
+                .connections
+                .iter()
+                .find(|connection| connection.config.id == connection_id)
+                .is_some_and(|connection| connection.config.kind == DatabaseKind::Postgres);
+            if is_postgres {
+                self.start_user_admin_pg_roles_load(tab_id, cx);
+                return;
+            }
             self.start_user_admin_users_load(tab_id, cx);
             self.start_user_admin_database_options_load(tab_id, cx);
         }
@@ -750,7 +762,6 @@ fn sync_user_admin_inputs(
     sync_input_value(&this.user_admin_ssl_cipher_input, &admin.ssl_cipher, window, cx);
     sync_input_value(&this.user_admin_ssl_issuer_input, &admin.ssl_issuer, window, cx);
     sync_input_value(&this.user_admin_ssl_subject_input, &admin.ssl_subject, window, cx);
-    sync_input_value(&this.user_admin_pg_rename_input, &admin.pg_rename_new, window, cx);
 }
 
 fn sync_input_value(

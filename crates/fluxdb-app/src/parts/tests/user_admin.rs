@@ -190,26 +190,20 @@ fn pg_groups_for_member_filters_and_returns_groups() {
     assert!(pg_groups_for_member(&memberships, "eve").is_empty());
 }
 
-/// PG：UserAdminState 的 pg_can_login（新建角色可登录）默认与切换。
+/// PG：改版工作台的草稿状态默认值（无草稿、无变更、预定义角色判定）。
 #[test]
-fn user_admin_pg_can_login_defaults_and_reflects() {
+fn user_admin_pg_draft_defaults_and_predefined_roles() {
     let mut admin = UserAdminState::new(ConnectionId(1), None, PrivilegeScope::Postgres);
-    assert!(admin.pg_can_login, "PG 新建角色默认可登录 LOGIN");
-    admin.pg_can_login = false;
-    assert!(!admin.pg_can_login, "切换为 NOLOGIN 组角色应生效");
-}
-
-/// PG：UserAdminState 角色内联编辑模式（改密/重命名）默认关闭，可切换与清空。
-#[test]
-fn user_admin_pg_edit_mode_defaults_and_clears() {
-    let mut admin = UserAdminState::new(ConnectionId(1), None, PrivilegeScope::Postgres);
-    assert_eq!(admin.pg_edit_mode, PgRoleEditMode::None, "默认无编辑模式");
-    admin.pg_edit_mode = PgRoleEditMode::Rename;
-    assert_eq!(admin.pg_edit_mode, PgRoleEditMode::Rename);
-    admin.pg_edit_mode = PgRoleEditMode::Password;
-    assert_eq!(admin.pg_edit_mode, PgRoleEditMode::Password);
-    admin.pg_edit_mode = PgRoleEditMode::None;
-    assert_eq!(admin.pg_edit_mode, PgRoleEditMode::None, "结束后回到 None");
+    assert!(admin.pg_draft.is_none(), "默认无草稿");
+    assert!(!admin.pg_has_draft_changes(), "无草稿时不应有未保存变更");
+    assert!(UserAdminState::pg_is_predefined_role("pg_monitor"));
+    assert!(UserAdminState::pg_is_predefined_role("pg_read_all_data"));
+    assert!(!UserAdminState::pg_is_predefined_role("postgres"), "postgres 是普通超级用户名，不是预定义角色");
+    // 新建草稿：角色名留空待填、默认 LOGIN；存在草稿即视为有变更。
+    admin.pg_draft = Some(PgRoleDraft::new_create());
+    assert!(admin.pg_draft_name().unwrap().is_empty(), "新建草稿角色名留空，避免自动误建");
+    assert!(admin.pg_draft.as_ref().unwrap().can_login, "新建默认 LOGIN");
+    assert!(admin.pg_has_draft_changes(), "新建草稿即为待保存变更");
 }
 
 /// PG 权限面板：授权目标 scope 构造（表/视图/序列/函数/schema/数据库 + 空 schema 回退 public）。

@@ -7,15 +7,6 @@ impl AppController {
         role_operation_for_connection(&config, |connector| connector.list_roles(connection_id))
     }
 
-    /// 经连接器列出 PG 角色 → 名称 → 是否可登录（LOGIN），供角色选项切换展示。
-    fn load_pg_role_login_map(
-        &self,
-        connection_id: ConnectionId,
-    ) -> fluxdb_core::Result<BTreeMap<String, bool>> {
-        let roles = self.list_pg_roles_for_connection(connection_id)?;
-        Ok(roles.into_iter().map(|r| (r.name, r.can_login)).collect())
-    }
-
     fn user_admin_state(&self, tab_id: TabId) -> Option<&UserAdminState> {
         self.find_tab(tab_id).and_then(|tab| match &tab.kind {
             TabKind::UserAdmin(admin) => Some(admin),
@@ -143,12 +134,10 @@ impl AppController {
             .user_admin_state(tab_id)
             .ok_or_else(|| Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))?;
         // PG：角色「授权」= 其所在的组角色（成员关系），经连接器读取，非 SHOW GRANTS 文本解析。
+        // 空结果也是成功空态：无成员关系的角色不允许回退 MySQL provider（那是错误路径）。
         if self.connection_kind(admin.connection_id) == Some(DatabaseKind::Postgres) {
             let memberships = self.list_pg_memberships_for_connection(admin.connection_id)?;
-            let groups = pg_groups_for_member(&memberships, &user.user);
-            if !groups.is_empty() || user.user.is_empty() {
-                return Ok(groups);
-            }
+            return Ok(pg_groups_for_member(&memberships, &user.user));
         }
         let provider = self.user_admin_provider_for_tab(tab_id)?;
         let request = QueryRequest {
@@ -318,10 +307,10 @@ impl AppController {
             .user_admin_state(tab_id)
             .ok_or_else(|| Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))?;
         let role = admin
-            .selected_user
-            .as_ref()
-            .map(|u| u.user.clone())
-            .ok_or_else(|| Error::new(ErrorKind::Query, "请先选择角色"))?;
+            .pg_effective_grantee_name();
+        if role.is_empty() {
+            return Err(Error::new(ErrorKind::Query, "请先选择角色"));
+        }
         let scope = pg_grant_scope_from_state(
             admin.pg_grant_kind,
             &admin.pg_grant_schema,
@@ -339,59 +328,163 @@ impl AppController {
         })
     }
 
-    /// 授予选中角色某权限（GRANT ... ON 目标 TO 角色）。仅对**直接授权**生效，不改继承/owner。
-    fn apply_pg_grant(
-        &self,
-        tab_id: TabId,
-        privilege: &str,
-        grant_option: bool,
-    ) -> fluxdb_core::Result<()> {
+    /// 由草稿 diff 出本次保存的结构化变更计划（预览与执行共用）。
+    ///
+    /// 顺序由连接器渲染保证：创建 → 改名 → 属性/密码 → 成员 → 对象授权；
+    /// 改名后所有变更引用新身份。失败（如连接数限制非法）返回错误，不产生半份计划。
+    pub fn build_pg_role_plan(&self, tab_id: TabId) -> fluxdb_core::Result<PgRoleSavePlan> {
         let admin = self
             .user_admin_state(tab_id)
             .ok_or_else(|| Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))?;
-        let role = admin
-            .selected_user
-            .as_ref()
-            .map(|u| u.user.clone())
-            .ok_or_else(|| Error::new(ErrorKind::Query, "请先选择角色"))?;
-        let scope = pg_grant_scope_from_state(
-            admin.pg_grant_kind,
-            &admin.pg_grant_schema,
-            &admin.pg_grant_object,
-            &admin.pg_grant_signature,
-        );
-        let connection_id = admin.connection_id;
-        let config = self
-            .connection_config(connection_id)
-            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
-        role_operation_for_connection(&config, |connector| {
-            connector.grant_object_privilege(connection_id, privilege, &scope, &role, grant_option)
+        let Some(draft) = admin.pg_draft.clone() else {
+            return Err(Error::new(ErrorKind::Query, "没有待保存的草稿"));
+        };
+        let baseline = admin.pg_baseline_role();
+        let name = draft.name.trim().to_string();
+        if name.is_empty() {
+            return Err(Error::new(ErrorKind::Query, "角色名不能为空"));
+        }
+        // 连接数限制提前校验（diff 失败即视为非法文本）。
+        if draft.parsed_connection_limit().is_none() {
+            return Err(Error::new(ErrorKind::Query, "连接数限制必须是不限（-1）或非负整数"));
+        }
+        // 确认密码一致性由 UI 保证；此处校验密码操作合法性。
+        if let PgPasswordOp::Set(password) = &draft.password {
+            if draft.create && draft.can_login && password.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::Query,
+                    "新建可登录角色未设置密码（如需无密码请选择「不设置密码」）",
+                ));
+            }
+        }
+        // 预定义角色（pg_*）由系统管理：拒绝改名/属性/密码/有效期变更；
+        // 成员关系与对象授权仍可按授权能力操作（服务端最终判定）。
+        if let Some(base) = baseline
+            && UserAdminState::pg_is_predefined_role(&base.name)
+        {
+            let identity_touched = base.name != name
+                || fluxdb_core::pg_role_attributes_diff(Some(base), &draft).is_some()
+                || draft.password != PgPasswordOp::Keep
+                || draft.valid_until != PgValidUntilOp::Keep;
+            if identity_touched {
+                return Err(Error::new(
+                    ErrorKind::Query,
+                    format!("预定义角色「{}」由系统管理，不允许修改名称、属性或密码", base.name),
+                ));
+            }
+        }
+        let mut changes: Vec<PgRoleChange> = Vec::new();
+        match baseline {
+            None => {
+                // 新建：CREATE + 全量属性 + 初始密码操作。
+                let attributes =
+                    fluxdb_core::pg_role_attributes_diff(None, &draft)
+                        .unwrap_or_default();
+                changes.push(PgRoleChange::Create {
+                    name: name.clone(),
+                    can_login: draft.can_login,
+                    password: draft.password.clone(),
+                    attributes,
+                });
+            }
+            Some(base) => {
+                if base.name != name {
+                    changes.push(PgRoleChange::Rename {
+                        from: base.name.clone(),
+                        to: name.clone(),
+                    });
+                }
+                if let Some(attributes) = fluxdb_core::pg_role_attributes_diff(Some(base), &draft)
+                    && !attributes.is_empty()
+                {
+                    changes.push(PgRoleChange::AlterAttributes {
+                        name: name.clone(),
+                        attributes,
+                    });
+                }
+                match &draft.password {
+                    PgPasswordOp::Keep => {}
+                    PgPasswordOp::Set(password) => changes.push(PgRoleChange::SetPassword {
+                        name: name.clone(),
+                        password: (!password.is_empty()).then_some(password.clone()),
+                    }),
+                    PgPasswordOp::Clear => changes.push(PgRoleChange::SetPassword {
+                        name: name.clone(),
+                        password: None,
+                    }),
+                }
+            }
+        }
+        // 成员与授权草稿：受影响角色统一改为最终身份（改名场景）。
+        // 草稿记录里的受影响角色是编辑时的旧名；重命名时全部替换为新名。
+        let old_name = admin.pg_selected_role.clone().unwrap_or_default();
+        let final_name = name;
+        for edit in &admin.pg_membership_edits {
+            changes.push(rewrite_pg_change_role(edit, &old_name, &final_name));
+        }
+        for edit in &admin.pg_grant_edits {
+            changes.push(rewrite_pg_change_role(edit, &old_name, &final_name));
+        }
+        // 对象授权所在数据库（一期同批一个库）；无对象授权时为 None。
+        let database = admin
+            .pg_grant_edits
+            .first()
+            .map(|_| admin.pg_grant_database.clone())
+            .filter(|db| !db.is_empty());
+        Ok(PgRoleSavePlan {
+            database,
+            role_name: final_name,
+            changes,
         })
     }
+}
 
-    /// 撤销选中角色某权限（REVOKE ... ON 目标 FROM 角色）。只撤销该角色的**直接**授权。
-    fn apply_pg_revoke(&self, tab_id: TabId, privilege: &str) -> fluxdb_core::Result<()> {
-        let admin = self
-            .user_admin_state(tab_id)
-            .ok_or_else(|| Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))?;
-        let role = admin
-            .selected_user
-            .as_ref()
-            .map(|u| u.user.clone())
-            .ok_or_else(|| Error::new(ErrorKind::Query, "请先选择角色"))?;
-        let scope = pg_grant_scope_from_state(
-            admin.pg_grant_kind,
-            &admin.pg_grant_schema,
-            &admin.pg_grant_object,
-            &admin.pg_grant_signature,
-        );
-        let connection_id = admin.connection_id;
-        let config = self
-            .connection_config(connection_id)
-            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
-        role_operation_for_connection(&config, |connector| {
-            connector.revoke_object_privilege(connection_id, privilege, &scope, &role)
-        })
+/// 把成员/授权草稿变更的受影响角色统一替换为最终名（改名后引用新身份）。
+///
+/// `old_name` 是编辑时的身份：成员关系的 member、对象授权的 grantee 若等于旧名则替换。
+fn rewrite_pg_change_role(edit: &PgRoleChange, old_name: &str, final_name: &str) -> PgRoleChange {
+    let rewrite_member = |member: &str| {
+        if member == old_name && !old_name.is_empty() {
+            final_name.to_string()
+        } else {
+            member.to_string()
+        }
+    };
+    match edit {
+        PgRoleChange::GrantMembership { role, member, admin, inherit, set } => {
+            PgRoleChange::GrantMembership {
+                role: role.clone(),
+                member: rewrite_member(member),
+                admin: *admin,
+                inherit: *inherit,
+                set: *set,
+            }
+        }
+        PgRoleChange::RevokeMembership { role, member } => PgRoleChange::RevokeMembership {
+            role: role.clone(),
+            member: rewrite_member(member),
+        },
+        PgRoleChange::GrantObject { privilege, scope, grantee, grant_option } => {
+            PgRoleChange::GrantObject {
+                privilege: privilege.clone(),
+                scope: scope.clone(),
+                grantee: rewrite_member(grantee),
+                grant_option: *grant_option,
+            }
+        }
+        PgRoleChange::RevokeObject { privilege, scope, grantee } => PgRoleChange::RevokeObject {
+            privilege: privilege.clone(),
+            scope: scope.clone(),
+            grantee: rewrite_member(grantee),
+        },
+        PgRoleChange::RevokeGrantOption { privilege, scope, grantee } => {
+            PgRoleChange::RevokeGrantOption {
+                privilege: privilege.clone(),
+                scope: scope.clone(),
+                grantee: rewrite_member(grantee),
+            }
+        }
+        other => other.clone(),
     }
 }
 
@@ -401,4 +494,15 @@ impl AppController {
 /// 标识符引用与白名单）；此处仅转发，供预览/测试使用，避免两份不一致的渲染实现。
 pub fn pg_grant_object_sql(scope: &PgObjectGrantScope) -> fluxdb_core::Result<String> {
     fluxdb_connectors::pg_object_scope_sql(scope)
+}
+
+/// 当前授权目标指纹（kind|schema|object|signature），用于判断已读权限是否过期。
+pub fn pg_grant_target_fingerprint(admin: &UserAdminState) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        admin.pg_grant_kind.label(),
+        admin.pg_grant_schema,
+        admin.pg_grant_object,
+        admin.pg_grant_signature
+    )
 }

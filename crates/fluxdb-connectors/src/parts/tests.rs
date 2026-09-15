@@ -3063,7 +3063,7 @@ SELECT item_id, name FROM audit_log;"
 
     // —— PostgreSQL（T04）——
 
-    fn postgres_config() -> ConnectionConfig {
+    pub(crate) fn postgres_config() -> ConnectionConfig {
         ConnectionConfig {
             id: ConnectionId(4),
             name: "PG Local".to_string(),
@@ -3090,7 +3090,7 @@ SELECT item_id, name FROM audit_log;"
         }
     }
 
-    fn pg_query_request(config: &ConnectionConfig, session_id: Option<QuerySessionId>) -> QueryRequest {
+    pub(crate) fn pg_query_request(config: &ConnectionConfig, session_id: Option<QuerySessionId>) -> QueryRequest {
         QueryRequest {
             connection_id: config.id,
             database: None,
@@ -3099,6 +3099,14 @@ SELECT item_id, name FROM audit_log;"
             mode: QueryMode::All,
             options: QueryExecutionOptions::default(),
             session_id,
+        }
+    }
+
+    /// 构造自定义 SQL 的查询请求（供管理类集成测试执行 DDL/清理）。
+    pub(crate) fn pg_qtxt(config: &ConnectionConfig, text: &str) -> QueryRequest {
+        QueryRequest {
+            text: text.to_string(),
+            ..pg_query_request(config, None)
         }
     }
 
@@ -6401,4 +6409,273 @@ SELECT item_id, name FROM audit_log;"
         let env = pg_hostaddr_env("127.0.0.1", 15432);
         assert!(env.iter().any(|(k, v)| k == "PGHOSTADDR" && v == "127.0.0.1"));
         assert!(env.iter().any(|(k, v)| k == "PGPORT" && v == "15432"));
+    }
+
+#[cfg(test)]
+mod pg_plan_apply_tests {
+    use super::*;
+    use crate::tests::{postgres_config as pg_cfg, pg_qtxt};
+
+// ===== PG 角色变更计划：单事务应用（需本机 fluxdb-t09-pg 容器；无环境时失败即如实报告）=====
+
+/// 集成：任一语句失败 → 整批回滚，不产生半完成状态（角色不应存在）。
+#[test]
+fn pg_apply_role_plan_rolls_back_as_a_whole() {
+    let config = pg_cfg();
+    let connector = PostgresConnector::with_config(config.clone());
+    // 前置清理同名遗留角色，保证断言可靠。
+    let _ = connector.execute(&pg_qtxt(
+        &config,
+        "DROP ROLE IF EXISTS \"fluxdb_t27_rollback\";",
+    ));
+
+    let plan = PgRoleSavePlan {
+        database: None,
+        role_name: "fluxdb_t27_rollback".into(),
+        changes: vec![
+            PgRoleChange::Create {
+                name: "fluxdb_t27_rollback".into(),
+                can_login: false,
+                password: PgPasswordOp::Keep,
+                attributes: PgRoleAttributes {
+                    inherit: Some(true),
+                    ..Default::default()
+                },
+            },
+            // 必然失败：对不存在的表授权。
+            PgRoleChange::GrantObject {
+                privilege: "SELECT".into(),
+                scope: PgObjectGrantScope::Relation {
+                    schema: "public".into(),
+                    name: "fluxdb_no_such_table_t27".into(),
+                    kind: PgRelationKind::Table,
+                },
+                grantee: "fluxdb_t27_rollback".into(),
+                grant_option: false,
+            },
+        ],
+    };
+    assert!(
+        connector.apply_role_plan(config.id, &plan).is_err(),
+        "对不存在对象授权应失败"
+    );
+    let roles = connector.list_roles(config.id).unwrap();
+    assert!(
+        !roles.iter().any(|r| r.name == "fluxdb_t27_rollback"),
+        "事务应整体回滚：角色不应存在（无半完成状态）"
+    );
+}
+
+
+    /// 集成：成功路径——创建（属性+密码）→ 成员授予 → 对象授权 → 改名，读模型逐一核实后清理。
+    #[test]
+    fn pg_apply_role_plan_end_to_end_and_rename() {
+        let config = pg_cfg();
+        let connector = PostgresConnector::with_config(config.clone());
+        let sql = |text: &str| {
+            let _ = connector.execute(&pg_qtxt(&config, text));
+        };
+        // 准备组角色与目标表；清理遗留。
+        sql("DROP ROLE IF EXISTS \"fluxdb_t27_user\";");
+        sql("DROP ROLE IF EXISTS \"fluxdb_t27_user2\";");
+        sql("DROP ROLE IF EXISTS \"fluxdb_t27_grp\";");
+        sql("DROP TABLE IF EXISTS \"public\".\"fluxdb_t27_tbl\";");
+        sql("CREATE ROLE \"fluxdb_t27_grp\" NOLOGIN;");
+        sql("CREATE TABLE \"public\".\"fluxdb_t27_tbl\" (id int);");
+
+        let plan = PgRoleSavePlan {
+            database: Some("postgres".into()),
+            role_name: "fluxdb_t27_user".into(),
+            changes: vec![
+                PgRoleChange::Create {
+                    name: "fluxdb_t27_user".into(),
+                    can_login: true,
+                    password: PgPasswordOp::Set("t27-secret".into()),
+                    attributes: PgRoleAttributes {
+                        can_login: Some(true),
+                        connection_limit: Some(5),
+                        ..Default::default()
+                    },
+                },
+                PgRoleChange::GrantMembership {
+                    role: "fluxdb_t27_grp".into(),
+                    // 授予以改名后的最终身份；渲染排序保证 Rename 先于成员/对象授权。
+                    member: "fluxdb_t27_user2".into(),
+                    admin: false,
+                    inherit: true,
+                    set: true,
+                },
+                PgRoleChange::GrantObject {
+                    privilege: "SELECT".into(),
+                    scope: PgObjectGrantScope::Relation {
+                        schema: "public".into(),
+                        name: "fluxdb_t27_tbl".into(),
+                        kind: PgRelationKind::Table,
+                    },
+                    grantee: "fluxdb_t27_user2".into(),
+                    grant_option: false,
+                },
+                PgRoleChange::Rename {
+                    from: "fluxdb_t27_user".into(),
+                    to: "fluxdb_t27_user2".into(),
+                },
+            ],
+        };
+        let masked = connector.apply_role_plan(config.id, &plan).unwrap();
+        // 审计输出脱敏：不含明文密码。
+        assert!(
+            !masked.join("\n").contains("t27-secret"),
+            "apply 返回的审计语句必须脱敏"
+        );
+
+        // 改名后读模型：新名存在且属性正确，旧名不存在。
+        let roles = connector.list_roles(config.id).unwrap();
+        let renamed = roles.iter().find(|r| r.name == "fluxdb_t27_user2");
+        assert!(renamed.is_some(), "改名后的角色应存在");
+        let renamed = renamed.unwrap();
+        assert!(renamed.can_login);
+        assert_eq!(renamed.connection_limit, 5);
+        assert!(!roles.iter().any(|r| r.name == "fluxdb_t27_user"), "旧名不应存在");
+
+        // 成员关系：改名后的用户是组成员（授权引用新身份）。
+        let memberships = connector.list_role_membership(config.id).unwrap();
+        assert!(memberships.iter().any(|m| m.grantee == "fluxdb_t27_grp"
+            && m.member == "fluxdb_t27_user2"));
+
+        // 对象权限：新身份对表有直接 SELECT。
+        let scope = PgObjectGrantScope::Relation {
+            schema: "public".into(),
+            name: "fluxdb_t27_tbl".into(),
+            kind: PgRelationKind::Table,
+        };
+        let effective = connector
+            .role_effective_grants(config.id, &scope, "fluxdb_t27_user2")
+            .unwrap();
+        let select = effective.iter().find(|p| p.privilege == "SELECT").unwrap();
+        assert!(select.effective && select.direct, "应有直接 SELECT 授权");
+
+        // 清理：撤销成员 → 删角色 → 删表（只清理本测试创建的对象）。
+        sql("REVOKE \"fluxdb_t27_grp\" FROM \"fluxdb_t27_user2\";");
+        sql("DROP ROLE \"fluxdb_t27_user2\";");
+        sql("DROP ROLE \"fluxdb_t27_grp\";");
+        sql("DROP TABLE IF EXISTS \"public\".\"fluxdb_t27_tbl\";");
+    }
+}
+
+    // ===== PG 角色变更计划渲染（T27 改版）=====
+
+    #[cfg(test)] // 仅测试构建使用；非 test 构建下避免 dead_code 警告
+    fn sample_plan() -> PgRoleSavePlan {
+        PgRoleSavePlan {
+            database: Some("appdb".into()),
+            role_name: "app_user".into(),
+            changes: vec![
+                PgRoleChange::SetPassword {
+                    name: "app_user".into(),
+                    password: Some("pw123".into()),
+                },
+                PgRoleChange::GrantMembership {
+                    role: "readonly".into(),
+                    member: "app_user".into(),
+                    admin: false,
+                    inherit: true,
+                    set: true,
+                },
+                PgRoleChange::GrantObject {
+                    privilege: "SELECT".into(),
+                    scope: PgObjectGrantScope::Relation {
+                        schema: "public".into(),
+                        name: "orders".into(),
+                        kind: PgRelationKind::Table,
+                    },
+                    grantee: "app_user".into(),
+                    grant_option: true,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn pg_render_role_plan_orders_and_masks() {
+        // 真实渲染：密码明文仅出现在执行路径。
+        let stmts = pg_render_role_plan(&sample_plan(), false, true).unwrap();
+        assert!(stmts[0].starts_with("ALTER ROLE \"app_user\" PASSWORD 'pw123';"));
+        assert!(stmts.iter().any(|s| s == "GRANT \"readonly\" TO \"app_user\";"));
+        assert!(stmts
+            .iter()
+            .any(|s| s == "GRANT SELECT ON TABLE \"public\".\"orders\" TO \"app_user\" WITH GRANT OPTION;"));
+        // 脱敏渲染：占位符替代明文。
+        let masked = pg_render_role_plan(&sample_plan(), true, true).unwrap();
+        assert!(masked[0].contains("PASSWORD '********'"));
+        assert!(!masked.join("\n").contains("pw123"));
+    }
+
+    #[test]
+    fn pg_render_role_plan_member_options_respect_version() {
+        let plan = PgRoleSavePlan {
+            database: None,
+            role_name: "app_user".into(),
+            changes: vec![PgRoleChange::GrantMembership {
+                role: "readonly".into(),
+                member: "app_user".into(),
+                admin: false,
+                inherit: false,
+                set: true,
+            }],
+        };
+        // PG16+：下发 INHERIT/SET/ADMIN FALSE 选项语句。
+        let modern = pg_render_role_plan(&plan, false, true).unwrap();
+        assert!(modern.iter().any(|s| s.contains("WITH INHERIT FALSE")));
+        assert!(modern.iter().any(|s| s.contains("WITH SET TRUE")));
+        assert!(modern.iter().any(|s| s.contains("WITH ADMIN FALSE")));
+        // PG≤14：仅基础 GRANT，不生成旧版不支持的语法。
+        let legacy = pg_render_role_plan(&plan, false, false).unwrap();
+        assert_eq!(legacy, vec!["GRANT \"readonly\" TO \"app_user\";"]);
+    }
+
+    #[test]
+    fn pg_render_role_plan_valid_until_clear_uses_infinity() {
+        let plan = PgRoleSavePlan {
+            database: None,
+            role_name: "app_user".into(),
+            changes: vec![PgRoleChange::AlterAttributes {
+                name: "app_user".into(),
+                attributes: PgRoleAttributes {
+                    valid_until: Some(PgValidUntilOp::Clear),
+                    ..Default::default()
+                },
+            }],
+        };
+        let stmts = pg_render_role_plan(&plan, false, true).unwrap();
+        assert_eq!(stmts, vec!["ALTER ROLE \"app_user\" VALID UNTIL 'infinity';"]);
+    }
+
+    #[test]
+    fn pg_render_role_plan_create_includes_password_and_rejects_bad_name() {
+        let plan = PgRoleSavePlan {
+            database: None,
+            role_name: "new_role".into(),
+            changes: vec![PgRoleChange::Create {
+                name: "new_role".into(),
+                can_login: true,
+                password: PgPasswordOp::Set("p@ss'word".into()),
+                attributes: PgRoleAttributes {
+                    can_login: Some(true),
+                    ..Default::default()
+                },
+            }],
+        };
+        let stmts = pg_render_role_plan(&plan, false, true).unwrap();
+        // 密码中的单引号被安全转义。
+        assert_eq!(stmts, vec!["CREATE ROLE \"new_role\" LOGIN PASSWORD 'p@ss''word';"]);
+        let bad = PgRoleSavePlan {
+            changes: vec![PgRoleChange::Create {
+                name: "bad;name".into(),
+                can_login: true,
+                password: PgPasswordOp::Keep,
+                attributes: PgRoleAttributes::default(),
+            }],
+            ..plan
+        };
+        assert!(pg_render_role_plan(&bad, false, true).is_err());
     }

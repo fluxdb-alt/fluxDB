@@ -732,3 +732,352 @@ pub fn pg_role_effective_grants(
         Ok(out)
     })
 }
+
+// ===== 结构化变更计划：渲染（预览/执行共用）与单事务应用（T27 改版）=====
+
+use fluxdb_core::{PgGrantTargetLists, PgPasswordOp, PgRoleAttributes, PgRoleChange, PgRoleSavePlan, PgValidUntilOp};
+
+/// 变更种类执行顺序权重：创建 → 改名 → 属性/密码 → 成员 → 对象授权。
+fn pg_role_change_rank(change: &PgRoleChange) -> u8 {
+    match change {
+        PgRoleChange::Create { .. } => 0,
+        PgRoleChange::Rename { .. } => 1,
+        PgRoleChange::AlterAttributes { .. } | PgRoleChange::SetPassword { .. } => 2,
+        PgRoleChange::GrantMembership { .. } | PgRoleChange::RevokeMembership { .. } => 3,
+        PgRoleChange::GrantObject { .. }
+        | PgRoleChange::RevokeObject { .. }
+        | PgRoleChange::RevokeGrantOption { .. } => 4,
+    }
+}
+
+/// 渲染角色属性子句（不含角色名与语句收尾）。
+fn pg_render_role_attribute_clauses(attrs: &PgRoleAttributes, mask_password: bool) -> fluxdb_core::Result<Vec<String>> {
+    let mut clauses = Vec::new();
+    if let Some(value) = attrs.can_login {
+        clauses.push(if value { "LOGIN" } else { "NOLOGIN" }.to_string());
+    }
+    if let Some(value) = attrs.is_superuser {
+        clauses.push(if value { "SUPERUSER" } else { "NOSUPERUSER" }.to_string());
+    }
+    if let Some(value) = attrs.can_create_db {
+        clauses.push(if value { "CREATEDB" } else { "NOCREATEDB" }.to_string());
+    }
+    if let Some(value) = attrs.can_create_role {
+        clauses.push(if value { "CREATEROLE" } else { "NOCREATEROLE" }.to_string());
+    }
+    if let Some(value) = attrs.inherit {
+        clauses.push(if value { "INHERIT" } else { "NOINHERIT" }.to_string());
+    }
+    if let Some(value) = attrs.is_replication {
+        clauses.push(if value { "REPLICATION" } else { "NOREPLICATION" }.to_string());
+    }
+    if let Some(value) = attrs.bypass_rls {
+        clauses.push(if value { "BYPASSRLS" } else { "NOBYPASSRLS" }.to_string());
+    }
+    if let Some(limit) = attrs.connection_limit {
+        clauses.push(format!("CONNECTION LIMIT {limit}"));
+    }
+    match &attrs.valid_until {
+        None => {}
+        Some(PgValidUntilOp::Keep) => {}
+        // 清除有效期必须显式 infinity（「不修改」无法撤销已有截止时间）。
+        Some(PgValidUntilOp::Clear) => clauses.push("VALID UNTIL 'infinity'".to_string()),
+        Some(PgValidUntilOp::At(value)) => {
+            clauses.push(format!("VALID UNTIL {}", quote_pg_string_literal(value)));
+        }
+    }
+    let _ = mask_password; // 密码不放在属性里，占位由 SetPassword 渲染负责。
+    Ok(clauses)
+}
+
+/// 渲染密码子句：真实语句带明文（仅执行路径使用）；mask 时输出脱敏占位符。
+fn pg_render_password_clause(password: Option<&str>, mask: bool) -> String {
+    match password {
+        None => "PASSWORD NULL".to_string(),
+        Some(_pw) if mask => "PASSWORD '********'".to_string(),
+        Some(pw) => format!("PASSWORD {}", quote_pg_string_literal(pw)),
+    }
+}
+
+/// 渲染单条变更为一组语句（一次 GRANT 只能带一个 WITH 子句，成员选项拆多条）。
+fn pg_render_role_change(
+    change: &PgRoleChange,
+    mask: bool,
+    member_options_supported: bool,
+) -> fluxdb_core::Result<Vec<String>> {
+    let stmts = match change {
+        PgRoleChange::Create { name, can_login, password, attributes } => {
+            if !is_pg_identifier_name(name) {
+                return Err(Error::new(ErrorKind::Query, "角色名不合法"));
+            }
+            let mut parts = vec![format!("CREATE ROLE {}", pg_quote_identifier(name))];
+            parts.push(if *can_login { "LOGIN".to_string() } else { "NOLOGIN".to_string() });
+            // LOGIN/NOLOGIN 已显式下发，属性里跳过 can_login，避免重复子句。
+            let mut attrs = attributes.clone();
+            attrs.can_login = None;
+            parts.extend(pg_render_role_attribute_clauses(&attrs, mask)?);
+            match password {
+                PgPasswordOp::Keep => {}
+                PgPasswordOp::Set(_) => parts.push(pg_render_password_clause(
+                    password_set_value(password).as_deref(),
+                    mask,
+                )),
+                PgPasswordOp::Clear => parts.push("PASSWORD NULL".to_string()),
+            }
+            vec![format!("{};", parts.join(" "))]
+        }
+        PgRoleChange::Rename { from, to } => {
+            if from.is_empty() || to.is_empty() || !is_pg_identifier_name(to) {
+                return Err(Error::new(ErrorKind::Query, "角色重命名参数不合法"));
+            }
+            vec![format!(
+                "ALTER ROLE {} RENAME TO {};",
+                pg_quote_identifier(from),
+                pg_quote_identifier(to)
+            )]
+        }
+        PgRoleChange::AlterAttributes { name, attributes } => {
+            if name.is_empty() {
+                return Err(Error::new(ErrorKind::Query, "角色名不能为空"));
+            }
+            let clauses = pg_render_role_attribute_clauses(attributes, mask)?;
+            if clauses.is_empty() {
+                Vec::new()
+            } else {
+                vec![format!(
+                    "ALTER ROLE {} {};",
+                    pg_quote_identifier(name),
+                    clauses.join(" ")
+                )]
+            }
+        }
+        PgRoleChange::SetPassword { name, password } => {
+            if name.is_empty() {
+                return Err(Error::new(ErrorKind::Query, "角色名不能为空"));
+            }
+            vec![format!(
+                "ALTER ROLE {} {};",
+                pg_quote_identifier(name),
+                pg_render_password_clause(password.as_deref(), mask)
+            )]
+        }
+        PgRoleChange::GrantMembership { role, member, admin, inherit, set } => {
+            if role.is_empty() || member.is_empty() {
+                return Err(Error::new(ErrorKind::Query, "角色与成员名不能为空"));
+            }
+            if !is_pg_identifier_name(role) || !is_pg_identifier_name(member) {
+                return Err(Error::new(ErrorKind::Query, "角色/成员名不合法"));
+            }
+            let (role_q, member_q) = (pg_quote_identifier(role), pg_quote_identifier(member));
+            let mut stmts = vec![format!("GRANT {role_q} TO {member_q};")];
+            if *admin {
+                stmts.push(format!("GRANT {role_q} TO {member_q} WITH ADMIN OPTION;"));
+            } else if member_options_supported {
+                stmts.push(format!("GRANT {role_q} TO {member_q} WITH ADMIN FALSE;"));
+            }
+            if member_options_supported {
+                stmts.push(format!(
+                    "GRANT {role_q} TO {member_q} WITH INHERIT {};",
+                    if *inherit { "TRUE" } else { "FALSE" }
+                ));
+                stmts.push(format!(
+                    "GRANT {role_q} TO {member_q} WITH SET {};",
+                    if *set { "TRUE" } else { "FALSE" }
+                ));
+            }
+            stmts
+        }
+        PgRoleChange::RevokeMembership { role, member } => {
+            if role.is_empty() || member.is_empty() {
+                return Err(Error::new(ErrorKind::Query, "角色与成员名不能为空"));
+            }
+            if !is_pg_identifier_name(role) || !is_pg_identifier_name(member) {
+                return Err(Error::new(ErrorKind::Query, "角色/成员名不合法"));
+            }
+            vec![format!(
+                "REVOKE {} FROM {};",
+                pg_quote_identifier(role),
+                pg_quote_identifier(member)
+            )]
+        }
+        PgRoleChange::GrantObject { privilege, scope, grantee, grant_option } => {
+            if !is_pg_privilege_name(privilege) || !is_pg_identifier_name(grantee) {
+                return Err(Error::new(ErrorKind::Query, "权限/授权对象名不合法"));
+            }
+            let object_sql = pg_object_scope_sql(scope)?;
+            let suffix = if *grant_option { " WITH GRANT OPTION" } else { "" };
+            vec![format!(
+                "GRANT {} ON {} TO {}{};",
+                privilege,
+                object_sql,
+                pg_quote_identifier(grantee),
+                suffix
+            )]
+        }
+        PgRoleChange::RevokeObject { privilege, scope, grantee } => {
+            if !is_pg_privilege_name(privilege) || !is_pg_identifier_name(grantee) {
+                return Err(Error::new(ErrorKind::Query, "权限/授权对象名不合法"));
+            }
+            let object_sql = pg_object_scope_sql(scope)?;
+            vec![format!(
+                "REVOKE {} ON {} FROM {};",
+                privilege,
+                object_sql,
+                pg_quote_identifier(grantee)
+            )]
+        }
+        PgRoleChange::RevokeGrantOption { privilege, scope, grantee } => {
+            if !is_pg_privilege_name(privilege) || !is_pg_identifier_name(grantee) {
+                return Err(Error::new(ErrorKind::Query, "权限/授权对象名不合法"));
+            }
+            let object_sql = pg_object_scope_sql(scope)?;
+            vec![format!(
+                "REVOKE GRANT OPTION FOR {} ON {} FROM {};",
+                privilege,
+                object_sql,
+                pg_quote_identifier(grantee)
+            )]
+        }
+    };
+    Ok(stmts)
+}
+
+/// 取 Set 变体中的明文（内部辅助，仅供渲染真实语句）。
+fn password_set_value(op: &PgPasswordOp) -> Option<String> {
+    match op {
+        PgPasswordOp::Set(value) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+/// 把变更计划渲染为有序 SQL（纯函数，预览与执行共用同一渲染规则）。
+///
+/// `mask=true` 输出脱敏占位（不能直接执行）；成员选项语句按服务端版本决定
+/// （PG16+ 才有 INHERIT/SET/ADMIN FALSE 语法）。改名后所有语句引用新身份。
+pub fn pg_render_role_plan(
+    plan: &PgRoleSavePlan,
+    mask: bool,
+    member_options_supported: bool,
+) -> fluxdb_core::Result<Vec<String>> {
+    // 稳定排序保证执行顺序：Create → Rename → 属性/密码 → 成员 → 对象授权；
+    // 同类保持加入顺序。改名后的操作已由计划构建方引用新名。
+    let mut indexed: Vec<(u8, usize, &PgRoleChange)> = plan
+        .changes
+        .iter()
+        .enumerate()
+        .map(|(index, change)| (pg_role_change_rank(change), index, change))
+        .collect();
+    indexed.sort_by_key(|(rank, index, _)| (*rank, *index));
+    let mut stmts = Vec::new();
+    for (_, _, change) in indexed {
+        stmts.extend(pg_render_role_change(change, mask, member_options_supported)?);
+    }
+    Ok(stmts)
+}
+
+/// 应用变更计划：同一数据库会话内的单事务（BEGIN/COMMIT），失败整批回滚。
+///
+/// 替代循环调用单项接口的伪原子提交；对象授权与角色 DDL 共用一个连接
+/// （角色是集群级主体，任意库连接均可执行其 DDL；对象 ACL 在目标库读写）。
+/// 返回实际执行语句的**脱敏**列表（供审计，不含明文密码）。
+pub fn pg_apply_role_plan(
+    config: &ConnectionConfig,
+    plan: &PgRoleSavePlan,
+) -> fluxdb_core::Result<Vec<String>> {
+    if config.kind != DatabaseKind::Postgres {
+        return Err(Error::new(ErrorKind::Connection, "连接类型不支持角色变更计划"));
+    }
+    if plan.is_empty() {
+        return Ok(Vec::new());
+    }
+    pg_runtime().block_on(async {
+        let database = pg_request_database(config, plan.database.as_deref());
+        let session = pg_connect(config, &database).await?;
+        let client = session.client.as_ref();
+        let member_options_supported = pg_auth_members_has_member_options(client).await?;
+        let stmts = pg_render_role_plan(plan, false, member_options_supported)?;
+        let masked = pg_render_role_plan(plan, true, member_options_supported)?;
+        // 单事务整批执行：任何一条失败即回滚，不产生半完成状态
+        // （与 apply_changes 相同的 BEGIN/COMMIT/ROLLBACK 口径，pg_connect 为独占连接）。
+        client
+            .batch_execute("BEGIN")
+            .await
+            .map_err(pg_error)?;
+        match client.batch_execute(&stmts.join("\n")).await {
+            Ok(()) => {
+                client.batch_execute("COMMIT").await.map_err(pg_error)?;
+                Ok(masked)
+            }
+            Err(error) => {
+                let _ = client.batch_execute("ROLLBACK").await;
+                Err(pg_error(error))
+            }
+        }
+    })
+}
+
+/// 列权限页可选目标（数据库 / schema / 表·视图·序列 / 函数，函数带签名区分重载）。
+///
+/// 关系与函数返回 `schema.name` 字符串；函数按 `pg_get_function_identity_arguments`
+/// 取签名。系统 schema（pg_%）排除，information_schema 保留（授权合法）。
+pub fn pg_list_grant_targets(
+    config: &ConnectionConfig,
+    database: &str,
+) -> fluxdb_core::Result<PgGrantTargetLists> {
+    if config.kind != DatabaseKind::Postgres {
+        return Err(Error::new(ErrorKind::Connection, "连接类型不支持权限目标枚举"));
+    }
+    pg_runtime().block_on(async {
+        let session = pg_connect(config, database).await?;
+        let client = session.client.as_ref();
+        let mut lists = PgGrantTargetLists::default();
+        let rows = client
+            .query("SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY datname", &[])
+            .await
+            .map_err(pg_error)?;
+        lists.databases = rows.into_iter().map(|row| row.get(0)).collect();
+        let rows = client
+            .query(
+                "SELECT nspname FROM pg_namespace \
+                 WHERE nspname <> 'information_schema' AND nspname NOT LIKE 'pg\\_%' ESCAPE '\\' \
+                 ORDER BY nspname",
+                &[],
+            )
+            .await
+            .map_err(pg_error)?;
+        lists.schemas = rows.into_iter().map(|row| row.get(0)).collect();
+        let rows = client
+            .query(
+                "SELECT n.nspname || '.' || c.relname, c.relkind::text \
+                 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE c.relkind IN ('r','p','f','v','m','S') \
+                   AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\' \
+                 ORDER BY n.nspname, c.relname",
+                &[],
+            )
+            .await
+            .map_err(pg_error)?;
+        for row in rows {
+            let qualified: String = row.get(0);
+            match row.get::<_, String>(1).as_str() {
+                "v" | "m" => lists.views.push(qualified),
+                "S" => lists.sequences.push(qualified),
+                _ => lists.tables.push(qualified),
+            }
+        }
+        let rows = client
+            .query(
+                "SELECT n.nspname || '.' || p.proname || '(' || \
+                        pg_get_function_identity_arguments(p.oid) || ')' \
+                 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
+                 WHERE p.prokind IN ('f','p') \
+                   AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\' \
+                 ORDER BY n.nspname, p.proname",
+                &[],
+            )
+            .await
+            .map_err(pg_error)?;
+        lists.routines = rows.into_iter().map(|row| row.get(0)).collect();
+        Ok(lists)
+    })
+}

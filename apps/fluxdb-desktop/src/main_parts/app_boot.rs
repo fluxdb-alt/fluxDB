@@ -956,14 +956,73 @@ fn main() {
                         });
                         let user_admin_new_password_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("密码").masked(true));
-                        let user_admin_pg_grant_schema_input =
-                            cx.new(|cx| InputState::new(window, cx).placeholder("schema（默认 public）"));
-                        let user_admin_pg_grant_object_input =
-                            cx.new(|cx| InputState::new(window, cx).placeholder("对象名"));
-                        let user_admin_pg_grant_signature_input = cx
-                            .new(|cx| InputState::new(window, cx).placeholder("函数签名（如 a integer）"));
-                        let user_admin_pg_rename_input = cx
-                            .new(|cx| InputState::new(window, cx).placeholder("新角色名"));
+                        // PG 用户与角色工作台（改版）：常规/高级/权限页输入与选择器。
+                        let pg_role_name_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("角色名"));
+                        let pg_password_input = cx
+                            .new(|cx| InputState::new(window, cx).placeholder("新密码").masked(true));
+                        let pg_password_confirm_input = cx.new(|cx| {
+                            InputState::new(window, cx)
+                                .placeholder("确认新密码")
+                                .masked(true)
+                        });
+                        let pg_connection_limit_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("-1"));
+                        let pg_valid_until_input = cx.new(|cx| {
+                            InputState::new(window, cx).placeholder("如 2026-12-31 23:59:59+08")
+                        });
+                        let pg_valid_until_mode_select = cx.new(|cx| {
+                            SelectState::new(
+                                SearchableVec::new(pg_valid_until_mode_options()),
+                                Some(IndexPath::new(0)),
+                                window,
+                                cx,
+                            )
+                        });
+                        let pg_password_op_select = cx.new(|cx| {
+                            SelectState::new(
+                                SearchableVec::new(pg_password_op_options(true)),
+                                Some(IndexPath::new(0)),
+                                window,
+                                cx,
+                            )
+                        });
+                        let pg_grant_db_select = cx.new(|cx| {
+                            SelectState::new(
+                                SearchableVec::new(Vec::new()),
+                                None,
+                                window,
+                                cx,
+                            )
+                            .searchable(true)
+                        });
+                        let pg_grant_schema_select = cx.new(|cx| {
+                            SelectState::new(
+                                SearchableVec::new(Vec::new()),
+                                None,
+                                window,
+                                cx,
+                            )
+                            .searchable(true)
+                        });
+                        let pg_grant_object_select = cx.new(|cx| {
+                            SelectState::new(
+                                SearchableVec::new(Vec::new()),
+                                None,
+                                window,
+                                cx,
+                            )
+                            .searchable(true)
+                        });
+                        let pg_member_of_role_select = cx.new(|cx| {
+                            SelectState::new(
+                                SearchableVec::new(Vec::new()),
+                                None,
+                                window,
+                                cx,
+                            )
+                            .searchable(true)
+                        });
                         let user_admin_max_queries_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("0"));
                         let user_admin_max_updates_input =
@@ -1602,81 +1661,201 @@ fn main() {
                                 }
                             },
                         );
-                        // PG 对象权限目标三输入：各自变更时用当前状态其余字段拼出完整 target 下发。
-                        let user_admin_pg_grant_schema_subscription = cx.subscribe(
-                            &user_admin_pg_grant_schema_input,
+                        // ===== PG 用户与角色工作台（改版）订阅 =====
+                        let pg_role_name_subscription = cx.subscribe(
+                            &pg_role_name_input,
                             |this: &mut NavicatMain, input, event: &InputEvent, cx| {
                                 if matches!(event, InputEvent::Change)
                                     && let Some(tab_id) = this.active_user_admin_tab_id()
-                                    && let Some(admin) = this.user_admin_state_for(tab_id)
                                 {
                                     this.dispatch(
-                                        AppCommand::SetUserAdminPgGrantTarget {
+                                        AppCommand::SetPgDraftName {
                                             tab_id,
-                                            kind: admin.pg_grant_kind,
-                                            schema: input.read(cx).value().to_string(),
-                                            object: admin.pg_grant_object,
-                                            signature: admin.pg_grant_signature,
+                                            name: input.read(cx).value().to_string(),
                                         },
                                         cx,
                                     );
                                 }
                             },
                         );
-                        let user_admin_pg_grant_object_subscription = cx.subscribe(
-                            &user_admin_pg_grant_object_input,
+                        // 密码明文仅进入内存中的草稿（Set 操作），不写日志/历史。
+                        let pg_password_subscription = cx.subscribe(
+                            &pg_password_input,
                             |this: &mut NavicatMain, input, event: &InputEvent, cx| {
                                 if matches!(event, InputEvent::Change)
                                     && let Some(tab_id) = this.active_user_admin_tab_id()
-                                    && let Some(admin) = this.user_admin_state_for(tab_id)
                                 {
                                     this.dispatch(
-                                        AppCommand::SetUserAdminPgGrantTarget {
+                                        AppCommand::SetPgDraftPassword {
                                             tab_id,
-                                            kind: admin.pg_grant_kind,
-                                            schema: admin.pg_grant_schema,
-                                            object: input.read(cx).value().to_string(),
-                                            signature: admin.pg_grant_signature,
+                                            password: input.read(cx).value().to_string(),
                                         },
                                         cx,
                                     );
                                 }
                             },
                         );
-                        let user_admin_pg_grant_signature_subscription = cx.subscribe(
-                            &user_admin_pg_grant_signature_input,
-                            |this: &mut NavicatMain, input, event: &InputEvent, cx| {
-                                if matches!(event, InputEvent::Change)
-                                    && let Some(tab_id) = this.active_user_admin_tab_id()
-                                    && let Some(admin) = this.user_admin_state_for(tab_id)
-                                {
-                                    this.dispatch(
-                                        AppCommand::SetUserAdminPgGrantTarget {
-                                            tab_id,
-                                            kind: admin.pg_grant_kind,
-                                            schema: admin.pg_grant_schema,
-                                            object: admin.pg_grant_object,
-                                            signature: input.read(cx).value().to_string(),
-                                        },
-                                        cx,
-                                    );
+                        // 确认密码只留在桌面层做一致性校验，不进入 App 状态。
+                        let pg_password_confirm_subscription = cx.subscribe(
+                            &pg_password_confirm_input,
+                            |this: &mut NavicatMain, _, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change) {
+                                    this.sync_pg_save_enabled(cx);
                                 }
                             },
                         );
-                        let user_admin_pg_rename_subscription = cx.subscribe(
-                            &user_admin_pg_rename_input,
+                        let pg_connection_limit_subscription = cx.subscribe(
+                            &pg_connection_limit_input,
                             |this: &mut NavicatMain, input, event: &InputEvent, cx| {
                                 if matches!(event, InputEvent::Change)
                                     && let Some(tab_id) = this.active_user_admin_tab_id()
                                 {
                                     this.dispatch(
-                                        AppCommand::SetUserAdminPgRenameNew {
+                                        AppCommand::SetPgDraftConnectionLimit {
                                             tab_id,
                                             value: input.read(cx).value().to_string(),
                                         },
                                         cx,
                                     );
                                 }
+                            },
+                        );
+                        let pg_valid_until_subscription = cx.subscribe(
+                            &pg_valid_until_input,
+                            |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(tab_id) = this.active_user_admin_tab_id()
+                                {
+                                    this.dispatch(
+                                        AppCommand::SetPgDraftValidUntil {
+                                            tab_id,
+                                            op: PgValidUntilOp::At(
+                                                input.read(cx).value().to_string(),
+                                            ),
+                                        },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        let valid_until_input_ref = pg_valid_until_input.clone();
+                        let pg_valid_until_mode_select_subscription = cx.subscribe_in(
+                            &pg_valid_until_mode_select,
+                            window,
+                            move |this: &mut NavicatMain,
+                             _select,
+                             event: &SelectEvent<SearchableVec<String>>,
+                             _window,
+                             cx| {
+                                let SelectEvent::Confirm(value) = event;
+                                if let (Some(tab_id), Some(value)) =
+                                    (this.active_user_admin_tab_id(), value)
+                                {
+                                    let op = match value.as_str() {
+                                        "清除截止时间（永不过期）" => PgValidUntilOp::Clear,
+                                        // 切到自定义模式时以输入框当前文本作为截止时间。
+                                        "自定义截止时间…" => PgValidUntilOp::At(
+                                            valid_until_input_ref
+                                                .read(cx)
+                                                .value()
+                                                .to_string(),
+                                        ),
+                                        _ => PgValidUntilOp::Keep,
+                                    };
+                                    this.dispatch(
+                                        AppCommand::SetPgDraftValidUntil { tab_id, op },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        let pg_password_op_select_subscription = cx.subscribe_in(
+                            &pg_password_op_select,
+                            window,
+                            |this: &mut NavicatMain,
+                             _select,
+                             event: &SelectEvent<SearchableVec<String>>,
+                             _window,
+                             cx| {
+                                let SelectEvent::Confirm(value) = event;
+                                if let (Some(tab_id), Some(value)) =
+                                    (this.active_user_admin_tab_id(), value)
+                                {
+                                    // 「不设置密码」（新建）= 不下发 PASSWORD 子句（Keep）。
+                                    let op = match value.as_str() {
+                                        "设置新密码" => PgPasswordOp::Set(String::new()),
+                                        "清除密码" => PgPasswordOp::Clear,
+                                        _ => PgPasswordOp::Keep,
+                                    };
+                                    this.dispatch(
+                                        AppCommand::SetPgDraftPasswordOp { tab_id, op },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        let pg_grant_db_select_subscription = cx.subscribe_in(
+                            &pg_grant_db_select,
+                            window,
+                            |this: &mut NavicatMain,
+                             _select,
+                             event: &SelectEvent<SearchableVec<String>>,
+                             _window,
+                             cx| {
+                                let SelectEvent::Confirm(value) = event;
+                                if let (Some(tab_id), Some(db)) =
+                                    (this.active_user_admin_tab_id(), value)
+                                {
+                                    this.start_pg_grant_targets_load_for(
+                                        tab_id,
+                                        db.clone(),
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        let pg_grant_schema_select_subscription = cx.subscribe_in(
+                            &pg_grant_schema_select,
+                            window,
+                            |this: &mut NavicatMain,
+                             _select,
+                             event: &SelectEvent<SearchableVec<String>>,
+                             _window,
+                             cx| {
+                                let SelectEvent::Confirm(value) = event;
+                                if let (Some(tab_id), Some(schema)) =
+                                    (this.active_user_admin_tab_id(), value)
+                                {
+                                    this.set_pg_grant_schema(tab_id, schema.clone(), cx);
+                                }
+                            },
+                        );
+                        let pg_grant_object_select_subscription = cx.subscribe_in(
+                            &pg_grant_object_select,
+                            window,
+                            |this: &mut NavicatMain,
+                             _select,
+                             event: &SelectEvent<SearchableVec<String>>,
+                             _window,
+                             cx| {
+                                let SelectEvent::Confirm(value) = event;
+                                if let (Some(tab_id), Some(object)) =
+                                    (this.active_user_admin_tab_id(), value)
+                                {
+                                    this.set_pg_grant_object(tab_id, object.clone(), cx);
+                                }
+                            },
+                        );
+                        let pg_member_of_role_select_subscription = cx.subscribe_in(
+                            &pg_member_of_role_select,
+                            window,
+                            |_this: &mut NavicatMain,
+                             _select,
+                             event: &SelectEvent<SearchableVec<String>>,
+                             _window,
+                             cx| {
+                                let SelectEvent::Confirm(_) = event;
+                                cx.notify();
                             },
                         );
                         let user_admin_new_password_subscription = cx.subscribe(
@@ -2301,17 +2480,32 @@ fn main() {
                             user_admin_new_password_input,
                             _user_admin_new_password_subscription:
                                 user_admin_new_password_subscription,
-                            user_admin_pg_grant_schema_input,
-                            _user_admin_pg_grant_schema_subscription:
-                                user_admin_pg_grant_schema_subscription,
-                            user_admin_pg_grant_object_input,
-                            _user_admin_pg_grant_object_subscription:
-                                user_admin_pg_grant_object_subscription,
-                            user_admin_pg_grant_signature_input,
-                            _user_admin_pg_grant_signature_subscription:
-                                user_admin_pg_grant_signature_subscription,
-                            user_admin_pg_rename_input,
-                            _user_admin_pg_rename_subscription: user_admin_pg_rename_subscription,
+                            pg_role_name_input,
+                            _pg_role_name_subscription: pg_role_name_subscription,
+                            pg_password_input,
+                            _pg_password_subscription: pg_password_subscription,
+                            pg_password_confirm_input,
+                            _pg_password_confirm_subscription: pg_password_confirm_subscription,
+                            pg_connection_limit_input,
+                            _pg_connection_limit_subscription: pg_connection_limit_subscription,
+                            pg_valid_until_input,
+                            _pg_valid_until_subscription: pg_valid_until_subscription,
+                            pg_valid_until_mode_select,
+                            _pg_valid_until_mode_select_subscription:
+                                pg_valid_until_mode_select_subscription,
+                            pg_password_op_select,
+                            _pg_password_op_select_subscription: pg_password_op_select_subscription,
+                            pg_grant_db_select,
+                            _pg_grant_db_select_subscription: pg_grant_db_select_subscription,
+                            pg_grant_schema_select,
+                            _pg_grant_schema_select_subscription: pg_grant_schema_select_subscription,
+                            pg_grant_object_select,
+                            _pg_grant_object_select_subscription: pg_grant_object_select_subscription,
+                            pg_member_of_role_select,
+                            _pg_member_of_role_select_subscription:
+                                pg_member_of_role_select_subscription,
+                            pg_member_new_admin: false,
+                            pg_select_items_fingerprint: String::new(),
                             user_admin_max_queries_input,
                             _user_admin_max_queries_subscription:
                                 user_admin_max_queries_subscription,
