@@ -54,6 +54,16 @@ fn settings_data_panel(
                     false,
                     colors,
                     cx,
+                ))
+                .child(settings_path_row(
+                    "pg_dump 路径",
+                    "PostgreSQL 原生备份工具路径，留空时使用系统 PATH 中的 pg_dump",
+                    AppIcon::Database,
+                    &settings.pg_dump_path,
+                    "settings-backup-pg-dump",
+                    false,
+                    colors,
+                    cx,
                 )),
         )
 }
@@ -130,6 +140,9 @@ fn settings_choose_backup_path(
                             }
                             "settings-backup-sqlite3" => {
                                 this.settings_editor_draft.sqlite3_path = value
+                            }
+                            "settings-backup-pg-dump" => {
+                                this.settings_editor_draft.pg_dump_path = value
                             }
                             _ => {}
                         }
@@ -413,4 +426,3 @@ fn database_support_entries() -> [DatabaseSupportEntry; 5] {
         },
     ]
 }
-

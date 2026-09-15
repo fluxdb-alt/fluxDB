@@ -1012,7 +1012,11 @@ fn run_native_pg_dump(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| anyhow::anyhow!("启动 pg_dump 失败：{error}"))?;
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "启动 pg_dump 失败：{error}。请在设置 → 数据 → 备份中配置有效的 pg_dump 路径，或将 pg_dump 加入系统 PATH"
+            )
+        })?;
 
     let output = child.stdout.take().expect("stdout piped");
     // stderr 尾部收集（pg_dump 的错误/提示，如 connection 相关）。
