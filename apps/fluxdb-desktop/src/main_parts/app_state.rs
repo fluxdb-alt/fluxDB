@@ -1138,6 +1138,18 @@ struct NavicatMain {
     _settings_line_height_subscription: Subscription,
     settings_radius_input: Entity<InputState>,
     _settings_radius_subscription: Subscription,
+    /// 设置面板「PostgreSQL 客户端下载源」输入框（空值表示使用内置官方源）。
+    settings_pg_client_source_input: Entity<InputState>,
+    _settings_pg_client_source_subscription: Subscription,
+    /// PostgreSQL 客户端工具的检测结果文案（None 表示尚未检测）。
+    pg_client_status: Option<String>,
+    /// 客户端下载任务的实时状态（进度文案 + 取消标志）；None 表示当前没有下载在跑。
+    pg_client_download: Option<PgClientDownloadState>,
+    _pg_client_download_task: Option<Task<()>>,
+    /// 下载进度回流任务：定时把后台线程的进度文案刷到状态行。
+    _pg_client_progress_task: Option<Task<()>>,
+    /// 备份对话框打开时的预检结果：PostgreSQL 连接但本机缺少 pg_dump。
+    backup_pg_client_missing: bool,
     query_output_heights: BTreeMap<TabId, f32>,
     query_output_widths: BTreeMap<TabId, f32>,
     query_output_resize_start: Option<QueryOutputResizeStart>,
@@ -1416,6 +1428,15 @@ struct BackupForm {
     pg_include_owner: bool,
     /// 高级（仅 PostgreSQL 原生 pg_dump）：导出 ACL 权限；默认 false 传 `--no-acl`。
     pg_include_acl: bool,
+}
+
+/// PostgreSQL 客户端工具下载任务的 UI 状态（设置面板展示 + 取消）。
+#[derive(Clone, Debug)]
+struct PgClientDownloadState {
+    /// 展示给用户的进度文案，如「下载中 42%（138.2 MB / 329.9 MB）」。
+    message: String,
+    /// 取消标志，后台下载线程按分片检查。
+    cancel: Arc<AtomicBool>,
 }
 
 /// 备份文件的旁挂元数据（{备份文件}.meta.json）：记录表清单与备注。

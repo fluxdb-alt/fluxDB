@@ -291,6 +291,11 @@ fn main() {
                             cx.new(|cx| InputState::new(window, cx).placeholder("14"));
                         let settings_radius_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("6"));
+                        // 留空即使用内置官方源，占位符直接展示默认模板，便于用户改成内网镜像。
+                        let settings_pg_client_source_input = cx.new(|cx| {
+                            InputState::new(window, cx)
+                                .placeholder(fluxdb_app::PG_CLIENT_DEFAULT_SOURCE)
+                        });
                         let data_cell_edit_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("输入值"));
                         let temporal_part_input = cx.new(|cx| InputState::new(window, cx));
@@ -1139,6 +1144,19 @@ fn main() {
                                     value.saturating_add(2).min(32)
                                 };
                                 this.preview_settings(cx);
+                            },
+                        );
+                        // 下载源是纯文本设置，随输入写入草稿，由「保存」统一落盘。
+                        let settings_pg_client_source_subscription = cx.subscribe_in(
+                            &settings_pg_client_source_input,
+                            window,
+                            |this: &mut NavicatMain, input, event: &InputEvent, _window, cx| {
+                                if !matches!(event, InputEvent::Change | InputEvent::PressEnter { .. }) {
+                                    return;
+                                }
+                                this.settings_editor_draft.pg_client_download_source =
+                                    input.read(cx).value().trim().to_string();
+                                cx.notify();
                             },
                         );
                         let data_cell_edit_subscription = cx.subscribe_in(
@@ -2140,6 +2158,13 @@ fn main() {
                                 cx,
                             )
                         });
+                        settings_pg_client_source_input.update(cx, |input, cx| {
+                            input.set_value(
+                                settings_editor_draft.pg_client_download_source.clone(),
+                                window,
+                                cx,
+                            )
+                        });
                         let settings_font_size_slider = cx.new(|_| {
                             SliderState::new()
                                 .min(10.)
@@ -2730,6 +2755,14 @@ fn main() {
                             _settings_line_height_subscription: settings_line_height_subscription,
                             settings_radius_input,
                             _settings_radius_subscription: settings_radius_subscription,
+                            settings_pg_client_source_input,
+                            _settings_pg_client_source_subscription:
+                                settings_pg_client_source_subscription,
+                            pg_client_status: None,
+                            pg_client_download: None,
+                            _pg_client_download_task: None,
+                            _pg_client_progress_task: None,
+                            backup_pg_client_missing: false,
                             query_output_heights: BTreeMap::new(),
                             query_output_widths: BTreeMap::new(),
                             query_output_resize_start: None,

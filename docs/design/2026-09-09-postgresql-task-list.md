@@ -486,7 +486,7 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
 
 ### T25 — 数据库备份和恢复验收
 
-- [ ] 完成 T25（增量一~三：pg_dump 路径 + 恢复验证 + 应用调用链/owner/ACL/范围/版本预检）
+- [ ] 完成 T25（增量一~五：pg_dump 路径 + 恢复验证 + 应用调用链/owner/ACL/范围/版本预检 + 客户端工具发现/下载）
 - **开始前读**：设计 11.3；R13、R15、R18、R23、R26、R31。
 - **工作**：pg_dump 工具检测/版本、plain 格式与结构/数据/完整、对象/owner/ACL、目录/记录；有 custom 格式则同时实现 pg_restore；所有 I/O 经 app/connector/storage；取消、管道/进程回收、passfile/partial 清理；普通表逻辑导出准确标注范围。
 - **交付位置**：postgres/native_tools、app/transfer/backup、storage backup records、database_backup/backup_tab UI。
@@ -499,6 +499,17 @@ MySQL 回归：本项影响的旧功能及结果；不适用时解释
   增量三（`0450d0e`，应用调用链 + owner/ACL/范围/版本）：connectors 新增 `pg_dump_invocation`（纯函数、可单测）——plain+inserts、结构/数据/完整（`PgDumpScope`）、owner/ACL 开关（默认 `--no-owner --no-acl` 便于跨环境恢复，勾选才保留）、表过滤 `-t`、密码/TLS 只入 env 不进 argv；`pg_dump_version_compatible`+`pg_tool_major_version`+`pg_server_major_version`。desktop `run_native_pg_dump` 改经连接器构造参数（不再手写 argv）；`run_backup` 加版本预检（pg_dump 主版本 < 服务端主版本明确报错，不假成功）；高级表单新增「包含属主 OWNER / ACL 权限（PG 原生）」。记录落盘时机已符合（`.meta.json` 仅成功写、失败/取消删残留文件）。
   增量四（`bba23b9`，SSH 原生工具链路）：连接器 `pg_ssh_tunnel_invocation`（`ssh -N -L local:target:port -p [-i key] [-o ServerAlive] user@jump`）+ `SshTunnelAuth`（Key/Password/Agent，密码经 sshpass+SSHPASS 不落 argv）+ `pg_hostaddr_env`（libpq host/hostaddr 分离：`-h` 真远端供 TLS 校验、`PGHOSTADDR` 隧道本地拨号，设计 §11.3）。desktop PG 原生备份在 SSH 启用时起隧道子进程 → 等就绪 → pg_dump 经 127.0.0.1:local → 结束/失败/取消一律 kill+wait 回收。**真库 SSH 端到端验证**：`ssh -N -L 15432:<pg>:5432` 后 pg_dump(schema-only) 退出 0 产出 CREATE TABLE、psql 查询返回 1。
   **custom 格式未提供**（`BackupForm` 无格式选择器，恒为 plain .sql）——按设计条件项，**不实现 pg_restore**，不为此延误既定功能。
+  增量五（本会话，客户端工具发现与下载，对齐 DBeaver 方案）：新增 `crates/fluxdb-app/src/parts/pg_client_tools.rs`——
+  - 发现：`pg_client_candidate_dirs` 按「设置的客户端目录（兼容传安装根或 bin 目录）→ 应用托管下载目录 → 系统标准安装路径 → PATH」生成候选并去重；系统路径按平台展开（macOS：Postgres.app/Versions、/Library/PostgreSQL、libpq(brew)；Linux：/usr/lib/postgresql/<版本>、/usr/bin；Windows：%ProgramFiles%\PostgreSQL\<版本>\bin）。`discover_pg_clients` 返回带主版本号与来源的安装列表，`resolve_pg_client_tool(settings, tool, required_major)` 优先选不低于服务端主版本的一处，均不满足时退回版本最高者交由版本预检报错；旧设置 `pg_dump_path` 仍最高优先级（仅 pg_dump）。`pg_client_tool_present` 只查文件不起子进程，供 UI 预检。
+  - 下载：`pg_client_download_url` 按服务端主版本选 EDB 版本（18.1-1/17.6-1/16.10-1/15.14-1/14.19-1，未知取最新），下载源为设置项 `pg_client_download_source`（空=内置 EDB 官方源，支持 `{version}`/`{platform}`，可换内网镜像）；`download_pg_client` 流式下载到 `.pg-client-download.part`、按分片回报进度并检查取消，只解压 `bin/{pg_dump,pg_dumpall,pg_restore,psql,*.dll}` 与非 Windows 的 `lib/*.dylib|*.so`（含符号链接还原、unix 权限还原、拒绝含 `..` 的条目），最后 `pg_dump --version` 校验可运行；失败/取消清理临时文件。Windows/macOS 可下载，Linux 返回 None 走 `pg_client_install_hint` 的包管理器引导。
+  - 安装位置：设置了 `pg_client_dir` 就装到那里，否则装到 `<应用数据目录>/clients/postgresql/<版本>`（`pg_client_install_dir`）。
+  - 接线：core `Settings` 新增 `pg_client_dir`/`pg_client_download_source`（+ storage 测试字面量、设置草稿 changed/apply/reset）；设置页新增「PostgreSQL 客户端」分组（状态行 + 检测 + 下载并安装/取消 + 客户端目录选择 + 下载源输入，`apps/fluxdb-desktop/src/main_parts/settings/pg_client.rs`）；备份对话框打开时对 PG 连接做快速预检，缺工具显示 Alert 横幅与「前往设置」；`run_backup`/`run_native_pg_dump`/`native_tool_available` 与 SQL 文件原生执行的 psql 全部改走统一解析，spawn 失败与解析失败均返回带安装引导的中文错误（原 `pg_dump_tool_major` 删除，由 `pg_tool_major_at` 统一）。
+  - 依赖：`fluxdb-app` 新增 `ureq 3`（rustls+ring，与既有 TLS 栈一致）与 `zip 8`（仅 deflate）。
+  - **分片下载（原「整包下载」方案作废）**：官方包是完整服务端发行版（Windows 330MB / macOS 359MB），客户端工具与其依赖只占其中很小一块，整包下载等于下完再扔掉绝大部分。改为 `HttpRangeReader`（`Read + Seek`，按 256KB 起、顺序读时翻倍至 1MB 上限的 Range 请求 + 单块缓存）把远端压缩包当可随机访问文件交给 `zip`，只取中央目录与命中条目的字节范围（实测 macOS 完整安装 28.3MB，`pg_dump` 17 校验通过）；服务端不认 Range（非 206）时回退 `download_to_file` 整包下载。解压改为先按中央目录筛出目标条目再逐个 `by_index`，不再对整包上万个条目做 IO。
+  - **精简文件集 + 兜底**：`pg_client_archive_target(name, include_optional)` 默认只取工具本体与运行时依赖白名单（`PG_CLIENT_RUNTIME_PREFIXES`：libpq/libssl/libcrypto/libz/libzstd/liblz4/libintl/libiconv/krb5 一组 + Windows libwinpthread），跳过 ICU（mac 23MB / win 11MB）与 pgAdmin 的 wxWidgets；白名单是手工清单，故校验不过时自动以 `include_optional=true` 再装一轮「全部动态库」，避免过度精简装出跑不起来的工具。
+  验证：新增单测（URL 模板/版本表、条目过滤与 zip slip 防御、解析优先级与 legacy 兼容、发现结果来源/版本、Range 分片下载只取所需字节、Range 不可用时回退整包、缺 pg_dump 时校验失败）。下载类测试用本地一次性 HTTP 服务 + 合成压缩包，不触公网；另留 `pg_client_live_edb_smoke`（`#[ignore]`）作实网冒烟。`cargo fmt`、`cargo check --workspace`、`cargo test -p fluxdb-app`/`-p fluxdb-storage`/`-p fluxdb-core` 全绿。
+  - **修复记录一（2026-09-16，`--version` 无超时会挂死）**：应用内实际下载安装后，`pg_dump --version` 在依赖库缺失时**不退出**（实测进程长时间驻留，状态 UE），而 `pg_tool_major_at` 用 `Command::output()` 无上限等待 —— 后果是客户端发现（`discover_pg_clients` 对每个候选探测版本）与下载后校验一起挂死，UI 无响应。修复：改 `spawn` + `try_wait` 轮询，超过 `PG_CLIENT_VERSION_TIMEOUT`（3s）即 kill + wait 回收并返回 None（`tracing::warn` 记录）。新增单测 `pg_tool_major_at_gives_up_on_hanging_tool`（`sleep 60` 的假工具必须在超时后返回）。
+  - **修复记录二（2026-09-16，半成品安装被当成可用客户端）**：安装是「边下边写」，进程中途被杀会留下有 `pg_dump`、缺 `libpq.5.dylib` 等依赖的目录；`pg_client_tool_present` 只查文件存在，于是该目录被当作可用客户端，直到真正备份时才以 dyld 报错暴露。修复：安装开始前删除完成标记 `PG_CLIENT_INSTALL_MARKER`（`.fluxdb-install-complete`），只有在 `pg_dump` 与 `psql` 双工具校验通过后才写入；`pg_client_managed_dirs` 只列出带标记的托管目录（用户显式配置的目录不受此限制，避免误伤用户自己的 PostgreSQL 安装）。`pg_client_managed_dirs_in(root)` 为可注入版本供单测；新增单测 `managed_install_without_marker_is_ignored`。
   未完成项：SSH 隧道下 pg_dump/psql 的原生子进程链路未落地（当前只传直连 host/port，未建子进程隧道；需 SSH 环境 + 主机工具，保留待验证，并入集中人工清单 F 节）；备份记录「耗时」字段与集群级角色边界说明（可加）；普通表逻辑导出准确标注范围的 PG 分支；MySQL 原生/逻辑备份回归手测（→ 集中人工清单 E 节）。
 
 ### T26 — 角色、用户和 ACL 后端

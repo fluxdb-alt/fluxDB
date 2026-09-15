@@ -364,6 +364,7 @@ impl Render for NavicatMain {
                     self.backup_object_search_input.clone(),
                     &self.backup_objects_scroll,
                     &self.backup_tasks,
+                    self.backup_pg_client_missing,
                     colors,
                     cx,
                 ))

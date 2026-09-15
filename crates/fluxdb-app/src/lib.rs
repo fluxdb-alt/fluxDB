@@ -74,6 +74,7 @@ include!("parts/query_completion.rs");
 include!("parts/redis_commands.rs");
 include!("parts/redis_completion.rs");
 include!("parts/terminal_redis.rs");
+include!("parts/pg_client_tools.rs");
 include!("parts/query_history.rs");
 include!("parts/workbench_history.rs");
 include!("parts/query_result_edit.rs");

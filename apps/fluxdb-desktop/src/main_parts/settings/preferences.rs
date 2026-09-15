@@ -47,6 +47,8 @@ fn settings_section_changed(
         || saved.mysqldump_path != draft.mysqldump_path
         || saved.sqlite3_path != draft.sqlite3_path
         || saved.pg_dump_path != draft.pg_dump_path
+        || saved.pg_client_dir != draft.pg_client_dir
+        || saved.pg_client_download_source != draft.pg_client_download_source
         }
         SettingsPanelSection::ConnectionSecurity
         | SettingsPanelSection::DatabaseSupport
@@ -100,6 +102,8 @@ fn settings_apply_backup_fields(settings: &mut Settings, draft: &Settings) {
     settings.mysqldump_path = draft.mysqldump_path.clone();
     settings.sqlite3_path = draft.sqlite3_path.clone();
     settings.pg_dump_path = draft.pg_dump_path.clone();
+    settings.pg_client_dir = draft.pg_client_dir.clone();
+    settings.pg_client_download_source = draft.pg_client_download_source.clone();
 }
 
 fn reset_settings_section(
@@ -130,6 +134,9 @@ fn reset_settings_section(
             this.settings_editor_draft.mysqldump_path = defaults.mysqldump_path;
             this.settings_editor_draft.sqlite3_path = defaults.sqlite3_path;
             this.settings_editor_draft.pg_dump_path = defaults.pg_dump_path;
+            this.settings_editor_draft.pg_client_dir = defaults.pg_client_dir;
+            this.settings_editor_draft.pg_client_download_source =
+                defaults.pg_client_download_source;
             this.show_message("已恢复默认数据设置，点击保存后生效", AppMessageKind::Info, cx);
             cx.notify();
         }

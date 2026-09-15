@@ -87,6 +87,22 @@ impl NavicatMain {
             pg_include_owner: false,
             pg_include_acl: false,
         });
+        // 打开即预检 PostgreSQL 客户端：缺工具时在对话框顶部提示，不用等点了备份才报错。
+        // 只查文件存在性（不执行 --version），保证打开对话框不被子进程拖慢。
+        self.backup_pg_client_missing = self
+            .controller
+            .state()
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == connection_id)
+            .is_some_and(|connection| connection.config.kind == DatabaseKind::Postgres)
+            && !fluxdb_app::pg_client_tool_present(
+                &self.controller.state().settings,
+                fluxdb_app::PgClientTool::Dump,
+            );
+        if self.backup_pg_client_missing {
+            tracing::warn!("打开备份对话框时未发现 PostgreSQL 客户端工具");
+        }
         self.backup_log_task = None;
         self.backup_file_name_input
             .update(cx, |input, cx| input.set_value(String::new(), window, cx));
@@ -549,19 +565,24 @@ fn run_backup(
                     .as_ref()
                     .map(|profile| profile.tls.ssl_mode)
                     .unwrap_or(PostgresSslMode::Prefer);
+                // 工具解析：设置目录 → 应用下载目录 → 系统安装路径 → PATH（见 pg_client_tools）。
+                // 解析不到时直接给带安装引导的错误，而不是等 spawn 失败后抛裸 OS 错误。
+                let server_major = fluxdb_app::pg_server_major_version(&config).ok().flatten();
+                let Some(resolved) = fluxdb_app::resolve_pg_client_tool(
+                    &settings,
+                    fluxdb_app::PgClientTool::Dump,
+                    server_major,
+                ) else {
+                    anyhow::bail!("{}", fluxdb_app::pg_client_install_hint());
+                };
                 // 版本校验：pg_dump 客户端主版本不得低于服务端主版本（PG 禁止更旧客户端备份）。
                 // 工具版本从 `pg_dump --version` 解析；服务端版本经连接器读取；任一未知则放行（不误拦）。
-                let tool = if !settings.pg_dump_path.trim().is_empty() {
-                    settings.pg_dump_path.clone()
-                } else {
-                    "pg_dump".to_string()
-                };
-                let tool_major = pg_dump_tool_major(&tool);
-                let server_major = fluxdb_app::pg_server_major_version(&config).ok().flatten();
+                let tool_major = resolved.major_version;
                 if !fluxdb_app::pg_dump_version_compatible(tool_major, server_major) {
                     anyhow::bail!(
-                        "pg_dump 版本过旧：客户端主版本 {} 低于服务端主版本 {}，\
-                         请在设置中配置与服务端匹配（或不低于服务端）的 pg_dump 路径",
+                        "pg_dump 版本过旧：客户端主版本 {} 低于服务端主版本 {}。\
+                         请在「设置 → 数据 → 备份」中下载匹配版本的 PostgreSQL 客户端，\
+                         或指定不低于服务端版本的客户端目录",
                         tool_major.unwrap_or(0),
                         server_major.unwrap_or(0)
                     );
@@ -661,12 +682,14 @@ fn native_tool_available(settings: &Settings, kind: &DatabaseKind) -> bool {
                 "sqlite3"
             }
         }
+        // PostgreSQL 走统一的客户端解析（含应用下载目录与系统标准安装路径）。
         DatabaseKind::Postgres => {
-            if !settings.pg_dump_path.trim().is_empty() {
-                &settings.pg_dump_path
-            } else {
-                "pg_dump"
-            }
+            return fluxdb_app::resolve_pg_client_tool(
+                settings,
+                fluxdb_app::PgClientTool::Dump,
+                None,
+            )
+            .is_some();
         }
         _ => return false,
     };
@@ -966,11 +989,10 @@ fn run_native_pg_dump(
     if database.is_empty() {
         anyhow::bail!("未指定数据库，无法进行原生备份");
     }
-    let tool = if !settings.pg_dump_path.trim().is_empty() {
-        settings.pg_dump_path.as_str()
-    } else {
-        "pg_dump"
-    };
+    // 工具路径统一由 pg_client_tools 解析（设置目录 → 应用下载目录 → 系统安装 → PATH）。
+    let tool = fluxdb_app::resolve_pg_client_tool(settings, fluxdb_app::PgClientTool::Dump, None)
+        .map(|resolved| resolved.program)
+        .unwrap_or_else(|| fluxdb_app::PgClientTool::Dump.binary_name());
     if cfg!(not(test)) && host.is_empty() {
         anyhow::bail!("PostgreSQL 连接缺少主机信息");
     }
@@ -984,7 +1006,7 @@ fn run_native_pg_dump(
     let tables: Vec<String> = form.selected_tables.iter().cloned().collect();
     // 参数与凭据/传输由连接器统一构造（可单测）；密码/TLS 只入 env，argv 无凭据、无 shell。
     let invocation = fluxdb_app::pg_dump_invocation(
-        tool,
+        &tool,
         host,
         port,
         user,
@@ -1014,7 +1036,8 @@ fn run_native_pg_dump(
         .spawn()
         .map_err(|error| {
             anyhow::anyhow!(
-                "启动 pg_dump 失败：{error}。请在设置 → 数据 → 备份中配置有效的 pg_dump 路径，或将 pg_dump 加入系统 PATH"
+                "启动 pg_dump 失败：{error}。{}",
+                fluxdb_app::pg_client_install_hint()
             )
         })?;
 
@@ -1331,16 +1354,6 @@ fn backup_statusbar_area(
                         .child(label),
                 ),
         )
-}
-
-/// 运行 `<tool> --version` 并解析 pg_dump 客户端主版本号；失败/无法解析返回 None（不误拦）。
-fn pg_dump_tool_major(tool: &str) -> Option<u32> {
-    let output = Command::new(tool).arg("--version").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    fluxdb_app::pg_tool_major_version(&text)
 }
 
 /// 经 SSH 隧道做 PG 原生备份：起 `ssh -N -L` 子进程 → 等隧道就绪 → pg_dump 经 127.0.0.1:local

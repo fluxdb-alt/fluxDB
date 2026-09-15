@@ -1,6 +1,8 @@
 fn settings_data_panel(
     settings: &Settings,
+    pg_client: PgClientPanelState,
     colors: UiColors,
+    window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     div()
@@ -57,7 +59,7 @@ fn settings_data_panel(
                 ))
                 .child(settings_path_row(
                     "pg_dump 路径",
-                    "PostgreSQL 原生备份工具路径，留空时使用系统 PATH 中的 pg_dump",
+                    "单独指定 pg_dump 可执行文件（优先级最高）；一般留空，改用下方「PostgreSQL 客户端」",
                     AppIcon::Database,
                     &settings.pg_dump_path,
                     "settings-backup-pg-dump",
@@ -66,6 +68,9 @@ fn settings_data_panel(
                     cx,
                 )),
         )
+        .child(settings_pg_client_group(
+            settings, pg_client, colors, window, cx,
+        ))
 }
 
 /// 设置面板中一条可选择的路径行（目录或文件）。选择结果写入 settings_editor_draft 对应字段。
@@ -143,6 +148,11 @@ fn settings_choose_backup_path(
                             }
                             "settings-backup-pg-dump" => {
                                 this.settings_editor_draft.pg_dump_path = value
+                            }
+                            "settings-backup-pg-client-dir" => {
+                                this.settings_editor_draft.pg_client_dir = value;
+                                // 选完目录立刻复检，省去「保存后才知道选对没有」的来回。
+                                this.detect_pg_client_tools(cx);
                             }
                             _ => {}
                         }

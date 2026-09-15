@@ -7,6 +7,7 @@ fn settings_content(
     font_size_slider: Entity<SliderState>,
     line_height_input: Entity<InputState>,
     radius_input: Entity<InputState>,
+    pg_client: PgClientPanelState,
     dangerous_actions_collapsed: bool,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
@@ -57,6 +58,7 @@ fn settings_content(
                                     font_size_slider,
                                     line_height_input,
                                     radius_input,
+                                    pg_client,
                                     dangerous_actions_collapsed,
                                     window,
                                     cx,
@@ -261,6 +263,7 @@ fn settings_panel_body(
     font_size_slider: Entity<SliderState>,
     line_height_input: Entity<InputState>,
     radius_input: Entity<InputState>,
+    pg_client: PgClientPanelState,
     dangerous_actions_collapsed: bool,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
@@ -293,7 +296,9 @@ fn settings_panel_body(
         SettingsPanelSection::System => {
             settings_system_panel(&editor_draft, colors, cx)
         }
-        SettingsPanelSection::Data => settings_data_panel(&editor_draft, colors, cx),
+        SettingsPanelSection::Data => {
+            settings_data_panel(&editor_draft, pg_client, colors, window, cx)
+        }
         SettingsPanelSection::ConnectionSecurity => settings_connection_security_panel(colors),
         SettingsPanelSection::DatabaseSupport => {
             div().child(settings_database_support_panel(colors))

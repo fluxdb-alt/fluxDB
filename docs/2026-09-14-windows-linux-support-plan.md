@@ -178,6 +178,8 @@ Windows/macOS 托盘分别验证事件循环、打开、退出和恢复焦点。
 
 首版不捆绑所有数据库客户端，提供配置、版本检测和可见错误。`pg_dump` 保留与服务端版本兼容校验；Windows 的 redis-cli 来源需单独验证，不能默认系统已带或要求 WSL 才能运行应用。
 
+PostgreSQL 客户端已按 DBeaver 方案实现自动发现与按需下载（`fluxdb-app/parts/pg_client_tools.rs`，详见 PostgreSQL 详细设计 §11.3）：发现顺序为「设置的客户端目录 → 应用托管下载目录 → 系统标准安装路径 → PATH」，Windows 展开 `%ProgramFiles%\PostgreSQL\<版本>\bin`、Linux 展开 `/usr/lib/postgresql/<版本>/bin`、macOS 展开 Postgres.app 与 /Library/PostgreSQL 及 libpq。Windows/macOS 支持应用内下载官方二进制包（安装到设置的客户端目录，未设置时到 `<应用数据目录>/clients/postgresql/<版本>`），Linux 只给包管理器安装引导。仍待平台验证：Windows 上下载解压后的 DLL 依赖是否齐全、带空格/中文路径的实际执行、以及是否需要读注册表补充发现（当前按标准安装目录展开，未读注册表）。
+
 ## 5. 实施顺序与交付物
 
 | 阶段 | 工作与修改位置 | 完成条件 | 参考工作量 |

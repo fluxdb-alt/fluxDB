@@ -1043,6 +1043,8 @@ mod tests {
             mysqldump_path: String::new(),
             sqlite3_path: String::new(),
             pg_dump_path: String::new(),
+            pg_client_dir: String::new(),
+            pg_client_download_source: String::new(),
         };
 
         storage.save_settings(&settings).unwrap();

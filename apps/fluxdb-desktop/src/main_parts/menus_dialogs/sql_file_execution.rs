@@ -545,6 +545,15 @@ impl NavicatMain {
         if let Some(addr) = &hostaddr {
             invocation.env.extend(fluxdb_app::pg_hostaddr_env(addr, connect_port));
         }
+        // psql 路径与备份共用同一套客户端解析（设置目录 → 应用下载目录 → 系统安装 → PATH），
+        // 解析不到时保持裸名交给 PATH，由启动失败分支给出安装引导。
+        if let Some(resolved) = fluxdb_app::resolve_pg_client_tool(
+            &self.controller.state().settings,
+            fluxdb_app::PgClientTool::Psql,
+            None,
+        ) {
+            invocation.program = resolved.program;
+        }
         let file_label = sql_file_name(path);
         // 捕获 owned 副本，避免借用逃逸到 spawn 的后台任务生命周期外。
         let cancel_for_spawn = cancel_flag.clone();
@@ -1589,7 +1598,12 @@ fn run_pg_native_psql(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| anyhow::anyhow!("启动 psql 失败：{error}"))?;
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "启动 psql 失败：{error}。{}",
+                fluxdb_app::pg_client_install_hint()
+            )
+        })?;
 
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");

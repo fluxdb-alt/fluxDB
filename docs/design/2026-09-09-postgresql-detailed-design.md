@@ -160,10 +160,12 @@ crates/fluxdb-app/src/parts/
   query_execution/           # 请求准备、完成归并、历史联动
   user_admin/                # 通用工作流 + PostgreSQL 角色状态
   transfer/                  # 导出/备份/SQL 文件后台编排
+  pg_client_tools.rs         # pg_dump/psql/pg_restore 发现、版本解析、下载安装
 apps/fluxdb-desktop/src/main_parts/
   connection_dialog/         # 原表单拆分 + postgres.rs
   sidebar/                   # database/schema 节点适配现有树
   user_admin/                # PostgreSQL 角色字段及权限表
+  settings/pg_client.rs      # 设置页客户端状态/下载/目录与下载源
 ```
 
 新增 PG 文件用真实 `mod`，helper 默认私有或 `pub(super)`/`pub(crate)`。保留旧 `include!` 模块的边界；仅迁移确实共享的 helper，不整体改造所有数据库。
@@ -497,7 +499,13 @@ PG 不显示 engine/charset/unsigned/zerofill/ON UPDATE 时间/索引前缀长�
 
 原生工具路径为配置项，检测存在、版本与权限；pg_dump 不能使用比服务器主版本更旧的客户端。子进程使用 `Command` 参数数组，不经 shell；密码经短生命周期 0600 passfile（正确转义）或安全凭据机制，日志/进程参数不带密码。SSH/代理下保持通道至子进程结束；libpq 的 host/hostaddr 分别保持证书身份与拨号地址。进度按对象/字节显示，无法估计时用不确定进度，不能捏造百分比。
 
-取消需终止并 wait/reap 自己创建的进程组、关闭管道和 transport；输出临时文件、凭据文件均清理，不能遗留成功记录。备份记录只有在进程退出成功、输出完成后落盘；恢复验证在隔离数据库进行。
+客户端工具管理对齐 DBeaver：应用自动发现本机客户端（设置的客户端目录 → 应用托管下载目录 → 系统标准安装路径 → PATH），发现不到时给出按平台可执行的补齐入口，而不是等用户点了备份才抛裸 OS 错误。发现与下载实现在 `fluxdb-app/parts/pg_client_tools.rs`：`discover_pg_clients`/`resolve_pg_client_tool` 负责定位与版本探测（`required_major` 优先选不低于服务端主版本的安装），`pg_client_tool_present` 提供不拉子进程的快速预检供 UI 打开对话框时使用，`download_pg_client` 负责下载官方二进制包并只解压客户端可执行文件与运行库（其余服务端程序/头文件跳过，条目按 `bin/`、`lib/` 末两段匹配并拒绝含 `..` 的路径）。下载源为设置项 `pg_client_download_source`（空=内置 EnterpriseDB 官方源，支持 `{version}`/`{platform}` 占位符便于内网镜像）；安装目录为设置项 `pg_client_dir`，未设置时落到 `<应用数据目录>/clients/postgresql/<版本>`。Windows/macOS 提供应用内下载，Linux 无官方免安装包，只给包管理器安装引导。安装完成后必须执行 `pg_dump --version` 校验可运行，失败即报错而不是留下半成品目录。旧设置项 `pg_dump_path` 保持最高优先级以兼容既有配置。
+
+官方包同时含服务端程序、share 数据与 pgAdmin 依赖，客户端只占一小部分，因此下载走 HTTP Range 分片：把远端压缩包当随机访问文件，只取中央目录与命中条目的字节范围（`HttpRangeReader`），服务端不支持 Range 时回退整包下载。默认只装工具本体与运行时依赖白名单，白名单是手工清单，校验不过时自动改用「全部动态库」重装一轮兜底，避免过度精简装出跑不起来的工具。
+
+两条来自实机问题的硬约束：**探测 `--version` 必须带超时**——工具在依赖库缺失时可能报错却不退出（实测驻留不回收），无上限等待会让客户端发现与安装校验一起挂死，超时后必须 kill 并 wait 回收；**安装要有完成标记**——安装是边下边写，中途被杀会留下有工具、缺依赖的目录，托管目录只在标记存在时才被视为可用安装（用户显式配置的目录不受此限制，避免误伤用户自己的 PostgreSQL 安装）。
+
+取消需终止并 wait/reap 自己创建的进程组、关闭管道和 transport；输出临时文件、凭据文件均清理，不能遗留成功记录。下载取消同样按分片检查标志，删除 `.pg-client-download.part` 临时文件。备份记录只有在进程退出成功、输出完成后落盘；恢复验证在隔离数据库进行。
 
 ## 12. 用户、角色与权限
 

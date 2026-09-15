@@ -103,6 +103,7 @@ fn database_backup_modal(
     object_search_input: Entity<InputState>,
     objects_scroll: &VirtualListScrollHandle,
     tasks: &[BackupTaskState],
+    pg_client_missing: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
@@ -117,6 +118,7 @@ fn database_backup_modal(
             note_input,
             object_search_input,
             objects_scroll,
+            pg_client_missing,
             colors,
             cx,
         ))
@@ -287,6 +289,7 @@ fn database_backup_modal_body(
     note_input: Entity<InputState>,
     object_search_input: Entity<InputState>,
     objects_scroll: &VirtualListScrollHandle,
+    pg_client_missing: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -297,6 +300,10 @@ fn database_backup_modal_body(
         .flex()
         .flex_col()
         .gap_3()
+        // 缺少 PostgreSQL 客户端时先给横幅提示与前往设置的入口，避免点了备份才失败。
+        .when(pg_client_missing, |this| {
+            this.child(database_backup_pg_client_banner(colors, cx))
+        })
         .child(match form.tab {
             BackupTab::General => {
                 database_backup_general_body(form, file_name_input, note_input, colors, cx)
@@ -371,6 +378,37 @@ fn database_backup_target_input(database: String, colors: UiColors) -> Div {
 }
 
 /// 备份方式只读说明：统一自动选择（按库类型与工具自动判断原生或逻辑），不提供手动三选一。
+/// 缺少 PostgreSQL 客户端工具时的横幅：说明影响 + 直接跳到设置里下载或指定目录。
+fn database_backup_pg_client_banner(colors: UiColors, cx: &mut Context<NavicatMain>) -> Div {
+    let accent = ComponentTheme::global(cx).warning;
+    div()
+        .flex()
+        .items_center()
+        .gap_3()
+        .child(
+            div().flex_1().min_w(px(0.)).child(
+                Alert::new(
+                    "backup-pg-client-missing",
+                    "未找到 pg_dump：PostgreSQL 备份依赖官方客户端工具，请先下载或指定客户端目录。",
+                )
+                .with_variant(AlertVariant::Warning)
+                .bg(alert_tint(accent, colors)),
+            ),
+        )
+        .child(
+            Button::new("backup-pg-client-settings")
+                .label("前往设置")
+                .small()
+                .rounded(colors.radius)
+                .on_click(cx.listener(|this, _, _window, cx| {
+                    this.cancel_backup_modal(cx);
+                    this.settings_panel_section = SettingsPanelSection::Data;
+                    this.dispatch(AppCommand::OpenSettings, cx);
+                    this.detect_pg_client_tools(cx);
+                })),
+        )
+}
+
 fn database_backup_mode_info(colors: UiColors) -> Div {
     div()
         .flex()
