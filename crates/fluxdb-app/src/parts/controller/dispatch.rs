@@ -2286,6 +2286,25 @@ impl AppController {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
                 }
             }
+            AppCommand::BeginUserAdminDeleteUser(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    // 仅在选中了已有用户（非新建草稿态）时允许弹出删除确认。
+                    if let Some(selected) = admin.selected_user.clone().filter(|_| !admin.creating_user) {
+                        admin.pending_delete_user = Some(selected);
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::CancelUserAdminDeleteUser(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pending_delete_user = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
             AppCommand::SetUserAdminPgCanLogin { tab_id, can_login } => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
                     admin.pg_can_login = can_login;

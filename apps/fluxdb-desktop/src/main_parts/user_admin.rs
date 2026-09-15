@@ -33,6 +33,12 @@ impl NavicatMain {
                 };
                 view.update(cx, |this, cx| {
                     this._user_admin_users_tasks.remove(&tab_id);
+                    // 加载失败时除侧边栏展示外，也 Alert 提示，避免用户只看到列表为空/侧边栏报错而不知原因
+                    // （典型场景：改当前用户密码成功后，连接仍用旧密码刷新列表导致 MySQL 拒绝连接）。
+                    let load_error = result
+                        .as_ref()
+                        .err()
+                        .map(|error| error.message.clone());
                     this.dispatch(
                         AppCommand::FinishUserAdminUsersLoad {
                             tab_id,
@@ -40,6 +46,13 @@ impl NavicatMain {
                         },
                         cx,
                     );
+                    if let Some(load_error) = load_error {
+                        this.show_message(
+                            format!("刷新用户列表失败：{load_error}"),
+                            AppMessageKind::Error,
+                            cx,
+                        );
+                    }
                     if let Some(admin) = this.user_admin_state_for(tab_id)
                         && matches!(
                             admin.active_detail_tab,
@@ -211,6 +224,8 @@ impl NavicatMain {
                 view.update(cx, |this, cx| {
                     this._user_admin_apply_tasks.remove(&tab_id);
                     let success = result.is_ok();
+                    // 失败原因在 move 进 dispatch 前取出，用于 Alert 提示。
+                    let error_msg = result.as_ref().err().map(|error| error.message.clone());
                     this.dispatch(
                         AppCommand::FinishUserAdminSqlApply { tab_id, result },
                         cx,
@@ -236,6 +251,14 @@ impl NavicatMain {
                         {
                             this.start_user_admin_member_grants_load(tab_id, role, cx);
                         }
+                    } else if let Some(error_msg) = error_msg {
+                        // 执行失败：Alert 提示原因（如权限不足/DROP USER 被拒绝），并刷新用户与权限列表。
+                        this.show_message(
+                            format!("执行失败：{error_msg}"),
+                            AppMessageKind::Error,
+                            cx,
+                        );
+                        this.start_user_admin_users_load(tab_id, cx);
                     }
                 });
             });
@@ -663,6 +686,16 @@ fn user_admin_content(
         ));
     }
 
+    if let Some(user) = &admin.pending_delete_user {
+        root = root.child(user_admin_delete_user_modal(
+            tab_id,
+            user.clone(),
+            this.focus_handle.clone(),
+            colors,
+            cx,
+        ));
+    }
+
     root
 }
 
@@ -837,6 +870,43 @@ fn user_admin_toolbar(
                 }),
             ),
         )
+        // 删除当前选中的已有用户：仅非新建草稿态、已选中、且非 MySQL 系统账号（mysql. 前缀）时可用。
+        .child(
+            user_admin_button(
+                "删除",
+                AppIcon::Trash,
+                true,
+                !supported
+                    || admin.creating_user
+                    || admin.selected_user.is_none()
+                    || admin
+                        .selected_user
+                        .as_ref()
+                        .is_some_and(user_admin_is_system_account),
+                colors,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    if supported
+                        && !this
+                            .user_admin_state_for(tab_id)
+                            .and_then(|admin| admin.selected_user)
+                            .as_ref()
+                            .is_some_and(user_admin_is_system_account)
+                    {
+                        this.dispatch(AppCommand::BeginUserAdminDeleteUser(tab_id), cx);
+                    }
+                    cx.stop_propagation();
+                }),
+            ),
+        )
+}
+
+/// MySQL 系统内置账号（mysql.infoschema / mysql.session / mysql.sys 等）由服务端强制保留，
+/// 无法通过 DROP USER 删除，故删除按钮对这些账号置灰。
+fn user_admin_is_system_account(user: &DatabaseUserIdentity) -> bool {
+    user.user.starts_with("mysql.")
 }
 
 fn user_admin_badge(text: String, colors: UiColors) -> Div {
@@ -1366,31 +1436,24 @@ fn user_admin_select_row(
         .items_center()
         .gap_3()
         .child(user_admin_form_label(label, colors))
-        .child(user_admin_select_box(select, placeholder, colors))
+        .child(user_admin_select_box(select, placeholder))
 }
 
 fn user_admin_select_box(
     select: Entity<SelectState<SearchableVec<String>>>,
     placeholder: &'static str,
-    colors: UiColors,
 ) -> Div {
+    // 与「执行 SQL 文件」对话框 (`sql_file_select_field`) 同一用法：
+    // 直接用 Select 自带外观并给定 34px 高度，触发器自身 flex + items_center
+    // 保证选中值/占位文字垂直居中；不自绘外框，避免 appearance(false) 下
+    // 行盒偏移导致的文本不居中/降部被裁问题。边框/背景随 ActiveTheme 双主题生效。
     div()
         .w(px(360.))
-        .h(px(34.))
-        .rounded(colors.radius)
-        .border_1()
-        .border_color(colors.border)
-        .bg(colors.input_bg)
-        .overflow_hidden()
-        .flex()
-        .items_center()
-        .hover(move |style| style.border_color(user_admin_input_hover_border_color(false, colors)))
         .child(
             Select::new(&select)
                 .placeholder(placeholder)
-                .appearance(false)
                 .w_full()
-                .h_full()
+                .h(px(34.))
                 .menu_width(px(360.)),
         )
 }
@@ -2387,4 +2450,155 @@ fn user_admin_error_row(text: &str, _colors: UiColors) -> Div {
         .text_size(px(12.))
         .text_color(rgb(0xff3b45))
         .child(text.to_string())
+}
+
+/// MySQL 用户与权限：删除用户确认弹框。
+///
+/// 对齐全局 modal 规范：遮罩点击 / X / Esc（CancelDialog）取消关闭，
+/// 内部点击 stop_propagation 防止穿透到遮罩。确定后直接执行 DROP USER，
+/// 不经过 SQL 预览（删除为危险操作但目标明确，确认框即足够）。
+fn user_admin_delete_user_modal(
+    tab_id: TabId,
+    user: DatabaseUserIdentity,
+    focus_handle: FocusHandle,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> impl IntoElement {
+    let title = if user.user.is_empty() {
+        "匿名用户@%".to_string()
+    } else {
+        format!("{}@{}", user.user, user.host)
+    };
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .occlude()
+        .bg(if colors.is_dark {
+            hsla(220. / 360., 0.12, 0.08, 0.54)
+        } else {
+            hsla(210. / 360., 0.20, 0.20, 0.16)
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                this.dispatch(AppCommand::CancelUserAdminDeleteUser(tab_id), cx);
+                cx.stop_propagation();
+            }),
+        )
+        .child(
+            div()
+                .w(px(420.))
+                .rounded(colors.radius_lg)
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.panel_bg)
+                .shadow(vec![box_shadow(
+                    px(0.),
+                    px(18.),
+                    px(42.),
+                    px(0.),
+                    hsla(0., 0., 0., if colors.is_dark { 0.42 } else { 0.18 }),
+                )])
+                .overflow_hidden()
+                .text_color(colors.text)
+                .track_focus(&focus_handle)
+                .key_context("UserAdminDeleteUserModal")
+                .on_action(cx.listener(move |this, _: &CancelDialog, _, cx| {
+                    // Esc 关闭（全局 escape→CancelDialog 绑定）
+                    this.dispatch(AppCommand::CancelUserAdminDeleteUser(tab_id), cx);
+                    cx.stop_propagation();
+                }))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .px_5()
+                        .pt_4()
+                        .pb_3()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(px(17.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("删除用户"),
+                        )
+                        .child(
+                            div()
+                                .size(px(28.))
+                                .rounded(colors.radius)
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .hover(move |style| style.bg(colors.hover))
+                                .child(app_icon(AppIcon::Close, 15., colors.muted))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.dispatch(
+                                            AppCommand::CancelUserAdminDeleteUser(tab_id),
+                                            cx,
+                                        );
+                                        cx.stop_propagation();
+                                    }),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .px_5()
+                        .pb_4()
+                        .text_size(px(13.))
+                        .text_color(colors.muted)
+                        .child(format!(
+                            "确定要删除用户「{}」吗？此操作不可撤销。",
+                            title
+                        )),
+                )
+                .child(div().h(px(1.)).bg(colors.border_soft))
+                .child(
+                    div()
+                        .h(px(58.))
+                        .px_5()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("user-admin-delete-cancel")
+                                .label("取消")
+                                .w(px(78.))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.dispatch(
+                                        AppCommand::CancelUserAdminDeleteUser(tab_id),
+                                        cx,
+                                    );
+                                    cx.stop_propagation();
+                                })),
+                        )
+                        .child(
+                            Button::new("user-admin-delete-confirm")
+                                .label("删除用户")
+                                .danger()
+                                .w(px(104.))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(provider) = this.user_admin_provider(tab_id) {
+                                        let sql = provider.drop_user_sql(&user);
+                                        this.dispatch(
+                                            AppCommand::CancelUserAdminDeleteUser(tab_id),
+                                            cx,
+                                        );
+                                        this.start_user_admin_sql_apply(tab_id, sql, cx);
+                                    }
+                                    cx.stop_propagation();
+                                })),
+                        ),
+                ),
+        )
 }

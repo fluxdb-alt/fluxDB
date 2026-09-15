@@ -253,6 +253,8 @@ pub struct UserAdminState {
     pub role_membership_edits: Vec<UserRoleMembership>,
     pub member_grant_edits: Vec<UserRoleMember>,
     pub pending_sql: Option<UserAdminPendingSql>,
+    /// 待确认删除的用户（MySQL 用户与权限删除确认弹框）。
+    pub pending_delete_user: Option<DatabaseUserIdentity>,
     /// PostgreSQL：新建角色是否可登录（LOGIN）/组角色（NOLOGIN）。仅 PG 场景使用。
     pub pg_can_login: bool,
     /// PostgreSQL 对象权限（T27）：授权目标种类 + schema/对象/函数签名。
@@ -383,6 +385,7 @@ impl UserAdminState {
             role_membership_edits: Vec::new(),
             member_grant_edits: Vec::new(),
             pending_sql: None,
+            pending_delete_user: None,
             pg_can_login: true,
             pg_grant_kind: PgGrantObjectKind::default(),
             pg_grant_schema: "public".to_string(),
@@ -1896,6 +1899,10 @@ pub enum AppCommand {
         danger: bool,
     },
     ClearUserAdminPendingSql(TabId),
+    /// MySQL：打开「删除用户」确认弹框（针对当前选中的已有用户）。
+    BeginUserAdminDeleteUser(TabId),
+    /// MySQL：关闭「删除用户」确认弹框（取消）。
+    CancelUserAdminDeleteUser(TabId),
     StartUserAdminSqlApply(TabId),
     ApplyUserAdminSql {
         tab_id: TabId,

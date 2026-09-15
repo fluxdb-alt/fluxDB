@@ -764,6 +764,7 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
             role_membership_edits: admin.role_membership_edits.clone(),
             member_grant_edits: admin.member_grant_edits.clone(),
             pending_sql: admin.pending_sql.clone(),
+            pending_delete_user: admin.pending_delete_user.clone(),
             pg_can_login: admin.pg_can_login,
             pg_grant_kind: admin.pg_grant_kind,
             pg_grant_schema: admin.pg_grant_schema.clone(),

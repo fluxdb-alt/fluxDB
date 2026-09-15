@@ -212,7 +212,17 @@ impl AppController {
             mode: fluxdb_core::QueryMode::All,
             options: QueryExecutionOptions::default(),
         };
-        self.execute_query(&request).map(|_| ())
+        let execution = self.execute_query(&request)?;
+        // 连接器把单条语句错误放在 execution.summaries（success=false）而非抛 Err，
+        // 以便查询编辑器批处理时不中断其他语句。这里需要「整批要么全成、要么全败」的
+        // 语义，故显式检查是否有失败语句，避免 DROP USER 等被权限拒绝却误判成功。
+        if let Some(failed) = execution.summaries.iter().find(|summary| !summary.success) {
+            return Err(Error::new(
+                ErrorKind::Query,
+                format!("数据库执行失败：{}", failed.message),
+            ));
+        }
+        Ok(())
     }
 
     fn reset_user_admin_selection_after_users_load(

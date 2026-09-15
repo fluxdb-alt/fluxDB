@@ -321,6 +321,21 @@ mod tests {
     }
 
     #[test]
+    fn mysql_drop_user_sql_escapes_account() {
+        let provider = database_user_admin_provider(DatabaseKind::MySql).unwrap();
+        let user = DatabaseUserIdentity {
+            user: "app'user".to_string(),
+            host: "host'name".to_string(),
+            plugin: None,
+        };
+
+        assert_eq!(
+            provider.drop_user_sql(&user),
+            "DROP USER 'app''user'@'host''name';"
+        );
+    }
+
+    #[test]
     fn mysql_alter_user_options_sql_are_escaped() {
         let provider = database_user_admin_provider(DatabaseKind::MySql).unwrap();
         let user = DatabaseUserIdentity {
