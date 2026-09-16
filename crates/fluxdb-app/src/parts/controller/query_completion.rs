@@ -8,105 +8,7 @@ fn join_on_fk_score(score: i32, column_is_fk_child: bool) -> i32 {
     }
 }
 
-/// T051：后台刷新 worker——取 index 中已有的（旧）表名，在线拉取这些表的列并写回 index。
-/// 与同步 warm 共用同一批 free connector 查询函数，不依赖控制器 `&self`，故可由独立线程执行。
-/// 返回 (刷新表数, 刷新列数)。刷新仅对成功拉取的列写回，失败时旧候选保留。
-fn refresh_index_columns_in_background(
-    index: &Mutex<CompletionIndex>,
-    config: &ConnectionConfig,
-    connection_id: ConnectionId,
-    database: Option<&str>,
-    schema: Option<&str>,
-) -> fluxdb_core::Result<(usize, usize)> {
-    // T052：按影响范围限制刷新对象。库级 dirty → 刷新整库；
-    // 仅部分表 dirty（非库级）→ 只刷新那些表，避免每次 DDL 都重刷整库。
-    let (table_names, database_wide): (Vec<String>, bool) = {
-        let Ok(guard) = index.lock() else {
-            return Ok((0, 0));
-        };
-        let database_wide = guard.is_database_dirty(connection_id, database, schema);
-        let dirty_tables = guard
-            .dirty_table_names(connection_id, database, schema)
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let table_names = guard
-            .database_tables(connection_id, database, schema)
-            .into_iter()
-            .filter(|table| matches!(table.kind, ObjectKind::Table | ObjectKind::View))
-            // 存储键按 catalog 原名（§8.4 不折叠、不合并），而 dirty 标记来自 DDL 文本，
-            // 各方言对未加引号标识符的折叠规则不同，故这里按忽略大小写匹配：多刷可接受，漏刷不行。
-            .filter(|table| {
-                database_wide
-                    || dirty_tables.is_empty()
-                    || dirty_tables
-                        .iter()
-                        .any(|dirty| dirty.eq_ignore_ascii_case(&table.name))
-            })
-            .map(|table| table.name)
-            .collect::<Vec<_>>();
-        (table_names, database_wide)
-    };
-    // 触发后台刷新即说明该 scope 的元数据整体已过期（dirty 或 TTL）：例程/触发器不像列那样
-    // 能按表名精确刷新，直接失效该 scope 的例程/触发器索引，下次补全按需重新拉取并写回（§8.4）。
-    if let Ok(mut guard) = index.lock() {
-        guard.clear_routines_and_triggers(connection_id, database, schema);
-    }
-    if table_names.is_empty() {
-        // 无匹配表的 dirty（对象已 DROP，或名称与 catalog 对不上）不会因刷新自动消失，
-        // 在此清掉，避免该 scope 永久 dirty、每次补全都触发后台刷新。
-        if let Ok(mut guard) = index.lock() {
-            guard.clear_dirty_tables(connection_id, database, schema);
-        }
-        return Ok((0, 0));
-    }
-    // 库级失效（DDL / 表操作）时同时重取表清单：新建、重命名、删除的表才能及时进出候选，
-    // 否则索引里的表名只在冷启动时建立，删掉的表会一直被建议（§8.4 DDL 后刷新）。
-    if database_wide
-        && let Ok(tables) = list_completion_tables_for_connection_with_cancel(
-            config,
-            database,
-            schema,
-            "",
-            COMPLETION_METADATA_LIMIT,
-            &|| false,
-        )
-        && let Ok(mut guard) = index.lock()
-    {
-        guard.insert_tables(connection_id, database, schema, tables, config.kind);
-    }
-    let columns = list_completion_columns_for_tables_for_connection_with_cancel(
-        config,
-        database,
-        schema,
-        &table_names,
-        &|| false,
-    )?;
-    let refreshed_columns = columns.len();
-    // 按表名精确分组（不折叠大小写）：同一批次内，PG 端已按 search_path 只返回每个表名
-    // 首个可见 schema 的列，故表名在批内唯一；折叠会让 `"Foo"` 与 `"foo"` 互相覆盖列（§8.4）。
-    let mut by_table: BTreeMap<String, Vec<CompletionColumn>> = BTreeMap::new();
-    for column in columns {
-        by_table
-            .entry(column.table.clone())
-            .or_default()
-            .push(column);
-    }
-    if let Ok(mut guard) = index.lock() {
-        for table in &table_names {
-            let table_columns = by_table.remove(table).unwrap_or_default();
-            // replace_table_columns 内部 touch_meta → 更新 last_verified_at 并清 dirty，索引转为 fresh。
-            guard.replace_table_columns(
-                connection_id,
-                database,
-                schema,
-                table,
-                table_columns,
-                config.kind,
-            );
-        }
-    }
-    Ok((table_names.len(), refreshed_columns))
-}
+include!("completion_refresh.rs");
 
 fn completion_expectation_label(expectation: CompletionExpectation) -> &'static str {
     match expectation {
@@ -1313,52 +1215,17 @@ impl AppController {
         }
         if let Ok(index) = self.completion_index.lock() {
             let columns = index.database_columns(connection_id, database, schema, prefix);
-            if !columns.is_empty() {
+            if index.has_database_index(connection_id, database, schema) {
                 return Ok(columns);
             }
         }
-        if self.load_persisted_completion_index(config, connection_id, database, schema)
-            && let Ok(index) = self.completion_index.lock()
-        {
-            let columns = index.database_columns(connection_id, database, schema, prefix);
-            if !columns.is_empty() {
-                return Ok(columns);
-            }
-        }
-
-        let tables = self.indexed_completion_tables_with_cancel(
-            config,
-            connection_id,
-            database,
-            schema,
-            should_cancel,
-        )?;
-        let table_names = tables
-            .iter()
-            .filter(|table| matches!(table.kind, ObjectKind::Table | ObjectKind::View))
-            .map(|table| table.name.clone())
-            .collect::<Vec<_>>();
-        if table_names.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        self.refresh_completion_index_tables_with_cancel(
-            config,
-            connection_id,
-            database,
-            schema,
-            &table_names,
-            should_cancel,
-        )?;
-        if should_cancel() {
-            return Ok(Vec::new());
-        }
+        // 过期快照同样可用于当前请求，后台刷新负责更新。
+        self.load_persisted_completion_index(config, connection_id, database, schema);
         if let Ok(index) = self.completion_index.lock() {
-            let result = index.database_columns(connection_id, database, schema, prefix);
-            drop(index);
-            self.save_persisted_completion_index(config, connection_id, database, schema);
-            return Ok(result);
+            return Ok(index.database_columns(connection_id, database, schema, prefix));
         }
+
+        // 前缀没有候选不代表索引缺失；全库列补全只读缓存，禁止按键触发全库扫描。
         Ok(Vec::new())
     }
 
@@ -1382,6 +1249,12 @@ impl AppController {
         }
 
         let tables = self.indexed_completion_tables(config, connection_id, database, schema)?;
+        // 大库仅预热表名；列由实际引用表的补全与详情按需加载。
+        if tables.len() >= COMPLETION_METADATA_LIMIT as usize {
+            tracing::debug!(target: "gdb_sql_completion", op = "index_warmup", table_count = tables.len(), "大库跳过全库列预热");
+            self.save_persisted_completion_index(config, connection_id, database, schema);
+            return Ok(());
+        }
         let mut table_names = tables
             .iter()
             .filter(|table| matches!(table.kind, ObjectKind::Table | ObjectKind::View))
@@ -1528,24 +1401,21 @@ impl AppController {
             let mut by_table: BTreeMap<String, Vec<CompletionColumn>> = BTreeMap::new();
             for column in columns {
                 by_table
-                    .entry(column.table.to_ascii_lowercase())
+                    .entry(column.table.clone())
                     .or_default()
                     .push(column);
             }
+            for table in &chunk {
+                by_table.entry(table.clone()).or_default();
+            }
             if let Ok(mut index) = self.completion_index.lock() {
-                for table in &chunk {
-                    let table_columns = by_table
-                        .remove(&table.to_ascii_lowercase())
-                        .unwrap_or_default();
-                    index.replace_table_columns(
-                        connection_id,
-                        database,
-                        schema,
-                        table,
-                        table_columns,
-                        config.kind,
-                    );
-                }
+                index.replace_table_columns_batch(
+                    connection_id,
+                    database,
+                    schema,
+                    by_table,
+                    config.kind,
+                );
             }
         }
         Ok(())
@@ -1763,9 +1633,7 @@ impl AppController {
     /// 表操作直接执行 SQL、不走查询历史记录路径，故不会经过 `mark_query_history_completion_dirty`；
     /// 这里按 scope 标脏，后台刷薪触发时会重取表清单与列，旧名/已删表不再被建议（§9.3）。
     fn mark_table_action_completion_dirty(&self, object: &ObjectPath) {
-        if let Ok(mut index) = self.completion_index.lock() {
-            index.mark_dirty(object.connection_id, object.database.as_deref(), object.schema.as_deref());
-        }
+        self.invalidate_completion_metadata(object.connection_id, object.database.as_deref(), object.schema.as_deref(), None);
     }
 
     fn indexed_completion_routines_with_cancel(

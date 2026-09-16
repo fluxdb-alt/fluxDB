@@ -27,7 +27,9 @@ impl AppController {
                 );
                 continue;
             }
-            self.mark_query_history_completion_dirty(request, &summary.sql);
+            if summary.success {
+                self.mark_query_history_completion_dirty(request, &summary.sql);
+            }
             let kind = query_history_kind(&summary.sql);
             let control = if summary.success { history_transaction_control(&summary.sql) } else { HistoryTransactionControl::None };
             if control == HistoryTransactionControl::Begin {
@@ -210,7 +212,6 @@ impl AppController {
     }
 
     fn record_failed_query_history(&mut self, request: &QueryRequest) {
-        self.mark_query_history_completion_dirty(request, &request.text);
         self.state.query_history.push(QueryHistoryEntry {
             session_id: None,
             connection_id: request.connection_id,
@@ -260,25 +261,17 @@ impl AppController {
         ));
     }
 
-    fn mark_query_history_completion_dirty(&mut self, request: &QueryRequest, sql: &str) {
+    fn mark_query_history_completion_dirty(&self, request: &QueryRequest, sql: &str) {
         let Some(impact) = sql_ddl_impact(sql) else {
             return;
         };
-        let Ok(mut index) = self.completion_index.lock() else {
-            return;
-        };
-        if impact.database_wide || impact.tables.is_empty() {
-            index.mark_dirty(request.connection_id, request.database.as_deref(), None);
-        } else {
-            for table in impact.tables {
-                index.mark_table_dirty(
-                    request.connection_id,
-                    request.database.as_deref(),
-                    None,
-                    &table,
-                );
-            }
-        }
+        // 新建、删除和重命名会改变对象清单；仅按旧表名刷新会漏掉新增对象。
+        let changes_objects = sql_identifier_tokens(sql).iter().any(|token|
+            matches!(token.to_ascii_lowercase().as_str(), "create" | "drop" | "rename")
+        );
+        let tables = (!impact.database_wide && !impact.tables.is_empty() && !changes_objects)
+            .then_some(&impact.tables);
+        self.invalidate_completion_metadata(request.connection_id, request.database.as_deref(), None, tables);
     }
 }
 

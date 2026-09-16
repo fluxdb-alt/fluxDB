@@ -168,6 +168,28 @@ impl CompletionIndex {
         self.clear_dirty_table_names_matching(connection_id, database, schema, table);
     }
 
+    /// 一批只清理一次旧列引用，避免共享前缀被逐表重复扫描。
+    fn replace_table_columns_batch(
+        &mut self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        columns: BTreeMap<String, Vec<CompletionColumn>>,
+        db_kind: DatabaseKind,
+    ) {
+        let mut old_ids = BTreeSet::new();
+        for table in columns.keys() {
+            let key = Self::table_key(connection_id, database, schema, table);
+            if let Some(ids) = self.columns_by_table.remove(&key) {
+                old_ids.extend(ids);
+            }
+        }
+        self.remove_column_ids(&old_ids);
+        for (table, columns) in columns {
+            self.replace_table_columns(connection_id, database, schema, &table, columns, db_kind);
+        }
+    }
+
     /// 清除指定库/schema 下「按名称匹配（忽略大小写）」的表级 dirty 标记。
     ///
     /// 存储键按 catalog 原名（§8.4 不折叠、不合并），但 dirty 标记来自 DDL 文本，
@@ -680,10 +702,50 @@ impl CompletionIndex {
             return;
         };
         let old_ids = old_ids.into_iter().collect::<BTreeSet<_>>();
-        for ids in self.columns_by_db.values_mut() {
-            ids.retain(|id| !old_ids.contains(id));
+        self.remove_column_ids(&old_ids);
+    }
+
+    fn remove_column_ids(&mut self, old_ids: &BTreeSet<ColumnId>) {
+        if old_ids.is_empty() {
+            return;
         }
-        self.rebuild_prefix_index();
+        // 快照的列 schema 可以比补全桶更具体（例如 PostgreSQL search_path）。
+        // 通过旧列 ID 找到实际所在桶，不能从表键猜测桶的 schema。
+        let mut affected_databases = Vec::new();
+        for (db_key, ids) in &mut self.columns_by_db {
+            let previous_len = ids.len();
+            ids.retain(|id| !old_ids.contains(id));
+            if ids.len() != previous_len {
+                affected_databases.push(db_key.clone());
+            }
+        }
+        // 只移除旧列实际占用的前缀，不再为替换一张表重建所有数据库的索引。
+        let mut prefixes = BTreeSet::new();
+        for id in old_ids {
+            if let Some(column) = self.columns.get(id.0) {
+                for token in std::iter::once(column.lower_column.as_str())
+                    .chain(column.column_tokens.iter().map(String::as_str))
+                {
+                    prefixes.extend(token_prefixes(token));
+                }
+            }
+        }
+        for db_key in affected_databases {
+            for prefix in &prefixes {
+                let key = PrefixKey {
+                    connection_id: db_key.connection_id,
+                    database: db_key.database.clone(),
+                    schema: db_key.schema.clone(),
+                    prefix: prefix.clone(),
+                };
+                if let Some(ids) = self.column_prefix_index.get_mut(&key) {
+                    ids.retain(|id| !old_ids.contains(id));
+                    if ids.is_empty() {
+                        self.column_prefix_index.remove(&key);
+                    }
+                }
+            }
+        }
     }
 
     fn rebuild_prefix_index(&mut self) {

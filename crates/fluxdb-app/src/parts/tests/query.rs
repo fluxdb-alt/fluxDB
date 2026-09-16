@@ -3574,6 +3574,10 @@
     #[test]
     fn query_completion_suggests_database_columns_without_from() {
         let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::WarmCompletionIndex {
+            connection_id: ConnectionId(1),
+            database: Some("main".to_string()),
+        });
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
@@ -4158,9 +4162,8 @@
     }
 
     #[test]
-    fn background_refresh_batches_large_schema_columns_in_single_call() {
-        // T053：大 schema（200 张表）走后台 worker 刷新时，worker 以一次批量列查询覆盖整库，
-        // 而非每表一次查询（N+1）。对比：批量 1 次 vs 逐表 N 次远程查询。
+    fn background_refresh_batches_large_schema_columns() {
+        // TTL 过期刷新 200 张已知表，跨多个批次后首尾列都应可用。
         const N: usize = 200;
         let controller = AppController::with_mock_data();
         let now = unix_timestamp_secs();
@@ -4187,7 +4190,7 @@
                 last_indexed_at: now,
                 last_verified_at: now,
                 ttl_seconds: COMPLETION_INDEX_TTL_SECONDS,
-                dirty: false,
+                dirty: true,
                 table_count: N,
                 table_fingerprints: Vec::new(),
             },
@@ -4195,7 +4198,6 @@
         {
             let mut index = controller.completion_index.lock().unwrap();
             index.insert_snapshot(snapshot);
-            index.mark_dirty(ConnectionId(1), Some("main"), None);
         }
 
         let config = controller
@@ -4207,7 +4209,7 @@
             refresh_index_columns_in_background(&index, &config, ConnectionId(1), Some("main"), None)
                 .expect("large-schema refresh");
 
-        // 单次批量调用覆盖全部 N 张表（worker 对批量列 fetch 仅一次调用）
+        // 多批次合计覆盖全部 N 张表。
         assert_eq!(tables, N, "整库刷新应覆盖全部 {N} 张表, got {tables}");
         assert!(columns >= N, "每表至少一列, got {columns}");
         {
@@ -4984,7 +4986,7 @@
     #[test]
     fn completion_cache_clears_for_object_refresh_commands() {
         assert!(should_clear_completion_cache(&AppCommand::OpenConnection(ConnectionId(1))));
-        assert!(should_clear_completion_cache(&AppCommand::LoadObjectChildren(
+        assert!(!should_clear_completion_cache(&AppCommand::LoadObjectChildren(
             ObjectPath {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
@@ -4993,8 +4995,8 @@
                 kind: ObjectKind::Table,
             }
         )));
-        assert!(should_clear_completion_cache(&AppCommand::RefreshObject(None)));
-        assert!(should_clear_completion_cache(&AppCommand::ExecuteQuery(TabId(1))));
+        assert!(!should_clear_completion_cache(&AppCommand::RefreshObject(None)));
+        assert!(!should_clear_completion_cache(&AppCommand::ExecuteQuery(TabId(1))));
     }
 
     #[test]

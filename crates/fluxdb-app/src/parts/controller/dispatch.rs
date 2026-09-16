@@ -3,6 +3,21 @@ impl AppController {
         if should_clear_completion_cache(&command) {
             self.clear_completion_cache();
         }
+        // 对象刷新保留旧候选，仅标记相关索引失效，避免主线程释放并重建整个索引。
+        match &command {
+            AppCommand::RefreshObject(Some(object)) => self.invalidate_completion_metadata(
+                object.connection_id, object.database.as_deref(), object.schema.as_deref(), None,
+            ),
+            AppCommand::RefreshObject(None) | AppCommand::RefreshConnectionTree => {
+                let scopes = self.completion_index.lock().ok()
+                    .map(|index| index.metas.keys().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                for scope in scopes {
+                    self.invalidate_completion_metadata(scope.connection_id, scope.database.as_deref(), scope.schema.as_deref(), None);
+                }
+            }
+            _ => {}
+        }
 
         match command {
             AppCommand::LoadConnections => {
@@ -3504,6 +3519,7 @@ impl AppController {
             if let Some(summary) = execution.summaries.iter().find(|summary| !summary.success) {
                 return Err(Error::new(ErrorKind::Query, summary.message.clone()));
             }
+            self.mark_query_history_completion_dirty(&request, &request.text);
         }
         Ok(())
     }
@@ -3542,6 +3558,7 @@ COMMIT;");
         if let Some(summary) = execution.summaries.iter().find(|summary| !summary.success) {
             return Err(Error::new(ErrorKind::Query, summary.message.clone()));
         }
+        self.mark_query_history_completion_dirty(&request, &request.text);
         Ok(())
     }
 
