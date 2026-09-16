@@ -149,7 +149,9 @@ fn content(
                 this.settings_font_size_slider.clone(),
                 this.settings_line_height_input.clone(),
                 this.settings_radius_input.clone(),
+                [this.pg_client.snapshot(NativeClientKind::Postgres), this.mysql_client.snapshot(NativeClientKind::MySql)],
                 this.settings_dangerous_actions_collapsed,
+                this.settings_data_groups_collapsed,
                 window,
                 cx,
             )
@@ -237,6 +239,7 @@ include!("settings/navigation.rs");
 include!("settings/editor.rs");
 include!("settings/appearance.rs");
 include!("settings/system.rs");
+include!("settings/native_client.rs");
 include!("settings/rows.rs");
 include!("settings/preferences.rs");
 
@@ -684,6 +687,7 @@ fn data_editor_content(
     // 非 Redis 编辑器则原样借用，不影响其它数据页。
     let display_page = this.data_page_for_display(tab_id, page);
     let page = display_page.as_ref();
+    let db_kind = this.connection_database_kind(editor.object.connection_id);
     let sql = data_editor_sql_preview(
         &editor.object,
         filter_rules.as_slice(),
@@ -693,6 +697,7 @@ fn data_editor_content(
         sort_text.as_str(),
         page.offset,
         page.limit,
+        db_kind,
     );
     let all_field_names = page
         .columns
@@ -724,7 +729,10 @@ fn data_editor_content(
         .changes
         .as_ref()
         .filter(|changes| !changes.is_empty())
-        .map(|changes| data_change_sql_preview(page, changes));
+        .map(|changes| {
+            let db_kind = this.connection_database_kind(changes.object.connection_id);
+            data_change_sql_preview(page, changes, db_kind)
+        });
     let change_sql_preview_open = this.data_change_sql_preview_tabs.contains(&tab_id);
     // min_h(0)：flex 项默认最小尺寸为内容高度，缺这行时整列会被内容撑出窗口，
     // 下游（如 Redis Set 成员列表）拿到的永远是内容高度而非可用高度，滚动区因此永不溢出
@@ -3451,6 +3459,38 @@ fn query_output_error_state(
         )),
     )
 }
+/// 空结果集的列头条：仅对列列表渲染列名，供 0 行但保留列头的结果显示。
+fn query_result_empty_columns_header(
+    columns: &[fluxdb_core::Column],
+    colors: UiColors,
+) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(32.))
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .border_b_1()
+        .border_color(colors.border)
+        .bg(colors.panel_alt)
+        .text_size(px(13.))
+        .text_color(colors.muted)
+        .children(columns.iter().enumerate().map(|(index, column)| {
+            let name = if column.name.is_empty() {
+                format!("列{}", index + 1)
+            } else {
+                column.name.clone()
+            };
+            div()
+                .flex_none()
+                .max_w(px(240.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(name)
+        }))
+}
+
 
 #[derive(Clone, Copy)]
 enum QueryResultEntry<'a> {
@@ -3640,11 +3680,23 @@ fn query_result_view(
         }
     }
     if page.rows.is_empty() {
+        // 空结果仍保留列头（T13 后端按列头生成），避免 PG/MY 空集合查询丢字段信息。
+        let column_header = if page.columns.is_empty() {
+            None
+        } else {
+            Some(
+                query_result_empty_columns_header(&page.columns, colors)
+                    .into_any_element(),
+            )
+        };
         return div()
             .size_full()
+            .flex()
+            .flex_col()
+            .child(column_header.unwrap_or_else(|| div().into_any_element()))
             .child(
                 div()
-                    .size_full()
+                    .flex_1()
                     .overflow_y_scrollbar()
                     .child(
                         div()
@@ -3699,7 +3751,10 @@ fn query_result_view(
     let change_sql_preview = result_editor
         .and_then(|_| change_count)
         .and_then(|_| result_editor.and_then(|editor| editor.changes.as_ref()))
-        .map(|changes| data_change_sql_preview(result_page, changes));
+        .map(|changes| {
+            let db_kind = this.connection_database_kind(changes.object.connection_id);
+            data_change_sql_preview(result_page, changes, db_kind)
+        });
     let change_sql_preview_open = this.data_change_sql_preview_tabs.contains(&tab_id);
     let cell_detail_drawer = result_editor
         .filter(|editor| editor.cell_detail_panel.open)
@@ -4626,14 +4681,23 @@ fn query_toolbar(
                     }),
                 ),
         )
-        .child(query_toolbar_icon_button(
-            "停止",
-            AppIcon::Square,
-            editor.running,
-            false,
-            rgb(0xff5c5c),
-            colors,
-        ))
+        .child(
+            query_toolbar_icon_button(
+                "停止",
+                AppIcon::Square,
+                editor.running,
+                false,
+                rgb(0xff5c5c),
+                colors,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.request_query_cancel(tab_id, cx);
+                    cx.stop_propagation();
+                }),
+            ),
+        )
         .child(query_toolbar_icon_button(
             "解释",
             AppIcon::FileSearch,

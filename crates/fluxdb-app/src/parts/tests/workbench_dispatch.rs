@@ -16,6 +16,7 @@ fn workbench_dispatch_rejects_sql_and_routes_redis() {
         options: Default::default(),
         redis_profile: None,
         mysql_profile: None,
+            postgres_profile: None,
     };
     let request = CommandWorkbenchRequest {
         target: CommandExecutionTarget::Redis {
@@ -51,6 +52,7 @@ fn workbench_dispatch_rejects_sql_and_routes_redis() {
         options: Default::default(),
         redis_profile: None,
         mysql_profile: None,
+            postgres_profile: None,
     };
     match execute_command_workbench_commands_for_connection(&redis, &request) {
         Ok(_) => {}

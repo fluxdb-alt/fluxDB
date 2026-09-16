@@ -72,6 +72,9 @@ fn mysql_completion_tables_with_cancel(
                     } else {
                         ObjectKind::Table
                     },
+                    // information_schema.tables 的 table_comment 与 MySQL 习惯不同步（含统计信息），
+                    // 此处不取，避免把内部注释当作业务注释展示。
+                    comment: None,
                 })
             })
             .collect()
@@ -118,7 +121,7 @@ fn mysql_completion_columns_with_cancel(
             return Ok(Vec::new());
         };
         connection.close().await.map_err(mysql_error)?;
-        Ok(columns_to_completion(table, columns))
+        Ok(columns_to_completion(Some(&database), None, table, columns))
     })
 }
 
@@ -197,6 +200,9 @@ fn mysql_completion_columns_for_tables_with_cancel(
                 let nullable: String = row.try_get("is_nullable").map_err(mysql_error)?;
                 let key: String = row.try_get("column_key").map_err(mysql_error)?;
                 Ok(CompletionColumn {
+                    database: Some(database.clone()),
+                    // MySQL/TiDB 无独立 schema 层（schema 即 database）。
+                    schema: None,
                     table,
                     name,
                     type_name: Some(column_type),
@@ -278,6 +284,8 @@ fn mysql_completion_routines_with_cancel(
                     } else {
                         CompletionRoutineKind::Function
                     },
+                    // MySQL information_schema.routines 无参数签名，按设计保持可空。
+                    signature: None,
                 })
             })
             .collect()

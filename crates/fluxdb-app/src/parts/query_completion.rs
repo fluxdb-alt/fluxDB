@@ -111,6 +111,7 @@ struct SqlCompletionContext {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ReferencedTable {
     database: Option<String>,
+    schema: Option<String>,
     name: String,
     alias: Option<String>,
 }
@@ -118,6 +119,7 @@ struct ReferencedTable {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CompletionColumnTarget {
     database: Option<String>,
+    schema: Option<String>,
     table: String,
     /// 表的别名（如有）。P2.10 重复列消歧时优先用别名作为限定前缀。
     alias: Option<String>,
@@ -148,6 +150,7 @@ struct SqlScope {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SqlScopeTable {
     pub database: Option<String>,
+    pub schema: Option<String>,
     pub name: String,
     pub alias: Option<String>,
 }
@@ -192,6 +195,7 @@ pub fn sql_scope_symbols(sql: &str, dialect: DatabaseKind) -> SqlScopeSymbols {
             .into_iter()
             .map(|table| SqlScopeTable {
                 database: table.database,
+                schema: table.schema,
                 name: table.name,
                 alias: table.alias,
             })
@@ -278,6 +282,8 @@ fn object_name_text(name: &ObjectName) -> Option<String> {
 const COMPLETION_CONTEXT_WINDOW_BYTES: usize = 64 * 1024;
 
 fn sql_completion_context(sql: &str, cursor: usize, dialect: DatabaseKind) -> SqlCompletionContext {
+    // 保留原始方言判定（标识符引号字符随方言不同），再换成 AST 方言适配器。
+    let kind = dialect;
     let dialect = sql_completion_dialect(dialect);
     let cursor = cursor.min(sql.len());
     // 补全只需要当前 statement 和光标前的局部语境。窗口上限避免 1MB 文档每次按键
@@ -286,10 +292,13 @@ fn sql_completion_context(sql: &str, cursor: usize, dialect: DatabaseKind) -> Sq
     let context_end = completion_context_end(sql, cursor);
     let context_sql = &sql[context_start..context_end];
     let before = &context_sql[..cursor - context_start];
-    let trailing = trailing_identifier(before);
+    let trailing = trailing_identifier(before, kind);
     let replace_start = context_start + trailing.start;
     let replace_end = if trailing.quoted_identifier
-        && sql.as_bytes().get(cursor).is_some_and(|byte| *byte == b'`')
+        && sql
+            .as_bytes()
+            .get(cursor)
+            .is_some_and(|byte| *byte == dialect_identifier_quote(kind))
     {
         cursor + 1
     } else {
@@ -701,7 +710,7 @@ fn build_sql_scope(
     let mut referenced_tables = dialect.referenced_tables(scope);
     // sqlparser 的 FROM 收集不会进入 EXISTS/IN 等表达式子查询；只补入
     // fallback 中明确指向已知 CTE 的别名，避免把普通启发式表扫描带回热路径。
-    for table in extract_referenced_tables(scope) {
+    for table in extract_referenced_tables(scope, dialect.kind()) {
         if table.alias.is_some()
             && cte_columns.contains_key(&table.name.to_ascii_lowercase())
             && !referenced_tables.iter().any(|known| {
@@ -1047,6 +1056,7 @@ fn fk_join_completion_items(
             filter_text: Some(fk.ref_table.clone()),
             sort_text: None,
             insert_text_format: InsertTextFormat::PlainText,
+            schema: None,
         });
     }
     // 过滤：以参考表名匹配前缀。
@@ -1060,6 +1070,8 @@ fn fk_join_completion_items(
 
 trait SqlCompletionDialect: Sync {
     fn referenced_tables(&self, sql: &str) -> Vec<ReferencedTable>;
+
+    fn kind(&self) -> DatabaseKind;
 
     fn keywords(&self) -> &'static [&'static str] {
         SQL_COMPLETION_KEYWORDS
@@ -1080,11 +1092,16 @@ trait SqlCompletionDialect: Sync {
 
 struct MySqlCompletionDialect;
 struct SqliteCompletionDialect;
+struct PostgresCompletionDialect;
 struct GenericCompletionDialect;
 
 impl SqlCompletionDialect for MySqlCompletionDialect {
     fn referenced_tables(&self, sql: &str) -> Vec<ReferencedTable> {
-        referenced_tables_from_statements(sql, true)
+        referenced_tables_from_statements(sql, true, DatabaseKind::MySql)
+    }
+
+    fn kind(&self) -> DatabaseKind {
+        DatabaseKind::MySql
     }
 
     fn supports_procedures(&self) -> bool {
@@ -1098,7 +1115,11 @@ impl SqlCompletionDialect for MySqlCompletionDialect {
 
 impl SqlCompletionDialect for SqliteCompletionDialect {
     fn referenced_tables(&self, sql: &str) -> Vec<ReferencedTable> {
-        referenced_tables_from_statements(sql, false)
+        referenced_tables_from_statements(sql, false, DatabaseKind::Sqlite)
+    }
+
+    fn kind(&self) -> DatabaseKind {
+        DatabaseKind::Sqlite
     }
 
     fn keywords(&self) -> &'static [&'static str] {
@@ -1114,9 +1135,33 @@ impl SqlCompletionDialect for SqliteCompletionDialect {
     }
 }
 
+/// PostgreSQL 方言：PG 亦具备过程（CALL/PROCEDURE）与触发器索引，
+/// 与 MySQL 一致地参与过程/触发器上下文建议（connector 侧 pg_catalog 已产出两类索引）。
+impl SqlCompletionDialect for PostgresCompletionDialect {
+    fn referenced_tables(&self, sql: &str) -> Vec<ReferencedTable> {
+        referenced_tables_from_statements(sql, false, DatabaseKind::Postgres)
+    }
+
+    fn kind(&self) -> DatabaseKind {
+        DatabaseKind::Postgres
+    }
+
+    fn supports_procedures(&self) -> bool {
+        true
+    }
+
+    fn supports_triggers(&self) -> bool {
+        true
+    }
+}
+
 impl SqlCompletionDialect for GenericCompletionDialect {
     fn referenced_tables(&self, sql: &str) -> Vec<ReferencedTable> {
-        referenced_tables_from_statements(sql, false)
+        referenced_tables_from_statements(sql, false, DatabaseKind::MongoDb)
+    }
+
+    fn kind(&self) -> DatabaseKind {
+        DatabaseKind::MongoDb
     }
 }
 
@@ -1126,55 +1171,62 @@ impl SqlCompletionDialect for GenericCompletionDialect {
 fn referenced_tables_from_statements(
     sql: &str,
     mysql: bool,
+    kind: DatabaseKind,
 ) -> Vec<ReferencedTable> {
     if let Some(statements) = parse_statements_tolerant(sql, mysql) {
         let mut tables = Vec::new();
         for statement in &statements {
-            collect_statement_tables(statement, &mut tables);
+            collect_statement_tables(statement, &mut tables, kind);
         }
         if !tables.is_empty() {
             return dedupe_referenced_tables(tables);
         }
     }
-    extract_referenced_tables(sql)
+    extract_referenced_tables(sql, kind)
 }
 
 static MYSQL_COMPLETION_DIALECT: MySqlCompletionDialect = MySqlCompletionDialect;
 static SQLITE_COMPLETION_DIALECT: SqliteCompletionDialect = SqliteCompletionDialect;
+static POSTGRES_COMPLETION_DIALECT: PostgresCompletionDialect = PostgresCompletionDialect;
 static GENERIC_COMPLETION_DIALECT: GenericCompletionDialect = GenericCompletionDialect;
 
 fn sql_completion_dialect(dialect: DatabaseKind) -> &'static dyn SqlCompletionDialect {
     match dialect {
         DatabaseKind::MySql | DatabaseKind::TiDb => &MYSQL_COMPLETION_DIALECT,
         DatabaseKind::Sqlite => &SQLITE_COMPLETION_DIALECT,
+        DatabaseKind::Postgres => &POSTGRES_COMPLETION_DIALECT,
         DatabaseKind::MongoDb | DatabaseKind::Redis => &GENERIC_COMPLETION_DIALECT,
     }
 }
 
-fn collect_statement_tables(statement: &Statement, tables: &mut Vec<ReferencedTable>) {
+fn collect_statement_tables(
+    statement: &Statement,
+    tables: &mut Vec<ReferencedTable>,
+    kind: DatabaseKind,
+) {
     let cte_sources = BTreeMap::new();
     match statement {
-        Statement::Query(query) => collect_query_tables(query, tables),
+        Statement::Query(query) => collect_query_tables(query, tables, kind),
         Statement::Insert(insert) => {
             match &insert.table {
                 TableObject::TableName(name) => {
-                    if let Some(table) = referenced_table_from_object_name(name, None) {
+                    if let Some(table) = referenced_table_from_object_name(name, None, kind) {
                         tables.push(table);
                     }
                 }
-                TableObject::TableQuery(query) => collect_query_tables(query, tables),
+                TableObject::TableQuery(query) => collect_query_tables(query, tables, kind),
                 TableObject::TableFunction(_) => {}
             }
             if let Some(source) = &insert.source {
-                collect_query_tables(source, tables);
+                collect_query_tables(source, tables, kind);
             }
         }
         Statement::Update(update) => {
-            collect_table_with_joins(&update.table, tables, &cte_sources);
+            collect_table_with_joins(&update.table, tables, &cte_sources, kind);
             if let Some(from) = &update.from {
                 match from {
                     UpdateTableFromKind::BeforeSet(from) | UpdateTableFromKind::AfterSet(from) => {
-                        collect_table_with_joins_list(from, tables, &cte_sources)
+                        collect_table_with_joins_list(from, tables, &cte_sources, kind)
                     }
                 }
             }
@@ -1182,20 +1234,24 @@ fn collect_statement_tables(statement: &Statement, tables: &mut Vec<ReferencedTa
         Statement::Delete(delete) => {
             match &delete.from {
                 FromTable::WithFromKeyword(from) | FromTable::WithoutKeyword(from) => {
-                    collect_table_with_joins_list(from, tables, &cte_sources)
+                    collect_table_with_joins_list(from, tables, &cte_sources, kind)
                 }
             }
             if let Some(using) = &delete.using {
-                collect_table_with_joins_list(using, tables, &cte_sources);
+                collect_table_with_joins_list(using, tables, &cte_sources, kind);
             }
         }
-        Statement::Directory { source, .. } => collect_query_tables(source, tables),
+        Statement::Directory { source, .. } => collect_query_tables(source, tables, kind),
         _ => {}
     }
 }
 
-fn collect_query_tables(query: &SqlAstQuery, tables: &mut Vec<ReferencedTable>) {
-    collect_query_tables_with_ctes(query, tables, &BTreeMap::new());
+fn collect_query_tables(
+    query: &SqlAstQuery,
+    tables: &mut Vec<ReferencedTable>,
+    kind: DatabaseKind,
+) {
+    collect_query_tables_with_ctes(query, tables, &BTreeMap::new(), kind);
 }
 
 fn extract_cte_columns_fallback(sql: &str) -> BTreeMap<String, Vec<String>> {
@@ -1309,35 +1365,39 @@ fn collect_query_tables_with_ctes(
     query: &SqlAstQuery,
     tables: &mut Vec<ReferencedTable>,
     parent_ctes: &BTreeMap<String, ReferencedTable>,
+    kind: DatabaseKind,
 ) {
     let mut cte_sources = parent_ctes.clone();
     if let Some(with) = &query.with {
         for cte in &with.cte_tables {
-            collect_query_tables_with_ctes(&cte.query, tables, parent_ctes);
-            if let Some(source) = single_query_source_table(&cte.query) {
+            collect_query_tables_with_ctes(&cte.query, tables, parent_ctes, kind);
+            if let Some(source) = single_query_source_table(&cte.query, kind) {
                 cte_sources.insert(cte.alias.name.value.to_ascii_lowercase(), source);
             }
         }
     }
-    collect_set_expr_tables(&query.body, tables, &cte_sources);
+    collect_set_expr_tables(&query.body, tables, &cte_sources, kind);
 }
 
 fn collect_set_expr_tables(
     expr: &SetExpr,
     tables: &mut Vec<ReferencedTable>,
     cte_sources: &BTreeMap<String, ReferencedTable>,
+    kind: DatabaseKind,
 ) {
     match expr {
-        SetExpr::Select(select) => collect_table_with_joins_list(&select.from, tables, cte_sources),
-        SetExpr::Query(query) => collect_query_tables_with_ctes(query, tables, cte_sources),
+        SetExpr::Select(select) => {
+            collect_table_with_joins_list(&select.from, tables, cte_sources, kind)
+        }
+        SetExpr::Query(query) => collect_query_tables_with_ctes(query, tables, cte_sources, kind),
         SetExpr::SetOperation { left, right, .. } => {
-            collect_set_expr_tables(left, tables, cte_sources);
-            collect_set_expr_tables(right, tables, cte_sources);
+            collect_set_expr_tables(left, tables, cte_sources, kind);
+            collect_set_expr_tables(right, tables, cte_sources, kind);
         }
         SetExpr::Insert(statement)
         | SetExpr::Update(statement)
         | SetExpr::Delete(statement)
-        | SetExpr::Merge(statement) => collect_statement_tables(statement, tables),
+        | SetExpr::Merge(statement) => collect_statement_tables(statement, tables, kind),
         SetExpr::Values(_) | SetExpr::Table(_) => {}
     }
 }
@@ -1346,9 +1406,10 @@ fn collect_table_with_joins_list(
     tables_with_joins: &[TableWithJoins],
     tables: &mut Vec<ReferencedTable>,
     cte_sources: &BTreeMap<String, ReferencedTable>,
+    kind: DatabaseKind,
 ) {
     for table_with_joins in tables_with_joins {
-        collect_table_with_joins(table_with_joins, tables, cte_sources);
+        collect_table_with_joins(table_with_joins, tables, cte_sources, kind);
     }
 }
 
@@ -1356,10 +1417,11 @@ fn collect_table_with_joins(
     table_with_joins: &TableWithJoins,
     tables: &mut Vec<ReferencedTable>,
     cte_sources: &BTreeMap<String, ReferencedTable>,
+    kind: DatabaseKind,
 ) {
-    collect_table_factor(&table_with_joins.relation, tables, cte_sources);
+    collect_table_factor(&table_with_joins.relation, tables, cte_sources, kind);
     for join in &table_with_joins.joins {
-        collect_table_factor(&join.relation, tables, cte_sources);
+        collect_table_factor(&join.relation, tables, cte_sources, kind);
     }
 }
 
@@ -1367,6 +1429,7 @@ fn collect_table_factor(
     table_factor: &TableFactor,
     tables: &mut Vec<ReferencedTable>,
     cte_sources: &BTreeMap<String, ReferencedTable>,
+    kind: DatabaseKind,
 ) {
     match table_factor {
         TableFactor::Table { name, alias, .. } => {
@@ -1377,7 +1440,7 @@ fn collect_table_factor(
             if let Some(table) = cte_source
                 .cloned()
                 .map(|source| referenced_table_with_alias(source, alias.as_ref(), name))
-                .or_else(|| referenced_table_from_object_name(name, alias.as_ref()))
+                .or_else(|| referenced_table_from_object_name(name, alias.as_ref(), kind))
             {
                 tables.push(table);
             }
@@ -1385,18 +1448,18 @@ fn collect_table_factor(
         TableFactor::Derived {
             subquery, alias, ..
         } => {
-            collect_query_tables_with_ctes(subquery, tables, cte_sources);
+            collect_query_tables_with_ctes(subquery, tables, cte_sources, kind);
             if let Some(alias) = alias
-                && let Some(source) = single_query_source_table(subquery)
+                && let Some(source) = single_query_source_table(subquery, kind)
             {
                 tables.push(referenced_table_with_alias(source, Some(alias), &ObjectName(vec![])));
             }
         }
         TableFactor::NestedJoin {
             table_with_joins, ..
-        } => collect_table_with_joins(table_with_joins, tables, cte_sources),
+        } => collect_table_with_joins(table_with_joins, tables, cte_sources, kind),
         TableFactor::Pivot { table, .. } | TableFactor::Unpivot { table, .. } => {
-            collect_table_factor(table, tables, cte_sources)
+            collect_table_factor(table, tables, cte_sources, kind)
         }
         _ => {}
     }
@@ -1405,12 +1468,14 @@ fn collect_table_factor(
 fn referenced_table_from_object_name(
     name: &ObjectName,
     alias: Option<&TableAlias>,
+    kind: DatabaseKind,
 ) -> Option<ReferencedTable> {
     let parts = object_name_identifier_parts(name);
     let name = parts.last()?.clone();
-    let database = (parts.len() > 1).then(|| parts[..parts.len() - 1].join("."));
+    let (database, schema) = completion_relation_namespace(&parts[..parts.len() - 1], kind);
     Some(ReferencedTable {
         database,
+        schema,
         name,
         alias: alias.map(|alias| alias.name.value.clone()),
     })
@@ -1427,15 +1492,19 @@ fn referenced_table_with_alias(
     table
 }
 
-fn single_query_source_table(query: &SqlAstQuery) -> Option<ReferencedTable> {
+fn single_query_source_table(
+    query: &SqlAstQuery,
+    kind: DatabaseKind,
+) -> Option<ReferencedTable> {
     let mut tables = Vec::new();
-    collect_query_tables(query, &mut tables);
+    collect_query_tables(query, &mut tables, kind);
     let mut unique = BTreeMap::new();
     for mut table in tables {
         table.alias = None;
         unique.insert(
             (
                 table.database.as_ref().map(|value| value.to_ascii_lowercase()),
+                table.schema.as_ref().map(|value| value.to_ascii_lowercase()),
                 table.name.to_ascii_lowercase(),
             ),
             table,
@@ -1452,6 +1521,25 @@ fn object_name_identifier_parts(name: &ObjectName) -> Vec<String> {
             ObjectNamePart::Function(_) => None,
         })
         .collect()
+}
+
+/// SQL 对象限定名按方言映射为物理数据库与 schema。
+/// PostgreSQL 的二段名是 `schema.table`，三段名才是 `database.schema.table`；
+/// MySQL/SQLite 的二段名保持为 `database.table`。
+fn completion_relation_namespace(
+    qualifiers: &[String],
+    kind: DatabaseKind,
+) -> (Option<String>, Option<String>) {
+    if qualifiers.is_empty() {
+        return (None, None);
+    }
+    if kind == DatabaseKind::Postgres {
+        let schema = qualifiers.last().cloned();
+        let database = (qualifiers.len() > 1).then(|| qualifiers[..qualifiers.len() - 1].join("."));
+        (database, schema)
+    } else {
+        (Some(qualifiers.join(".")), None)
+    }
 }
 
 fn current_sql_statement_range(sql: &str, cursor: usize) -> (usize, usize) {
@@ -1540,6 +1628,7 @@ fn dedupe_referenced_tables(tables: Vec<ReferencedTable>) -> Vec<ReferencedTable
     for table in tables {
         let key = (
             table.database.as_ref().map(|value| value.to_ascii_lowercase()),
+            table.schema.as_ref().map(|value| value.to_ascii_lowercase()),
             table.name.to_ascii_lowercase(),
             table.alias.as_ref().map(|value| value.to_ascii_lowercase()),
         );
@@ -1559,7 +1648,15 @@ struct TrailingIdentifier {
     quoted_identifier: bool,
 }
 
-fn trailing_identifier(before: &str) -> TrailingIdentifier {
+/// 方言的标识符引号字符：MySQL/TiDB 用反引号，其余（PostgreSQL/SQLite）用双引号。
+fn dialect_identifier_quote(kind: DatabaseKind) -> u8 {
+    match kind {
+        DatabaseKind::MySql | DatabaseKind::TiDb => b'`',
+        _ => b'"',
+    }
+}
+
+fn trailing_identifier(before: &str, kind: DatabaseKind) -> TrailingIdentifier {
     let mut prefix_start = before.len();
     for (index, ch) in before.char_indices().rev() {
         if is_sql_ident_char(ch) {
@@ -1569,7 +1666,10 @@ fn trailing_identifier(before: &str) -> TrailingIdentifier {
         }
     }
     let prefix = before[prefix_start..].to_string();
-    let quoted_identifier = prefix_start > 0 && before.as_bytes()[prefix_start - 1] == b'`';
+    // 已输入的起始引号（MySQL 反引号 / PG 双引号）说明这是带引号标识符：
+    // 替换范围纳入该引号，插入文本强制加引号并保留大小写（§8.4）。
+    let quoted_identifier =
+        prefix_start > 0 && before.as_bytes()[prefix_start - 1] == dialect_identifier_quote(kind);
     // 将左反引号纳入替换范围：既能恢复 FROM/JOIN 上下文，也避免采纳候选后留下旧引号。
     let start = prefix_start - usize::from(quoted_identifier);
     let qualifier_path = trailing_qualifier_path(before, start);
@@ -1824,13 +1924,17 @@ fn type_family_compatible(expected: TypeFamily, candidate: TypeFamily) -> bool {
 }
 
 /// 把 table context 中的限定路径映射到 completion index 的两级 key。
-/// 单段路径沿用历史语义（按 database 查询），两段路径按 `database.schema` 查询。
+/// PostgreSQL 的单段限定符是 schema，MySQL/SQLite 的单段限定符是 database。
 fn completion_namespace_scope(
     context: &SqlCompletionContext,
     default_database: Option<&str>,
+    kind: DatabaseKind,
 ) -> (Option<String>, Option<String>) {
     match context.qualifier_path.as_slice() {
         [] => (default_database.map(str::to_string), None),
+        [namespace] if kind == DatabaseKind::Postgres => {
+            (default_database.map(str::to_string), Some(namespace.clone()))
+        }
         [database] => (Some(database.clone()), None),
         [database, schema, ..] => (Some(database.clone()), Some(schema.clone())),
     }
@@ -1973,7 +2077,7 @@ fn is_update_set_context(before_lower: &str) -> bool {
         .any(|keyword| find_top_level_sql_keyword(after_set, keyword).is_some())
 }
 
-fn extract_referenced_tables(sql: &str) -> Vec<ReferencedTable> {
+fn extract_referenced_tables(sql: &str, kind: DatabaseKind) -> Vec<ReferencedTable> {
     let tokens = sql_identifier_tokens(sql);
     let mut tables = Vec::new();
     let mut index = 0;
@@ -1994,7 +2098,12 @@ fn extract_referenced_tables(sql: &str) -> Vec<ReferencedTable> {
         let Some(raw_name) = tokens.get(index + 1).cloned() else {
             break;
         };
-        let (database, name) = split_qualified_table_name(&raw_name);
+        let parts = raw_name.split('.').map(str::to_string).collect::<Vec<_>>();
+        let Some(name) = parts.last().cloned() else {
+            index += 2;
+            continue;
+        };
+        let (database, schema) = completion_relation_namespace(&parts[..parts.len() - 1], kind);
         let alias = match (tokens.get(index + 2), tokens.get(index + 3)) {
             (Some(as_token), Some(alias)) if as_token.eq_ignore_ascii_case("as") => {
                 Some(alias.clone())
@@ -2010,6 +2119,7 @@ fn extract_referenced_tables(sql: &str) -> Vec<ReferencedTable> {
         };
         tables.push(ReferencedTable {
             database,
+            schema,
             name,
             alias,
         });
@@ -2193,6 +2303,7 @@ fn completion_column_tables(context: &SqlCompletionContext) -> Vec<CompletionCol
             })
             .map(|table| CompletionColumnTarget {
                 database: table.database.clone(),
+                schema: table.schema.clone(),
                 table: table.name.clone(),
                 alias: table.alias.clone(),
             })
@@ -2204,6 +2315,7 @@ fn completion_column_tables(context: &SqlCompletionContext) -> Vec<CompletionCol
         .iter()
         .map(|table| CompletionColumnTarget {
             database: table.database.clone(),
+            schema: table.schema.clone(),
             table: table.name.clone(),
             alias: table.alias.clone(),
         })
@@ -2449,6 +2561,7 @@ fn function_completion_items_for(
             filter_text: None,
             sort_text: None,
             insert_text_format: InsertTextFormat::PlainText,
+            schema: None,
         })
         .collect::<Vec<_>>();
     items.sort_by(|left, right| {
@@ -2463,7 +2576,18 @@ fn function_completion_items_for(
     items
 }
 
-fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<QueryCompletionItem> {
+/// 表候选（P1.5 + §8.4 跨 schema 消歧）。
+///
+/// 同表名出现在多个 schema（PG search_path 多段）时，label 与 apply 文本加 `schema.` 前缀区分，
+/// 唯一表名保持裸名；`detail` 始终展示所属 schema/库，便于用户确认来源。
+/// `scope_schema` 是本次补全使用的 schema 作用域（`completion_namespace_scope` 的结果），
+/// 与表清单写入 CompletionIndex 的桶键一致；写进候选后，详情面板即可按
+/// (库, schema, 表) 命中该对象的完整列身份，而不是无条件用 schema=None 去查。
+fn table_completion_items(
+    tables: Vec<CompletionTable>,
+    prefix: &str,
+    scope_schema: Option<&str>,
+) -> Vec<QueryCompletionItem> {
     let mut tables = tables
         .into_iter()
         .filter(|table| matches_completion_fuzzy(&table.name, prefix))
@@ -2476,7 +2600,22 @@ fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<Que
                     .to_ascii_lowercase()
                     .cmp(&right.name.to_ascii_lowercase())
             })
+            .then_with(|| {
+                left.schema
+                    .as_deref()
+                    .unwrap_or_default()
+                    .cmp(right.schema.as_deref().unwrap_or_default())
+            })
     });
+
+    // 同表名跨 schema 计数：仅当同名出现在多个不同 schema/库时才加限定前缀。
+    let mut owners: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for table in &tables {
+        owners
+            .entry(table.name.clone())
+            .or_default()
+            .insert(table.schema.clone().or_else(|| table.database.clone()).unwrap_or_default());
+    }
 
     tables
         .into_iter()
@@ -2486,25 +2625,59 @@ fn table_completion_items(tables: Vec<CompletionTable>, prefix: &str) -> Vec<Que
             } else {
                 QueryCompletionKind::Table
             };
-            QueryCompletionItem {
-                label: table.name.clone(),
-                insert_text: table.name,
-                kind,
-                detail: table
+            let namespace = table
+                .schema
+                .clone()
+                .or_else(|| table.database.clone())
+                .unwrap_or_default();
+            let ambiguous = owners
+                .get(&table.name)
+                .is_some_and(|set| set.len() > 1)
+                && !namespace.is_empty();
+            let detail = match table.schema.clone() {
+                Some(schema) => Some(match table.database.clone() {
+                    Some(database) => format!("{database}.{schema}"),
+                    None => schema,
+                }),
+                None => table
                     .database
+                    .clone()
                     .or_else(|| Some(completion_kind_label(kind).to_string())),
-                documentation: None,
+            };
+            let (label, insert_text) = if ambiguous {
+                (
+                    format!("{namespace}.{}", table.name),
+                    format!("{namespace}.{}", table.name),
+                )
+            } else {
+                (table.name.clone(), table.name)
+            };
+            QueryCompletionItem {
+                label,
+                insert_text,
+                kind,
+                detail,
+                // 表/视图注释作为文档提示；无注释时不伪造。
+                documentation: table
+                    .comment
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|comment| !comment.is_empty())
+                    .map(str::to_string),
                 filter_text: None,
                 sort_text: None,
-                            ..Default::default()
-}
+                schema: scope_schema.map(str::to_string),
+                ..Default::default()
+            }
         })
         .collect()
 }
 
-/// 将 routines 中指定 kind 的候选生成为补全项（P1.7）。
+/// 将 routines 中指定 kind 的候选生成为补全项（P1.7 + §8.4 函数重载）。
 ///
 /// 函数无参数 metadata 时插入 `name()`，方便继续输入参数；procedure 插入裸名。
+/// 同名重载（同 schema、同 kind、签名不同）分别成条：detail/文档展示签名便于区分，
+/// insert_text 仍为可调用的 `name()`，不把重载合并成一个候选。
 fn routine_completion_items(
     routines: Vec<CompletionRoutine>,
     kind: CompletionRoutineKind,
@@ -2515,24 +2688,52 @@ fn routine_completion_items(
         .filter_map(|routine| {
             (routine.kind == kind
                 && matches_completion_prefix(&routine.name, prefix))
-            .then(|| QueryCompletionItem {
-                label: routine.name.clone(),
-                insert_text: match kind {
-                    CompletionRoutineKind::Function => format!("{}()", routine.name),
-                    CompletionRoutineKind::Procedure => routine.name,
-                },
-                kind: match kind {
-                    CompletionRoutineKind::Function => QueryCompletionKind::Function,
-                    CompletionRoutineKind::Procedure => QueryCompletionKind::Procedure,
-                },
-                detail: match kind {
-                    CompletionRoutineKind::Function => Some("function".to_string()),
-                    CompletionRoutineKind::Procedure => Some("procedure".to_string()),
-                },
-                documentation: None,
-                filter_text: None,
-                sort_text: None,
-                insert_text_format: InsertTextFormat::PlainText,
+            .then(|| {
+                let label = match routine.signature.as_deref() {
+                    Some(signature) if !signature.is_empty() => {
+                        format!("{}({signature})", routine.name)
+                    }
+                    _ => routine.name.clone(),
+                };
+                let detail = match (kind, routine.signature.as_deref()) {
+                    (CompletionRoutineKind::Function, Some(signature)) if !signature.is_empty() => {
+                        Some(format!("function({signature})"))
+                    }
+                    (CompletionRoutineKind::Procedure, Some(signature)) if !signature.is_empty() => {
+                        Some(format!("procedure({signature})"))
+                    }
+                    (CompletionRoutineKind::Function, _) => Some("function".to_string()),
+                    (CompletionRoutineKind::Procedure, _) => Some("procedure".to_string()),
+                };
+                let name = routine.name.clone();
+                QueryCompletionItem {
+                    label,
+                    insert_text: match kind {
+                        CompletionRoutineKind::Function => format!("{name}()"),
+                        CompletionRoutineKind::Procedure => name,
+                    },
+                    kind: match kind {
+                        CompletionRoutineKind::Function => QueryCompletionKind::Function,
+                        CompletionRoutineKind::Procedure => QueryCompletionKind::Procedure,
+                    },
+                    detail,
+                    documentation: routine.signature.as_deref().map(|signature| {
+                        let role = match kind {
+                            CompletionRoutineKind::Function => "函数",
+                            CompletionRoutineKind::Procedure => "过程",
+                        };
+                        match routine.schema.as_deref() {
+                            Some(schema) if !schema.is_empty() => {
+                                format!("{role} {}（schema {schema}）\n参数：{signature}", routine.name)
+                            }
+                            _ => format!("{role} {}\n参数：{signature}", routine.name),
+                        }
+                    }),
+                    filter_text: None,
+                    sort_text: None,
+                    insert_text_format: InsertTextFormat::PlainText,
+                    schema: None,
+                }
             })
         })
         .collect()
@@ -2607,10 +2808,18 @@ fn snippet_completion_items(prefix: &str) -> Vec<QueryCompletionItem> {
         .collect()
 }
 
-/// 判断标识符是否需要引号包裹（P1.6）：保留字、以数字开头、或含非标识符字符时。
+/// 判断标识符是否需要引号包裹（P1.6 + §8.4 大小写）。
+///
+/// 规则：保留字、以数字开头、含非标识符字符时必须加引号；此外 PostgreSQL 把未加引号的
+/// 标识符折叠为小写，含大写字母的名字不加引号会指向另一个对象，因此同样必须加引号。
+/// MySQL/TiDB/SQLite 不做折叠，保持原判定。
 ///
 /// `reserved` 由调用方提供该方言的保留字判定，避免在纯函数层引入关键字表耦合。
-pub fn identifier_needs_quote(name: &str, reserved: impl Fn(&str) -> bool) -> bool {
+pub fn identifier_needs_quote(
+    name: &str,
+    kind: DatabaseKind,
+    reserved: impl Fn(&str) -> bool,
+) -> bool {
     if name.is_empty() {
         return false;
     }
@@ -2618,6 +2827,9 @@ pub fn identifier_needs_quote(name: &str, reserved: impl Fn(&str) -> bool) -> bo
         return true;
     }
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return true;
+    }
+    if kind == DatabaseKind::Postgres && name.chars().any(|c| c.is_ascii_uppercase()) {
         return true;
     }
     reserved(name)
@@ -2632,7 +2844,7 @@ pub fn quote_identifier(
     kind: DatabaseKind,
     reserved: impl Fn(&str) -> bool,
 ) -> String {
-    if !identifier_needs_quote(name, &reserved) {
+    if !identifier_needs_quote(name, kind, &reserved) {
         return name.to_string();
     }
     let (open, close) = match kind {
@@ -2668,6 +2880,7 @@ fn schema_completion_items(
             filter_text: None,
             sort_text: None,
             insert_text_format: InsertTextFormat::PlainText,
+            schema: None,
         })
         .collect::<Vec<_>>();
     items.sort_by(|left, right| {
@@ -2744,6 +2957,7 @@ fn cte_column_completion_items(
                     filter_text: None,
                     sort_text: None,
                     insert_text_format: InsertTextFormat::PlainText,
+                    schema: None,
                 })
             })
         })
@@ -2772,6 +2986,7 @@ fn derived_column_completion_items(
                     filter_text: None,
                     sort_text: None,
                     insert_text_format: InsertTextFormat::PlainText,
+                    schema: None,
                 })
             })
         })
@@ -2779,6 +2994,32 @@ fn derived_column_completion_items(
 }
 
 #[allow(dead_code)]
+/// 列候选的文档提示（§8.4）：类型、可空性、主键与注释，逐行展示。
+///
+/// 只在有真实 metadata 时输出对应行，不用占位文本冒充已知信息。
+pub fn column_completion_documentation(column: &CompletionColumn) -> Option<String> {
+    let mut lines = Vec::new();
+    if let Some(type_name) = column
+        .type_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(format!("类型：{type_name}"));
+    }
+    lines.push(format!("可空：{}", if column.nullable { "是" } else { "否" }));
+    if column.primary_key {
+        lines.push("主键".to_string());
+    }
+    if let Some(comment) = column
+        .comment
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(format!("注释：{}", comment.trim()));
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
 fn column_completion_detail(column: &CompletionColumn) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(type_name) = column.type_name.as_ref().filter(|value| !value.is_empty()) {

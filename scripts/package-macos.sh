@@ -146,7 +146,9 @@ if [[ "$CREATE_DMG" == "1" ]]; then
         echo "Disk usage before cleaning Cargo artifacts:"
         df -h "$WORKSPACE_ROOT"
         du -sh "$TARGET_DIR/$TARGET" 2>/dev/null || true
-        cargo clean --target "$TARGET"
+        # macOS 安装包也位于 target 下，cargo clean 会连同 macos-package 一并删除。
+        # TARGET 已在脚本入口限制为两个受支持的三元组，仅清理对应架构目录。
+        rm -rf "$TARGET_DIR/$TARGET"
         echo "Disk usage after cleaning Cargo artifacts:"
         df -h "$WORKSPACE_ROOT"
     fi

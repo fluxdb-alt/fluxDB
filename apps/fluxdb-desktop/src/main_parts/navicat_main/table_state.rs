@@ -458,9 +458,11 @@ impl NavicatMain {
         let completion_controller = self.controller.clone();
         let completion_connection_id = editor.connection_id;
         let completion_database = editor.database.clone();
+        let completion_schema = editor.schema.clone();
         // F004：采纳补全时回写个性化（recency/frequency）。与补全解析同一 controller。
         let accept_controller = completion_controller.clone();
-        // F005：metadata 详情解析复用同一 controller（内存 CompletionIndex，无数据库访问）。
+        // F005：metadata 详情解析复用同一 controller：优先读内存 CompletionIndex，索引未覆盖
+        // 该对象时按 (库, schema, 表) 取一次列元数据并写回索引。
         let documentation_controller = completion_controller.clone();
         let completion_resolver: sql_editor_adapter::SqlCompletionResolver =
             std::sync::Arc::new(move |text, cursor, explicit, latest_request, request_id| {
@@ -468,6 +470,7 @@ impl NavicatMain {
                     .query_completions_for_text_with_cancel(
                         completion_connection_id,
                         completion_database.clone(),
+                        completion_schema.clone(),
                         text,
                         cursor,
                         explicit,
@@ -496,18 +499,21 @@ impl NavicatMain {
                         completion.filter_text = item.filter_text.unwrap_or_default();
                         completion.sort_text = item.sort_text.unwrap_or_default();
                         completion.replace_range = Some(replace_range);
+                        // 候选身份（schema 作用域）随候选带到详情请求，供按完整身份查列。
+                        completion.schema = item.schema;
                         completion
                     })
                     .collect();
                 Ok(sql_editor_adapter::SqlCompletionResponse { items, has_more: false })
             });
-        // F005：补全候选项右侧 metadata 详情，复用 fluxdb-app 内存 CompletionIndex
-        // （无数据库访问）。latest_request/request_id 由编辑器传入，AppController 内
-        // 逐项组装列清单时 latest-wins 丢弃旧请求，保证旧详情不覆盖新选中项。
+        // F005：补全候选项右侧 metadata 详情。优先复用 fluxdb-app 内存 CompletionIndex；
+        // 索引未覆盖该对象（如 search_path 之外的 schema 表）时按 (库, schema, 表) 取一次
+        // 元数据并写回索引。latest_request/request_id 传入 AppController，既能 latest-wins
+        // 丢弃旧请求，也让被切走的旧请求尽早停止远程查询。
         let documentation_connection_id = editor.connection_id;
         let documentation_database = editor.database.clone();
         let documentation_resolver: sql_editor_adapter::SqlDocumentationResolver =
-            std::sync::Arc::new(move |kind, label, comment, _latest_request, _request_id| {
+            std::sync::Arc::new(move |kind, label, comment, schema, latest_request, request_id| {
                 use sql_editor_adapter::SqlDocState as S;
                 let qkind = match kind {
                     fluxdb_editor_core::CompletionKind::Keyword => fluxdb_core::QueryCompletionKind::Keyword,
@@ -518,15 +524,19 @@ impl NavicatMain {
                     fluxdb_editor_core::CompletionKind::Method => fluxdb_core::QueryCompletionKind::Procedure,
                     _ => fluxdb_core::QueryCompletionKind::Keyword,
                 };
-                // latest-wins 由编辑器取消令牌 + 选中项守卫保证（旧详情不覆盖新选择）；
-                // App 侧列清单组装对单次请求不需额外取消，传恒 false。
+                // 编辑器侧已有令牌 + 选中项守卫（旧结果不上屏）；这里再把请求 id 传下去，
+                // 让详情解析在切换选中项后提前收敛，避免旧请求继续占用连接做无谓查询。
+                let should_cancel = || {
+                    latest_request.load(std::sync::atomic::Ordering::Acquire) != request_id
+                };
                 match documentation_controller.completion_documentation_for_with_cancel(
                     documentation_connection_id,
                     documentation_database.clone(),
                     qkind,
                     label,
                     comment,
-                    &|| false,
+                    schema,
+                    &should_cancel,
                 ) {
                     fluxdb_app::CompletionDocumentationState::Loading => S::Loading,
                     fluxdb_app::CompletionDocumentationState::Ready(text) => S::Ready(text),

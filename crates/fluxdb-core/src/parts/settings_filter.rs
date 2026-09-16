@@ -215,12 +215,30 @@ pub struct Settings {
     /// 数据库备份文件的默认保存目录，为空时回退到系统下载目录。
     #[serde(default)]
     pub backup_dir: String,
-    /// 原生备份工具 mysqldump 的路径；为空时从系统 PATH 查找。
+    /// 兼容旧配置的 mysqldump 单文件路径；非空时优先于统一 MySQL 客户端目录。
     #[serde(default)]
     pub mysqldump_path: String,
+    /// MySQL 客户端安装根或 bin 目录；留空时自动发现，旧 mysqldump_path 优先。
+    #[serde(default)]
+    pub mysql_client_dir: String,
+    /// Windows 官方 ZIP 下载源（支持 {version} / {platform}），留空使用内置源。
+    #[serde(default)]
+    pub mysql_client_download_source: String,
     /// 原生备份工具 sqlite3 的路径；为空时从系统 PATH 查找。
     #[serde(default)]
     pub sqlite3_path: String,
+    /// 原生备份工具 pg_dump 的路径；为空时从系统 PATH 查找。
+    #[serde(default)]
+    pub pg_dump_path: String,
+    /// PostgreSQL 客户端工具（pg_dump / pg_restore / psql）所在的 bin 目录。
+    /// 为空时按「托管下载目录 → 系统标准安装路径 → PATH」顺序自动发现；
+    /// 非空时既作为解析工具的首选目录，也作为下载安装的目标目录。
+    #[serde(default)]
+    pub pg_client_dir: String,
+    /// PostgreSQL 客户端工具的下载源 URL 模板，为空时使用内置 EnterpriseDB 官方源。
+    /// 支持占位符 `{version}`（如 `17.6-1`）与 `{platform}`（`windows-x64` / `osx`）。
+    #[serde(default)]
+    pub pg_client_download_source: String,
 }
 
 impl Default for Settings {
@@ -259,7 +277,12 @@ impl Default for Settings {
             custom_keybindings: BTreeMap::new(),
             backup_dir: String::new(),
             mysqldump_path: String::new(),
+            mysql_client_dir: String::new(),
+            mysql_client_download_source: String::new(),
             sqlite3_path: String::new(),
+            pg_dump_path: String::new(),
+            pg_client_dir: String::new(),
+            pg_client_download_source: String::new(),
         }
     }
 }

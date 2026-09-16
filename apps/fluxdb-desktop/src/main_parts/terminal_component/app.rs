@@ -47,6 +47,7 @@ impl NavicatMain {
                 options: std::collections::BTreeMap::new(),
                 redis_profile: None,
                 mysql_profile: None,
+                postgres_profile: None,
             });
 
         let adapter: Box<dyn TerminalSessionAdapter> =

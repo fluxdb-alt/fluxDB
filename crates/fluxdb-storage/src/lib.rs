@@ -9,9 +9,9 @@ mod sqlite;
 
 use fluxdb_core::{
     ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot, ConnectionConfig, ConnectionId, Error,
-    ErrorKind, MysqlConnectionProfile, MysqlTransportLayer, QueryRollbackSnapshot,
-    RedisConnectionProfile, Result, RoutineRef, SavedQuery, SecretRef, Settings, SidebarLayout,
-    TableRef, TriggerRef,
+    ErrorKind, MysqlConnectionProfile, MysqlTransportLayer, PostgresConnectionProfile,
+    PostgresTransportLayer, QueryRollbackSnapshot, RedisConnectionProfile, Result, RoutineRef,
+    SavedQuery, SecretRef, Settings, SidebarLayout, TableRef, TriggerRef,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -24,6 +24,8 @@ pub trait Storage {
     fn save_settings(&self, settings: &Settings) -> Result<()>;
     fn load_connections(&self) -> Result<Vec<ConnectionConfig>>;
     fn save_connections(&self, connections: &[ConnectionConfig]) -> Result<()>;
+    /// 删除某连接所拥有的全部 Keychain 条目（按 credential_ref 拥有权，保护其他连接）。
+    fn delete_connection_secrets(&self, connection: &ConnectionConfig);
     fn load_sidebar_layout(&self, connections: &[ConnectionConfig]) -> Result<SidebarLayout>;
     fn save_sidebar_layout(
         &self,
@@ -318,6 +320,10 @@ impl Storage for FileStorage {
         self.write_connections_and_layout(&conn, connections, &layout)
     }
 
+    fn delete_connection_secrets(&self, connection: &ConnectionConfig) {
+        self.delete_owned_keychain_secrets(connection);
+    }
+
     fn load_sidebar_layout(&self, connections: &[ConnectionConfig]) -> Result<SidebarLayout> {
         let conn = self.open_sqlite()?;
         let mut layout = sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)?
@@ -377,6 +383,18 @@ impl FileStorage {
             }
         }
 
+        // PostgreSQL 结构化档案：同理回填（与 MySQL/Redis 槽位后缀无冲突）。
+        if let Some(profile) = connection.postgres_profile.as_mut() {
+            for (suffix, slot) in postgres_profile_secret_slots_mut(profile) {
+                if slot.key.is_empty() {
+                    slot.key = format!("{credential_ref}{suffix}");
+                }
+                if slot.inline.is_none() {
+                    slot.inline = read_keychain_password(slot.key.clone());
+                }
+            }
+        }
+
         connection
     }
 
@@ -418,7 +436,53 @@ impl FileStorage {
             }
         }
 
+        // PostgreSQL 结构化档案：同理写 Keychain（与 MySQL/Redis 槽位后缀无冲突）。
+        if let Some(profile) = connection.postgres_profile.as_ref() {
+            for (suffix, slot) in postgres_profile_secret_slots(profile) {
+                let account = if slot.key.is_empty() {
+                    format!("{credential_ref}{suffix}")
+                } else {
+                    slot.key.clone()
+                };
+                if let Some(value) = slot.inline.as_deref() {
+                    write_keychain_password(&account, value)?;
+                }
+            }
+        }
+
         Ok(())
+    }
+
+    /// 删除该连接自身 credential_ref 所拥有的全部 Keychain 条目（扁平密码 + 各类档案槽位）。
+    ///
+    /// 按连接拥有权清理：每个连接经 CreateConnection 派生独立 ref，删除只清本连接 ref 下的条目，
+    /// 不触碰其他连接的 ref（即保护共享引用——引用共享只在显式共享时才有，本路径不跨连接）。
+    /// 删除幂等：条目不存在按成功处理。Keychain 不可用（非常规 root / 非 macOS）时无副作用。
+    fn delete_owned_keychain_secrets(&self, connection: &ConnectionConfig) {
+        let Some(credential_ref) = self.credential_ref_for_keychain(connection) else {
+            return;
+        };
+        // 扁平历史密码与结构化档案槽位同属该 ref。
+        delete_keychain_password(&credential_ref);
+        let mut accounts: Vec<String> = Vec::new();
+        if let Some(profile) = connection.redis_profile.as_ref() {
+            for (suffix, slot) in profile_secret_slots(profile) {
+                accounts.push(secret_slot_account(&credential_ref, suffix, slot));
+            }
+        }
+        if let Some(profile) = connection.mysql_profile.as_ref() {
+            for (suffix, slot) in mysql_profile_secret_slots(profile) {
+                accounts.push(secret_slot_account(&credential_ref, suffix, slot));
+            }
+        }
+        if let Some(profile) = connection.postgres_profile.as_ref() {
+            for (suffix, slot) in postgres_profile_secret_slots(profile) {
+                accounts.push(secret_slot_account(&credential_ref, suffix, slot));
+            }
+        }
+        for account in accounts {
+            delete_keychain_password(&account);
+        }
     }
 
     fn credential_ref_for_keychain(&self, connection: &ConnectionConfig) -> Option<String> {
@@ -462,6 +526,9 @@ impl FileStorage {
 pub struct QueryHistoryRecord {
     pub connection_id: ConnectionId,
     pub database: Option<String>,
+    /// 历史记录所属 schema（PG）；旧记录缺省为 None，`#[serde(default)]` 兼容加载。
+    #[serde(default)]
+    pub schema: Option<String>,
     pub text: String,
     #[serde(default)]
     pub tables: Vec<String>,
@@ -477,6 +544,9 @@ pub struct QueryHistoryRecord {
     pub rollback_sql: Option<String>,
     #[serde(default)]
     pub rollback_snapshot: Option<QueryRollbackSnapshot>,
+    /// 写入事务状态（committed/uncommitted/rolled_back，§8.4）；旧记录缺省按已提交。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transaction_state: Option<String>,
     #[serde(default)]
     pub message: Option<String>,
     #[serde(default)]
@@ -619,6 +689,12 @@ fn strip_plaintext_secrets(connection: &ConnectionConfig) -> ConnectionConfig {
             slot.inline = None;
         }
     }
+    // PostgreSQL 档案同理：清空全部受控值，保证盘上副本零明文。
+    if let Some(profile) = connection.postgres_profile.as_mut() {
+        for (_, slot) in postgres_profile_secret_slots_mut(profile) {
+            slot.inline = None;
+        }
+    }
     connection
 }
 
@@ -627,6 +703,15 @@ fn strip_plaintext_secrets(connection: &ConnectionConfig) -> ConnectionConfig {
 ///
 /// 证书/私钥文件一律以文件路径引用（`key` 存路径，非密码语义），不在此列；
 /// 只有真正的密码（基础密码、SSH 密码、SSH 私钥口令）才进 Keychain。
+/// 槽位在 Keychain 中的 account：未显式设 key 时按 `{ref}{suffix}` 推导，否则用显式 key。
+fn secret_slot_account(credential_ref: &str, suffix: &str, slot: &SecretRef) -> String {
+    if slot.key.is_empty() {
+        format!("{credential_ref}{suffix}")
+    } else {
+        slot.key.clone()
+    }
+}
+
 fn profile_secret_slots(profile: &RedisConnectionProfile) -> Vec<(&'static str, &SecretRef)> {
     let mut slots: Vec<(&'static str, &SecretRef)> = vec![("", &profile.basic.password)];
     if profile.ssh.enabled {
@@ -694,6 +779,54 @@ fn mysql_profile_secret_slots_mut(
     slots
 }
 
+/// 遍历 PostgreSQL 档案中需要走 Keychain 的「密码类」槽位。
+/// 返回 `(Keychain 账号后缀, 该槽的 SecretRef)`。
+///
+/// 证书/私钥文件一律以文件路径引用（`key` 存路径，非密码语义），不在此列；
+/// 只有真正的密码（基础密码、SSH 密码、SSH 私钥口令、代理密码）才进 Keychain。
+fn postgres_profile_secret_slots(
+    profile: &PostgresConnectionProfile,
+) -> Vec<(&'static str, &SecretRef)> {
+    let mut slots: Vec<(&'static str, &SecretRef)> = vec![("", &profile.basic.password)];
+    for layer in &profile.transport {
+        match layer {
+            PostgresTransportLayer::Ssh(ssh) if ssh.enabled => {
+                slots.push((".ssh_password", &ssh.password));
+                slots.push((".ssh_passphrase", &ssh.passphrase));
+            }
+            PostgresTransportLayer::Proxy(proxy) if proxy.enabled => {
+                slots.push((".proxy_password", &proxy.password));
+            }
+            _ => {}
+        }
+    }
+    slots
+}
+
+/// PostgreSQL 档案槽位的可变版，供回填 / 剥离时原地改写槽位。
+fn postgres_profile_secret_slots_mut(
+    profile: &mut PostgresConnectionProfile,
+) -> Vec<(&'static str, &mut SecretRef)> {
+    // 解构以取得不重叠的借用（basic 与 transport 互不借用）。
+    let PostgresConnectionProfile {
+        basic, transport, ..
+    } = profile;
+    let mut slots: Vec<(&'static str, &mut SecretRef)> = vec![("", &mut basic.password)];
+    for layer in transport.iter_mut() {
+        match layer {
+            PostgresTransportLayer::Ssh(ssh) if ssh.enabled => {
+                slots.push((".ssh_password", &mut ssh.password));
+                slots.push((".ssh_passphrase", &mut ssh.passphrase));
+            }
+            PostgresTransportLayer::Proxy(proxy) if proxy.enabled => {
+                slots.push((".proxy_password", &mut proxy.password));
+            }
+            _ => {}
+        }
+    }
+    slots
+}
+
 #[cfg(target_os = "macos")]
 fn read_keychain_password(account: String) -> Option<String> {
     let output = Command::new("security")
@@ -745,6 +878,23 @@ fn write_keychain_password(account: &str, password: &str) -> Result<()> {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn delete_keychain_password(account: &str) {
+    let _ = Command::new("security")
+        .args([
+            "delete-generic-password",
+            "-s",
+            KEYCHAIN_SERVICE,
+            "-a",
+            account,
+        ])
+        .status();
+    // 条目不存在（含未保存过）按成功处理：删除幂等，不因缺条目报错。
+}
+
+#[cfg(not(target_os = "macos"))]
+fn delete_keychain_password(_: &str) {}
+
 #[cfg(not(target_os = "macos"))]
 fn write_keychain_password(_: &str, _: &str) -> Result<()> {
     Ok(())
@@ -759,7 +909,7 @@ mod tests {
     use fluxdb_core::{
         COMPLETION_INDEX_VERSION, ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot,
         ConnectionGroup, ConnectionGroupId, ConnectionId, DatabaseKind, Endpoint, LogLevel,
-        ObjectKind, SavedQuery, SidebarOrderEntry, TableRef, Theme,
+        ObjectKind, SavedQuery, SidebarOrderEntry, TableFingerprint, TableRef, Theme,
     };
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -808,6 +958,49 @@ mod tests {
         assert_eq!(parsed, Settings::default());
     }
 
+    /// 凭据清理的槽位 account 推导必须与保存路径一致（save/delete 共用 secret_slot_account），
+    /// 保证「按连接 ref 只删本连接」，且删除幂等不报错。
+    #[test]
+    fn secret_account_derivation_matches_save_and_delete_is_idempotent() {
+        // 空 key 按 ref+suffix 推导；显式 key 用显式值。
+        let slot_empty = SecretRef::inline("pw");
+        assert_eq!(
+            secret_slot_account("gdb.connection.7", ":pg:password", &slot_empty),
+            "gdb.connection.7:pg:password"
+        );
+        let slot_named = SecretRef::ref_key("user-shared-key");
+        assert_eq!(
+            secret_slot_account("gdb.connection.7", ":pg:password", &slot_named),
+            "user-shared-key"
+        );
+
+        // 携带 PG 档案的连接：delete_owned_keychain_secrets 遍历槽位，不 panic、幂等。
+        // 测试目录非系统 Keychain（uses_system_keychain=false）→ credential_ref_for_keychain 返回 None，
+        // 走无副作用路径；这里主要锁定枚举逻辑与「无 Keychain 时安全无操作」。
+        let mut profile = fluxdb_core::PostgresConnectionProfile::default();
+        profile.basic.password = SecretRef::inline("secret");
+        let mut config = ConnectionConfig {
+            id: ConnectionId(9),
+            name: "pg".into(),
+            kind: DatabaseKind::Postgres,
+            endpoint: Endpoint::Tcp {
+                host: "h".into(),
+                port: 5432,
+                database: None,
+            },
+            credential_ref: Some("gdb.connection.9".into()),
+            options: BTreeMap::new(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: Some(profile),
+        };
+        let storage = FileStorage::new(unique_temp_dir());
+        storage.delete_connection_secrets(&config);
+        storage.delete_connection_secrets(&config); // 重复删除幂等
+        config.credential_ref = None; // 无 ref 也安全无操作
+        storage.delete_connection_secrets(&config);
+    }
+
     #[test]
     fn saves_and_loads_settings() {
         let storage = FileStorage::new(unique_temp_dir());
@@ -848,7 +1041,12 @@ mod tests {
             )]),
             backup_dir: String::new(),
             mysqldump_path: String::new(),
+            mysql_client_dir: String::new(),
+            mysql_client_download_source: String::new(),
             sqlite3_path: String::new(),
+            pg_dump_path: String::new(),
+            pg_client_dir: String::new(),
+            pg_client_download_source: String::new(),
         };
 
         storage.save_settings(&settings).unwrap();
@@ -863,6 +1061,7 @@ mod tests {
             id: 1,
             connection_id: ConnectionId(7),
             database: Some("shop".to_string()),
+            schema: None,
             name: "orders.sql".to_string(),
             text: "select * from orders".to_string(),
         }];
@@ -879,6 +1078,7 @@ mod tests {
             .map(|index| QueryHistoryRecord {
                 connection_id: ConnectionId(7),
                 database: Some("shop".to_string()),
+                schema: None,
                 text: format!("select {index}"),
                 tables: vec!["orders".to_string()],
                 kind: "query".to_string(),
@@ -887,6 +1087,7 @@ mod tests {
                 object: None,
                 rollback_sql: None,
                 rollback_snapshot: None,
+                transaction_state: None,
                 message: None,
                 returned_rows: 0,
                 affected_rows: 0,
@@ -1003,6 +1204,34 @@ mod tests {
             storage.legacy_completion_index_path(&connection, Some("production"), None);
         fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
         fs::write(&legacy_path, toml::to_string_pretty(&snapshot).unwrap()).unwrap();
+
+        assert_eq!(
+            storage
+                .load_completion_index(&connection, Some("production"), None)
+                .unwrap(),
+            Some(snapshot)
+        );
+    }
+
+    /// 表指纹是 64 位哈希，取值范围可能超出 TOML 的 i64 整数上限：必须能落盘并原值读回。
+    ///
+    /// 回归：指纹曾按整数写入，哈希最高位为 1 时整份快照序列化即失败（错误一度被调用方
+    /// 吞掉，表现为「补全索引从不落盘、每次冷启动重查目录」）。
+    #[test]
+    fn completion_index_round_trips_table_fingerprints_beyond_i64() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let connection = sample_connections()[0].clone();
+        let mut snapshot = sample_completion_snapshot(connection.id);
+        snapshot.meta.table_fingerprints = vec![TableFingerprint {
+            database: Some("production".to_string()),
+            schema: None,
+            table: "Product".to_string(),
+            fingerprint: u64::MAX,
+        }];
+
+        storage
+            .save_completion_index(&connection, Some("production"), None, &snapshot)
+            .expect("溢出 i64 的指纹也必须能落盘");
 
         assert_eq!(
             storage
@@ -1160,6 +1389,70 @@ mod tests {
     }
 
     #[test]
+    fn postgres_profile_strips_secret_inlines_and_enumerates_slots() {
+        use fluxdb_core::{
+            PostgresBasicOptions, PostgresConnectionProfile, PostgresProxy, PostgresProxyType,
+            PostgresSshOptions, PostgresTransportLayer,
+        };
+        let mut profile = PostgresConnectionProfile {
+            basic: PostgresBasicOptions {
+                host: "db".into(),
+                port: 5432,
+                username: "postgres".into(),
+                password: SecretRef::inline("pg-secret"),
+                ..Default::default()
+            },
+            transport: vec![
+                PostgresTransportLayer::Ssh(PostgresSshOptions {
+                    enabled: true,
+                    host: "jump".into(),
+                    port: 22,
+                    username: "bob".into(),
+                    password: SecretRef::inline("ssh-secret"),
+                    passphrase: SecretRef::inline("ssh-pass"),
+                    ..Default::default()
+                }),
+                PostgresTransportLayer::Proxy(PostgresProxy {
+                    enabled: true,
+                    proxy_type: PostgresProxyType::Socks5,
+                    host: "proxy".into(),
+                    port: 1080,
+                    password: SecretRef::inline("proxy-secret"),
+                    ..Default::default()
+                }),
+            ],
+            ..Default::default()
+        };
+
+        // 槽位枚举：基础密码 + SSH 密码 + SSH 口令 + 代理密码。
+        let suffixes: Vec<_> = postgres_profile_secret_slots(&profile)
+            .into_iter()
+            .map(|(s, _)| s)
+            .collect();
+        assert_eq!(
+            suffixes,
+            vec!["", ".ssh_password", ".ssh_passphrase", ".proxy_password"]
+        );
+
+        // 剥离后所有内联密钥清空。
+        for (_, slot) in postgres_profile_secret_slots_mut(&mut profile) {
+            slot.inline = None;
+        }
+        assert!(profile.basic.password.inline.is_none());
+        let ssh = &profile.transport[0];
+        let PostgresTransportLayer::Ssh(ssh) = ssh else {
+            panic!("expected ssh")
+        };
+        assert!(ssh.password.inline.is_none());
+        assert!(ssh.passphrase.inline.is_none());
+        let proxy = &profile.transport[1];
+        let PostgresTransportLayer::Proxy(proxy) = proxy else {
+            panic!("expected proxy")
+        };
+        assert!(proxy.password.inline.is_none());
+    }
+
+    #[test]
     fn saves_and_loads_sidebar_layout() {
         let storage = FileStorage::new(unique_temp_dir());
         let connections = sample_connections();
@@ -1264,6 +1557,7 @@ mod tests {
                 options: BTreeMap::new(),
                 redis_profile: None,
                 mysql_profile: None,
+                postgres_profile: None,
             },
             ConnectionConfig {
                 id: ConnectionId(2),
@@ -1277,6 +1571,7 @@ mod tests {
                 options: BTreeMap::new(),
                 redis_profile: None,
                 mysql_profile: None,
+                postgres_profile: None,
             },
             ConnectionConfig {
                 id: ConnectionId(3),
@@ -1289,6 +1584,7 @@ mod tests {
                 options: BTreeMap::new(),
                 redis_profile: None,
                 mysql_profile: None,
+                postgres_profile: None,
             },
             ConnectionConfig {
                 id: ConnectionId(4),
@@ -1320,6 +1616,7 @@ mod tests {
                     ..Default::default()
                 }),
                 mysql_profile: None,
+                postgres_profile: None,
             },
         ]
     }

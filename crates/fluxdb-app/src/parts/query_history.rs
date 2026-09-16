@@ -5,25 +5,122 @@ impl AppController {
         execution: &QueryExecutionResult,
     ) {
         let executed_at_unix_secs = current_unix_secs();
+        let persistent = request.session_id.is_some() && self.connection_config(request.connection_id)
+            .is_some_and(|config| config.kind == DatabaseKind::Postgres);
+        let mut recorded_in_run: Vec<usize> = if persistent {
+            self.state.query_history.iter().enumerate().filter(|(_, entry)|
+                entry.connection_id == request.connection_id && entry.session_id == request.session_id
+                && entry.transaction_state == QueryHistoryTransactionState::Uncommitted)
+                .map(|(index, _)| index).collect()
+        } else { Vec::new() };
+        let mut transaction_open = !recorded_in_run.is_empty();
+        let mut transaction_failed = recorded_in_run.iter().any(|index| !self.state.query_history[*index].success);
         for (index, summary) in execution.summaries.iter().enumerate() {
-            self.mark_query_history_completion_dirty(request, &summary.sql);
+            if history_statement_is_sensitive(&summary.sql) {
+                // 敏感语句（口令/授权）不记录历史，也不留可回放的文本。
+                tracing::debug!(
+                    target: "gdb_query_history",
+                    op = "history_record",
+                    skipped = "sensitive",
+                    connection_id = ?request.connection_id,
+                    "敏感语句不入历史"
+                );
+                continue;
+            }
+            if summary.success {
+                self.mark_query_history_completion_dirty(request, &summary.sql);
+            }
+            let kind = query_history_kind(&summary.sql);
+            let control = if summary.success { history_transaction_control(&summary.sql) } else { HistoryTransactionControl::None };
+            if control == HistoryTransactionControl::Begin {
+                transaction_open = true;
+            }
+            let transaction_state = if transaction_open {
+                QueryHistoryTransactionState::Uncommitted
+            } else { QueryHistoryTransactionState::Committed };
+            if transaction_open && !summary.success { transaction_failed = true; }
+            let rollback_snapshot = execution
+                .rollback_snapshots
+                .get(index)
+                .cloned()
+                .flatten()
+                .filter(|_| summary.success);
             self.state.query_history.push(QueryHistoryEntry {
+                session_id: if persistent { request.session_id } else { None },
                 connection_id: request.connection_id,
                 database: request.database.clone(),
+                schema: request.schema.clone(),
                 text: summary.sql.clone(),
                 tables: query_history_tables(&summary.sql),
-                kind: query_history_kind(&summary.sql),
+                kind,
                 success: summary.success,
                 summary: summary.clone(),
                 executed_at_unix_secs,
                 object: sql_history_object_name(&summary.sql),
-                rollback_snapshot: execution
-                    .rollback_snapshots
-                    .get(index)
-                    .cloned()
-                    .flatten()
-                    .filter(|_| summary.success),
+                rollback_snapshot,
+                transaction_state,
             });
+            recorded_in_run.push(self.state.query_history.len() - 1);
+
+            if summary.message.contains("结果待核实") {
+                for index in &recorded_in_run {
+                    self.state.query_history[*index].transaction_state = QueryHistoryTransactionState::Unknown;
+                }
+                transaction_open = false;
+                recorded_in_run.clear();
+            }
+            if summary.success && transaction_open {
+                let tokens = sql_identifier_tokens(&summary.sql);
+                if tokens.first().is_some_and(|s| s.eq_ignore_ascii_case("rollback")) && tokens.iter().take(3).any(|s| s.eq_ignore_ascii_case("to")) {
+                    if let Some(savepoint) = tokens.last() {
+                        let boundary = recorded_in_run.iter().rev().copied().find(|index| {
+                            let previous = sql_identifier_tokens(&self.state.query_history[*index].text);
+                            previous.first().is_some_and(|s| s.eq_ignore_ascii_case("savepoint")) && previous.get(1) == Some(savepoint)
+                        });
+                        if let Some(boundary) = boundary {
+                            for index in recorded_in_run.iter().copied().filter(|i| *i > boundary && *i + 1 < self.state.query_history.len()).collect::<Vec<_>>() {
+                                self.state.query_history[index].transaction_state = QueryHistoryTransactionState::RolledBack;
+                            }
+                            recorded_in_run.retain(|index| *index <= boundary);
+                        }
+                    }
+                    transaction_failed = false;
+                }
+            }
+            match control {
+                HistoryTransactionControl::Commit => {
+                    transaction_open = false;
+                    self.settle_history_transaction(&recorded_in_run, !transaction_failed);
+                    transaction_failed = false;
+                    recorded_in_run.clear();
+                }
+                HistoryTransactionControl::Rollback => {
+                    transaction_open = false;
+                    self.settle_history_transaction(&recorded_in_run, false);
+                    recorded_in_run.clear();
+                    transaction_failed = false;
+                }
+                HistoryTransactionControl::Begin | HistoryTransactionControl::None => {}
+            }
+        }
+        if transaction_open && !persistent {
+            // 未 COMMIT：连接释放时服务端回滚未提交事务，历史必须如实标注，不显示为已提交。
+            self.settle_history_transaction(&recorded_in_run, false);
+        }
+    }
+
+    /// 结束一次显式事务：把本次执行内已记录的写入条目按提交/回滚落定状态。
+    fn settle_history_transaction(&mut self, indexes: &[usize], committed: bool) {
+        for index in indexes {
+            if let Some(entry) = self.state.query_history.get_mut(*index)
+                && entry.transaction_state == QueryHistoryTransactionState::Uncommitted
+            {
+                entry.transaction_state = if committed {
+                    QueryHistoryTransactionState::Committed
+                } else {
+                    QueryHistoryTransactionState::RolledBack
+                };
+            }
         }
     }
 
@@ -51,6 +148,8 @@ impl AppController {
         let snapshot_request = QueryRequest {
             connection_id: request.connection_id,
             database: request.database.clone(),
+            session_id: None,
+            schema: request.schema.clone(),
             text: spec.snapshot_sql(),
             mode: fluxdb_core::QueryMode::Selection,
             options: QueryExecutionOptions::default(),
@@ -80,6 +179,7 @@ impl AppController {
                     .filter_map(|(index, column)| column.primary_key.then_some(index))
                     .collect::<Vec<_>>();
                 QueryRollbackSnapshot::Update(QueryUpdateRollbackSnapshot {
+                    db_kind: Some(config.kind),
                     table: table_sql,
                     columns: page.columns.clone(),
                     changed_columns: changed_columns.clone(),
@@ -103,6 +203,7 @@ impl AppController {
                 table_name: _,
                 where_clause: _,
             } => QueryRollbackSnapshot::Delete(QueryDeleteRollbackSnapshot {
+                db_kind: Some(config.kind),
                 table: table_sql,
                 columns: page.columns,
                 rows: page.rows,
@@ -111,10 +212,11 @@ impl AppController {
     }
 
     fn record_failed_query_history(&mut self, request: &QueryRequest) {
-        self.mark_query_history_completion_dirty(request, &request.text);
         self.state.query_history.push(QueryHistoryEntry {
+            session_id: None,
             connection_id: request.connection_id,
             database: request.database.clone(),
+            schema: request.schema.clone(),
             text: request.text.clone(),
             tables: query_history_tables(&request.text),
             kind: query_history_kind(&request.text),
@@ -131,6 +233,8 @@ impl AppController {
             executed_at_unix_secs: current_unix_secs(),
             object: sql_history_object_name(&request.text),
             rollback_snapshot: None,
+            // 失败语句没有落定的写入，按已提交（无写入）处理。
+            transaction_state: QueryHistoryTransactionState::Committed,
         });
     }
 
@@ -139,32 +243,35 @@ impl AppController {
         object: &ObjectPath,
         before_page: &DataPage,
         changes: &DataChangeSet,
+        outcome: &AppliedChangeOutcome,
     ) {
         let executed_at_unix_secs = current_unix_secs();
-        self.state.query_history.extend(
-            data_change_history_entries(object, before_page, changes, executed_at_unix_secs)
-        );
+        // 补偿 SQL 按连接方言生成（PG 双引号/bytea/精确十进制），历史记录里保存该方言。
+        let kind = self
+            .connection_config(object.connection_id)
+            .map(|config| config.kind)
+            .unwrap_or(DatabaseKind::MySql);
+        self.state.query_history.extend(data_change_history_entries(
+            object,
+            before_page,
+            changes,
+            outcome,
+            executed_at_unix_secs,
+            kind,
+        ));
     }
 
-    fn mark_query_history_completion_dirty(&mut self, request: &QueryRequest, sql: &str) {
+    fn mark_query_history_completion_dirty(&self, request: &QueryRequest, sql: &str) {
         let Some(impact) = sql_ddl_impact(sql) else {
             return;
         };
-        let Ok(mut index) = self.completion_index.lock() else {
-            return;
-        };
-        if impact.database_wide || impact.tables.is_empty() {
-            index.mark_dirty(request.connection_id, request.database.as_deref(), None);
-        } else {
-            for table in impact.tables {
-                index.mark_table_dirty(
-                    request.connection_id,
-                    request.database.as_deref(),
-                    None,
-                    &table,
-                );
-            }
-        }
+        // 新建、删除和重命名会改变对象清单；仅按旧表名刷新会漏掉新增对象。
+        let changes_objects = sql_identifier_tokens(sql).iter().any(|token|
+            matches!(token.to_ascii_lowercase().as_str(), "create" | "drop" | "rename")
+        );
+        let tables = (!impact.database_wide && !impact.tables.is_empty() && !changes_objects)
+            .then_some(&impact.tables);
+        self.invalidate_completion_metadata(request.connection_id, request.database.as_deref(), None, tables);
     }
 }
 
@@ -360,19 +467,28 @@ fn annotate_snapshot_columns(
     table: &str,
     page: &mut DataPage,
 ) {
+    // schema 必须随请求下传：PG 里同名跨 schema 的表若按 search_path 取元数据，
+    // 会拿到另一个 schema 的主键/类型，补偿身份就此写错（§8.4/R11）。列名先精确匹配，
+    // 再退回忽略大小写（MySQL/SQLite 的大小写差异输入）。
     let Ok(metadata) = controller.completion_columns(
         config,
         request.connection_id,
         request.database.as_deref(),
-        None,
+        request.schema.as_deref(),
         table,
     ) else {
         return;
     };
     for column in &mut page.columns {
-        if let Some(metadata_column) = metadata
+        let matched = metadata
             .iter()
-            .find(|metadata_column| metadata_column.name.eq_ignore_ascii_case(&column.name))
+            .find(|metadata_column| metadata_column.name == column.name)
+            .or_else(|| {
+                metadata
+                    .iter()
+                    .find(|metadata_column| metadata_column.name.eq_ignore_ascii_case(&column.name))
+            });
+        if let Some(metadata_column) = matched
         {
             column.type_name = metadata_column
                 .type_name
@@ -454,13 +570,72 @@ fn current_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// 显式事务控制语句类型（用于历史事务状态）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HistoryTransactionControl {
+    Begin,
+    Commit,
+    Rollback,
+    None,
+}
+
+/// 识别显式事务控制语句。`ROLLBACK TO SAVEPOINT` 不算结束事务（事务仍开着）。
+fn history_transaction_control(sql: &str) -> HistoryTransactionControl {
+    let tokens = sql_identifier_tokens(sql)
+        .into_iter()
+        .map(|token| token.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    match tokens.first().map(String::as_str) {
+        Some("begin") => HistoryTransactionControl::Begin,
+        Some("start") if tokens.get(1).is_some_and(|token| token == "transaction") => {
+            HistoryTransactionControl::Begin
+        }
+        Some("commit" | "end") => HistoryTransactionControl::Commit,
+        Some("rollback" | "abort") => {
+            // `ROLLBACK TO [SAVEPOINT] x` 只回退到保存点，事务继续。
+            if tokens.iter().take(3).any(|token| token == "to") {
+                HistoryTransactionControl::None
+            } else {
+                HistoryTransactionControl::Rollback
+            }
+        }
+        _ => HistoryTransactionControl::None,
+    }
+}
+
+/// 敏感语句不入历史（§8.4/R11）：口令/角色/授权类语句既含凭据也不能安全回放。
+fn history_statement_is_sensitive(sql: &str) -> bool {
+    let tokens = sql_identifier_tokens(sql)
+        .into_iter()
+        .map(|token| token.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let first = tokens.first().map(String::as_str);
+    let second = tokens.get(1).map(String::as_str);
+    let third = tokens.get(2).map(String::as_str);
+    match (first, second) {
+        (Some("set"), Some("password")) => true,
+        (Some("create" | "alter" | "drop"), Some("user" | "role" | "login" | "group")) => true,
+        (Some("grant" | "revoke"), _) => true,
+        // `ALTER USER ... IDENTIFIED BY ...` / `CREATE USER ... PASSWORD ...` 等口令行。
+        _ => third.is_some_and(|_| {
+            tokens
+                .iter()
+                .any(|token| matches!(token.as_str(), "identified" | "password" | "passwd"))
+                && matches!(first, Some("create" | "alter" | "set" | "update"))
+        }),
+    }
+}
+
 fn data_change_history_entries(
     object: &ObjectPath,
     before_page: &DataPage,
     changes: &DataChangeSet,
+    outcome: &AppliedChangeOutcome,
     executed_at_unix_secs: u64,
+    kind: DatabaseKind,
 ) -> Vec<QueryHistoryEntry> {
     let mut entries = Vec::new();
+    let table_name = sql_history_object_name_for_path(object, kind);
 
     for update in &changes.updates {
         if update.cells.is_empty() {
@@ -470,20 +645,23 @@ fn data_change_history_entries(
             .cells
             .iter()
             .map(|cell| {
+                let column_type = before_page
+                    .columns
+                    .iter()
+                    .find(|column| column.name == cell.column)
+                    .and_then(|column| column.type_name.as_deref());
                 format!(
                     "{} = {}",
-                    sql_history_quote_ident(&cell.column),
-                    sql_history_value_literal(&cell.value)
+                    sql_history_quote_ident_for(&cell.column, kind),
+                    sql_history_value_literal_for_type(&cell.value, kind, column_type)
                 )
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let where_clause = sql_history_row_identity(&update.identity);
-        let sql = format!(
-            "UPDATE {} SET {assignments} WHERE {where_clause};",
-            sql_history_object_name_for_path(object)
-        );
-        let rollback_snapshot = data_change_update_rollback_snapshot(object, before_page, update);
+        let where_clause = sql_history_row_identity_for(update.identity.values.iter(), kind);
+        let sql = format!("UPDATE {table_name} SET {assignments} WHERE {where_clause};");
+        let rollback_snapshot =
+            data_change_update_rollback_snapshot(object, before_page, update, kind);
         entries.push(data_change_history_entry(
             object,
             sql,
@@ -492,7 +670,7 @@ fn data_change_history_entries(
         ));
     }
 
-    for row in &changes.inserts {
+    for (insert_index, row) in changes.inserts.iter().enumerate() {
         let insert_values = before_page
             .columns
             .iter()
@@ -500,27 +678,30 @@ fn data_change_history_entries(
             .filter(|(_, value)| !matches!(value, CellValue::Null))
             .collect::<Vec<_>>();
         let sql = if insert_values.is_empty() {
-            format!(
-                "INSERT INTO {} DEFAULT VALUES;",
-                sql_history_object_name_for_path(object)
-            )
+            format!("INSERT INTO {table_name} DEFAULT VALUES;")
         } else {
             let columns = insert_values
                 .iter()
-                .map(|(column, _)| sql_history_quote_ident(&column.name))
+                .map(|(column, _)| sql_history_quote_ident_for(&column.name, kind))
                 .collect::<Vec<_>>()
                 .join(", ");
             let values = insert_values
                 .iter()
-                .map(|(_, value)| sql_history_value_literal(value))
+                .map(|(column, value)| {
+                    sql_history_value_literal_for_type(value, kind, column.type_name.as_deref())
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!(
-                "INSERT INTO {} ({columns}) VALUES ({values});",
-                sql_history_object_name_for_path(object)
-            )
+            format!("INSERT INTO {table_name} ({columns}) VALUES ({values});")
         };
-        let rollback_snapshot = data_change_insert_rollback_snapshot(object, before_page, row);
+        // 服务端 RETURNING 的身份（自增/序列主键）优先；缺失时回退到编辑器已知的主键值。
+        let rollback_snapshot = data_change_insert_rollback_snapshot(
+            object,
+            before_page,
+            row,
+            outcome.inserted_identities.get(insert_index),
+            kind,
+        );
         entries.push(data_change_history_entry(
             object,
             sql,
@@ -531,11 +712,11 @@ fn data_change_history_entries(
 
     for identity in &changes.deletes {
         let sql = format!(
-            "DELETE FROM {} WHERE {};",
-            sql_history_object_name_for_path(object),
-            sql_history_row_identity(identity)
+            "DELETE FROM {table_name} WHERE {};",
+            sql_history_row_identity_for(identity.values.iter(), kind)
         );
-        let rollback_snapshot = data_change_delete_rollback_snapshot(object, before_page, identity);
+        let rollback_snapshot =
+            data_change_delete_rollback_snapshot(object, before_page, identity, kind);
         entries.push(data_change_history_entry(
             object,
             sql,
@@ -554,8 +735,10 @@ fn data_change_history_entry(
     executed_at_unix_secs: u64,
 ) -> QueryHistoryEntry {
     QueryHistoryEntry {
+        session_id: None,
         connection_id: object.connection_id,
         database: object.database.clone(),
+        schema: object.schema.clone(),
         text: sql.clone(),
         tables: vec![object.name.clone()],
         kind: QueryHistoryKind::DataChange,
@@ -572,6 +755,8 @@ fn data_change_history_entry(
         executed_at_unix_secs,
         object: Some(object.name.clone()),
         rollback_snapshot,
+        // 数据编辑器的提交是即时写入（各自自动提交），落定即已提交。
+        transaction_state: QueryHistoryTransactionState::Committed,
     }
 }
 
@@ -579,6 +764,7 @@ fn data_change_update_rollback_snapshot(
     object: &ObjectPath,
     before_page: &DataPage,
     update: &RowUpdate,
+    kind: DatabaseKind,
 ) -> Option<QueryRollbackSnapshot> {
     let row = page_row_for_identity(before_page, &update.identity)?;
     let values = update
@@ -597,7 +783,8 @@ fn data_change_update_rollback_snapshot(
         return None;
     }
     Some(QueryRollbackSnapshot::Update(QueryUpdateRollbackSnapshot {
-        table: sql_history_object_name_for_path(object),
+        db_kind: Some(kind),
+        table: sql_history_object_name_for_path(object, kind),
         columns: before_page.columns.clone(),
         changed_columns: update
             .cells
@@ -616,7 +803,17 @@ fn data_change_insert_rollback_snapshot(
     object: &ObjectPath,
     before_page: &DataPage,
     row: &Row,
+    inserted_identity: Option<&RowIdentity>,
+    kind: DatabaseKind,
 ) -> QueryRollbackSnapshot {
+    // 服务端返回的真实身份优先：自增列在编辑器里根本没有值，只能靠 RETURNING 拿（§8.4/R11）。
+    if let Some(identity) = inserted_identity.filter(|identity| !identity.values.is_empty()) {
+        return QueryRollbackSnapshot::Insert(QueryInsertRollbackSnapshot {
+            db_kind: Some(kind),
+            table: sql_history_object_name_for_path(object, kind),
+            identities: vec![identity.clone()],
+        });
+    }
     let values = before_page
         .columns
         .iter()
@@ -644,7 +841,8 @@ fn data_change_insert_rollback_snapshot(
         values
     };
     QueryRollbackSnapshot::Insert(QueryInsertRollbackSnapshot {
-        table: sql_history_object_name_for_path(object),
+        db_kind: Some(kind),
+        table: sql_history_object_name_for_path(object, kind),
         identities: vec![RowIdentity { values }],
     })
 }
@@ -653,6 +851,7 @@ fn data_change_delete_rollback_snapshot(
     object: &ObjectPath,
     before_page: &DataPage,
     identity: &RowIdentity,
+    kind: DatabaseKind,
 ) -> Option<QueryRollbackSnapshot> {
     let row = page_row_for_identity(before_page, identity)?;
     let row = Row {
@@ -664,7 +863,8 @@ fn data_change_delete_rollback_snapshot(
             .collect(),
     };
     Some(QueryRollbackSnapshot::Delete(QueryDeleteRollbackSnapshot {
-        table: sql_history_object_name_for_path(object),
+        db_kind: Some(kind),
+        table: sql_history_object_name_for_path(object, kind),
         columns: before_page.columns.clone(),
         rows: vec![row],
     }))
@@ -672,6 +872,10 @@ fn data_change_delete_rollback_snapshot(
 
 impl QueryHistoryEntry {
     pub fn rollback_sql(&self) -> Option<String> {
+        // 已回滚的写入没有留下任何变更：不提供补偿 SQL，避免把从未生效的改动再写一遍（§8.4/R11）。
+        if self.transaction_state != QueryHistoryTransactionState::Committed {
+            return None;
+        }
         self.rollback_snapshot
             .as_ref()
             .and_then(query_history_rollback_sql)
@@ -681,6 +885,16 @@ impl QueryHistoryEntry {
         self.rollback_snapshot
             .as_ref()
             .map(query_history_rollback_snapshot_summary)
+    }
+
+    /// 事务状态文案；已提交时不额外标注，避免噪声。
+    pub fn transaction_state_label(&self) -> Option<&'static str> {
+        match self.transaction_state {
+            QueryHistoryTransactionState::Committed => None,
+            QueryHistoryTransactionState::Uncommitted => Some("未提交（事务进行中）"),
+            QueryHistoryTransactionState::RolledBack => Some("已回滚（未提交或显式 ROLLBACK）"),
+            QueryHistoryTransactionState::Unknown => Some("结果待核实"),
+        }
     }
 }
 
@@ -693,6 +907,7 @@ fn query_history_rollback_sql(snapshot: &QueryRollbackSnapshot) -> Option<String
 }
 
 fn insert_rollback_sql(snapshot: &QueryInsertRollbackSnapshot) -> Option<String> {
+    let kind = snapshot.db_kind.unwrap_or(DatabaseKind::MySql);
     snapshot
         .identities
         .iter()
@@ -700,7 +915,7 @@ fn insert_rollback_sql(snapshot: &QueryInsertRollbackSnapshot) -> Option<String>
             Some(format!(
                 "DELETE FROM {} WHERE {};",
                 snapshot.table,
-                sql_history_row_identity_for_rollback(identity)?
+                sql_history_row_identity_for_rollback_in(identity, kind)?
             ))
         })
         .collect::<Option<Vec<_>>>()
@@ -709,6 +924,7 @@ fn insert_rollback_sql(snapshot: &QueryInsertRollbackSnapshot) -> Option<String>
 }
 
 fn update_rollback_sql(snapshot: &QueryUpdateRollbackSnapshot) -> Option<String> {
+    let kind = snapshot.db_kind.unwrap_or(DatabaseKind::MySql);
     let mut statements = Vec::new();
     for row in &snapshot.rows {
         let assignments = snapshot
@@ -716,10 +932,16 @@ fn update_rollback_sql(snapshot: &QueryUpdateRollbackSnapshot) -> Option<String>
             .iter()
             .filter_map(|column| {
                 row.values.get(column).map(|value| {
+                    // 列类型用于 PG 的精确十进制/JSON 字面量渲染。
+                    let column_type = snapshot
+                        .columns
+                        .iter()
+                        .find(|meta| meta.name == *column)
+                        .and_then(|meta| meta.type_name.as_deref());
                     Some(format!(
                         "{} = {}",
-                        sql_history_quote_ident(column),
-                        sql_history_value_literal_for_rollback(value)?
+                        sql_history_quote_ident_for(column, kind),
+                        sql_history_value_literal_for_rollback_with_type(value, kind, column_type)?
                     ))
                 })
             })
@@ -728,7 +950,7 @@ fn update_rollback_sql(snapshot: &QueryUpdateRollbackSnapshot) -> Option<String>
             continue;
         }
         let where_clause = if !row.identity.values.is_empty() {
-            sql_history_row_identity_for_rollback(&row.identity)?
+            sql_history_row_identity_for_rollback_in(&row.identity, kind)?
         } else if snapshot.rows.len() == 1 {
             snapshot.fallback_where.clone()?
         } else {
@@ -746,6 +968,7 @@ fn update_rollback_sql(snapshot: &QueryUpdateRollbackSnapshot) -> Option<String>
 }
 
 fn delete_rollback_sql(snapshot: &QueryDeleteRollbackSnapshot) -> Option<String> {
+    let kind = snapshot.db_kind.unwrap_or(DatabaseKind::MySql);
     snapshot
         .rows
         .iter()
@@ -757,8 +980,12 @@ fn delete_rollback_sql(snapshot: &QueryDeleteRollbackSnapshot) -> Option<String>
                 .filter(|(_, value)| !matches!(value, CellValue::Null))
                 .map(|(column, value)| {
                     Some((
-                        sql_history_quote_ident(&column.name),
-                        sql_history_value_literal_for_rollback(value)?,
+                        sql_history_quote_ident_for(&column.name, kind),
+                        sql_history_value_literal_for_rollback_with_type(
+                            value,
+                            kind,
+                            column.type_name.as_deref(),
+                        )?,
                     ))
                 })
                 .collect::<Option<Vec<_>>>()?;
@@ -927,36 +1154,51 @@ fn sql_history_object_name(sql: &str) -> Option<String> {
     Some(token.trim_matches('`').trim_matches('"').to_string())
 }
 
-fn sql_history_object_name_for_path(object: &ObjectPath) -> String {
-    match object.database.as_deref() {
-        Some(database) if !database.is_empty() => format!(
+/// 补偿 SQL 里的限定对象名（按方言加引号）。
+///
+/// PG 的限定层级是 schema.table（不带库名，库由连接决定）；MySQL/TiDB/SQLite 是
+/// database.table。schema/database 未知时退化为裸表名，由连接的 search_path/默认库解析。
+fn sql_history_object_name_for_path(object: &ObjectPath, kind: DatabaseKind) -> String {
+    let qualifier = if kind == DatabaseKind::Postgres {
+        object.schema.as_deref()
+    } else {
+        object.database.as_deref()
+    };
+    match qualifier.filter(|value| !value.is_empty()) {
+        Some(qualifier) => format!(
             "{}.{}",
-            sql_history_quote_ident(database),
-            sql_history_quote_ident(&object.name)
+            sql_history_quote_ident_for(qualifier, kind),
+            sql_history_quote_ident_for(&object.name, kind)
         ),
-        _ => sql_history_quote_ident(&object.name),
+        None => sql_history_quote_ident_for(&object.name, kind),
     }
 }
 
-fn sql_history_row_identity(identity: &RowIdentity) -> String {
-    if identity.values.is_empty() {
-        return "1 = 0".to_string();
-    }
-    identity
-        .values
-        .iter()
+/// 行身份 → WHERE 子句（按方言渲染，供历史条目展示的 SQL 使用）。
+fn sql_history_row_identity_for<'a>(
+    pairs: impl Iterator<Item = (&'a String, &'a CellValue)>,
+    kind: DatabaseKind,
+) -> String {
+    let clauses = pairs
         .map(|(column, value)| {
             format!(
                 "{} = {}",
-                sql_history_quote_ident(column),
-                sql_history_value_literal(value)
+                sql_history_quote_ident_for(column, kind),
+                sql_history_value_literal_for_type(value, kind, None)
             )
         })
-        .collect::<Vec<_>>()
-        .join(" AND ")
+        .collect::<Vec<_>>();
+    if clauses.is_empty() {
+        return "1 = 0".to_string();
+    }
+    clauses.join(" AND ")
 }
 
-fn sql_history_row_identity_for_rollback(identity: &RowIdentity) -> Option<String> {
+/// 行身份 → WHERE 子句（按方言渲染标识符与字面量）。
+fn sql_history_row_identity_for_rollback_in(
+    identity: &RowIdentity,
+    kind: DatabaseKind,
+) -> Option<String> {
     if identity.values.is_empty() {
         return None;
     }
@@ -966,19 +1208,66 @@ fn sql_history_row_identity_for_rollback(identity: &RowIdentity) -> Option<Strin
         .map(|(column, value)| {
             Some(format!(
                 "{} = {}",
-                sql_history_quote_ident(column),
-                sql_history_value_literal_for_rollback(value)?
+                sql_history_quote_ident_for(column, kind),
+                sql_history_value_literal_for_rollback_with_type(value, kind, None)?
             ))
         })
         .collect::<Option<Vec<_>>>()
         .map(|parts| parts.join(" AND "))
 }
 
-fn sql_history_quote_ident(value: &str) -> String {
-    format!("`{}`", value.replace('`', "``"))
+/// 按方言给标识符加引号（PG 用双引号，MySQL/TiDB/SQLite 用反引号）。
+fn sql_history_quote_ident_for(value: &str, kind: DatabaseKind) -> String {
+    if kind == DatabaseKind::Postgres {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        format!("`{}`", value.replace('`', "``"))
+    }
 }
 
-fn sql_history_value_literal(value: &CellValue) -> String {
+/// 十六进制字节序列（bytea/BLOB 共用）。
+fn sql_history_hex_bytes(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// 列类型是否属于需要按「裸数值字面量」渲染的精确十进制族。
+///
+/// PG 的 numeric/decimal/money 走文本保精度（见 postgres/values.rs），补偿 SQL 若把它
+/// 当字符串写回会引入隐式转换与格式差异，故按数值字面量原样输出（§8.4 decimal 不失真）。
+fn sql_history_numeric_type(type_name: Option<&str>) -> bool {
+    let Some(type_name) = type_name else {
+        return false;
+    };
+    let lower = type_name.trim().to_ascii_lowercase();
+    let base = lower.split('(').next().unwrap_or(&lower).trim();
+    matches!(
+        base,
+        "numeric" | "decimal" | "dec" | "money" | "smallmoney" | "int" | "integer" | "bigint"
+            | "smallint" | "tinyint" | "mediumint" | "int2" | "int4" | "int8" | "double"
+            | "double precision" | "real" | "float" | "float4" | "float8"
+    )
+}
+
+/// 十进制文本是否可安全作为裸数值字面量输出（拒绝 NaN/Infinity/含引号等异常文本）。
+fn sql_history_numeric_text(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+' | 'e' | 'E'))
+        && trimmed.chars().any(|ch| ch.is_ascii_digit())
+}
+
+fn sql_history_value_literal_for_type(
+    value: &CellValue,
+    kind: DatabaseKind,
+    type_name: Option<&str>,
+) -> String {
+    let postgres = kind == DatabaseKind::Postgres;
     match value {
         CellValue::Null => "NULL".to_string(),
         CellValue::Bool(value) => {
@@ -996,25 +1285,66 @@ fn sql_history_value_literal(value: &CellValue) -> String {
                 "NULL".to_string()
             }
         }
-        CellValue::Text(value) | CellValue::Json(value) => {
-            format!("'{}'", value.replace('\'', "''"))
+        // PG：精确十进制文本按数值字面量输出；json/jsonb 用具名类型转换保留类型。
+        CellValue::Text(value) => {
+            if postgres && sql_history_numeric_type(type_name) && sql_history_numeric_text(value) {
+                value.trim().to_string()
+            } else if postgres
+                && type_name
+                    .map(|name| {
+                        let lower = name.trim().to_ascii_lowercase();
+                        lower == "json" || lower == "jsonb"
+                    })
+                    .unwrap_or(false)
+            {
+                format!("'{}'::{}", value.replace('\'', "''"), type_name.unwrap_or("jsonb").trim())
+            } else {
+                format!("'{}'", value.replace('\'', "''"))
+            }
         }
-        CellValue::Bytes(bytes) => format!(
-            "X'{}'",
-            bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<Vec<_>>()
-                .join("")
-        ),
+        CellValue::Json(value) => {
+            if postgres {
+                format!(
+                    "'{}'::{}",
+                    value.replace('\'', "''"),
+                    type_name.map(str::trim).unwrap_or("jsonb")
+                )
+            } else {
+                format!("'{}'", value.replace('\'', "''"))
+            }
+        }
+        CellValue::Bytes(bytes) => {
+            let hex = sql_history_hex_bytes(bytes);
+            if postgres {
+                // PG 十六进制 bytea 字面量，显式 ::bytea 防止被当作 text 写入。
+                format!("'\\x{hex}'::bytea")
+            } else {
+                format!("X'{hex}'")
+            }
+        }
         CellValue::BinarySummary(summary) if summary.is_null => "NULL".to_string(),
         CellValue::BinarySummary(_) => "NULL".to_string(),
     }
 }
 
-fn sql_history_value_literal_for_rollback(value: &CellValue) -> Option<String> {
+fn sql_history_value_literal_for_rollback_with_type(
+    value: &CellValue,
+    kind: DatabaseKind,
+    type_name: Option<&str>,
+) -> Option<String> {
     match value {
         CellValue::BinarySummary(summary) if !summary.is_null => None,
-        value => Some(sql_history_value_literal(value)),
+        value => Some(sql_history_value_literal_for_type(value, kind, type_name)),
+    }
+}
+
+
+/// 显式关闭连接/标签后，只有确认未提交的记录可结算为回滚；Unknown 必须留待用户核实。
+fn settle_closed_query_history(history: &mut [QueryHistoryEntry], connection_id: ConnectionId, session_id: Option<fluxdb_core::QuerySessionId>) {
+    for entry in history {
+        if entry.connection_id == connection_id && session_id.is_none_or(|session| entry.session_id == Some(session))
+            && entry.transaction_state == QueryHistoryTransactionState::Uncommitted {
+            entry.transaction_state = QueryHistoryTransactionState::RolledBack;
+        }
     }
 }

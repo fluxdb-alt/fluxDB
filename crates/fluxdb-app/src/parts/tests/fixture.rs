@@ -52,6 +52,7 @@ fn matrix_request_result(sql: &str, cursor: Option<usize>) -> QueryCompletionRes
     controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
         connection_id: ConnectionId(1),
         database: Some("main".to_string()),
+        schema: None
     });
     controller.dispatch(AppCommand::UpdateQueryText {
         tab_id: TabId(1),

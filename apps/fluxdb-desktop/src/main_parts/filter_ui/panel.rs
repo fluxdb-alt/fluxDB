@@ -212,11 +212,12 @@ fn data_editor_sql_preview(
     sort_text: &str,
     offset: u64,
     limit: u64,
+    db_kind: DatabaseKind,
 ) -> String {
     let mut clauses = Vec::new();
     match mode {
         DataFilterMode::Builder => {
-            let where_clause = data_filter_rules_sql(rules);
+            let where_clause = data_filter_rules_sql(rules, db_kind);
             if !where_clause.is_empty() {
                 clauses.push(format!("WHERE {where_clause}"));
             }
@@ -225,7 +226,7 @@ fn data_editor_sql_preview(
                 .filter(|rule| rule.enabled)
                 .map(|rule| {
                     let direction = if rule.ascending { "ASC" } else { "DESC" };
-                    format!("{} {direction}", sql_quote_ident(&rule.field))
+                    format!("{} {direction}", sql_quote_ident(&rule.field, db_kind))
                 })
                 .collect::<Vec<_>>();
             if !order_by.is_empty() {
@@ -244,14 +245,17 @@ fn data_editor_sql_preview(
         }
     }
 
-    clauses.push(format!("LIMIT {limit}"));
-    if offset > 0 {
-        clauses.push(format!("OFFSET {offset}"));
-    }
+    // 分页子句统一由方言渲染（PostgreSQL/MySQL/TiDB/SQLite 均 `LIMIT … OFFSET …`）。
+    clauses.push(
+        sql_dialect(db_kind)
+            .render_limit_offset(limit, offset)
+            .trim_start()
+            .to_string(),
+    );
 
     format!(
         "SELECT * FROM {} {}",
-        sql_qualified_object_name(object),
+        sql_qualified_object_name(object, db_kind),
         clauses.join(" ")
     )
 }

@@ -31,6 +31,8 @@ pub enum ErrorKind {
     Query,
     Cancelled,
     Unsupported,
+    /// 拨号/握手/建立连接超时（区别于连接被拒绝等 `Connection` 错误）。
+    Timeout,
     Internal,
 }
 

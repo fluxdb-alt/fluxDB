@@ -12,6 +12,7 @@ fn mock_connections() -> Vec<ConnectionConfig> {
             options: demo_connection_options(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         },
         ConnectionConfig {
             id: ConnectionId(2),
@@ -26,6 +27,7 @@ fn mock_connections() -> Vec<ConnectionConfig> {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         },
     ]
 }
@@ -99,57 +101,42 @@ fn mock_child_objects(parent: Option<&ObjectPath>) -> Vec<ObjectSummary> {
 }
 
 fn test_connection(config: &ConnectionConfig) -> fluxdb_core::Result<()> {
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => MySqlConnector::new().test_connection(config),
-        DatabaseKind::Sqlite => SqliteConnector::new().test_connection(config),
-        DatabaseKind::MongoDb => MockConnector::new(config.kind).test_connection(config),
-        DatabaseKind::Redis => RedisConnector::new().test_connection(config),
-    }
+    connector_for(config)?.test_connection(config)
 }
 
 fn list_objects_for_connection(
     config: &ConnectionConfig,
     path: Option<&ObjectPath>,
 ) -> fluxdb_core::Result<Vec<ObjectSummary>> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind).list_objects(path);
-    }
-
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
-            MySqlConnector::with_config(config.clone()).list_objects(path)
-        }
-        DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).list_objects(path),
-        DatabaseKind::MongoDb => MockConnector::new(config.kind).list_objects(path),
-        DatabaseKind::Redis => RedisConnector::with_config(config.clone()).list_objects(path),
-    }
+    connector_for(config)?.list_objects(path)
 }
 
 fn create_database_for_connection(
     config: &ConnectionConfig,
     request: &CreateDatabaseRequest,
 ) -> fluxdb_core::Result<()> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind).create_database(request);
-    }
+    connector_for(config)?.create_database(request)
+}
 
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
-            MySqlConnector::with_config(config.clone()).create_database(request)
-        }
-        DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).create_database(request),
-        DatabaseKind::MongoDb | DatabaseKind::Redis => {
-            MockConnector::new(config.kind).create_database(request)
-        }
-    }
+fn create_schema_for_connection(
+    config: &ConnectionConfig,
+    connection_id: ConnectionId,
+    database: &str,
+    schema: &str,
+) -> fluxdb_core::Result<()> {
+    connector_for(config)?.create_schema(connection_id, database, schema)
+}
+
+/// 用泛型闭包转发 Connector 上的角色方法，避免为每个动作重复装箱和调用。
+fn role_operation_for_connection<T, F>(
+    config: &ConnectionConfig,
+    operation: F,
+) -> fluxdb_core::Result<T>
+where
+    F: FnOnce(&dyn fluxdb_core::Connector) -> fluxdb_core::Result<T>,
+{
+    let connector = connector_for(config)?;
+    operation(connector.as_ref())
 }
 
 fn delete_database_for_connection(
@@ -157,46 +144,14 @@ fn delete_database_for_connection(
     connection_id: ConnectionId,
     database: &str,
 ) -> fluxdb_core::Result<()> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind).delete_database(connection_id, database);
-    }
-
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
-            MySqlConnector::with_config(config.clone()).delete_database(connection_id, database)
-        }
-        DatabaseKind::Sqlite => {
-            SqliteConnector::with_config(config.clone()).delete_database(connection_id, database)
-        }
-        DatabaseKind::MongoDb | DatabaseKind::Redis => {
-            MockConnector::new(config.kind).delete_database(connection_id, database)
-        }
-    }
+    connector_for(config)?.delete_database(connection_id, database)
 }
 
 fn execute_query_for_connection(
     config: &ConnectionConfig,
     request: &QueryRequest,
 ) -> fluxdb_core::Result<QueryExecutionResult> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind).execute(request);
-    }
-
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
-            MySqlConnector::with_config(config.clone()).execute(request)
-        }
-        DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).execute(request),
-        DatabaseKind::MongoDb | DatabaseKind::Redis => MockConnector::new(config.kind).execute(request),
-    }
+    connector_for(config)?.execute(request)
 }
 
 fn execute_query_for_connection_with_progress(
@@ -205,39 +160,7 @@ fn execute_query_for_connection_with_progress(
     on_summary: &mut dyn FnMut(QueryExecutionSummary),
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<QueryExecutionResult> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind).execute_with_progress(
-            request,
-            on_summary,
-            should_cancel,
-        );
-    }
-
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
-            MySqlConnector::with_config(config.clone()).execute_with_progress(
-                request,
-                on_summary,
-                should_cancel,
-            )
-        }
-        DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).execute_with_progress(
-            request,
-            on_summary,
-            should_cancel,
-        ),
-        DatabaseKind::MongoDb | DatabaseKind::Redis => {
-            MockConnector::new(config.kind).execute_with_progress(
-                request,
-                on_summary,
-                should_cancel,
-            )
-        }
-    }
+    connector_for(config)?.execute_with_progress(request, on_summary, should_cancel)
 }
 
 /// 命令执行器（Workbench）批量分发：按「执行单元 = 单条命令」切分输入文本，
@@ -263,25 +186,8 @@ fn list_completion_tables_for_connection_with_cancel(
     limit: u64,
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<CompletionTable>> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind)
-            .list_completion_tables_with_cancel(database, schema, filter, limit, should_cancel);
-    }
-
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => MySqlConnector::with_config(config.clone())
-            .list_completion_tables_with_cancel(database, schema, filter, limit, should_cancel),
-        DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
-            .list_completion_tables_with_cancel(database, schema, filter, limit, should_cancel),
-        DatabaseKind::MongoDb | DatabaseKind::Redis => {
-            MockConnector::new(config.kind)
-                .list_completion_tables_with_cancel(database, schema, filter, limit, should_cancel)
-        }
-    }
+    connector_for(config)?
+        .list_completion_tables_with_cancel(database, schema, filter, limit, should_cancel)
 }
 
 fn loaded_completion_tables(
@@ -320,6 +226,7 @@ fn loaded_completion_tables(
             schema: object.path.schema.clone(),
             name: object.path.name.clone(),
             kind: object.path.kind,
+            comment: None,
         })
         .collect()
 }
@@ -330,38 +237,72 @@ fn loaded_completion_columns(
     database: Option<&str>,
     table: &str,
 ) -> Vec<CompletionColumn> {
-    state
-        .tabs
-        .iter()
-        .filter_map(|tab| match &tab.kind {
-            TabKind::DataEditor(editor)
-                if editor.object.connection_id == connection_id
-                    && editor.object.name.eq_ignore_ascii_case(table)
-                    && database.is_none_or(|database| {
-                        editor
-                            .object
-                            .database
-                            .as_deref()
-                            .is_some_and(|object_database| {
-                                object_database.eq_ignore_ascii_case(database)
-                            })
-                    }) =>
-            {
-                editor.page.as_ref().map(|page| (editor, page))
+    loaded_completion_columns_in_schema(state, connection_id, database, None, table)
+}
+
+/// 从已打开的数据编辑 tab 复用列元数据（避免重复拉 catalog）。
+///
+/// 匹配优先级：**名称精确**（PG 允许 `"Foo"` 与 `"foo"` 并存，先精确才能取到正确对象）
+/// → 退回忽略大小写（MySQL/SQLite 常见的大小写差异输入）。给了 schema 时必须 schema 一致，
+/// 否则跨 schema 同名表会互相取到对方的列元数据（§8.4）。
+fn loaded_completion_columns_in_schema(
+    state: &AppState,
+    connection_id: ConnectionId,
+    database: Option<&str>,
+    schema: Option<&str>,
+    table: &str,
+) -> Vec<CompletionColumn> {
+    let matches = |editor: &DataEditorState, exact: bool| {
+        editor.object.connection_id == connection_id
+            && if exact {
+                editor.object.name == table
+            } else {
+                editor.object.name.eq_ignore_ascii_case(table)
             }
-            _ => None,
-        })
-        .flat_map(|(editor, page)| {
-            page.columns.iter().map(|column| CompletionColumn {
-                table: editor.object.name.clone(),
-                name: column.name.clone(),
-                type_name: column.type_name.clone(),
-                nullable: column.nullable,
-                primary_key: column.primary_key,
-                comment: column.comment.clone(),
+            && database.is_none_or(|database| {
+                editor
+                    .object
+                    .database
+                    .as_deref()
+                    .is_some_and(|object_database| object_database.eq_ignore_ascii_case(database))
             })
-        })
-        .collect()
+            && schema.is_none_or(|schema| {
+                editor
+                    .object
+                    .schema
+                    .as_deref()
+                    .is_some_and(|object_schema| object_schema == schema)
+            })
+    };
+    let collect = |state: &AppState, exact: bool| -> Vec<CompletionColumn> {
+        state
+            .tabs
+            .iter()
+            .filter_map(|tab| match &tab.kind {
+                TabKind::DataEditor(editor) if matches(editor, exact) => {
+                    editor.page.as_ref().map(|page| (editor, page))
+                }
+                _ => None,
+            })
+            .flat_map(|(editor, page)| {
+                page.columns.iter().map(|column| CompletionColumn {
+                    database: editor.object.database.clone(),
+                    schema: editor.object.schema.clone(),
+                    table: editor.object.name.clone(),
+                    name: column.name.clone(),
+                    type_name: column.type_name.clone(),
+                    nullable: column.nullable,
+                    primary_key: column.primary_key,
+                    comment: column.comment.clone(),
+                })
+            })
+            .collect()
+    };
+    let exact = collect(state, true);
+    if !exact.is_empty() {
+        return exact;
+    }
+    collect(state, false)
 }
 
 fn list_completion_columns_for_connection(
@@ -380,25 +321,8 @@ fn list_completion_columns_for_connection_with_cancel(
     table: &str,
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<fluxdb_core::CompletionColumn>> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind)
-            .list_completion_columns_with_cancel(database, schema, table, should_cancel);
-    }
-
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => MySqlConnector::with_config(config.clone())
-            .list_completion_columns_with_cancel(database, schema, table, should_cancel),
-        DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
-            .list_completion_columns_with_cancel(database, schema, table, should_cancel),
-        DatabaseKind::MongoDb | DatabaseKind::Redis => {
-            MockConnector::new(config.kind)
-                .list_completion_columns_with_cancel(database, schema, table, should_cancel)
-        }
-    }
+    connector_for(config)?
+        .list_completion_columns_with_cancel(database, schema, table, should_cancel)
 }
 
 fn list_completion_columns_for_tables_for_connection_with_cancel(
@@ -408,23 +332,8 @@ fn list_completion_columns_for_tables_for_connection_with_cancel(
     tables: &[String],
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<fluxdb_core::CompletionColumn>> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind)
-            .list_completion_columns_for_tables_with_cancel(database, schema, tables, should_cancel);
-    }
-
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => MySqlConnector::with_config(config.clone())
-            .list_completion_columns_for_tables_with_cancel(database, schema, tables, should_cancel),
-        DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
-            .list_completion_columns_for_tables_with_cancel(database, schema, tables, should_cancel),
-        DatabaseKind::MongoDb | DatabaseKind::Redis => MockConnector::new(config.kind)
-            .list_completion_columns_for_tables_with_cancel(database, schema, tables, should_cancel),
-    }
+    connector_for(config)?
+        .list_completion_columns_for_tables_with_cancel(database, schema, tables, should_cancel)
 }
 
 fn list_completion_routines_for_connection_with_cancel(
@@ -435,23 +344,8 @@ fn list_completion_routines_for_connection_with_cancel(
     limit: u64,
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<fluxdb_core::CompletionRoutine>> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind)
-            .list_completion_routines_with_cancel(database, schema, filter, limit, should_cancel);
-    }
-
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => MySqlConnector::with_config(config.clone())
-            .list_completion_routines_with_cancel(database, schema, filter, limit, should_cancel),
-        DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
-            .list_completion_routines_with_cancel(database, schema, filter, limit, should_cancel),
-        DatabaseKind::MongoDb | DatabaseKind::Redis => MockConnector::new(config.kind)
-            .list_completion_routines_with_cancel(database, schema, filter, limit, should_cancel),
-    }
+    connector_for(config)?
+        .list_completion_routines_with_cancel(database, schema, filter, limit, should_cancel)
 }
 
 fn fk_object_path(
@@ -468,7 +362,7 @@ fn fk_object_path(
     }
 }
 
-/// 拉取某张表的真实外键元数据（P2.13 FK JOIN），按连接类型分发到对应 connector。
+/// 拉取某张表的真实外键元数据（P2.13 FK JOIN）。
 fn list_foreign_keys_for_connection_with_cancel(
     config: &ConnectionConfig,
     database: Option<&str>,
@@ -476,27 +370,8 @@ fn list_foreign_keys_for_connection_with_cancel(
     table: &str,
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<fluxdb_core::ForeignKeyInfo>> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind)
-            .list_foreign_keys_with_cancel(&fk_object_path(database, schema, table), should_cancel);
-    }
-
     let path = fk_object_path(database, schema, table);
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
-            MySqlConnector::with_config(config.clone()).list_foreign_keys_with_cancel(&path, should_cancel)
-        }
-        DatabaseKind::Sqlite => {
-            SqliteConnector::with_config(config.clone()).list_foreign_keys_with_cancel(&path, should_cancel)
-        }
-        DatabaseKind::MongoDb | DatabaseKind::Redis => {
-            MockConnector::new(config.kind).list_foreign_keys_with_cancel(&path, should_cancel)
-        }
-    }
+    connector_for(config)?.list_foreign_keys_with_cancel(&path, should_cancel)
 }
 
 fn list_completion_triggers_for_connection_with_cancel(
@@ -507,23 +382,8 @@ fn list_completion_triggers_for_connection_with_cancel(
     limit: u64,
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<fluxdb_core::CompletionTrigger>> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind)
-            .list_completion_triggers_with_cancel(database, schema, filter, limit, should_cancel);
-    }
-
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => MySqlConnector::with_config(config.clone())
-            .list_completion_triggers_with_cancel(database, schema, filter, limit, should_cancel),
-        DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone())
-            .list_completion_triggers_with_cancel(database, schema, filter, limit, should_cancel),
-        DatabaseKind::MongoDb | DatabaseKind::Redis => MockConnector::new(config.kind)
-            .list_completion_triggers_with_cancel(database, schema, filter, limit, should_cancel),
-    }
+    connector_for(config)?
+        .list_completion_triggers_with_cancel(database, schema, filter, limit, should_cancel)
 }
 
 fn load_data_for_connection(
@@ -533,50 +393,26 @@ fn load_data_for_connection(
     sort: &[SortSpec],
     filters: &[FilterSpec],
 ) -> fluxdb_core::Result<DataPage> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind).load_data(
-            object,
-            pagination.offset,
-            pagination.limit,
-            sort,
-            filters,
-        );
-    }
+    connector_for(config)?.load_data(
+        object,
+        pagination.offset,
+        pagination.limit,
+        sort,
+        filters,
+    )
+}
 
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => MySqlConnector::with_config(config.clone()).load_data(
-            object,
-            pagination.offset,
-            pagination.limit,
-            sort,
-            filters,
-        ),
-        DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).load_data(
-            object,
-            pagination.offset,
-            pagination.limit,
-            sort,
-            filters,
-        ),
-        DatabaseKind::MongoDb => MockConnector::new(config.kind).load_data(
-            object,
-            pagination.offset,
-            pagination.limit,
-            sort,
-            filters,
-        ),
-        DatabaseKind::Redis => RedisConnector::with_config(config.clone()).load_data(
-            object,
-            pagination.offset,
-            pagination.limit,
-            sort,
-            filters,
-        ),
-    }
+/// 一致快照分页导出路由：各后端调用其 `export_pages`（PG 覆写为单 REPEATABLE READ 事务快照，
+/// 其余用默认 load_data 逐页）。供桌面导出驱动接线。
+fn export_pages_for_connection(
+    config: &ConnectionConfig,
+    object: &ObjectPath,
+    sort: &[SortSpec],
+    filters: &[FilterSpec],
+    on_cancel: &dyn Fn() -> bool,
+    on_page: &mut dyn FnMut(DataPage) -> bool,
+) -> fluxdb_core::Result<()> {
+    connector_for(config)?.export_pages(object, sort, filters, on_cancel, on_page)
 }
 
 /// Redis Key 列表元信息懒加载的调度入口：批量补齐给定键名的类型/值/大小/TTL。
@@ -618,47 +454,14 @@ fn preview_data_export_for_connection(
     sort: &[SortSpec],
     filters: &[FilterSpec],
 ) -> fluxdb_core::Result<DataExportPreview> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind).preview_data_export(object, fields, sort, filters);
-    }
-
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
-            MySqlConnector::with_config(config.clone()).preview_data_export(object, fields, sort, filters)
-        }
-        DatabaseKind::Sqlite => {
-            SqliteConnector::with_config(config.clone()).preview_data_export(object, fields, sort, filters)
-        }
-        DatabaseKind::MongoDb | DatabaseKind::Redis => {
-            MockConnector::new(config.kind).preview_data_export(object, fields, sort, filters)
-        }
-    }
+    connector_for(config)?.preview_data_export(object, fields, sort, filters)
 }
 
 fn apply_data_changes_for_connection(
     config: &ConnectionConfig,
     changes: &DataChangeSet,
-) -> fluxdb_core::Result<()> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind).apply_changes(changes);
-    }
-
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
-            MySqlConnector::with_config(config.clone()).apply_changes(changes)
-        }
-        DatabaseKind::Sqlite => SqliteConnector::with_config(config.clone()).apply_changes(changes),
-        DatabaseKind::MongoDb => MockConnector::new(config.kind).apply_changes(changes),
-        DatabaseKind::Redis => RedisConnector::with_config(config.clone()).apply_changes(changes),
-    }
+) -> fluxdb_core::Result<AppliedChangeOutcome> {
+    connector_for(config)?.apply_changes(changes)
 }
 
 fn load_cell_binary_for_connection(
@@ -667,25 +470,7 @@ fn load_cell_binary_for_connection(
     identity: &RowIdentity,
     column: &str,
 ) -> fluxdb_core::Result<Vec<u8>> {
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return MockConnector::new(config.kind).load_cell_binary(object, identity, column);
-    }
-
-    match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
-            MySqlConnector::with_config(config.clone()).load_cell_binary(object, identity, column)
-        }
-        DatabaseKind::Sqlite => {
-            SqliteConnector::with_config(config.clone()).load_cell_binary(object, identity, column)
-        }
-        DatabaseKind::MongoDb | DatabaseKind::Redis => {
-            MockConnector::new(config.kind).load_cell_binary(object, identity, column)
-        }
-    }
+    connector_for(config)?.load_cell_binary(object, identity, column)
 }
 
 fn load_table_info_for_connection(
@@ -697,29 +482,8 @@ fn load_table_info_for_connection(
         return Err(Error::new(ErrorKind::Internal, "字段元数据来自数据页"));
     }
 
-    if config
-        .options
-        .get("demo")
-        .is_some_and(|value| value == "true")
-    {
-        return load_table_info_from_connector(&MockConnector::new(config.kind), object, tab);
-    }
-
-    let result = match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => load_table_info_from_connector(
-            &MySqlConnector::with_config(config.clone()),
-            object,
-            tab,
-        ),
-        DatabaseKind::Sqlite => load_table_info_from_connector(
-            &SqliteConnector::with_config(config.clone()),
-            object,
-            tab,
-        ),
-        DatabaseKind::MongoDb | DatabaseKind::Redis => {
-            load_table_info_from_connector(&MockConnector::new(config.kind), object, tab)
-        }
-    }?;
+    let connector = connector_for(config)?;
+    let result = load_table_info_from_connector(connector.as_ref(), object, tab)?;
 
     Ok(match result {
         TableInfoResult::Ddl(ddl) => {
@@ -727,6 +491,14 @@ fn load_table_info_for_connection(
         }
         result => result,
     })
+}
+
+/// 取表的展示 DDL（PG 用；MySQL/SQLite 走各自方言）。设计器保存前的结构指纹校验用。
+fn table_ddl_for_connection(
+    config: &ConnectionConfig,
+    object: &ObjectPath,
+) -> fluxdb_core::Result<String> {
+    connector_for(config)?.table_ddl(object)
 }
 
 fn load_table_info_from_connector(

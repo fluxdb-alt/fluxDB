@@ -7,7 +7,7 @@
 ![macOS](https://img.shields.io/badge/macOS-supported-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%2F%20Linux%20planned-lightgrey)
 ![UI Framework](https://img.shields.io/badge/UI-GPUI-blue)
-![Databases](https://img.shields.io/badge/Databases-MySQL%20%7C%20SQLite%20%7C%20Redis-green)
+![Databases](https://img.shields.io/badge/Databases-MySQL%20%7C%20PostgreSQL%20%7C%20SQLite%20%7C%20Redis-green)
 
 ## 早期阶段说明
 
@@ -46,11 +46,11 @@ cargo run -p fluxdb-desktop
 
 ## 项目简介
 
-FluxDB 是一个开源的**跨平台数据库管理客户端 / 数据库 GUI 工具**，基于 **Rust + GPUI** 构建的原生桌面应用。内置 **SQL 编辑器**、表结构管理、数据浏览与编辑等一整套能力，通过统一连接器层同时支持 **MySQL、SQLite、Redis**。无论你在找数据库管理工具、SQL 编辑器，还是 Rust 桌面应用参考，FluxDB 都值得一看。
+FluxDB 是一个开源的**跨平台数据库管理客户端 / 数据库 GUI 工具**，基于 **Rust + GPUI** 构建的原生桌面应用。内置 **SQL 编辑器**、表结构管理、数据浏览与编辑等一整套能力，通过统一连接器层同时支持 **MySQL、PostgreSQL、SQLite、Redis**。无论你在找数据库管理工具、SQL 编辑器，还是 Rust 桌面应用参考，FluxDB 都值得一看。
 
 ### 核心能力
 
-- **多数据库连接**：通过统一的连接器层（`fluxdb-connectors`）支持 **MySQL、SQLite、Redis** 三类数据源，一套交互面对三种后端。
+- **多数据库连接**：通过统一的连接器层（`fluxdb-connectors`）支持 **MySQL、PostgreSQL、SQLite、Redis** 四类数据源，一套交互面对四种后端。
 - **SQL 编辑器内核**（`fluxdb-editor-core`）：独立、与业务解耦的通用编辑器，内置语法高亮、代码折叠、Inlay/Block 渲染、BlockMap/DisplayMap 分层文本模型。
 - **智能补全**：关键字/表/列级 SQL 补全，文档面板与语义对齐；
 - **表结构管理**：Schema 浏览、列信息面板、DDL 编辑器、创建表（含外键）、表对象悬浮预览卡。
@@ -76,7 +76,7 @@ FluxDB 是一个开源的**跨平台数据库管理客户端 / 数据库 GUI 工
 apps/fluxdb-desktop          桌面入口（GPUI 应用、内容视图、编辑器组件）
 ├─ crates/fluxdb-app         应用层：查询、补全、表信息、数据编辑、Redis 命令等业务聚合
 ├─ crates/fluxdb-core        核心层：连接、连接器、数据分页、终端、用户/工作台
-├─ crates/fluxdb-connectors  连接器层：common / mock / mysql / sqlite / redis
+├─ crates/fluxdb-connectors  连接器层：common / mock / mysql / postgres / sqlite / redis
 ├─ crates/fluxdb-editor-core 通用编辑器内核（语法、折叠、Inlay/Block、文本模型）
 ├─ crates/fluxdb-editor-language  编辑器语言适配器协议
 └─ crates/fluxdb-storage     存储层
@@ -94,7 +94,7 @@ apps/fluxdb-desktop          桌面入口（GPUI 应用、内容视图、编辑�
 |----|------|
 | 语言 | Rust |
 | UI 框架 | GPUI |
-| 连接器 | MySQL / SQLite / Redis（ioredis 适配） |
+| 连接器 | MySQL / PostgreSQL / SQLite / Redis（ioredis 适配） |
 | 测试 | fluxdb-app / fluxdb-desktop 双测试套件 |
 
 ## 当前阶段完成度
@@ -102,6 +102,7 @@ apps/fluxdb-desktop          桌面入口（GPUI 应用、内容视图、编辑�
 ### 已完成
 
 - **MySQL**：连接管理、SQL 编辑器与补全、表结构浏览与管理（建表/改表/DDL）、数据浏览与编辑回写、SQL 文件执行、数据导出、备份列表。
+- **PostgreSQL**：连接管理、SQL 编辑器与补全、Schema 与对象浏览、表结构管理、数据浏览与编辑回写、用户与角色权限管理、原生客户端工具。
 - **SQLite**：与 MySQL 同套交互的基础能力。
 - **Redis**：连接总览、键值浏览与编辑、工作台、终端内嵌命令。
 
@@ -115,6 +116,7 @@ apps/fluxdb-desktop          桌面入口（GPUI 应用、内容视图、编辑�
 ## 后期规划
 
 - [x] **接入 MySQL**：连接管理、SQL 编辑器与补全、表结构浏览与管理、数据浏览与编辑回写等。
+- [x] **接入 PostgreSQL**：连接管理、Schema 与对象浏览、SQL 编辑器与补全、表结构管理、数据浏览与编辑回写等。
 - [x] **接入 Redis**：连接总览、键值浏览与编辑、工作台、终端内嵌命令。
 - [ ] **设置项真正生效**：部分设置配置尚未真实接入，逐步让各项偏好设置完整生效。
 - [ ] **支持 Windows / Linux 平台**：目前仅支持 macOS，后续补齐 Windows、Linux 的打包与适配。
@@ -154,4 +156,3 @@ FluxDB 采用 [GPL-3.0](./LICENSE) 开源协议。
 ![支付宝](docs/sponsor/alipay.png) | ![微信](docs/sponsor/wechat.png)
 
 > 图片待补充：将二维码分别放到 `docs/sponsor/alipay.png` 与 `docs/sponsor/wechat.png`。
-

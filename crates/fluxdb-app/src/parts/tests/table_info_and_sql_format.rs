@@ -189,6 +189,39 @@
     }
 
     #[test]
+    fn statement_ranges_split_via_dollar_quote_preserves_function_body() {
+        let sql = "CREATE FUNCTION add(a int, b int) RETURNS int AS $$\n\
+                   BEGIN\n\
+                   RETURN a + b;\n\
+                   END;\n\
+                   $$ LANGUAGE plpgsql;\n\
+                   SELECT add(1,2);";
+        let ranges = sql_text_statement_ranges(sql);
+        assert_eq!(ranges.len(), 2, "ranges = {ranges:?}");
+        let first = &sql[ranges[0].clone()];
+        assert!(first.starts_with("CREATE FUNCTION"), "first = {first}");
+        assert!(!first.contains("SELECT add"), "dollar-quote body split: {first}");
+        let second = &sql[ranges[1].clone()];
+        assert!(second.starts_with("SELECT add"), "second = {second}");
+    }
+
+    #[test]
+    fn statement_ranges_split_dollar_quote_with_named_tag_and_params() {
+        let sql = "\
+CREATE FUNCTION f() RETURNS void AS $fn$\n\
+DECLARE x int := 1;\n\
+BEGIN\n\
+  x := x + 1; -- inner semicolon\n\
+END;\n\
+$fn$ LANGUAGE plpgsql;\n\
+SELECT $1, f();";
+        let ranges = sql_text_statement_ranges(sql);
+        assert_eq!(ranges.len(), 2, "ranges = {ranges:?}");
+        assert!(sql[ranges[0].clone()].starts_with("CREATE FUNCTION"));
+        assert!(sql[ranges[1].clone()].starts_with("SELECT $1"));
+    }
+
+    #[test]
     fn format_sql_text_keeps_create_table_suffix_readable() {
         let formatted = format_sql_text_for_dialect(
             "create table users(id int primary key) engine=InnoDB default charset=utf8mb4",
@@ -351,6 +384,8 @@
             DatabaseKind::MySql,
             vec![CompletionColumn {
                 table: "users".to_string(),
+                database: None,
+                schema: None,
                 name: "email".to_string(),
                 type_name: Some("varchar(255)".to_string()),
                 nullable: false,
@@ -358,6 +393,8 @@
                 comment: Some("邮箱".to_string()),
             }, CompletionColumn {
                 table: "users".to_string(),
+                database: None,
+                schema: None,
                 name: "team_id".to_string(),
                 type_name: Some("int".to_string()),
                 nullable: true,
@@ -416,6 +453,8 @@
             vec![
                 CompletionColumn {
                     table: "users".to_string(),
+                    database: None,
+                    schema: None,
                     name: "id".to_string(),
                     type_name: Some("integer".to_string()),
                     nullable: false,
@@ -424,6 +463,8 @@
                 },
                 CompletionColumn {
                     table: "users".to_string(),
+                    database: None,
+                    schema: None,
                     name: "name".to_string(),
                     type_name: Some("text".to_string()),
                     nullable: true,
@@ -480,11 +521,11 @@
     #[test]
     fn rename_table_sql_preview_quotes_for_dialect() {
         assert_eq!(
-            rename_table_sql_preview(DatabaseKind::MySql, "orders", "orders_2026").unwrap(),
+            rename_table_sql_preview(DatabaseKind::MySql, None, "orders", "orders_2026").unwrap(),
             "ALTER TABLE `orders` RENAME TO `orders_2026`;"
         );
         assert_eq!(
-            rename_table_sql_preview(DatabaseKind::Sqlite, "order log", "order log old").unwrap(),
+            rename_table_sql_preview(DatabaseKind::Sqlite, None, "order log", "order log old").unwrap(),
             "ALTER TABLE \"order log\" RENAME TO \"order log old\";"
         );
     }
@@ -492,21 +533,22 @@
     #[test]
     fn copy_table_sql_preview_uses_insert_select_when_copying_data() {
         assert_eq!(
-            copy_table_sql_preview(DatabaseKind::MySql, "orders", "orders_copy", false).unwrap(),
+            copy_table_sql_preview(DatabaseKind::MySql, None, "orders", "orders_copy", false).unwrap(),
             "CREATE TABLE `orders_copy` LIKE `orders`;"
         );
         assert_eq!(
-            copy_table_sql_preview(DatabaseKind::MySql, "orders", "orders_copy", true).unwrap(),
+            copy_table_sql_preview(DatabaseKind::MySql, None, "orders", "orders_copy", true).unwrap(),
             "CREATE TABLE `orders_copy` LIKE `orders`;\nINSERT INTO `orders_copy` SELECT * FROM `orders`;"
         );
         assert_eq!(
-            copy_table_sql_preview(DatabaseKind::Sqlite, "event log", "event log copy", true)
+            copy_table_sql_preview(DatabaseKind::Sqlite, None, "event log", "event log copy", true)
                 .unwrap(),
             "CREATE TABLE \"event log copy\" AS SELECT * FROM \"event log\" WHERE 0;\nINSERT INTO \"event log copy\" SELECT * FROM \"event log\";"
         );
         assert_eq!(
             copy_table_sql_preview_with_source_ddl(
                 DatabaseKind::Sqlite,
+                None,
                 "event log",
                 "event log copy",
                 true,
@@ -524,6 +566,8 @@
         assert_eq!(
             drop_table_sql_preview(
                 DatabaseKind::MySql,
+                ObjectKind::Table,
+                None,
                 "3d_attachment",
                 ForeignKeyCheckMode::Default
             )
@@ -533,7 +577,9 @@
         assert_eq!(
             truncate_table_sql_preview(
                 DatabaseKind::MySql,
+                None,
                 "3d_attachment",
+                false,
                 ForeignKeyCheckMode::Default
             )
             .unwrap(),
@@ -542,7 +588,9 @@
         assert_eq!(
             truncate_table_sql_preview(
                 DatabaseKind::Sqlite,
+                None,
                 "event log",
+                false,
                 ForeignKeyCheckMode::Default
             )
             .unwrap(),
@@ -551,6 +599,8 @@
         assert_eq!(
             drop_table_sql_preview(
                 DatabaseKind::MySql,
+                ObjectKind::Table,
+                None,
                 "3d_attachment",
                 ForeignKeyCheckMode::Disable
             )
@@ -565,6 +615,7 @@
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::AddCreateTableForeignKey(TabId(1)));
         controller.dispatch(AppCommand::SetCreateTableForeignKeyField {

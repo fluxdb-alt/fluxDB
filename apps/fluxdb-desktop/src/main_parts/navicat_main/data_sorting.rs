@@ -169,8 +169,9 @@ impl NavicatMain {
         } else {
             self.data_sort_draft_rules.insert(tab_id, rules.clone());
             self.data_sort_rules.insert(tab_id, rules.clone());
+            let db_kind = self.data_editor_database_kind(tab_id);
             self.data_sort_texts
-                .insert(tab_id, data_sort_rules_text(&rules));
+                .insert(tab_id, data_sort_rules_text(&rules, db_kind));
         }
         self.perform_data_filter_and_sort(tab_id, cx);
     }

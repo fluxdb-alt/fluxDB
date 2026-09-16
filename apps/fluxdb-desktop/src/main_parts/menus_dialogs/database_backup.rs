@@ -24,14 +24,20 @@ impl NavicatMain {
         cx: &mut Context<Self>,
     ) {
         let Some(connection_id) = connection_id
-            .or_else(|| self.current_query_scope().map(|(connection_id, _)| connection_id))
+            .or_else(|| {
+                self.current_query_scope()
+                    .map(|(connection_id, _)| connection_id)
+            })
             .or_else(|| self.first_connection_id())
         else {
             self.show_message("请先创建连接", AppMessageKind::Warning, cx);
             return;
         };
         let database = database
-            .or_else(|| self.current_query_scope().and_then(|(_, database)| database))
+            .or_else(|| {
+                self.current_query_scope()
+                    .and_then(|(_, database)| database)
+            })
             .or_else(|| {
                 self.controller
                     .state()
@@ -65,10 +71,7 @@ impl NavicatMain {
             .unwrap_or_default();
         self.pending_backup_modal = Some(BackupForm {
             connection_id,
-            selected_tables: all_tables
-                .intersection(&preselected)
-                .cloned()
-                .collect(),
+            selected_tables: all_tables.intersection(&preselected).cloned().collect(),
             all_table_names: all_tables,
             all_view_names: all_views,
             database,
@@ -84,7 +87,44 @@ impl NavicatMain {
             include_schema: true,
             include_data: true,
             note: String::new(),
+            pg_include_owner: false,
+            pg_include_acl: false,
         });
+        // 打开即预检 PostgreSQL 客户端：缺工具时在对话框顶部提示，不用等点了备份才报错。
+        // 只查文件存在性（不执行 --version），保证打开对话框不被子进程拖慢。
+        self.backup_pg_client_missing = self
+            .controller
+            .state()
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == connection_id)
+            .is_some_and(|connection| connection.config.kind == DatabaseKind::Postgres)
+            && !fluxdb_app::pg_client_tool_present(
+                &self.controller.state().settings,
+                fluxdb_app::PgClientTool::Dump,
+            );
+        self.backup_mysql_client_missing = self
+            .controller
+            .state()
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == connection_id)
+            .is_some_and(|connection| {
+                matches!(
+                    connection.config.kind,
+                    DatabaseKind::MySql | DatabaseKind::TiDb
+                )
+            })
+            && !fluxdb_app::mysql_client_tool_present(
+                &self.controller.state().settings,
+                fluxdb_app::MySqlClientTool::Dump,
+            );
+        if self.backup_pg_client_missing {
+            tracing::warn!("打开备份对话框时未发现 PostgreSQL 客户端工具");
+        }
+        if self.backup_mysql_client_missing {
+            tracing::warn!("打开备份对话框时未发现 MySQL 客户端工具");
+        }
         self.backup_log_task = None;
         self.backup_file_name_input
             .update(cx, |input, cx| input.set_value(String::new(), window, cx));
@@ -97,7 +137,11 @@ impl NavicatMain {
     }
 
     /// 当前连接+库下所有表名（对象选择页签资源：默认全选）。
-    fn current_backup_tables(&self, connection_id: ConnectionId, database: Option<&str>) -> BTreeSet<String> {
+    fn current_backup_tables(
+        &self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+    ) -> BTreeSet<String> {
         let Some(database) = database else {
             return BTreeSet::new();
         };
@@ -107,17 +151,22 @@ impl NavicatMain {
             .iter()
             .find(|connection| connection.config.id == connection_id)
             .map(|connection| {
-                let names: BTreeSet<String> = group_objects(connection, database, ObjectGroup::Tables)
-                    .into_iter()
-                    .map(|object| object.path.name.clone())
-                    .collect();
+                let names: BTreeSet<String> =
+                    group_objects(connection, database, None, ObjectGroup::Tables)
+                        .into_iter()
+                        .map(|object| object.path.name.clone())
+                        .collect();
                 names
             })
             .unwrap_or_default()
     }
 
     /// 当前连接+库下所有视图名（对象选择页签「视图」分组资源）。
-    fn current_backup_views(&self, connection_id: ConnectionId, database: Option<&str>) -> BTreeSet<String> {
+    fn current_backup_views(
+        &self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+    ) -> BTreeSet<String> {
         let Some(database) = database else {
             return BTreeSet::new();
         };
@@ -127,7 +176,7 @@ impl NavicatMain {
             .iter()
             .find(|connection| connection.config.id == connection_id)
             .map(|connection| {
-                group_objects(connection, database, ObjectGroup::Views)
+                group_objects(connection, database, None, ObjectGroup::Views)
                     .into_iter()
                     .map(|object| object.path.name.clone())
                     .collect()
@@ -147,6 +196,10 @@ impl NavicatMain {
         };
         if form.target_dir.trim().is_empty() {
             self.show_message("请先在设置中配置备份目录", AppMessageKind::Warning, cx);
+            return;
+        }
+        if !form.include_schema && !form.include_data {
+            self.show_message("表结构和数据至少需要包含一项", AppMessageKind::Warning, cx);
             return;
         }
         let task_id = self.create_backup_task(&form);
@@ -197,7 +250,8 @@ impl NavicatMain {
         cx: &mut Context<Self>,
     ) {
         let cancel_flag = Arc::new(AtomicBool::new(false));
-        self._backup_cancel_flags.insert(task_id, cancel_flag.clone());
+        self._backup_cancel_flags
+            .insert(task_id, cancel_flag.clone());
 
         let database = form.database.clone().unwrap_or_default();
         let output_path = backup_output_path(&form);
@@ -255,7 +309,13 @@ impl NavicatMain {
                         view.update(cx, |this, cx| {
                             this._backup_tasks.remove(&task_id);
                             this._backup_cancel_flags.remove(&task_id);
-                            this.backup_finish_on_ui(task_id, result, database.clone(), output_path_finish.clone(), cx);
+                            this.backup_finish_on_ui(
+                                task_id,
+                                result,
+                                database.clone(),
+                                output_path_finish.clone(),
+                                cx,
+                            );
                         });
                     });
                     break;
@@ -379,10 +439,7 @@ impl NavicatMain {
 /// 计算最终备份文件名：配合「使用指定的文件名」门控；否则用默认 `库名_时间戳.sql`（保持旧行为）。
 fn resolve_backup_file_name(form: &BackupForm) -> String {
     let default = {
-        let name = form
-            .database
-            .clone()
-            .unwrap_or_default();
+        let name = form.database.clone().unwrap_or_default();
         let name = safe_data_export_filename_segment(&name);
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
         format!("{name}_{timestamp}.sql")
@@ -483,7 +540,7 @@ fn run_backup(
     let (host, port, user, password) = resolved_credentials(&config);
 
     let settings = controller.state().settings.clone();
-    let mode = match form.mode {
+    let mut mode = match form.mode {
         BackupMode::Native => BackupMode::Native,
         BackupMode::Logic => BackupMode::Logic,
         BackupMode::Auto => {
@@ -494,6 +551,12 @@ fn run_backup(
             }
         }
     };
+    // PostgreSQL 的逻辑备份即原生 pg_dump（本质是 SQL dump，且带准确 schema 范围）；
+    // 显式选「逻辑备份」也归一为原生 pg_dump，避免落入 MySQL 专用的逐表 run_logic_backup
+    // （其 `SET FOREIGN_KEY_CHECKS` 为 MySQL 语法，对 PG 非法）。
+    if config.kind == DatabaseKind::Postgres && mode == BackupMode::Logic {
+        mode = BackupMode::Native;
+    }
     let _ = sender.send(BackupTaskProgress {
         stage: "开始".to_string(),
         message: format!(
@@ -513,11 +576,9 @@ fn run_backup(
         std::fs::create_dir_all(parent)
             .map_err(|err| anyhow::anyhow!("创建备份目录失败: {err}"))?;
     }
-
     match mode {
         BackupMode::Native => match config.kind {
             DatabaseKind::MySql | DatabaseKind::TiDb => run_native_mysqldump(
-                &config,
                 &settings,
                 &host,
                 port,
@@ -529,11 +590,74 @@ fn run_backup(
                 &sender,
                 &form,
             ),
-            DatabaseKind::Sqlite => {
-                run_native_sqlite(&config, &output_path, &cancel_flag, &sender)
-            }
+            DatabaseKind::Sqlite => run_native_sqlite(&config, &output_path, &cancel_flag, &sender),
             DatabaseKind::MongoDb | DatabaseKind::Redis => {
                 anyhow::bail!("当前连接类型不支持原生备份")
+            }
+            DatabaseKind::Postgres => {
+                let ssl_mode = config
+                    .postgres_profile
+                    .as_ref()
+                    .map(|profile| profile.tls.ssl_mode)
+                    .unwrap_or(PostgresSslMode::Prefer);
+                // 工具解析：设置目录 → 应用下载目录 → 系统安装路径 → PATH（见 pg_client_tools）。
+                // 解析不到时直接给带安装引导的错误，而不是等 spawn 失败后抛裸 OS 错误。
+                let server_major = fluxdb_app::pg_server_major_version(&config).ok().flatten();
+                let Some(resolved) = fluxdb_app::resolve_pg_client_tool(
+                    &settings,
+                    fluxdb_app::PgClientTool::Dump,
+                    server_major,
+                ) else {
+                    anyhow::bail!("{}", fluxdb_app::pg_client_install_hint());
+                };
+                // 版本校验：pg_dump 客户端主版本不得低于服务端主版本（PG 禁止更旧客户端备份）。
+                // 工具版本从 `pg_dump --version` 解析；服务端版本经连接器读取；任一未知则放行（不误拦）。
+                let tool_major = resolved.major_version;
+                if !fluxdb_app::pg_dump_version_compatible(tool_major, server_major) {
+                    anyhow::bail!(
+                        "pg_dump 版本过旧：客户端主版本 {} 低于服务端主版本 {}。\
+                         请在「设置 → 数据 → 备份」中下载匹配版本的 PostgreSQL 客户端，\
+                         或指定不低于服务端版本的客户端目录",
+                        tool_major.unwrap_or(0),
+                        server_major.unwrap_or(0)
+                    );
+                }
+                // SSH 隧道（若启用）：起 ssh -N -L 子进程把远端映射到本地端口，工具经
+                // 127.0.0.1:local 拨号（PGHOSTADDR），-h 保持真实远端供 TLS 校验；保持通道至工具结束。
+                let ssh = config
+                    .postgres_profile
+                    .as_ref()
+                    .and_then(|profile| profile.ssh());
+                if let Some(ssh) = ssh {
+                    return run_native_pg_dump_via_ssh(
+                        &resolved.program,
+                        ssh,
+                        &host,
+                        port,
+                        &user,
+                        &password,
+                        ssl_mode,
+                        form.database.as_deref().unwrap_or_default(),
+                        &output_path,
+                        &cancel_flag,
+                        &sender,
+                        &form,
+                    );
+                }
+                run_native_pg_dump(
+                    &resolved.program,
+                    &host,
+                    port,
+                    &user,
+                    &password,
+                    ssl_mode,
+                    form.database.as_deref().unwrap_or_default(),
+                    &output_path,
+                    &cancel_flag,
+                    &sender,
+                    &form,
+                    None,
+                )
             }
         },
         BackupMode::Logic => run_logic_backup(
@@ -550,7 +674,12 @@ fn run_backup(
 }
 
 fn resolved_credentials(config: &ConnectionConfig) -> (String, u16, String, String) {
-    let resolved = config.mysql_resolved();
+    // PG 与 MySQL 凭据分属不同档案/options 键（PG 用 host/maintenance_database/username/password，
+    // MySQL 用 root/剩下扁平键），按连接类型选择对应归一化，避免 PG 拿到 MySQL 默认 root。
+    let resolved = match config.kind {
+        DatabaseKind::Postgres => config.postgres_resolved(),
+        _ => config.mysql_resolved(),
+    };
     let (host, port) = match &resolved.endpoint {
         Endpoint::Tcp { host, port, .. } => (host.clone(), *port),
         Endpoint::SqliteFile { .. } => (String::new(), 0),
@@ -560,7 +689,13 @@ fn resolved_credentials(config: &ConnectionConfig) -> (String, u16, String, Stri
         .options
         .get("username")
         .cloned()
-        .unwrap_or_else(|| "root".to_string());
+        .unwrap_or_else(|| {
+            if config.kind == DatabaseKind::Postgres {
+                String::new()
+            } else {
+                "root".to_string()
+            }
+        });
     let password = resolved
         .options
         .get("password")
@@ -572,11 +707,11 @@ fn resolved_credentials(config: &ConnectionConfig) -> (String, u16, String, Stri
 fn native_tool_available(settings: &Settings, kind: &DatabaseKind) -> bool {
     let tool = match kind {
         DatabaseKind::MySql | DatabaseKind::TiDb => {
-            if !settings.mysqldump_path.trim().is_empty() {
-                &settings.mysqldump_path
-            } else {
-                "mysqldump"
-            }
+            return fluxdb_app::resolve_mysql_client_tool(
+                settings,
+                fluxdb_app::MySqlClientTool::Dump,
+            )
+            .is_some();
         }
         DatabaseKind::Sqlite => {
             if !settings.sqlite3_path.trim().is_empty() {
@@ -584,6 +719,15 @@ fn native_tool_available(settings: &Settings, kind: &DatabaseKind) -> bool {
             } else {
                 "sqlite3"
             }
+        }
+        // PostgreSQL 走统一的客户端解析（含应用下载目录与系统标准安装路径）。
+        DatabaseKind::Postgres => {
+            return fluxdb_app::resolve_pg_client_tool(
+                settings,
+                fluxdb_app::PgClientTool::Dump,
+                None,
+            )
+            .is_some();
         }
         _ => return false,
     };
@@ -610,7 +754,6 @@ fn emit_native_log(
 }
 
 fn run_native_mysqldump(
-    config: &ConnectionConfig,
     settings: &Settings,
     host: &str,
     port: u16,
@@ -625,11 +768,16 @@ fn run_native_mysqldump(
     if database.is_empty() {
         anyhow::bail!("未指定数据库，无法进行原生备份");
     }
-    let tool = if !settings.mysqldump_path.trim().is_empty() {
-        settings.mysqldump_path.as_str()
-    } else {
-        "mysqldump"
+    // 与 DBeaver 一致：mysqldump 会直接截断同名文件，原生备份执行前拒绝覆盖。
+    if output_path.exists() {
+        anyhow::bail!("备份文件已存在，请修改文件名：{}", output_path.display());
+    }
+    let Some(client) =
+        fluxdb_app::resolve_mysql_client_tool(settings, fluxdb_app::MySqlClientTool::Dump)
+    else {
+        anyhow::bail!("{}", fluxdb_app::mysql_client_install_hint());
     };
+    let tool = client.program.display().to_string();
     if cfg!(not(test)) && host.is_empty() {
         anyhow::bail!("MySQL/TiDB 连接缺少主机信息");
     }
@@ -647,8 +795,8 @@ fn run_native_mysqldump(
     // 命中该特征则自动去掉 --routines 重试一次（备份降级为不含存储过程/函数，日志说明原因）。
     let mut stderr_tail = String::new();
     let first = mysqldump_once(
-        config,
-        tool,
+        &tool,
+        &client.version,
         host,
         port,
         user,
@@ -675,8 +823,8 @@ fn run_native_mysqldump(
         )?;
         let mut retry_tail = String::new();
         return mysqldump_once(
-            config,
-            tool,
+            &tool,
+            &client.version,
             host,
             port,
             user,
@@ -696,8 +844,8 @@ fn run_native_mysqldump(
 /// 单次 mysqldump 执行；stderr 尾部回填到 `stderr_tail` 供调用方做兼容性判定。
 #[allow(clippy::too_many_arguments)]
 fn mysqldump_once(
-    config: &ConnectionConfig,
     tool: &str,
+    client_version: &fluxdb_app::MySqlClientVersion,
     host: &str,
     port: u16,
     user: &str,
@@ -710,37 +858,41 @@ fn mysqldump_once(
     with_routines: bool,
     stderr_tail: &mut String,
 ) -> anyhow::Result<()> {
-    let mut cmd = Command::new(tool);
-    cmd.args(["--protocol=tcp", "-h", host, "-P", &port.to_string(), "-u", user]);
-    // 高级选项：仅对 MySQL/TiDB 生效（本分支已限定），不影响 SQLite 等其它类型。
-    if form.single_transaction {
-        cmd.arg("--single-transaction");
-    }
-    if form.lock_tables {
-        cmd.arg("--lock-all-tables");
-    }
-    // 普通账号无 PROCESS 权限时，mysqldump 查询 INNODB_TABLESPACES 会报
-    // "Access denied; you need (at least one of) the PROCESS privilege(s)"；
-    // --no-tablespaces 为客户端 flag（仅跳过该查询），恢复不依赖 tablespace 指令，TiDB 亦兼容。
-    cmd.arg("--triggers").arg("--no-tablespaces");
-    if with_routines {
-        cmd.arg("--routines");
-    }
-    for target in dump_target {
-        cmd.arg(target);
-    }
-    // 密码只走环境变量，避免出现在进程参数列表（ps 泄露）。
-    cmd.env("MYSQL_PWD", password);
-    if let Endpoint::Uri { uri } = &config.endpoint {
-        cmd.arg(format!("--default-auth=")); // 占位避免空 flag 报错；URI 兼容由连接器处理
-        let _ = uri;
+    let database = dump_target.first().map(String::as_str).unwrap_or_default();
+    let tables = dump_target.get(1..).unwrap_or_default();
+    let invocation = fluxdb_app::mysql_dump_invocation(
+        tool,
+        client_version,
+        host,
+        port,
+        user,
+        password,
+        database,
+        tables,
+        fluxdb_app::MySqlDumpOptions {
+            include_schema: form.include_schema,
+            include_data: form.include_data,
+            include_routines: with_routines,
+            single_transaction: form.single_transaction,
+            lock_tables: form.lock_tables,
+        },
+    );
+    let mut cmd = Command::new(&invocation.program);
+    cmd.args(&invocation.args);
+    for (key, value) in &invocation.env {
+        cmd.env(key, value);
     }
 
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| anyhow::anyhow!("启动 mysqldump 失败：{error}"))?;
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "启动 mysqldump 失败：{error}。{}",
+                fluxdb_app::mysql_client_install_hint()
+            )
+        })?;
 
     let output = child.stdout.take().expect("stdout piped");
     let stderr_handle = if let Some(mut stderr) = child.stderr.take() {
@@ -860,6 +1012,152 @@ fn run_native_sqlite(
     Ok(())
 }
 
+/// PostgreSQL 原生备份：调用 pg_dump（plain+inserts 单文件 .sql，可直接用 psql 恢复）。
+///
+/// 密码只经 `PGPASSWORD` 环境变量，不进 argv（避免 `ps` 泄露，设计 §11.2）。表过滤走 `-t`
+/// 透传所选表名（schema 限定时原样下发）；空集合 = 整库。stdout 流式写文件并逐批检测取消。
+#[allow(clippy::too_many_arguments)]
+fn run_native_pg_dump(
+    tool: &str,
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    ssl_mode: PostgresSslMode,
+    database: &str,
+    output_path: &Path,
+    cancel_flag: &Arc<AtomicBool>,
+    sender: &mpsc::Sender<BackupTaskProgress>,
+    form: &BackupForm,
+    // SSH 隧道场景的拨号地址（隧道本地 127.0.0.1）；host 仍为真实远端供 TLS 校验。
+    hostaddr: Option<&str>,
+) -> anyhow::Result<()> {
+    if database.is_empty() {
+        anyhow::bail!("未指定数据库，无法进行原生备份");
+    }
+    // 直接使用预检已验证的路径，直连与 SSH 均不重新选择客户端。
+    if cfg!(not(test)) && host.is_empty() {
+        anyhow::bail!("PostgreSQL 连接缺少主机信息");
+    }
+
+    // 备份范围：结构/数据/完整（复用表单 include_schema/include_data）。
+    let scope = match (form.include_schema, form.include_data) {
+        (true, false) => fluxdb_app::PgDumpScope::SchemaOnly,
+        (false, true) => fluxdb_app::PgDumpScope::DataOnly,
+        _ => fluxdb_app::PgDumpScope::Full,
+    };
+    let tables: Vec<String> = form.selected_tables.iter().cloned().collect();
+    // 参数与凭据/传输由连接器统一构造（可单测）；密码/TLS 只入 env，argv 无凭据、无 shell。
+    let invocation = fluxdb_app::pg_dump_invocation(
+        &tool,
+        host,
+        port,
+        user,
+        database,
+        Some(password),
+        ssl_mode,
+        scope,
+        form.pg_include_owner,
+        form.pg_include_acl,
+        &tables,
+    );
+    let mut cmd = Command::new(&invocation.program);
+    cmd.args(&invocation.args);
+    for (key, value) in &invocation.env {
+        cmd.env(key, value);
+    }
+    // SSH 隧道：host 保持真实远端（TLS 校验用），PGHOSTADDR 指向隧道本地地址实际拨号。
+    if let Some(addr) = hostaddr {
+        for (key, value) in fluxdb_app::pg_hostaddr_env(addr, port) {
+            cmd.env(key, value);
+        }
+    }
+
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "启动 pg_dump 失败：{error}。{}",
+                fluxdb_app::pg_client_install_hint()
+            )
+        })?;
+
+    let output = child.stdout.take().expect("stdout piped");
+    // stderr 尾部收集（pg_dump 的错误/提示，如 connection 相关）。
+    let stderr_handle = if let Some(mut stderr) = child.stderr.take() {
+        emit_native_log(sender, "转储", "pg_dump 已启动，正在导出数据…")?;
+        Some(std::thread::spawn(move || {
+            let mut buffer = [0u8; 8192];
+            let mut tail = Vec::new();
+            while let Ok(n) = std::io::Read::read(&mut stderr, &mut buffer) {
+                if n == 0 {
+                    break;
+                }
+                tail.extend_from_slice(&buffer[..n]);
+                if tail.len() > 8192 {
+                    let overflow = tail.len() - 8192;
+                    tail.drain(..overflow);
+                }
+            }
+            String::from_utf8_lossy(&tail).trim().to_string()
+        }))
+    } else {
+        emit_native_log(sender, "转储", "pg_dump 已启动，正在导出数据…")?;
+        None
+    };
+
+    // 复制 stdout 到备份文件，同时每批检测取消请求并 kill。
+    let mut out_writer = BufWriter::new(fs::File::create(output_path)?);
+    let mut buffer = [0u8; 64 * 1024];
+    let mut written: u64 = 0;
+    let mut stdout_io = std::io::BufReader::new(output);
+    loop {
+        if cancel_flag.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            // 清理取消产生的半成品备份，避免残留部分 dump 被误当成功备份。
+            let _ = fs::remove_file(output_path);
+            anyhow::bail!("已取消");
+        }
+        let n = std::io::Read::read(&mut stdout_io, &mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        out_writer.write_all(&buffer[..n])?;
+        written += n as u64;
+    }
+    out_writer.flush()?;
+
+    let status = child.wait()?;
+    let stderr_tail = if let Some(handle) = stderr_handle {
+        handle.join().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    if let Some(code) = status.code()
+        && code != 0
+    {
+        if !stderr_tail.is_empty() {
+            let _ = sender.send(BackupTaskProgress {
+                stage: "转储".to_string(),
+                message: format!("pg_dump: {stderr_tail}"),
+                success: false,
+            });
+        }
+        // 失败也清理半成品输出，避免留下残缺备份被扫描为「历史备份」。
+        let _ = fs::remove_file(output_path);
+        anyhow::bail!("pg_dump 退出码 {code}");
+    }
+    emit_native_log(
+        sender,
+        "完成",
+        format!("原生备份完成，共写入 {} 字节", written),
+    )?;
+    Ok(())
+}
+
 fn run_logic_backup(
     controller: &AppController,
     config: &ConnectionConfig,
@@ -895,7 +1193,11 @@ fn run_logic_backup(
 
     let mut writer = BufWriter::new(fs::File::create(output_path)?);
     writeln!(writer, "-- fluxDB 逻辑备份：{database}")?;
-    writeln!(writer, "-- 生成时间：{}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))?;
+    writeln!(
+        writer,
+        "-- 生成时间：{}",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    )?;
     writeln!(writer, "SET FOREIGN_KEY_CHECKS = 0;")?;
     writeln!(writer)?;
 
@@ -953,7 +1255,7 @@ fn run_logic_backup(
                     break;
                 }
             };
-            let written_rows = write_page_rows(&mut writer, &object.path, &page)?;
+            let written_rows = write_page_rows(&mut writer, &object.path, &page, config.kind)?;
             if written_rows > 0 {
                 let _ = sender.send(BackupTaskProgress {
                     stage: "数据".to_string(),
@@ -992,6 +1294,7 @@ fn write_page_rows<W: Write>(
     writer: &mut W,
     object: &ObjectPath,
     page: &fluxdb_core::DataPage,
+    db_kind: DatabaseKind,
 ) -> io::Result<u64> {
     let indexes = page
         .columns
@@ -1015,11 +1318,19 @@ fn write_page_rows<W: Write>(
                         .unwrap_or_else(|| "unknown".to_string()),
                     primary_key: column.primary_key,
                     comment: column.comment.clone(),
-                    value: row.values.get(*source_index).cloned().unwrap_or(CellValue::Null),
+                    value: row
+                        .values
+                        .get(*source_index)
+                        .cloned()
+                        .unwrap_or(CellValue::Null),
                 }
             })
             .collect::<Vec<_>>();
-        writeln!(writer, "{}", row_insert_sql(object, fields.as_slice(), false))?;
+        writeln!(
+            writer,
+            "{}",
+            row_insert_sql(object, fields.as_slice(), false, db_kind)
+        )?;
         written += 1;
     }
     Ok(written)
@@ -1032,7 +1343,12 @@ fn backup_statusbar_area(
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let Some(task) = tasks.iter().rev().find(|task| task.running()).or_else(|| tasks.last()) else {
+    let Some(task) = tasks
+        .iter()
+        .rev()
+        .find(|task| task.running())
+        .or_else(|| tasks.last())
+    else {
         return div().w(px(200.));
     };
     let running_count = tasks.iter().filter(|task| task.running()).count();
@@ -1082,9 +1398,17 @@ fn backup_statusbar_area(
                     }),
                 )
                 .child(app_icon(
-                    if task.running() { AppIcon::Play } else { AppIcon::Database },
+                    if task.running() {
+                        AppIcon::Play
+                    } else {
+                        AppIcon::Database
+                    },
                     13.,
-                    if has_error { rgb(0xd64545) } else { rgb(0x1687ff) },
+                    if has_error {
+                        rgb(0xd64545)
+                    } else {
+                        rgb(0x1687ff)
+                    },
                 ))
                 .child(
                     div()
@@ -1098,4 +1422,150 @@ fn backup_statusbar_area(
                         .child(label),
                 ),
         )
+}
+
+/// 经 SSH 隧道做 PG 原生备份：起 `ssh -N -L` 子进程 → 等隧道就绪 → pg_dump 经 127.0.0.1:local
+/// （PGHOSTADDR）拨号、`-h` 保持真实远端供 TLS 校验 → 结束/失败/取消时终止并回收隧道进程。
+#[allow(clippy::too_many_arguments)]
+fn run_native_pg_dump_via_ssh(
+    tool: &str,
+    ssh: &fluxdb_core::PostgresSshOptions,
+    remote_host: &str,
+    remote_port: u16,
+    user: &str,
+    password: &str,
+    ssl_mode: PostgresSslMode,
+    database: &str,
+    output_path: &Path,
+    cancel_flag: &Arc<AtomicBool>,
+    sender: &mpsc::Sender<BackupTaskProgress>,
+    form: &BackupForm,
+) -> anyhow::Result<()> {
+    emit_native_log(sender, "隧道", format!("正在经 SSH {} 建立隧道", ssh.host))?;
+    let (mut tunnel_child, local_port) =
+        pg_start_ssh_tunnel(ssh, remote_host, remote_port, cancel_flag)?;
+
+    let result = run_native_pg_dump(
+        tool,
+        remote_host,
+        local_port,
+        user,
+        password,
+        ssl_mode,
+        database,
+        output_path,
+        cancel_flag,
+        sender,
+        form,
+        Some("127.0.0.1"),
+    );
+
+    // 无论成败都终止并回收隧道进程（子进程生命周期与工具一致：工具结束即关闭隧道）。
+    let _ = tunnel_child.kill();
+    let _ = tunnel_child.wait();
+    result
+}
+
+/// 由 SSH 档案选项映射连接器隧道认证方式（私钥优先，其次密码，再次 agent）。
+fn pg_ssh_auth_from_options(ssh: &fluxdb_core::PostgresSshOptions) -> fluxdb_app::SshTunnelAuth {
+    let key_path = ssh.private_key.value().unwrap_or_default();
+    if !key_path.trim().is_empty() {
+        fluxdb_app::SshTunnelAuth::Key {
+            private_key_path: key_path.to_string(),
+        }
+    } else if !ssh.password.value().unwrap_or_default().is_empty() {
+        fluxdb_app::SshTunnelAuth::Password
+    } else {
+        fluxdb_app::SshTunnelAuth::Agent
+    }
+}
+
+/// 选一个本地空闲端口（绑定 127.0.0.1:0 取系统分配端口后释放，供 ssh -L 使用）。
+fn pg_pick_free_local_port() -> anyhow::Result<u16> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|error| anyhow::anyhow!("无法分配本地端口：{error}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| anyhow::anyhow!("读取本地端口失败：{error}"))?
+        .port();
+    drop(listener);
+    Ok(port)
+}
+
+/// 等 SSH 隧道就绪：轮询连接 127.0.0.1:local_port，直到成功或超时/取消/隧道进程退出。
+fn pg_wait_tunnel_ready(
+    local_port: u16,
+    tunnel_child: &mut std::process::Child,
+    cancel_flag: &Arc<AtomicBool>,
+    timeout_ms: u64,
+) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+    while std::time::Instant::now() < deadline {
+        if cancel_flag.load(Ordering::Relaxed) {
+            return false;
+        }
+        if let Ok(Some(_)) = tunnel_child.try_wait() {
+            return false; // 隧道进程已退出（建连失败）
+        }
+        if std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], local_port)),
+            Duration::from_millis(300),
+        )
+        .is_ok()
+        {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    false
+}
+
+/// 建立 SSH 隧道子进程（供 pg_dump/psql 复用）：选空闲端口 → `ssh -N -L`（密码认证经 sshpass -e）
+/// → 等就绪。返回 (隧道子进程, 本地端口)；调用方负责在工具结束后 kill+wait 回收。
+pub fn pg_start_ssh_tunnel(
+    ssh: &fluxdb_core::PostgresSshOptions,
+    remote_host: &str,
+    remote_port: u16,
+    cancel_flag: &Arc<AtomicBool>,
+) -> anyhow::Result<(std::process::Child, u16)> {
+    let local_port = pg_pick_free_local_port()?;
+    let auth = pg_ssh_auth_from_options(ssh);
+    let tunnel = fluxdb_app::pg_ssh_tunnel_invocation(
+        &ssh.host,
+        ssh.port,
+        &ssh.username,
+        &auth,
+        remote_host,
+        remote_port,
+        local_port,
+        ssh.keepalive_interval_secs,
+    );
+    let password_auth = matches!(auth, fluxdb_app::SshTunnelAuth::Password);
+    let mut tunnel_cmd = if password_auth {
+        Command::new("sshpass")
+    } else {
+        Command::new(&tunnel.program)
+    };
+    if password_auth {
+        tunnel_cmd.arg("-e").arg(&tunnel.program);
+    }
+    tunnel_cmd.args(&tunnel.args);
+    if password_auth {
+        let pass = ssh.password.value().unwrap_or_default();
+        if !pass.is_empty() {
+            tunnel_cmd.env("SSHPASS", pass);
+        }
+    }
+    let mut child = tunnel_cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| anyhow::anyhow!("启动 ssh 隧道失败：{error}"))?;
+    if !pg_wait_tunnel_ready(local_port, &mut child, cancel_flag, 8000) {
+        let _ = child.kill();
+        let _ = child.wait();
+        anyhow::bail!("SSH 隧道建立失败或超时");
+    }
+    Ok((child, local_port))
 }

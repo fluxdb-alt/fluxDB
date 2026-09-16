@@ -14,17 +14,6 @@ fn should_clear_completion_cache(command: &AppCommand) -> bool {
             | AppCommand::OpenConnection(_)
             | AppCommand::DisconnectConnection(_)
             | AppCommand::DeleteConnection(_)
-            | AppCommand::LoadObjectChildren(_)
-            | AppCommand::RefreshObject(_)
-            | AppCommand::RefreshConnectionTree
-            | AppCommand::ApplyCreateTable(_)
-            | AppCommand::RenameTable { .. }
-            | AppCommand::CopyTable { .. }
-            | AppCommand::DropTable { .. }
-            | AppCommand::TruncateTable { .. }
-            | AppCommand::ExecuteQuery(_)
-            | AppCommand::ExecuteQueryText { .. }
-            | AppCommand::ExecuteQueryTextWithOptions { .. }
     )
 }
 
@@ -35,6 +24,7 @@ fn edit_data_cell(
     value: CellValue,
 ) -> fluxdb_core::Result<()> {
     let insert_index = inserted_row_change_index(editor, row);
+    let identity = if insert_index.is_none() { Some(original_editor_row_identity(editor, row)?) } else { None };
     let page = editor
         .page
         .as_mut()
@@ -44,7 +34,7 @@ fn edit_data_cell(
         .get(column)
         .map(|column| column.name.clone())
         .ok_or_else(|| Error::new(ErrorKind::Internal, "列不存在"))?;
-    let identity = row_identity(page, row)?;
+
     let original_value = editor
         .original_page
         .as_ref()
@@ -72,6 +62,7 @@ fn edit_data_cell(
         return Ok(());
     }
 
+    let identity = identity.ok_or_else(|| Error::new(ErrorKind::Internal, "原始行身份缺失"))?;
     if original_value.as_ref() == Some(&value) {
         if let Some(changes) = editor.changes.as_mut() {
             remove_cell_update(changes, &identity, &column_name);
@@ -86,6 +77,7 @@ fn edit_data_cell(
                 inserts: Vec::new(),
                 updates: Vec::new(),
                 deletes: Vec::new(),
+                insert_intents: None,
             }),
             identity,
             column_name,
@@ -300,6 +292,7 @@ fn insert_data_row(
             inserts: Vec::new(),
             updates: Vec::new(),
             deletes: Vec::new(),
+            insert_intents: None,
         })
         .inserts
         .push(row);
@@ -350,6 +343,7 @@ fn clone_data_row(
             inserts: Vec::new(),
             updates: Vec::new(),
             deletes: Vec::new(),
+            insert_intents: None,
         })
         .inserts
         .push(cloned);
@@ -391,11 +385,11 @@ fn page_contains_identity(page: &DataPage, identity: &RowIdentity) -> bool {
 }
 
 fn delete_data_row(editor: &mut DataEditorState, row: usize) -> fluxdb_core::Result<()> {
+    let identity = original_editor_row_identity(editor, row)?;
     let page = editor
         .page
         .as_mut()
         .ok_or_else(|| Error::new(ErrorKind::Internal, "数据页未加载"))?;
-    let identity = row_identity(page, row)?;
     page.rows
         .get(row)
         .ok_or_else(|| Error::new(ErrorKind::Internal, "行不存在"))?;
@@ -405,6 +399,7 @@ fn delete_data_row(editor: &mut DataEditorState, row: usize) -> fluxdb_core::Res
         inserts: Vec::new(),
         updates: Vec::new(),
         deletes: Vec::new(),
+        insert_intents: None,
     });
     changes.updates.retain(|update| update.identity != identity);
     if !changes.deletes.contains(&identity) {
@@ -552,11 +547,14 @@ fn row_identity(page: &DataPage, row_index: usize) -> fluxdb_core::Result<RowIde
         }
     }
 
-    if values.is_empty()
-        && let Some(column) = page.columns.first()
-        && let Some(value) = row.values.first()
-    {
-        values.insert(column.name.clone(), value.clone());
+    if values.is_empty() {
+        // 无主键时保留完整原始值，不能用第一列冒充唯一身份。
+        for (column, value) in page.columns.iter().zip(&row.values) {
+            if matches!(value, CellValue::BinarySummary(_)) {
+                return Err(Error::new(ErrorKind::Unsupported, "无唯一键且包含二进制摘要，无法可靠定位原始行"));
+            }
+            values.insert(column.name.clone(), value.clone());
+        }
     }
 
     if values.is_empty() {
@@ -600,4 +598,53 @@ fn remove_cell_update(changes: &mut DataChangeSet, identity: &RowIdentity, colum
         update.cells.retain(|cell| cell.column != column);
     }
     changes.updates.retain(|update| !update.cells.is_empty());
+}
+
+/// 根据已有草稿还原显示行对应的原始身份；改主键或连续改无键行也不能换成新值定位。
+fn original_editor_row_identity(editor: &DataEditorState, row: usize) -> fluxdb_core::Result<RowIdentity> {
+    let page = editor.page.as_ref().ok_or_else(|| Error::new(ErrorKind::Internal, "数据页未加载"))?;
+    let current = page.rows.get(row).ok_or_else(|| Error::new(ErrorKind::Internal, "行不存在"))?;
+    let original = editor.original_page.as_ref().unwrap_or(page);
+    // 会话内运行时追加列（如单元格 BLOB 详情列）会使 original 与当前页列结构不同，
+    // 整行相等比较失去列对齐前提（expected 比 current 少列）——此时退回按主键/首列身份定位，
+    // 主键行的防漂移保护（草稿态不换新值）不受影响，无键行整行比较原语义不变。
+    let columns_differ =
+        original.columns.len() != page.columns.len()
+            || original.columns.iter().any(|col| !page.columns.contains(col));
+    if columns_differ {
+        for (index, _) in original.rows.iter().enumerate() {
+            let identity = row_identity(original, index)?;
+            if page_contains_identity(page, &identity) {
+                return Ok(identity);
+            }
+        }
+        return Err(Error::new(ErrorKind::Query, "无法匹配原始行，请刷新后重试"));
+    }
+    for (index, original_row) in original.rows.iter().enumerate() {
+        let identity = row_identity(original, index)?;
+        let mut expected = original_row.clone();
+        if let Some(update) = editor.changes.as_ref().and_then(|c| c.updates.iter().find(|u| u.identity == identity)) {
+            for cell in &update.cells {
+                if let Some(column) = original.columns.iter().position(|col| col.name == cell.column) {
+                    expected.values[column] = cell.value.clone();
+                }
+            }
+        }
+        if &expected == current { return Ok(identity); }
+    }
+    Err(Error::new(ErrorKind::Query, "无法匹配原始行，请刷新后重试"))
+}
+
+/// PG 更新/删除带上读取时的原值，服务端可检测同主键行的并发修改。
+fn postgres_changes_with_original_values(changes: &DataChangeSet, page: &DataPage) -> fluxdb_core::Result<DataChangeSet> {
+    let mut changes = changes.clone();
+    for identity in changes.updates.iter_mut().map(|u| &mut u.identity).chain(changes.deletes.iter_mut()) {
+        let candidates = page.rows.iter().filter(|row| identity.values.iter().all(|(name, value)|
+            page.columns.iter().position(|col| &col.name == name).and_then(|index| row.values.get(index)) == Some(value))).collect::<Vec<_>>();
+        if candidates.len() != 1 { return Err(Error::new(ErrorKind::Query, "原始行身份不唯一，已取消提交")); }
+        for (col, value) in page.columns.iter().zip(&candidates[0].values) {
+            if !matches!(value, CellValue::BinarySummary(_)) { identity.values.insert(col.name.clone(), value.clone()); }
+        }
+    }
+    Ok(changes)
 }

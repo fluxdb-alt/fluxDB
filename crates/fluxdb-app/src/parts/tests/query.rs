@@ -43,11 +43,13 @@
             vec![
                 ReferencedTable {
                     database: Some("sales".to_string()),
+                    schema: None,
                     name: "orders".to_string(),
                     alias: Some("o".to_string()),
                 },
                 ReferencedTable {
                     database: None,
+                    schema: None,
                     name: "customers".to_string(),
                     alias: Some("c".to_string()),
                 },
@@ -57,6 +59,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "customers".to_string(),
                 alias: Some("c".to_string()),
             }]
@@ -133,15 +136,27 @@
         let default_sql = "select * from ";
         let default = sql_completion_context(default_sql, default_sql.len(), DatabaseKind::MySql);
         assert_eq!(
-            completion_namespace_scope(&default, Some("main")),
+            completion_namespace_scope(&default, Some("main"), DatabaseKind::MySql),
             (Some("main".to_string()), None)
         );
 
         let qualified_sql = "select * from sales.public.";
         let qualified = sql_completion_context(qualified_sql, qualified_sql.len(), DatabaseKind::MySql);
         assert_eq!(
-            completion_namespace_scope(&qualified, Some("main")),
+            completion_namespace_scope(&qualified, Some("main"), DatabaseKind::MySql),
             (Some("sales".to_string()), Some("public".to_string()))
+        );
+
+        let postgres_sql = "select * from tenant_b.";
+        let postgres =
+            sql_completion_context(postgres_sql, postgres_sql.len(), DatabaseKind::Postgres);
+        assert_eq!(
+            completion_namespace_scope(
+                &postgres,
+                Some("fluxdb_manual"),
+                DatabaseKind::Postgres,
+            ),
+            (Some("fluxdb_manual".to_string()), Some("tenant_b".to_string()))
         );
     }
 
@@ -166,6 +181,337 @@
         assert_eq!(items.len(), 2);
         assert!(items.iter().any(|item| item.label == "public"));
         assert!(items.iter().any(|item| item.label == "hr"));
+    }
+
+    #[test]
+    fn postgres_schema_completion_merges_loaded_schema_nodes_with_partial_index() {
+        let mut controller = AppController::with_mock_data();
+        controller.state.connections[0].config.kind = DatabaseKind::Postgres;
+        controller.state.connections[0].objects.extend(
+            ["tenant_a", "tenant_b"].into_iter().map(|name| ObjectSummary {
+                path: ObjectPath {
+                    connection_id: ConnectionId(1),
+                    database: Some("fluxdb_manual".to_string()),
+                    schema: None,
+                    name: name.to_string(),
+                    kind: ObjectKind::Schema,
+                },
+                rows: None,
+                modified_at: None,
+                comment: None,
+            }),
+        );
+        controller.state.connections[0].objects.push(ObjectSummary {
+            path: ObjectPath {
+                connection_id: ConnectionId(1),
+                database: Some("other_database".to_string()),
+                schema: None,
+                name: "tenant_other".to_string(),
+                kind: ObjectKind::Schema,
+            },
+            rows: None,
+            modified_at: None,
+            comment: None,
+        });
+        controller.completion_index.lock().unwrap().insert_tables(
+            ConnectionId(1),
+            Some("fluxdb_manual"),
+            None,
+            vec![CompletionTable {
+                database: Some("fluxdb_manual".to_string()),
+                schema: Some("public".to_string()),
+                name: "existing_table".to_string(),
+                kind: ObjectKind::Table,
+                comment: None,
+            }],
+            DatabaseKind::Postgres,
+        );
+
+        let config = controller.state.connections[0].config.clone();
+        let schemas = controller
+            .completion_schemas(&config, ConnectionId(1), Some("fluxdb_manual"))
+            .unwrap();
+        assert!(schemas.iter().any(|(_, schema)| schema.as_deref() == Some("public")));
+        assert!(
+            schemas
+                .iter()
+                .all(|(_, schema)| schema.as_deref() != Some("tenant_other"))
+        );
+        let items = schema_completion_items(schemas, "tenant_");
+
+        assert_eq!(
+            items.iter().map(|item| item.label.as_str()).collect::<Vec<_>>(),
+            vec!["tenant_a", "tenant_b"]
+        );
+        assert!(items.iter().all(|item| item.kind == QueryCompletionKind::Schema));
+    }
+
+    #[test]
+    fn postgres_schema_qualified_from_completion_only_returns_that_schema_tables() {
+        let mut controller = AppController::with_mock_data();
+        controller.state.connections[0].config.kind = DatabaseKind::Postgres;
+        let mut index = controller.completion_index.lock().unwrap();
+        for (schema, table) in [("tenant_b", "orders"), ("public", "OrderItems")] {
+            index.insert_tables(
+                ConnectionId(1),
+                Some("fluxdb_manual"),
+                Some(schema),
+                vec![CompletionTable {
+                    database: Some("fluxdb_manual".to_string()),
+                    schema: Some(schema.to_string()),
+                    name: table.to_string(),
+                    kind: ObjectKind::Table,
+                    comment: None,
+                }],
+                DatabaseKind::Postgres,
+            );
+        }
+        drop(index);
+
+        let sql = "SELECT * FROM tenant_b.or";
+        let result = controller
+            .query_completions_for_text(
+                ConnectionId(1),
+                Some("fluxdb_manual".to_string()),
+                None,
+                sql.to_string(),
+                sql.len(),
+                false,
+            )
+            .unwrap();
+
+        assert!(result.items.iter().any(|item| {
+            item.kind == QueryCompletionKind::Table && item.label == "orders"
+        }));
+        assert!(result.items.iter().all(|item| item.label != "OrderItems"));
+
+        // 候选必须携带作用域 schema：它等于索引桶键，详情据此按 (库, schema, 表) 取列。
+        let orders = result
+            .items
+            .iter()
+            .find(|item| item.kind == QueryCompletionKind::Table && item.label == "orders")
+            .expect("tenant_b.orders 候选");
+        assert_eq!(orders.schema.as_deref(), Some("tenant_b"));
+    }
+
+    #[test]
+    fn postgres_schema_qualified_table_returns_columns_in_select_list() {
+        let mut controller = AppController::with_mock_data();
+        controller.state.connections[0].config.kind = DatabaseKind::Postgres;
+        controller.completion_index.lock().unwrap().replace_table_columns(
+            ConnectionId(1),
+            Some("fluxdb_manual"),
+            Some("tenant_a"),
+            "orders",
+            vec![CompletionColumn {
+                database: Some("fluxdb_manual".to_string()),
+                schema: Some("tenant_a".to_string()),
+                table: "orders".to_string(),
+                name: "amount".to_string(),
+                type_name: Some("numeric(10,2)".to_string()),
+                nullable: true,
+                primary_key: false,
+                comment: None,
+            }],
+            DatabaseKind::Postgres,
+        );
+
+        let sql = "SELECT am FROM tenant_a.orders";
+        let result = controller
+            .query_completions_for_text(
+                ConnectionId(1),
+                Some("fluxdb_manual".to_string()),
+                None,
+                sql.to_string(),
+                "SELECT am".len(),
+                false,
+            )
+            .unwrap();
+
+        assert!(result.items.iter().any(|item| {
+            item.kind == QueryCompletionKind::Column && item.label == "amount"
+        }));
+    }
+
+    /// 详情面板按候选携带的 schema 身份查列：schema 限定下的表（不在 search_path、
+    /// 列只按 `(库, schema, 表)` 索引）也能解析出列清单，而不是报「对象不在索引」。
+    #[test]
+    fn table_documentation_resolves_by_candidate_schema_identity() {
+        let mut controller = AppController::with_mock_data();
+        controller.state.connections[0].config.kind = DatabaseKind::Postgres;
+        {
+            let mut index = controller.completion_index.lock().unwrap();
+            index.insert_tables(
+                ConnectionId(1),
+                Some("fluxdb_manual"),
+                Some("tenant_a"),
+                vec![CompletionTable {
+                    database: Some("fluxdb_manual".to_string()),
+                    schema: Some("tenant_a".to_string()),
+                    name: "orders".to_string(),
+                    kind: ObjectKind::Table,
+                    comment: None,
+                }],
+                DatabaseKind::Postgres,
+            );
+            index.replace_table_columns(
+                ConnectionId(1),
+                Some("fluxdb_manual"),
+                Some("tenant_a"),
+                "orders",
+                vec![CompletionColumn {
+                    database: Some("fluxdb_manual".to_string()),
+                    schema: Some("tenant_a".to_string()),
+                    table: "orders".to_string(),
+                    name: "amount".to_string(),
+                    type_name: Some("numeric(10,2)".to_string()),
+                    nullable: true,
+                    primary_key: false,
+                    comment: Some("金额".to_string()),
+                }],
+                DatabaseKind::Postgres,
+            );
+        }
+
+        let sql = "SELECT * FROM tenant_a.order";
+        let result = controller
+            .query_completions_for_text(
+                ConnectionId(1),
+                Some("fluxdb_manual".to_string()),
+                None,
+                sql.to_string(),
+                sql.len(),
+                false,
+            )
+            .unwrap();
+        let orders = result
+            .items
+            .iter()
+            .find(|item| item.kind == QueryCompletionKind::Table && item.label == "orders")
+            .expect("tenant_a.orders 候选");
+
+        // 带身份查询 → 命中 tenant_a 的列。
+        match controller.completion_item_documentation(
+            ConnectionId(1),
+            Some("fluxdb_manual"),
+            orders.schema.as_deref(),
+            orders,
+            &|| false,
+        ) {
+            CompletionDocumentationState::Ready(text) => {
+                assert!(text.contains("amount"), "应含列 amount: {text}");
+                assert!(text.contains("numeric(10,2)"), "应含类型: {text}");
+                assert!(text.contains("金额"), "应含列注释: {text}");
+            }
+            other => panic!("按身份查询应解析为 Ready, got {other:?}"),
+        }
+
+        // 反证：schema 身份丢失（None）时查不到该表的列（索引按 (库, schema, 表) 存），
+        // 说明身份必须从候选一路带到详情请求。
+        match controller.completion_item_documentation(
+            ConnectionId(1),
+            Some("fluxdb_manual"),
+            None,
+            orders,
+            &|| false,
+        ) {
+            CompletionDocumentationState::Ready(text) => {
+                assert!(!text.contains("amount"), "无身份不应命中 tenant_a 的列: {text}");
+            }
+            CompletionDocumentationState::Error(_) => {}
+            other => panic!("无身份时不应产出 tenant_a 的列清单, got {other:?}"),
+        }
+    }
+
+    /// 内存索引被清空（执行查询 / 刷新对象树等命令会整体清空）后，详情仍先读盘上快照：
+    /// 快照里的列能直接解析出来，不必重新建连取数。
+    /// 内存索引被清空（执行查询 / 刷新对象树等命令会整体清空）后，详情仍先读盘上快照：
+    /// 快照里独有的列能直接解析出来，不必重新建连取数。
+    #[test]
+    fn table_documentation_falls_back_to_persisted_snapshot() {
+        let storage_root = temp_sqlite_path("completion-doc-storage").with_extension("cache");
+        let storage = fluxdb_storage::FileStorage::new(storage_root);
+        let mut controller = AppController::with_mock_data();
+        controller.set_completion_index_storage(storage.clone());
+        let config = controller.state.connections[0].config.clone();
+        let now = unix_timestamp_secs();
+
+        // 盘上放一份「只有快照里有」的列（mock 连接器不会返回 snapshot_only）。
+        let snapshot = fluxdb_core::CompletionIndexSnapshot {
+            connection_id: ConnectionId(1),
+            database: Some("main".to_string()),
+            schema: None,
+            tables: vec![fluxdb_core::TableRef {
+                database: Some("main".to_string()),
+                schema: None,
+                name: "Product".to_string(),
+                kind: ObjectKind::Table,
+                rows: None,
+                comment: None,
+            }],
+            columns: vec![fluxdb_core::ColumnRef {
+                database: Some("main".to_string()),
+                schema: None,
+                table: "Product".to_string(),
+                column: "snapshot_only".to_string(),
+                type_name: Some("TEXT".to_string()),
+                nullable: true,
+                primary_key: false,
+                ordinal_position: Some(1),
+                comment: None,
+            }],
+            routines: Vec::new(),
+            triggers: Vec::new(),
+            meta: fluxdb_core::CompletionIndexMeta {
+                app_index_version: fluxdb_core::COMPLETION_INDEX_VERSION,
+                db_kind: DatabaseKind::MySql,
+                last_indexed_at: now,
+                last_verified_at: now,
+                ttl_seconds: COMPLETION_INDEX_TTL_SECONDS,
+                dirty: false,
+                table_count: 1,
+                table_fingerprints: Vec::new(),
+            },
+        };
+        storage
+            .save_completion_index(&config, Some("main"), None, &snapshot)
+            .expect("写入补全索引快照应成功");
+
+        assert!(
+            controller
+                .completion_index
+                .lock()
+                .unwrap()
+                .table_columns(ConnectionId(1), Some("main"), None, "Product")
+                .is_empty(),
+            "内存索引应为空（否则测不到快照回退）"
+        );
+
+        let item = QueryCompletionItem {
+            label: "Product".to_string(),
+            insert_text: "Product".to_string(),
+            kind: QueryCompletionKind::Table,
+            detail: None,
+            documentation: None,
+            filter_text: None,
+            sort_text: None,
+            ..Default::default()
+        };
+        match controller.completion_item_documentation(
+            ConnectionId(1),
+            Some("main"),
+            None,
+            &item,
+            &|| false,
+        ) {
+            CompletionDocumentationState::Ready(text) => {
+                assert!(
+                    text.contains("snapshot_only"),
+                    "应命中盘上快照的列，而不是回落连接器: {text}"
+                );
+            }
+            other => panic!("盘上快照应解析为 Ready, got {other:?}"),
+        }
     }
 
     #[test]
@@ -291,11 +637,261 @@
 
     #[test]
     fn identifier_needs_quote_flags_reserved_digit_and_special() {
-        assert!(identifier_needs_quote("select", |w| w == "select"));
-        assert!(identifier_needs_quote("1abc", |_| false));
-        assert!(identifier_needs_quote("a-b", |_| false));
-        assert!(!identifier_needs_quote("user_name", |_| false));
-        assert!(!identifier_needs_quote("", |_| false));
+        assert!(identifier_needs_quote("select", DatabaseKind::Postgres, |w| w
+            == "select"));
+        assert!(identifier_needs_quote("1abc", DatabaseKind::Postgres, |_| false));
+        assert!(identifier_needs_quote("a-b", DatabaseKind::Postgres, |_| false));
+        assert!(!identifier_needs_quote("user_name", DatabaseKind::Postgres, |_| false));
+        assert!(!identifier_needs_quote("", DatabaseKind::Postgres, |_| false));
+    }
+
+    /// §8.4 大小写：PG 未加引号折叠为小写，含大写字母的名字不加引号会指向另一个对象。
+    #[test]
+    fn identifier_needs_quote_quotes_uppercase_for_postgres_only() {
+        assert!(identifier_needs_quote("CamelCase", DatabaseKind::Postgres, |_| false));
+        assert!(identifier_needs_quote("t14_Dup", DatabaseKind::Postgres, |_| false));
+        assert!(!identifier_needs_quote("camelcase", DatabaseKind::Postgres, |_| false));
+        // MySQL 不折叠大小写，保持原判定，不加多余引号。
+        assert!(!identifier_needs_quote("CamelCase", DatabaseKind::MySql, |_| false));
+        assert_eq!(
+            quote_identifier("CamelCase", DatabaseKind::Postgres, |_| false),
+            "\"CamelCase\""
+        );
+        assert_eq!(
+            quote_identifier("CamelCase", DatabaseKind::MySql, |_| false),
+            "CamelCase"
+        );
+    }
+
+    /// 已输入的起始引号按方言识别：PG 用双引号，MySQL 用反引号；
+    /// 替换范围纳入起始引号，避免采纳候选后残留旧引号。
+    #[test]
+    fn completion_context_detects_dialect_quote_prefix() {
+        let sql = "select * from \"Cam";
+        let cursor = sql.len();
+        let context = sql_completion_context(sql, cursor, DatabaseKind::Postgres);
+        assert!(context.quoted_identifier, "PG 双引号应识别为带引号标识符");
+        assert_eq!(context.prefix, "Cam");
+        assert_eq!(context.replace_start, sql.len() - "\"Cam".len());
+
+        let sql = "select * from `Cam";
+        let cursor = sql.len();
+        let context = sql_completion_context(sql, cursor, DatabaseKind::MySql);
+        assert!(context.quoted_identifier, "MySQL 反引号应识别为带引号标识符");
+        assert_eq!(context.prefix, "Cam");
+        assert_eq!(context.replace_start, sql.len() - "`Cam".len());
+    }
+
+    /// §8.4 文档提示：列出类型/可空/主键/注释，缺项不伪造；表注释进补全项文档。
+    #[test]
+    fn column_completion_documentation_lists_type_nullable_key_and_comment() {
+        let column = CompletionColumn {
+            database: Some("db".into()),
+            schema: Some("public".into()),
+            table: "account".into(),
+            name: "id".into(),
+            type_name: Some("integer".into()),
+            nullable: false,
+            primary_key: true,
+            comment: Some("主键标识".into()),
+        };
+        let documentation = column_completion_documentation(&column).expect("应有文档提示");
+        assert!(documentation.contains("类型：integer"), "{documentation}");
+        assert!(documentation.contains("可空：否"), "{documentation}");
+        assert!(documentation.contains("主键"), "{documentation}");
+        assert!(documentation.contains("注释：主键标识"), "{documentation}");
+
+        // 无类型/无注释时仍给出可空性，不用占位文本冒充未知信息。
+        let minimal = CompletionColumn {
+            type_name: None,
+            comment: None,
+            nullable: true,
+            primary_key: false,
+            ..column
+        };
+        let documentation = column_completion_documentation(&minimal).expect("至少可空性");
+        assert_eq!(documentation, "可空：是");
+    }
+
+    /// §8.4 文档提示：表/视图注释随索引进候选文档。
+    #[test]
+    fn table_completion_items_carries_comment_as_documentation() {
+        let tables = vec![CompletionTable {
+            database: Some("db".into()),
+            schema: Some("public".into()),
+            name: "account".into(),
+            kind: ObjectKind::Table,
+            comment: Some("账户主表".into()),
+        }];
+        let items = table_completion_items(tables, "", Some("public"));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].documentation.as_deref(), Some("账户主表"));
+        // 候选身份必须携带作用域 schema，供详情按 (库, schema, 表) 命中索引。
+        assert_eq!(items[0].schema.as_deref(), Some("public"));
+
+        // 无注释时不伪造文档。
+        let no_comment = table_completion_items(
+            vec![CompletionTable {
+                database: Some("db".into()),
+                schema: Some("public".into()),
+                name: "account".into(),
+                kind: ObjectKind::Table,
+                comment: None,
+            }],
+            "",
+            None,
+        );
+        assert!(no_comment[0].documentation.is_none(), "无注释不伪造文档");
+    }
+
+    /// §8.4 函数重载：同 schema 同名但签名不同的例程是不同候选，不得合并；
+    /// 文档展示签名，apply 文本仍是可调用的 `name()`。
+    #[test]
+    fn routine_completion_items_keeps_overloads_distinct() {
+        let routines = vec![
+            CompletionRoutine {
+                schema: Some("public".into()),
+                name: "calc_total".into(),
+                kind: CompletionRoutineKind::Function,
+                signature: Some("integer".into()),
+            },
+            CompletionRoutine {
+                schema: Some("public".into()),
+                name: "calc_total".into(),
+                kind: CompletionRoutineKind::Function,
+                signature: Some("integer, text".into()),
+            },
+        ];
+        let items = routine_completion_items(routines, CompletionRoutineKind::Function, "");
+        assert_eq!(items.len(), 2, "两个重载应分别成条：{items:#?}");
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+        assert!(
+            labels.contains(&"calc_total(integer)")
+                && labels.contains(&"calc_total(integer, text)"),
+            "label 应带签名区分重载：{labels:?}"
+        );
+        assert!(
+            items.iter().all(|item| item.insert_text == "calc_total()"),
+            "重载的 apply 文本都应为可调用形式：{items:#?}"
+        );
+        let documentation = items[0].documentation.as_deref().unwrap_or_default();
+        assert!(
+            documentation.contains("参数：integer"),
+            "文档应展示签名：{documentation}"
+        );
+    }
+
+    /// §8.4 缓存/持久化：例程（含签名）与触发器进索引并随快照往返，
+    /// 否则重开应用后重载信息丢失、同名重载被合并。
+    #[test]
+    fn completion_index_roundtrips_routines_with_signature_and_triggers() {
+        let controller = AppController::with_mock_data();
+        let mut index = controller.completion_index.lock().unwrap();
+        index.insert_routines(
+            ConnectionId(1),
+            Some("db"),
+            Some("public"),
+            vec![
+                CompletionRoutine {
+                    schema: Some("public".into()),
+                    name: "calc_total".into(),
+                    kind: CompletionRoutineKind::Function,
+                    signature: Some("integer".into()),
+                },
+                CompletionRoutine {
+                    schema: Some("public".into()),
+                    name: "calc_total".into(),
+                    kind: CompletionRoutineKind::Function,
+                    signature: Some("integer, text".into()),
+                },
+            ],
+            DatabaseKind::Postgres,
+        );
+        index.insert_triggers(
+            ConnectionId(1),
+            Some("db"),
+            Some("public"),
+            vec![CompletionTrigger {
+                schema: Some("public".into()),
+                name: "t14_trg".into(),
+                table: Some("t14_completion".into()),
+            }],
+            DatabaseKind::Postgres,
+        );
+
+        let snapshot = index.snapshot(
+            ConnectionId(1),
+            Some("db"),
+            Some("public"),
+            DatabaseKind::Postgres,
+        );
+        assert_eq!(snapshot.routines.len(), 2, "两个重载都应进快照");
+        assert_eq!(snapshot.meta.app_index_version, COMPLETION_INDEX_VERSION);
+        assert_eq!(snapshot.triggers.len(), 1);
+
+        // 快照往返（模拟持久化后重开）：签名与触发器都保留。
+        let mut restored = CompletionIndex::default();
+        restored.insert_snapshot(snapshot);
+        let routines = restored.database_routines(ConnectionId(1), Some("db"), Some("public"));
+        let signatures: BTreeSet<&str> = routines
+            .iter()
+            .filter_map(|routine| routine.signature.as_deref())
+            .collect();
+        assert_eq!(
+            signatures,
+            BTreeSet::from(["integer", "integer, text"]),
+            "重载签名应完整保留：{signatures:?}"
+        );
+        let triggers = restored.database_triggers(ConnectionId(1), Some("db"), Some("public"));
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(triggers[0].name, "t14_trg");
+    }
+
+    #[test]
+    fn table_completion_items_qualifies_cross_schema_duplicates() {
+        let tables = vec![
+            CompletionTable {
+                database: Some("db".into()),
+                schema: Some("t14_a".into()),
+                name: "orders".into(),
+                kind: ObjectKind::Table,
+                comment: None,
+            },
+            CompletionTable {
+                database: Some("db".into()),
+                schema: Some("t14_b".into()),
+                name: "orders".into(),
+                kind: ObjectKind::Table,
+                comment: None,
+            },
+            CompletionTable {
+                database: Some("db".into()),
+                schema: Some("t14_a".into()),
+                name: "users".into(),
+                kind: ObjectKind::View,
+                comment: None,
+            },
+        ];
+        let items = table_completion_items(tables, "", None);
+        // 同名跨 schema：label 与 apply 文本都带 schema 前缀，避免插错对象。
+        let dup: Vec<_> = items
+            .iter()
+            .filter(|item| item.label.ends_with(".orders"))
+            .collect();
+        assert_eq!(dup.len(), 2, "两个同名表应分别成条：{items:#?}");
+        assert!(
+            dup.iter().any(|item| item.insert_text == "t14_a.orders")
+                && dup.iter().any(|item| item.insert_text == "t14_b.orders"),
+            "同名表 apply 文本应带 schema：{dup:#?}"
+        );
+        // 唯一表名保持裸名，detail 仍显示所属 schema，便于确认来源。
+        let users = items
+            .iter()
+            .find(|item| item.label == "users")
+            .expect("唯一表名应保持裸名");
+        assert_eq!(users.insert_text, "users");
+        assert_eq!(users.detail.as_deref(), Some("db.t14_a"));
+        assert_eq!(users.kind, QueryCompletionKind::View);
     }
 
     #[test]
@@ -305,11 +901,13 @@
                 schema: None,
                 name: "calc_total".into(),
                 kind: CompletionRoutineKind::Function,
+                signature: None,
             },
             CompletionRoutine {
                 schema: None,
                 name: "do_thing".into(),
                 kind: CompletionRoutineKind::Procedure,
+                signature: None,
             },
         ];
         // 函数无参数 metadata 时插入 name()，kind 为 Function。
@@ -414,6 +1012,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "users".to_string(),
                 alias: Some("u".to_string()),
             }]
@@ -469,6 +1068,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "orders".to_string(),
                 alias: Some("o".to_string()),
             }]
@@ -486,6 +1086,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: Some("sales".to_string()),
+                schema: None,
                 table: "orders".to_string(),
                 alias: Some("r".to_string()),
             }]
@@ -573,6 +1174,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "orders".to_string(),
                 alias: Some("u".to_string()),
             }]
@@ -589,6 +1191,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "Product".to_string(),
                 alias: None,
             }]
@@ -606,6 +1209,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "Product".to_string(),
                 alias: None,
             }]
@@ -721,6 +1325,7 @@
             completion_column_tables(&context),
             vec![CompletionColumnTarget {
                 database: None,
+                schema: None,
                 table: "3d_user".to_string(),
                 alias: Some("u".to_string()),
             }]
@@ -787,6 +1392,7 @@
                         filter_text: None,
                         sort_text: None,
                         insert_text_format: InsertTextFormat::PlainText,
+                        schema: None,
                     })
                     .collect::<Vec<_>>();
                 let started = Instant::now();
@@ -1348,6 +1954,7 @@
             .execute_query_text_for_scope_with_progress(
                 ConnectionId(1),
                 Some("main".to_string()),
+                None,
                 "select * from Product".to_string(),
                 QueryExecutionOptions::default(),
                 &mut |summary| summaries.push(summary),
@@ -1413,6 +2020,7 @@
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -1441,6 +2049,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(7),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -1477,6 +2086,7 @@
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -1563,6 +2173,7 @@
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
 
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1594,6 +2205,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(7),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -1663,6 +2275,330 @@
         assert!(editor.changes.is_none());
     }
 
+    /// §8.4 保存查询的 scope：带 schema 打开的查询编辑器必须保留该 schema，
+    /// 保存/重启恢复才能落到同一 search_path（PG 同名跨 schema 场景）。
+    #[test]
+    fn query_editor_keeps_schema_scope_on_open() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
+            connection_id: ConnectionId(1),
+            database: Some("main".to_string()),
+            schema: Some("sales".to_string()),
+        });
+
+        let editor = active_query_editor(&controller);
+        assert_eq!(editor.database.as_deref(), Some("main"));
+        assert_eq!(editor.schema.as_deref(), Some("sales"));
+    }
+
+    /// §8.4/R11：显式事务的历史状态——未 COMMIT 的写入不显示为已提交，
+    /// ROLLBACK 的写入标已回滚且不提供补偿 SQL。
+    #[test]
+    fn history_marks_uncommitted_and_rolled_back_writes() {
+        // 未提交（BEGIN; UPDATE 后批次结束）→ 已回滚：连接释放时服务端回滚，历史不得谎报成功提交。
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "BEGIN; UPDATE products SET name = 'X' WHERE id = 1;".to_string(),
+        });
+        controller.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+        let states: Vec<_> = controller
+            .state()
+            .query_history
+            .iter()
+            .map(|entry| entry.transaction_state)
+            .collect();
+        assert!(
+            states.contains(&QueryHistoryTransactionState::RolledBack),
+            "未提交的写入应标已回滚：{states:?}"
+        );
+        let write = controller
+            .state()
+            .query_history
+            .iter()
+            .find(|entry| entry.text.starts_with("UPDATE"))
+            .expect("应有 UPDATE 历史");
+        assert_eq!(
+            write.transaction_state,
+            QueryHistoryTransactionState::RolledBack
+        );
+        assert!(
+            write.rollback_sql().is_none(),
+            "已回滚的写入不应提供补偿 SQL"
+        );
+        assert!(write.transaction_state_label().is_some());
+
+        // BEGIN; UPDATE; COMMIT → 已提交，展示与补偿 SQL 正常。
+        let mut committed = AppController::with_mock_data();
+        committed.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        committed.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "BEGIN; UPDATE products SET name = 'X' WHERE id = 1; COMMIT;".to_string(),
+        });
+        committed.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+        let write = committed
+            .state()
+            .query_history
+            .iter()
+            .find(|entry| entry.text.starts_with("UPDATE"))
+            .expect("应有 UPDATE 历史");
+        assert_eq!(
+            write.transaction_state,
+            QueryHistoryTransactionState::Committed
+        );
+        assert!(write.transaction_state_label().is_none());
+
+        // BEGIN; DELETE; ROLLBACK → 已回滚。
+        let mut rolled_back = AppController::with_mock_data();
+        rolled_back.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        rolled_back.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "BEGIN; DELETE FROM products WHERE id = 1; ROLLBACK;".to_string(),
+        });
+        rolled_back.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+        let write = rolled_back
+            .state()
+            .query_history
+            .iter()
+            .find(|entry| entry.text.starts_with("DELETE"))
+            .expect("应有 DELETE 历史");
+        assert_eq!(
+            write.transaction_state,
+            QueryHistoryTransactionState::RolledBack
+        );
+    }
+
+    /// §8.4/R11：敏感语句（口令/角色/授权）不入历史，避免凭据留痕与可回放。
+    #[test]
+    fn sensitive_statements_are_not_recorded_in_history() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "ALTER USER admin IDENTIFIED BY 'secret123'".to_string(),
+        });
+        controller.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+        assert!(
+            controller.state().query_history.is_empty(),
+            "敏感语句不应进入历史：{:#?}",
+            controller.state().query_history
+        );
+
+        // 普通语句仍记录（回归）。
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "select * from Product".to_string(),
+        });
+        controller.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+        assert_eq!(controller.state().query_history.len(), 1);
+    }
+
+    /// §8.4 补偿 SQL 字面量：PG 用双引号标识符、hex bytea、精确十进制与 jsonb 具名转换；
+    /// MySQL 保持反引号与 X'..'，旧记录（db_kind=None）按 MySQL 渲染仍可读。
+    #[test]
+    fn pg_rollback_literals_use_dialect_quoting_and_types() {
+        // 十进制文本（PG numeric 走文本保精度）按数值字面量输出，不被引号包裹。
+        assert_eq!(
+            sql_history_value_literal_for_type(
+                &CellValue::Text("123.4500".to_string()),
+                DatabaseKind::Postgres,
+                Some("numeric(10,4)")
+            ),
+            "123.4500"
+        );
+        // 普通文本仍加引号并转义。
+        assert_eq!(
+            sql_history_value_literal_for_type(
+                &CellValue::Text("o'brien".to_string()),
+                DatabaseKind::Postgres,
+                Some("text")
+            ),
+            "'o''brien'"
+        );
+        // bytea：PG hex 转义 + 显式 ::bytea，避免被当作 text 写入。
+        assert_eq!(
+            sql_history_value_literal_for_type(
+                &CellValue::Bytes(vec![0xde, 0xad, 0xbe, 0xef]),
+                DatabaseKind::Postgres,
+                Some("bytea")
+            ),
+            "'\\xdeadbeef'::bytea"
+        );
+        assert_eq!(
+            sql_history_value_literal_for_type(
+                &CellValue::Bytes(vec![0x0a, 0xff]),
+                DatabaseKind::MySql,
+                Some("blob")
+            ),
+            "X'0aff'"
+        );
+        // jsonb 具名转换保留类型。
+        assert_eq!(
+            sql_history_value_literal_for_type(
+                &CellValue::Json("{\"a\":1}".to_string()),
+                DatabaseKind::Postgres,
+                Some("jsonb")
+            ),
+            "'{\"a\":1}'::jsonb"
+        );
+        assert_eq!(
+            sql_history_value_literal_for_type(
+                &CellValue::Bool(true),
+                DatabaseKind::Postgres,
+                None
+            ),
+            "TRUE"
+        );
+    }
+
+    /// §8.4 PG 补偿 SQL：标识符双引号、WHERE 用主键身份、UPDATE 用类型化字面量。
+    #[test]
+    fn pg_update_rollback_sql_quotes_identifiers_and_keeps_decimal() {
+        let snapshot = QueryUpdateRollbackSnapshot {
+            db_kind: Some(DatabaseKind::Postgres),
+            table: "\"sales\".\"orders\"".to_string(),
+            columns: vec![Column {
+                name: "amount".to_string(),
+                type_name: Some("numeric(10,2)".to_string()),
+                nullable: false,
+                primary_key: false,
+                comment: None,
+            }],
+            changed_columns: vec!["amount".to_string()],
+            rows: vec![QueryRollbackRowSnapshot {
+                identity: RowIdentity {
+                    values: BTreeMap::from([("id".to_string(), CellValue::I64(7))]),
+                },
+                values: BTreeMap::from([(
+                    "amount".to_string(),
+                    CellValue::Text("19.90".to_string()),
+                )]),
+            }],
+            fallback_where: None,
+        };
+        let sql = query_history_rollback_sql(&QueryRollbackSnapshot::Update(snapshot))
+            .expect("PG 补偿 SQL 应生成");
+        assert_eq!(
+            sql,
+            "UPDATE \"sales\".\"orders\" SET \"amount\" = 19.90 WHERE \"id\" = 7;"
+        );
+    }
+
+    /// 旧记录（无方言）仍按 MySQL 渲染：既有历史可读可用（验收项）。
+    #[test]
+    fn legacy_rollback_snapshot_without_dialect_renders_mysql() {
+        let snapshot = QueryUpdateRollbackSnapshot {
+            db_kind: None,
+            table: "`main`.`products`".to_string(),
+            columns: vec![Column {
+                name: "name".to_string(),
+                type_name: Some("varchar(64)".to_string()),
+                nullable: true,
+                primary_key: false,
+                comment: None,
+            }],
+            changed_columns: vec!["name".to_string()],
+            rows: vec![QueryRollbackRowSnapshot {
+                identity: RowIdentity {
+                    values: BTreeMap::from([("id".to_string(), CellValue::I64(1))]),
+                },
+                values: BTreeMap::from([(
+                    "name".to_string(),
+                    CellValue::Text("Road Bike".to_string()),
+                )]),
+            }],
+            fallback_where: None,
+        };
+        let sql = query_history_rollback_sql(&QueryRollbackSnapshot::Update(snapshot))
+            .expect("旧记录应仍能生成补偿 SQL");
+        assert_eq!(
+            sql,
+            "UPDATE `main`.`products` SET `name` = 'Road Bike' WHERE `id` = 1;"
+        );
+    }
+
+    /// §8.4/R30：二段名按方言解释——PG 是 schema.table（不能写进 public），
+    /// MySQL 仍是 database.table；引用名按方言引号解析并保留大小写，未加引号在 PG 折小写。
+    #[test]
+    fn pg_query_result_object_name_uses_schema_and_quoted_identifiers() {
+        let postgres = |text: &str| QueryRequest {
+            connection_id: ConnectionId(1),
+            database: Some("appdb".to_string()),
+            session_id: None,
+            schema: None,
+            text: text.to_string(),
+            mode: fluxdb_core::QueryMode::All,
+            options: QueryExecutionOptions::default(),
+        };
+
+        // 二段名 → schema.table，不是 database.table。
+        let object = editable_query_object(
+            &postgres("select * from sales.orders"),
+            DatabaseKind::Postgres,
+        )
+        .expect("PG 二段名应可编辑");
+        assert_eq!(object.database.as_deref(), Some("appdb"));
+        assert_eq!(object.schema.as_deref(), Some("sales"));
+        assert_eq!(object.name, "orders");
+
+        // 三段名 → database.schema.table。
+        let object = editable_query_object(
+            &postgres("select * from appdb.sales.orders"),
+            DatabaseKind::Postgres,
+        )
+        .expect("PG 三段名应可编辑");
+        assert_eq!(object.database.as_deref(), Some("appdb"));
+        assert_eq!(object.schema.as_deref(), Some("sales"));
+        assert_eq!(object.name, "orders");
+
+        // 未加引号在 PG 折叠为小写（`FROM Orders` 指 sales.orders）。
+        let object = editable_query_object(
+            &postgres("select * from sales.Orders"),
+            DatabaseKind::Postgres,
+        )
+        .expect("PG 未加引号名应可编辑");
+        assert_eq!(object.schema.as_deref(), Some("sales"));
+        assert_eq!(object.name, "orders");
+
+        // 双引号保留大小写与转义。
+        let object = editable_query_object(
+            &postgres("select * from sales.\"Orders\""),
+            DatabaseKind::Postgres,
+        )
+        .expect("PG 引用名应可编辑");
+        assert_eq!(object.name, "Orders");
+        let object = editable_query_object(
+            &postgres("select * from \"sales\".\"my\"\"table\""),
+            DatabaseKind::Postgres,
+        )
+        .expect("PG 转义引用名应可编辑");
+        assert_eq!(object.schema.as_deref(), Some("sales"));
+        assert_eq!(object.name, "my\"table");
+
+        // MySQL 二段名仍是 database.table（回归：语义不变）。
+        let object = editable_query_object(
+            &postgres("select * from main.products"),
+            DatabaseKind::MySql,
+        )
+        .expect("MySQL 二段名应可编辑");
+        assert_eq!(object.database.as_deref(), Some("main"));
+        assert_eq!(object.schema, None);
+        assert_eq!(object.name, "products");
+
+        // 复杂来源仍只读。
+        assert!(editable_query_object(
+            &postgres("select * from sales.orders o join sales.items i on i.id = o.id"),
+            DatabaseKind::Postgres
+        )
+        .is_none());
+        assert!(editable_query_object(
+            &postgres("select * from (select 1) t"),
+            DatabaseKind::Postgres
+        )
+        .is_none());
+    }
+
     #[test]
     fn complex_query_result_stays_readonly() {
         let mut controller = AppController::with_mock_data();
@@ -1693,6 +2629,103 @@
         assert_eq!(editor.summaries.len(), 2);
         assert_eq!(editor.summaries[0].sql, "select * from Product limit 20");
         assert_eq!(editor.summaries[1].sql, "select * from Product LIMIT 100");
+    }
+
+    #[test]
+    fn cancel_query_execution_reaches_the_executor() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        let text = "select * from Product;\nselect * from Product".to_string();
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: text.clone(),
+        });
+        // UI 在执行前派发 StartQueryExecution 登记取消标志，用户再点「停止」。
+        controller.dispatch(AppCommand::StartQueryExecution(TabId(1)));
+        let event = controller.dispatch(AppCommand::CancelQueryExecution(TabId(1)));
+        assert_eq!(event, AppEvent::QueryCancelRequested(TabId(1)));
+
+        let event = controller.dispatch(AppCommand::ExecuteQueryText {
+            tab_id: TabId(1),
+            text,
+        });
+
+        assert!(matches!(event, AppEvent::QueryFinished(TabId(1), _)));
+        // 取消标志必须下传到执行器：所有语句都不再发往服务端，而不是「点了没反应」照跑。
+        let editor = active_query_editor(&controller);
+        assert!(
+            editor.summaries.is_empty(),
+            "取消后不应有任何语句执行：{:#?}",
+            editor.summaries
+        );
+        assert_eq!(controller.state().query_history.len(), 0);
+    }
+
+    #[test]
+    fn start_query_execution_resets_previous_cancel_flag() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        let text = "select * from Product".to_string();
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: text.clone(),
+        });
+        controller.dispatch(AppCommand::StartQueryExecution(TabId(1)));
+        controller.dispatch(AppCommand::CancelQueryExecution(TabId(1)));
+        // 上一次的「停止」不能污染下一次执行：重新开始执行会换上新标志。
+        controller.dispatch(AppCommand::StartQueryExecution(TabId(1)));
+
+        let event = controller.dispatch(AppCommand::ExecuteQueryText {
+            tab_id: TabId(1),
+            text,
+        });
+
+        assert!(matches!(event, AppEvent::QueryFinished(TabId(1), _)));
+        let editor = active_query_editor(&controller);
+        assert_eq!(editor.summaries.len(), 1);
+        assert!(editor.summaries[0].success);
+    }
+
+    #[test]
+    fn completed_query_execution_clears_stale_cancel_flag() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+        let text = "select * from Product".to_string();
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: text.clone(),
+        });
+        controller.dispatch(AppCommand::StartQueryExecution(TabId(1)));
+        controller.dispatch(AppCommand::CancelQueryExecution(TabId(1)));
+        let canceled = controller.dispatch(AppCommand::ExecuteQueryText {
+            tab_id: TabId(1),
+            text: text.clone(),
+        });
+        assert!(matches!(canceled, AppEvent::QueryFinished(TabId(1), _)));
+        assert!(active_query_editor(&controller).summaries.is_empty());
+
+        // 某些内部入口会直接执行；上一次已经结束的取消标志不能让它静默返回空结果。
+        let event = controller.dispatch(AppCommand::ExecuteQueryText {
+            tab_id: TabId(1),
+            text,
+        });
+
+        assert!(matches!(event, AppEvent::QueryFinished(TabId(1), _)));
+        let editor = active_query_editor(&controller);
+        assert_eq!(editor.summaries.len(), 1);
+        assert!(editor.summaries[0].success);
+    }
+
+    #[test]
+    fn cancel_query_execution_without_running_query_still_reports_event() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)));
+
+        // 没有登记标志（没有在执行的查询）：不报错，只回事件，避免「停止」点两次就弹错误。
+        let event = controller.dispatch(AppCommand::CancelQueryExecution(TabId(1)));
+
+        assert_eq!(event, AppEvent::QueryCancelRequested(TabId(1)));
+        assert!(controller.state().last_error.is_none());
     }
 
     #[test]
@@ -1918,21 +2951,38 @@
     #[test]
     fn execute_query_keeps_comment_tokens_inside_strings() {
         assert_eq!(
-            sql_text_for_execution("select '--keep', '#keep', '/*keep*/'", 100),
+            sql_text_for_execution("select '--keep', '#keep', '/*keep*/'", 100, DatabaseKind::MySql),
             "select '--keep', '#keep', '/*keep*/' LIMIT 100"
         );
+    }
+
+    #[test]
+    fn execute_query_preserves_double_quoted_identifiers_for_postgres() {
+        // 回归：PG 的 `"` 是标识符引用，绝不能像 MySQL 那样改写成 `'` 单引号字符串，
+        // 否则 `"public"."orders"` 会被换成 `'public'.'orders'` 导致语法错误。
+        let sql =
+            "UPDATE \"public\".\"orders\" SET \"amount\" = 684.01 WHERE \"id\" = 1;".to_string();
+        let text = sql_text_for_execution(&sql, 0, DatabaseKind::Postgres);
+        assert_eq!(
+            text,
+            "UPDATE \"public\".\"orders\" SET \"amount\" = 684.01 WHERE \"id\" = 1;"
+        );
+        // MySQL 系仍旧把 `"` 归一为 `'`（字符串语义），保持既有行为。
+        let mysql = sql_text_for_execution(&sql, 0, DatabaseKind::MySql);
+        assert!(!mysql.contains("\""), "MySQL 不应保留双引号：{mysql}");
+        assert!(mysql.contains("'public'.'orders'"), "MySQL 应归一为单引号：{mysql}");
     }
 
     #[test]
     fn default_limit_zero_does_not_append_or_force() {
         // 不限制（page_size=0）：无 LIMIT 不追加
         assert_eq!(
-            sql_text_for_execution("select * from Product", 0),
+            sql_text_for_execution("select * from Product", 0, DatabaseKind::MySql),
             "select * from Product"
         );
         // 不限制：用户已写 LIMIT 即使超过也不改写
         assert_eq!(
-            sql_text_for_execution("select * from Product limit 5000", 0),
+            sql_text_for_execution("select * from Product limit 5000", 0, DatabaseKind::MySql),
             "select * from Product limit 5000"
         );
     }
@@ -1957,6 +3007,9 @@
             active_query_editor(&controller).summaries[0].sql,
             "select * from Product"
         );
+        let page = &active_query_editor(&controller).results[0];
+        assert_eq!(page.rows.len(), 2, "不限制时不能在结果转换层截成一行");
+        assert_eq!(page.limit, 0, "结果页必须保留 0=不限制的语义");
     }
 
     #[test]
@@ -1984,7 +3037,7 @@
     fn default_limit_caps_existing_larger_limit() {
         // 用户 limit 200 > 配置 100 → 强制封顶为 100
         assert_eq!(
-            sql_text_for_execution("select * from Product limit 200", 100),
+            sql_text_for_execution("select * from Product limit 200", 100, DatabaseKind::MySql),
             "select * from Product LIMIT 100"
         );
     }
@@ -1993,12 +3046,12 @@
     fn default_limit_keeps_smaller_or_equal_limit() {
         // 用户 limit 20 <= 配置 100 → 保持
         assert_eq!(
-            sql_text_for_execution("select * from Product limit 20", 100),
+            sql_text_for_execution("select * from Product limit 20", 100, DatabaseKind::MySql),
             "select * from Product limit 20"
         );
         // 相等也保持
         assert_eq!(
-            sql_text_for_execution("select * from Product limit 100", 100),
+            sql_text_for_execution("select * from Product limit 100", 100, DatabaseKind::MySql),
             "select * from Product limit 100"
         );
     }
@@ -2006,7 +3059,7 @@
     #[test]
     fn default_limit_appends_when_missing() {
         assert_eq!(
-            sql_text_for_execution("select * from Product", 500),
+            sql_text_for_execution("select * from Product", 500, DatabaseKind::MySql),
             "select * from Product LIMIT 500"
         );
     }
@@ -2015,7 +3068,7 @@
     fn default_limit_caps_offset_syntax() {
         // `limit offset, count`：封顶 count
         assert_eq!(
-            sql_text_for_execution("select * from Product limit 10, 300", 100),
+            sql_text_for_execution("select * from Product limit 10, 300", 100, DatabaseKind::MySql),
             "select * from Product LIMIT 100"
         );
     }
@@ -2024,7 +3077,7 @@
     fn default_limit_caps_offset_clause() {
         // `limit count offset m`：封顶 count
         assert_eq!(
-            sql_text_for_execution("select * from Product limit 300 offset 5", 100),
+            sql_text_for_execution("select * from Product limit 300 offset 5", 100, DatabaseKind::MySql),
             "select * from Product LIMIT 100 offset 5"
         );
     }
@@ -2032,7 +3085,7 @@
     #[test]
     fn default_limit_does_not_limit_non_select() {
         assert_eq!(
-            sql_text_for_execution("update Product set name = 'A'", 100),
+            sql_text_for_execution("update Product set name = 'A'", 100, DatabaseKind::MySql),
             "update Product set name = 'A'"
         );
     }
@@ -2173,6 +3226,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2201,6 +3255,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2228,6 +3283,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(2),
             database: None,
+            schema: None
         });
         let text = "CREATE TABLE test (id va";
         controller.dispatch(AppCommand::UpdateQueryText {
@@ -2279,21 +3335,25 @@
                     schema: None,
                     name: "shining_factory_type".to_string(),
                     kind: ObjectKind::Table,
+                    comment: None,
                 },
                 CompletionTable {
                     database: None,
                     schema: None,
                     name: "type_config".to_string(),
                     kind: ObjectKind::Table,
+                    comment: None,
                 },
                 CompletionTable {
                     database: None,
                     schema: None,
                     name: "shining_dental_order".to_string(),
                     kind: ObjectKind::Table,
+                    comment: None,
                 },
             ],
             "type",
+            None,
         );
 
         assert_eq!(items[0].insert_text, "type_config");
@@ -2306,6 +3366,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2335,6 +3396,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2368,6 +3430,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2397,6 +3460,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2424,6 +3488,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2477,6 +3542,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2508,9 +3574,14 @@
     #[test]
     fn query_completion_suggests_database_columns_without_from() {
         let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::WarmCompletionIndex {
+            connection_id: ConnectionId(1),
+            database: Some("main".to_string()),
+        });
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2543,6 +3614,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2572,6 +3644,7 @@
             .query_completions_for_text_with_cancel(
                 ConnectionId(1),
                 Some("main".to_string()),
+                None,
                 "select na".to_string(),
                 "select na".len(),
                 false,
@@ -2639,6 +3712,7 @@
         second.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         second.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2660,6 +3734,65 @@
         }));
         let index = second.completion_index.lock().unwrap();
         assert!(index.has_database_index(ConnectionId(1), Some("main"), None));
+    }
+
+    /// §8.4 大小写：`"Foo"` 与 `"foo"` 是两个真实对象，索引不得按折叠键合并互相覆盖列。
+    #[test]
+    fn completion_index_keeps_case_distinct_tables() {
+        let controller = AppController::with_mock_data();
+        let mut index = controller.completion_index.lock().unwrap();
+        index.insert_tables(
+            ConnectionId(1),
+            Some("db"),
+            Some("public"),
+            vec![
+                CompletionTable {
+                    database: Some("db".to_string()),
+                    schema: Some("public".to_string()),
+                    name: "Foo".to_string(),
+                    kind: ObjectKind::Table,
+                    comment: None,
+                },
+                CompletionTable {
+                    database: Some("db".to_string()),
+                    schema: Some("public".to_string()),
+                    name: "foo".to_string(),
+                    kind: ObjectKind::Table,
+                    comment: None,
+                },
+            ],
+            DatabaseKind::Postgres,
+        );
+        for name in ["Foo", "foo"] {
+            index.replace_table_columns(
+                ConnectionId(1),
+                Some("db"),
+                Some("public"),
+                name,
+                vec![CompletionColumn {
+                    database: Some("db".to_string()),
+                    schema: Some("public".to_string()),
+                    table: name.to_string(),
+                    name: format!("{name}_id"),
+                    type_name: Some("integer".to_string()),
+                    nullable: false,
+                    primary_key: true,
+                    comment: None,
+                }],
+                DatabaseKind::Postgres,
+            );
+        }
+
+        let tables = index.database_tables(ConnectionId(1), Some("db"), Some("public"));
+        let names: BTreeSet<&str> = tables.iter().map(|table| table.name.as_str()).collect();
+        assert_eq!(
+            names,
+            BTreeSet::from(["Foo", "foo"]),
+            "大小写不同的对象必须同时保留：{names:?}"
+        );
+        // 两张表各自的列都在，未被对方覆盖（每张 1 列 → 共 2 列）。
+        let columns = index.database_columns(ConnectionId(1), Some("db"), Some("public"), "");
+        assert_eq!(columns.len(), 2, "两表列不应互相覆盖：{columns:#?}");
     }
 
     #[test]
@@ -2711,6 +3844,135 @@
         }
     }
 
+    /// T14 验收「无权限/超时不阻塞编辑」：元数据源不可用（连接被拒）时，
+    /// 补全仍返回成功并保留本地候选，不把错误抛给编辑器。
+    #[test]
+    fn completion_degrades_when_metadata_source_unavailable() {
+        let mut controller = AppController::with_mock_data();
+        // 指向必然拒绝连接的端口，模拟「连不上 / 无权限」的元数据源。
+        let draft = ConnectionDraft {
+            name: "PG 不可达".to_string(),
+            kind: DatabaseKind::Postgres,
+            endpoint: Endpoint::Tcp {
+                host: "127.0.0.1".to_string(),
+                port: 1,
+                database: Some("postgres".to_string()),
+            },
+            credential_ref: None,
+            options: Default::default(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: Some(fluxdb_core::PostgresConnectionProfile {
+                basic: fluxdb_core::PostgresBasicOptions {
+                    host: "127.0.0.1".to_string(),
+                    port: 1,
+                    maintenance_database: "postgres".to_string(),
+                    username: "nobody".to_string(),
+                    password: fluxdb_core::SecretRef::inline(""),
+                },
+                ..Default::default()
+            }),
+        };
+        let AppEvent::ConnectionCreated(config) = controller.dispatch(AppCommand::CreateConnection(draft))
+        else {
+            panic!("创建连接应成功");
+        };
+        controller.dispatch(AppCommand::OpenQueryEditor(config.id));
+
+        let text = "sel".to_string();
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: text.clone(),
+        });
+        let event = controller.dispatch(AppCommand::RequestQueryCompletions {
+            tab_id: TabId(1),
+            request_seq: 1,
+            cursor: text.len(),
+            explicit: false,
+        });
+
+        let AppEvent::QueryCompletionsLoaded(_, _, result) = event else {
+            panic!("元数据不可用时补全仍应成功返回：{event:?}");
+        };
+        assert!(
+            result
+                .items
+                .iter()
+                .any(|item| item.kind == QueryCompletionKind::Keyword),
+            "应保留本地关键字候选：{:#?}",
+            result.items
+        );
+    }
+
+    /// §8.4 DDL 后刷新：例程/触发器无法按表名精确刷新，DDL 触发后台刷新时整体失效，
+    /// 下次补全重新从连接器取回（缓存不返回已失效的旧元数据）。
+    #[test]
+    fn ddl_invalidates_routine_and_trigger_index() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::WarmCompletionIndex {
+            connection_id: ConnectionId(1),
+            database: Some("main".to_string()),
+        });
+        {
+            let mut index = controller.completion_index.lock().unwrap();
+            index.insert_routines(
+                ConnectionId(1),
+                Some("main"),
+                None,
+                vec![CompletionRoutine {
+                    schema: None,
+                    name: "stale_fn".into(),
+                    kind: CompletionRoutineKind::Function,
+                    signature: None,
+                }],
+                DatabaseKind::Postgres,
+            );
+            index.insert_triggers(
+                ConnectionId(1),
+                Some("main"),
+                None,
+                vec![CompletionTrigger {
+                    schema: None,
+                    name: "stale_trg".into(),
+                    table: Some("product".into()),
+                }],
+                DatabaseKind::Postgres,
+            );
+            assert_eq!(
+                index
+                    .database_routines(ConnectionId(1), Some("main"), None)
+                    .len(),
+                1
+            );
+        }
+
+        // 建函数属于库级失效：索引 dirty 后后台刷新会连带失效例程/触发器。
+        controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
+            connection_id: ConnectionId(1),
+            database: Some("main".to_string()),
+            schema: None,
+        });
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id: TabId(1),
+            text: "create function f() returns int as $$ select 1 $$ language sql".to_string(),
+        });
+        controller.dispatch(AppCommand::ExecuteQuery(TabId(1)));
+
+        let index = controller.completion_index.lock().unwrap();
+        assert!(
+            index
+                .database_routines(ConnectionId(1), Some("main"), None)
+                .is_empty(),
+            "DDL 后例程索引应失效，避免返回过期元数据"
+        );
+        assert!(
+            index
+                .database_triggers(ConnectionId(1), Some("main"), None)
+                .is_empty(),
+            "DDL 后触发器索引应失效"
+        );
+    }
+
     #[test]
     fn ddl_marks_target_table_dirty_and_warmup_refreshes_it() {
         let mut controller = AppController::with_mock_data();
@@ -2721,6 +3983,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -2899,9 +4162,8 @@
     }
 
     #[test]
-    fn background_refresh_batches_large_schema_columns_in_single_call() {
-        // T053：大 schema（200 张表）走后台 worker 刷新时，worker 以一次批量列查询覆盖整库，
-        // 而非每表一次查询（N+1）。对比：批量 1 次 vs 逐表 N 次远程查询。
+    fn background_refresh_batches_large_schema_columns() {
+        // TTL 过期刷新 200 张已知表，跨多个批次后首尾列都应可用。
         const N: usize = 200;
         let controller = AppController::with_mock_data();
         let now = unix_timestamp_secs();
@@ -2928,7 +4190,7 @@
                 last_indexed_at: now,
                 last_verified_at: now,
                 ttl_seconds: COMPLETION_INDEX_TTL_SECONDS,
-                dirty: false,
+                dirty: true,
                 table_count: N,
                 table_fingerprints: Vec::new(),
             },
@@ -2936,7 +4198,6 @@
         {
             let mut index = controller.completion_index.lock().unwrap();
             index.insert_snapshot(snapshot);
-            index.mark_dirty(ConnectionId(1), Some("main"), None);
         }
 
         let config = controller
@@ -2948,7 +4209,7 @@
             refresh_index_columns_in_background(&index, &config, ConnectionId(1), Some("main"), None)
                 .expect("large-schema refresh");
 
-        // 单次批量调用覆盖全部 N 张表（worker 对批量列 fetch 仅一次调用）
+        // 多批次合计覆盖全部 N 张表。
         assert_eq!(tables, N, "整库刷新应覆盖全部 {N} 张表, got {tables}");
         assert!(columns >= N, "每表至少一列, got {columns}");
         {
@@ -2987,6 +4248,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
 
         // 模拟 DDL 后的 stale：直接标记库级 dirty。
@@ -3034,6 +4296,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -3077,7 +4340,7 @@
 
     #[test]
     fn lazy_completion_documentation_resolves_structure_or_error() {
-        // T054 验收 2：选中项详情懒加载，数据全部来自索引（无远程查询），
+        // T054 验收 2：选中项详情懒加载（索引优先，索引未覆盖该对象时按身份取一次），
         // 对象不在索引 / 无可用文档时返回 Error。
         let mut controller = AppController::with_mock_data();
         controller.dispatch(AppCommand::WarmCompletionIndex {
@@ -3099,6 +4362,7 @@
         let doc = controller.completion_item_documentation(
             ConnectionId(1),
             Some("main"),
+            None,
             &item("Product", QueryCompletionKind::Table, None),
             &|| false,
         );
@@ -3115,15 +4379,37 @@
             other => panic!("表项应解析为 Ready, got {other:?}"),
         }
 
-        // 索引中不存在的表 → Error。
+        // 索引未覆盖的表 → 按 (库, schema, 表) 取一次元数据并写回索引，不再是永久 Error。
         assert!(matches!(
             controller.completion_item_documentation(
                 ConnectionId(1),
                 Some("main"),
+                None,
                 &item("NopeMissing", QueryCompletionKind::Table, None),
                 &|| false
             ),
-            CompletionDocumentationState::Error(_)
+            CompletionDocumentationState::Ready(_)
+        ));
+        assert!(
+            !controller
+                .completion_index
+                .lock()
+                .unwrap()
+                .table_columns(ConnectionId(1), Some("main"), None, "NopeMissing")
+                .is_empty(),
+            "按需取到的列应写回索引，之后悬停直接命中"
+        );
+
+        // 取不到元数据来源（连接不存在）→ 如实报「元数据不可用」，不谎报成对象不存在。
+        assert!(matches!(
+            controller.completion_item_documentation(
+                ConnectionId(99),
+                Some("main"),
+                None,
+                &item("Product", QueryCompletionKind::Table, None),
+                &|| false
+            ),
+            CompletionDocumentationState::Error(reason) if reason.contains("列元数据不可用")
         ));
 
         // 列 → Ready 内联注释；无注释 → Error、不依赖索引。
@@ -3131,6 +4417,7 @@
             controller.completion_item_documentation(
                 ConnectionId(1),
                 Some("main"),
+                None,
                 &item("cust", QueryCompletionKind::Column, Some("客户编号")),
                 &|| false
             ),
@@ -3140,6 +4427,7 @@
             controller.completion_item_documentation(
                 ConnectionId(1),
                 Some("main"),
+                None,
                 &item("cust", QueryCompletionKind::Column, None),
                 &|| false
             ),
@@ -3151,6 +4439,7 @@
             controller.completion_item_documentation(
                 ConnectionId(1),
                 Some("main"),
+                None,
                 &item("normalize_price", QueryCompletionKind::Function, None),
                 &|| false
             ),
@@ -3162,6 +4451,7 @@
             controller.completion_item_documentation(
                 ConnectionId(1),
                 Some("main"),
+                None,
                 &item("select", QueryCompletionKind::Keyword, None),
                 &|| false
             ),
@@ -3185,6 +4475,7 @@
                 kind,
                 label.to_string(),
                 None,
+                None,
             )
         };
         // 列注释走 `comment` 参数（候选补全时可得的自带来内联注释）。
@@ -3195,6 +4486,7 @@
                 kind,
                 label.to_string(),
                 Some(comment.to_string()),
+                None,
             )
         };
 
@@ -3207,10 +4499,22 @@
             other => panic!("表项应解析为 Ready, got {other:?}"),
         }
 
-        // 索引中没有的表 → Error。
+        // 索引未覆盖的表 → 按需取一次（mock 兜底返回通用列）→ Ready，不再恒为 Error。
         assert!(matches!(
             doc(QueryCompletionKind::Table, "NopeMissing"),
-            CompletionDocumentationState::Error(_)
+            CompletionDocumentationState::Ready(_)
+        ));
+        // 取不到元数据来源（连接不存在）→ Error（如实说明原因）。
+        assert!(matches!(
+            controller.completion_documentation_for(
+                ConnectionId(99),
+                Some("main".to_string()),
+                QueryCompletionKind::Table,
+                "Product".to_string(),
+                None,
+                None,
+            ),
+            CompletionDocumentationState::Error(reason) if reason.contains("列元数据不可用")
         ));
 
         // 列 → Ready 内联注释（注释由 comment 参数带入）。
@@ -3254,6 +4558,7 @@
                 QueryCompletionKind::Table,
                 "Product".to_string(),
                 None,
+                None,
                 &|| true,
             ),
             CompletionDocumentationState::Loading
@@ -3265,6 +4570,7 @@
                 Some("main".to_string()),
                 QueryCompletionKind::Table,
                 "Product".to_string(),
+                None,
                 None,
                 &|| false,
             ),
@@ -3283,6 +4589,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -3486,6 +4793,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -3581,6 +4889,8 @@
             "Product",
             vec![CompletionColumn {
                 table: "Product".to_string(),
+                database: None,
+                schema: None,
                 name: "customer_name".to_string(),
                 type_name: Some("TEXT".to_string()),
                 nullable: false,
@@ -3602,6 +4912,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -3628,6 +4939,8 @@
             vec![
                 CompletionColumn {
                     table: "Product".to_string(),
+                    database: None,
+                    schema: None,
                     name: "product_name".to_string(),
                     type_name: Some("TEXT".to_string()),
                     nullable: true,
@@ -3636,6 +4949,8 @@
                 },
                 CompletionColumn {
                     table: "Product".to_string(),
+                    database: None,
+                    schema: None,
                     name: "name".to_string(),
                     type_name: Some("TEXT".to_string()),
                     nullable: false,
@@ -3644,6 +4959,8 @@
                 },
                 CompletionColumn {
                     table: "Product".to_string(),
+                    database: None,
+                    schema: None,
                     name: "display_name".to_string(),
                     type_name: Some("TEXT".to_string()),
                     nullable: true,
@@ -3669,7 +4986,7 @@
     #[test]
     fn completion_cache_clears_for_object_refresh_commands() {
         assert!(should_clear_completion_cache(&AppCommand::OpenConnection(ConnectionId(1))));
-        assert!(should_clear_completion_cache(&AppCommand::LoadObjectChildren(
+        assert!(!should_clear_completion_cache(&AppCommand::LoadObjectChildren(
             ObjectPath {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
@@ -3678,8 +4995,8 @@
                 kind: ObjectKind::Table,
             }
         )));
-        assert!(should_clear_completion_cache(&AppCommand::RefreshObject(None)));
-        assert!(should_clear_completion_cache(&AppCommand::ExecuteQuery(TabId(1))));
+        assert!(!should_clear_completion_cache(&AppCommand::RefreshObject(None)));
+        assert!(!should_clear_completion_cache(&AppCommand::ExecuteQuery(TabId(1))));
     }
 
     #[test]
@@ -3701,6 +5018,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -3866,6 +5184,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),
@@ -4132,6 +5451,7 @@
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id: TabId(1),

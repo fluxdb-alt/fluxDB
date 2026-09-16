@@ -3,8 +3,20 @@ impl NavicatMain {
         let Some(connection_id) = self.pending_delete_connection.take() else {
             return;
         };
+        // 删除前记录该连接配置，用于按拥有权清理其 Keychain 条目（复制/更新各拥有独立 ref，
+        // 只删本连接，不触碰其他连接）。
+        let deleted_config = self
+            .controller
+            .state()
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == connection_id)
+            .map(|connection| connection.config.clone());
 
         self.dispatch(AppCommand::DeleteConnection(connection_id), cx);
+        if let Some(config) = deleted_config {
+            self.storage.delete_connection_secrets(&config);
+        }
         let _ = self
             .storage
             .save_connections(&self.controller.connection_configs());
@@ -23,8 +35,10 @@ impl NavicatMain {
 
     fn create_connection_from_form(&mut self, cx: &mut Context<Self>) {
         let kind = self.new_connection_kind.unwrap_or(DatabaseKind::MySql);
+        self.saving_connection = true;
         if let Err(message) = self.validate_new_connection(kind) {
             self.new_connection_form.test_status = Some(ConnectionTestStatus::Error(message));
+            self.saving_connection = false;
             cx.notify();
             return;
         }
@@ -72,6 +86,7 @@ impl NavicatMain {
             if matches!(event, fluxdb_app::AppEvent::ConnectionUpdated(_)) {
                 self.open_connection_from_sidebar(config.id, cx);
             }
+            self.saving_connection = false;
             cx.notify();
             return;
         }
@@ -85,6 +100,7 @@ impl NavicatMain {
             fluxdb_app::AppEvent::ConnectionTested(_, Err(error)) => {
                 self.new_connection_form.test_status =
                     Some(ConnectionTestStatus::Error(error.to_string()));
+                self.saving_connection = false;
                 cx.notify();
                 return;
             }
@@ -93,12 +109,14 @@ impl NavicatMain {
                     "{}：{}",
                     error.title, error.message
                 )));
+                self.saving_connection = false;
                 cx.notify();
                 return;
             }
             _ => {
                 self.new_connection_form.test_status =
                     Some(ConnectionTestStatus::Error("连接失败，未保存".to_string()));
+                self.saving_connection = false;
                 cx.notify();
                 return;
             }
@@ -133,6 +151,7 @@ impl NavicatMain {
             self.persist_sidebar_layout();
             self.open_connection_from_sidebar(config.id, cx);
         }
+        self.saving_connection = false;
         cx.notify();
     }
 
@@ -237,6 +256,15 @@ impl NavicatMain {
         self.new_connection_inputs.cloud_provider_select.update(cx, |select, cx| {
             select.set_selected_value(&cloud_provider, window, cx);
         });
+        // SSL 模式下拉回填：选项值与表单字段值相同，直接同步光标。
+        let pg_ssl_mode = self.new_connection_form.pg_tls_ssl_mode.clone();
+        self.new_connection_inputs.pg_ssl_mode_select.update(cx, |select, cx| {
+            select.set_selected_value(&pg_ssl_mode, window, cx);
+        });
+        let mysql_ssl_mode = self.new_connection_form.mysql_tls_ssl_mode.clone();
+        self.new_connection_inputs.mysql_ssl_mode_select.update(cx, |select, cx| {
+            select.set_selected_value(&mysql_ssl_mode, window, cx);
+        });
     }
 
     fn cancel_new_connection(&mut self, cx: &mut Context<Self>) {
@@ -303,8 +331,12 @@ impl NavicatMain {
             ConnectionField::SshPassword => form.ssh_password = value,
             ConnectionField::SshPrivateKey => form.ssh_private_key = value,
             ConnectionField::SshPassphrase => form.ssh_passphrase = value,
+            // —— PostgreSQL 专用 ——
+            ConnectionField::PgDefaultSchema => form.pg_default_schema = value,
+            ConnectionField::PgApplicationName => form.pg_application_name = value,
+            ConnectionField::PgConnectTimeoutSecs => form.pg_connect_timeout_secs = value,
+            ConnectionField::PgQueryTimeoutSecs => form.pg_query_timeout_secs = value,
             // —— MySQL / TiDB 专用 ——
-            ConnectionField::MysqlTlsSslMode => form.mysql_tls_ssl_mode = value,
             ConnectionField::MysqlCharset => form.mysql_charset = value,
             ConnectionField::MysqlProxyType => form.mysql_proxy_type = value,
             ConnectionField::MysqlSshConnectTimeout => form.mysql_ssh_connect_timeout_secs = value,
@@ -342,6 +374,9 @@ impl NavicatMain {
             ConnectionToggleField::ClusterAllowReadonly => form.cluster_allow_readonly = value,
             ConnectionToggleField::MysqlProxyEnabled => form.mysql_proxy_enabled = value,
             ConnectionToggleField::MysqlTcpKeepalive => form.mysql_tcp_keepalive = value,
+            ConnectionToggleField::PgTcpKeepalive => form.pg_tcp_keepalive = value,
+            ConnectionToggleField::PgShowOtherDatabases => form.pg_show_other_databases = value,
+            ConnectionToggleField::PgShowSystemSchemas => form.pg_show_system_schemas = value,
         }
         cx.notify();
     }
@@ -442,6 +477,10 @@ impl NavicatMain {
     }
 
     fn test_new_connection(&mut self, cx: &mut Context<Self>) {
+        // 已有测试在跑时忽略重复点击，避免叠加并发测试任务。
+        if self._test_connection_task.is_some() {
+            return;
+        }
         let Some(kind) = self.new_connection_kind else {
             return;
         };
@@ -514,6 +553,13 @@ impl NavicatMain {
                     return Err(message);
                 }
             }
+            // PostgreSQL 同样走结构化档案校验（TLS 模式与证书、SSH/代理、超时）。
+            DatabaseKind::Postgres => {
+                let profile = form.build_postgres_profile();
+                if let Some(message) = profile.validate() {
+                    return Err(message);
+                }
+            }
             _ => {
                 if form.host.trim().is_empty() {
                     return Err("请填写主机".to_string());
@@ -558,7 +604,7 @@ impl NavicatMain {
         }
 
         let endpoint = match kind {
-            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Redis => Endpoint::Tcp {
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Redis | DatabaseKind::Postgres => Endpoint::Tcp {
                 host: form.host.trim().to_string(),
                 port: form
                     .port
@@ -595,6 +641,13 @@ impl NavicatMain {
             None
         };
 
+        // PostgreSQL 专用：组装结构化档案——缺它 PG 连接无法拨号（连接器要求 profile）。
+        let postgres_profile = if kind == DatabaseKind::Postgres {
+            Some(form.build_postgres_profile())
+        } else {
+            None
+        };
+
         ConnectionDraft {
             name: form.name.trim().to_string(),
             kind,
@@ -603,6 +656,7 @@ impl NavicatMain {
             options,
             redis_profile,
             mysql_profile,
+            postgres_profile,
         }
     }
 

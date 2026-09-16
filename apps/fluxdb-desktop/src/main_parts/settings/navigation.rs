@@ -7,7 +7,9 @@ fn settings_content(
     font_size_slider: Entity<SliderState>,
     line_height_input: Entity<InputState>,
     radius_input: Entity<InputState>,
+    clients: [NativeClientPanelState; 2],
     dangerous_actions_collapsed: bool,
+    data_groups: SettingsDataGroupsCollapsed,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -57,7 +59,9 @@ fn settings_content(
                                     font_size_slider,
                                     line_height_input,
                                     radius_input,
+                                    clients,
                                     dangerous_actions_collapsed,
+                                    data_groups,
                                     window,
                                     cx,
                                 )),
@@ -261,7 +265,9 @@ fn settings_panel_body(
     font_size_slider: Entity<SliderState>,
     line_height_input: Entity<InputState>,
     radius_input: Entity<InputState>,
+    clients: [NativeClientPanelState; 2],
     dangerous_actions_collapsed: bool,
+    data_groups: SettingsDataGroupsCollapsed,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -293,7 +299,9 @@ fn settings_panel_body(
         SettingsPanelSection::System => {
             settings_system_panel(&editor_draft, colors, cx)
         }
-        SettingsPanelSection::Data => settings_data_panel(&editor_draft, colors, cx),
+        SettingsPanelSection::Data => {
+            settings_data_panel(&editor_draft, clients, data_groups, colors, window, cx)
+        }
         SettingsPanelSection::ConnectionSecurity => settings_connection_security_panel(colors),
         SettingsPanelSection::DatabaseSupport => {
             div().child(settings_database_support_panel(colors))

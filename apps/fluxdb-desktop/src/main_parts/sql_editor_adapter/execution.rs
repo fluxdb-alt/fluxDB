@@ -77,6 +77,49 @@ pub fn split_statements(text: &str) -> Vec<Range> {
             i += 2;
             continue;
         }
+        // PG dollar-quoting `$tag$...$tag$` / `$$...$$`：其内分号/引号皆属函数体文本，不得切分。
+        // 开启符为 `$` + 可选标识符标签 + `$`；`$1` 参数、SQLite `$name`（无尾 `$`）均不构成开启符。
+        if b == b'$' {
+            // 解析标签：空（`$$`）或 `[A-Za-z_][A-Za-z0-9_]*`。
+            let mut j = i + 1;
+            if j < n && bytes[j] != b'$' {
+                if !(bytes[j].is_ascii_alphabetic() || bytes[j] == b'_') {
+                    i += 1; // 非标签起始，按普通字符处理
+                    continue;
+                }
+                j += 1;
+                while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                    j += 1;
+                }
+                if j >= n || bytes[j] != b'$' {
+                    i += 1; // 未闭合为 `$tag$`，非 dollar-quote
+                    continue;
+                }
+            } else if j >= n {
+                i += 1;
+                continue;
+            }
+            // 此处 `$...$` 是合法开启符（tag 空或非空），寻找匹配闭合 `$tag$`。
+            let tag_len = j - (i + 1);
+            let tag_start = i + 1;
+            let mut k = j + 1;
+            let mut closed = false;
+            while k + tag_len + 1 <= n {
+                if bytes[k] == b'$'
+                    && bytes[k + tag_len] == b'$'
+                    && &bytes[k + 1..k + 1 + tag_len] == &bytes[tag_start..tag_start + tag_len]
+                {
+                    i = k + tag_len + 1; // 跳过整个 dollar-quote
+                    closed = true;
+                    break;
+                }
+                k += 1;
+            }
+            if !closed {
+                i = n; // 未闭合：保守读到结尾，其内分号不切分
+            }
+            continue;
+        }
         // 进入字符串
         if b == b'\'' || b == b'"' || b == b'`' {
             quote = Some(b);
@@ -162,6 +205,56 @@ pub fn split_statement_ranges_snapshot(
                 bytes.next();
             }
             continue;
+        }
+        // PG dollar-quoting：与 split_statements 同语义，跳过 `$tag$...$tag$`（含未闭合）。
+        if b == b'$' {
+            let at = |pos: usize| snapshot.byte_at(pos);
+            let mut j = i + 1;
+            let mut tag_start = 0usize;
+            let mut tag_len = 0usize;
+            let is_opener = match at(j) {
+                Some(b'$') => true, // `$$`：空标签
+                Some(c) if c.is_ascii_alphabetic() || c == b'_' => {
+                    tag_start = j;
+                    j += 1;
+                    while at(j).is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_') {
+                        j += 1;
+                    }
+                    if at(j) == Some(b'$') {
+                        tag_len = j - tag_start;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            };
+            if is_opener {
+                let opener_end = j + 1; // `$` 之后
+                let mut k = opener_end;
+                let mut closed = false;
+                while k + tag_len + 1 <= n {
+                    if at(k) == Some(b'$')
+                        && at(k + tag_len) == Some(b'$')
+                        && snapshot.text_in_range(Range::new(k + 1, k + 1 + tag_len))
+                            == snapshot.text_in_range(Range::new(tag_start, tag_start + tag_len))
+                    {
+                        // 跳到结束 `$` 之后：少消费 1 个（当前位已由外层 next 取过）。
+                        for _ in 0..(k + tag_len + 1 - i) {
+                            bytes.next();
+                        }
+                        closed = true;
+                        break;
+                    }
+                    k += 1;
+                }
+                if !closed {
+                    // 未闭合：消费到结尾。
+                    while bytes.next().is_some() {}
+                }
+                continue;
+            }
+            continue; // 非开启符，按普通字符（后续若为分号自然切分）
         }
         if b == b'\'' || b == b'"' || b == b'`' {
             quote = Some(b);
@@ -326,5 +419,34 @@ mod execution_tests {
     /// 测试辅助：取文本子串。
     fn gcd_text(text: &str, range: Range) -> String {
         text[range.start..range.end].to_string()
+    }
+
+    /// PG dollar-quote 体内分号不切分：`DO $$ ... ; ... $$`。
+    #[test]
+    fn dollar_quote_body_semicolons_not_split() {
+        let text = "DO $$ BEGIN\n  INSERT INTO t VALUES (1);\n  INSERT INTO t VALUES (2);\nEND $$; SELECT 1;";
+        let stmts = split_statements(text);
+        assert_eq!(stmts.len(), 2, "DO 块 + 后续语句，实际 {stmts:?}");
+        assert_eq!(&gcd_text(text, stmts[0]), "DO $$ BEGIN\n  INSERT INTO t VALUES (1);\n  INSERT INTO t VALUES (2);\nEND $$");
+        assert_eq!(&gcd_text(text, stmts[1]), "SELECT 1");
+    }
+
+    /// PG 具名 dollar-quote `$func$...$func$` 与 `$1` 参数不应混淆。
+    #[test]
+    fn dollar_quote_named_tag_and_params() {
+        let text = "SELECT $1; CREATE FUNCTION f() RETURNS int AS $func$\nBEGIN\n RETURN 1;\nEND\n$func$ LANGUAGE plpgsql;";
+        let stmts = split_statements(text);
+        assert_eq!(stmts.len(), 2, "参数与函数体应各自成段，实际 {stmts:?}");
+        assert_eq!(&gcd_text(text, stmts[0]), "SELECT $1");
+        assert!(gcd_text(text, stmts[1]).starts_with("CREATE FUNCTION f()"));
+    }
+
+    /// snapshot 切分器对 dollar-quote 与字节版一致。
+    #[test]
+    fn snapshot_scanner_handles_dollar_quote() {
+        let text = "DO $$ BEGIN x; END $$; select 2";
+        let snapshot = fluxdb_editor_core::EditorBuffer::new_from(text).snapshot();
+        assert_eq!(split_statement_ranges_snapshot(&snapshot), split_statements(text));
+        assert_eq!(split_statements(text).len(), 2);
     }
 }

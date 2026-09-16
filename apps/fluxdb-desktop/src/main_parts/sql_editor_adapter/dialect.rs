@@ -102,6 +102,7 @@ impl SqlDialect {
         match kind {
             DatabaseKind::MySql | DatabaseKind::TiDb => SqlDialect::Mysql,
             DatabaseKind::Sqlite => SqlDialect::Sqlite,
+            DatabaseKind::Postgres => SqlDialect::Postgres,
             DatabaseKind::MongoDb | DatabaseKind::Redis => SqlDialect::Mysql,
         }
     }

@@ -252,10 +252,21 @@ fn create_table_trigger_body_editor(
                 .border_color(colors.border_soft)
                 .flex()
                 .items_center()
+                .gap_2()
                 .text_size(px(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
-                .child("定义"),
+                .child("定义")
+                // PG 触发器体指引用已存在函数，不是行内 SQL（后端 postgres 渲染 EXECUTE FUNCTION）。
+                .when(create.database_kind == DatabaseKind::Postgres, |this| {
+                    this.child(
+                        div()
+                            .text_size(px(11.))
+                            .font_weight(gpui::FontWeight::NORMAL)
+                            .text_color(colors.muted)
+                            .child("PG 需引用已存在函数：函数名()"),
+                    )
+                }),
         )
         .child(
             div()

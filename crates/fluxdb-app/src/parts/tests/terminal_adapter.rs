@@ -22,6 +22,7 @@ fn redis_config(id: u64) -> ConnectionConfig {
         options: std::collections::BTreeMap::new(),
         redis_profile: None,
         mysql_profile: None,
+            postgres_profile: None,
     }
 }
 
@@ -132,6 +133,7 @@ fn redis_config_with_options(id: u64, endpoint: Endpoint, options: BTreeMap<Stri
         options,
         redis_profile: None,
         mysql_profile: None,
+            postgres_profile: None,
     }
 }
 

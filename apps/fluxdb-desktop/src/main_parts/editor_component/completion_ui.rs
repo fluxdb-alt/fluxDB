@@ -19,8 +19,9 @@ impl Editor {
     /// F005：异步加载选中项右侧 metadata 详情。
     ///
     /// 每次切换先 bump 取消令牌，令上一 in-flight 详情判废（latest-wins），再在后台
-    /// 线程调用 provider 的 `documentation`（SQL provider 走内存 CompletionIndex，
-    /// 无数据库访问）。提交时用令牌 + 仍在选中同一项 双守卫，旧结果不覆盖新选择。
+    /// 线程调用 provider 的 `documentation`（SQL provider 优先读内存 CompletionIndex，
+    /// 索引未覆盖该对象时才按 (库, schema, 表) 取一次列元数据）。提交时用令牌 +
+    /// 仍在选中同一项 双守卫，旧结果不覆盖新选择。
     pub(crate) fn request_completion_documentation(&mut self, cx: &mut Context<Self>) {
         self.completion_doc_state = None;
         let Some(item) = self.completion_items.get(self.completion_selected).cloned() else {
@@ -39,11 +40,16 @@ impl Editor {
         let kind = item.kind;
         let label = item.label.clone();
         let comment = (!item.documentation.is_empty()).then(|| item.documentation.clone());
+        // 候选身份随请求带走：详情按 (库, schema, 表) 定位对象，避免跨 schema 同名取错。
+        let schema = item.schema.clone();
         let request = DocumentationRequest {
             kind,
             label,
             comment,
-            latest_request: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(doc_id)),
+            schema,
+            // 共享（而非每次新建）的请求 id 原子：后续选中项切换 bump 后，旧请求在
+            // provider 侧 `should_cancel` 即为真，可提前停止索引未命中时的远程取数。
+            latest_request: doc_token.shared(),
             request_id: doc_id,
         };
         let task = cx.background_spawn(async move {

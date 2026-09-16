@@ -336,6 +336,7 @@ enum AppIcon {
     Query,
     Refresh,
     Redo,
+    Schema,
     Search,
     #[allow(dead_code)] // 经典图标资源，供后续“选择”类工具使用，保留。
     Select,
@@ -396,6 +397,8 @@ fn app_icon_path(icon: AppIcon) -> &'static str {
         AppIcon::Query => "icons/terminal-square.svg",
         AppIcon::Refresh => "icons/refresh-cw.svg",
         AppIcon::Redo => "icons/redo-2.svg",
+        // 复用树内 schema 图标（与对象树展示的 schema 一致）。
+        AppIcon::Schema => "tree/schema.svg",
         AppIcon::Search => "icons/search.svg",
         AppIcon::Select => "icons/text-select.svg",
         AppIcon::Settings => "icons/settings.svg",

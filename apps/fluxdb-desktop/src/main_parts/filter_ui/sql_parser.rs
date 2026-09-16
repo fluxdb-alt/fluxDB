@@ -1,9 +1,9 @@
-fn data_filter_rule_sql(rule: &DataFilterRule) -> Option<String> {
+fn data_filter_rule_sql(rule: &DataFilterRule, db_kind: DatabaseKind) -> Option<String> {
     if !rule.enabled {
         return None;
     }
     let field = rule.field.as_deref()?;
-    let field = sql_quote_ident(field);
+    let field = sql_quote_ident(field, db_kind);
     let normalized_values = rule
         .values
         .iter()
@@ -95,7 +95,7 @@ fn data_filter_multi_value_sql(
     }
 }
 
-fn data_filter_rules_sql(rules: &[DataFilterRule]) -> String {
+fn data_filter_rules_sql(rules: &[DataFilterRule], db_kind: DatabaseKind) -> String {
     let mut clauses = Vec::new();
     let mut index = 0;
     while index < rules.len() {
@@ -103,7 +103,7 @@ fn data_filter_rules_sql(rules: &[DataFilterRule]) -> String {
         if rule.grouped {
             let mut group_clauses = Vec::new();
             while index < rules.len() && rules[index].grouped {
-                if let Some(sql) = data_filter_rule_sql(&rules[index]) {
+                if let Some(sql) = data_filter_rule_sql(&rules[index], db_kind) {
                     group_clauses.push(sql);
                 }
                 index += 1;
@@ -112,7 +112,7 @@ fn data_filter_rules_sql(rules: &[DataFilterRule]) -> String {
                 clauses.push(format!("({})", group_clauses.join(" AND ")));
             }
         } else {
-            if let Some(sql) = data_filter_rule_sql(rule) {
+            if let Some(sql) = data_filter_rule_sql(rule, db_kind) {
                 clauses.push(sql);
             }
             index += 1;
@@ -121,7 +121,7 @@ fn data_filter_rules_sql(rules: &[DataFilterRule]) -> String {
     clauses.join(" AND ")
 }
 
-fn data_filter_rules_sql_pretty(rules: &[DataFilterRule]) -> String {
+fn data_filter_rules_sql_pretty(rules: &[DataFilterRule], db_kind: DatabaseKind) -> String {
     let mut lines = Vec::new();
     let mut index = 0;
     while index < rules.len() {
@@ -129,7 +129,7 @@ fn data_filter_rules_sql_pretty(rules: &[DataFilterRule]) -> String {
             let group_start = index;
             let mut group_lines = Vec::new();
             while index < rules.len() && rules[index].grouped {
-                if let Some(sql) = data_filter_rule_sql(&rules[index]) {
+                if let Some(sql) = data_filter_rule_sql(&rules[index], db_kind) {
                     group_lines.push(sql);
                 }
                 index += 1;
@@ -151,7 +151,7 @@ fn data_filter_rules_sql_pretty(rules: &[DataFilterRule]) -> String {
                 lines.push(")".to_string());
             }
         } else {
-            if let Some(sql) = data_filter_rule_sql(&rules[index]) {
+            if let Some(sql) = data_filter_rule_sql(&rules[index], db_kind) {
                 lines.push(if lines.is_empty() {
                     sql
                 } else {
@@ -267,12 +267,13 @@ fn split_top_level_sql_parts<'a>(
     let mut index = 0usize;
     let mut in_single_quote = false;
     let mut in_backtick = false;
+    let mut in_double_quote = false;
     let mut between_pending = false;
 
     while index < text.len() {
         let ch = text[index..].chars().next().unwrap();
         match ch {
-            '\'' if !in_backtick => {
+            '\'' if !in_backtick && !in_double_quote => {
                 if in_single_quote && text[index + 1..].starts_with('\'') {
                     index += 2;
                     continue;
@@ -281,7 +282,7 @@ fn split_top_level_sql_parts<'a>(
                 index += ch.len_utf8();
                 continue;
             }
-            '`' if !in_single_quote => {
+            '`' if !in_single_quote && !in_double_quote => {
                 if in_backtick && text[index + 1..].starts_with('`') {
                     index += 2;
                     continue;
@@ -290,12 +291,23 @@ fn split_top_level_sql_parts<'a>(
                 index += ch.len_utf8();
                 continue;
             }
-            '(' if !in_single_quote && !in_backtick => depth += 1,
-            ')' if !in_single_quote && !in_backtick => depth = (depth - 1).max(0),
+            '"' if !in_single_quote && !in_backtick => {
+                if in_double_quote && text[index + 1..].starts_with('"') {
+                    index += 2;
+                    continue;
+                }
+                in_double_quote = !in_double_quote;
+                index += ch.len_utf8();
+                continue;
+            }
+            '(' if !in_single_quote && !in_backtick && !in_double_quote => depth += 1,
+            ')' if !in_single_quote && !in_backtick && !in_double_quote => {
+                depth = (depth - 1).max(0)
+            }
             _ => {}
         }
 
-        if depth == 0 && !in_single_quote && !in_backtick {
+        if depth == 0 && !in_single_quote && !in_backtick && !in_double_quote {
             if skip_between && is_sql_word_at(text, index, "BETWEEN") {
                 between_pending = true;
             }
@@ -593,11 +605,12 @@ fn split_top_level_sql_list(text: &str) -> Vec<&str> {
     let mut index = 0usize;
     let mut in_single_quote = false;
     let mut in_backtick = false;
+    let mut in_double_quote = false;
 
     while index < text.len() {
         let ch = text[index..].chars().next().unwrap();
         match ch {
-            '\'' if !in_backtick => {
+            '\'' if !in_backtick && !in_double_quote => {
                 if in_single_quote && text[index + 1..].starts_with('\'') {
                     index += 2;
                     continue;
@@ -606,7 +619,7 @@ fn split_top_level_sql_list(text: &str) -> Vec<&str> {
                 index += ch.len_utf8();
                 continue;
             }
-            '`' if !in_single_quote => {
+            '`' if !in_single_quote && !in_double_quote => {
                 if in_backtick && text[index + 1..].starts_with('`') {
                     index += 2;
                     continue;
@@ -615,7 +628,16 @@ fn split_top_level_sql_list(text: &str) -> Vec<&str> {
                 index += ch.len_utf8();
                 continue;
             }
-            ',' if !in_single_quote && !in_backtick => {
+            '"' if !in_single_quote && !in_backtick => {
+                if in_double_quote && text[index + 1..].starts_with('"') {
+                    index += 2;
+                    continue;
+                }
+                in_double_quote = !in_double_quote;
+                index += ch.len_utf8();
+                continue;
+            }
+            ',' if !in_single_quote && !in_backtick && !in_double_quote => {
                 let item = text[start..index].trim();
                 if !item.is_empty() {
                     items.push(item);
@@ -677,7 +699,8 @@ fn is_sql_word_at(text: &str, index: usize, word: &str) -> bool {
 }
 
 fn data_filter_rule_text_signature(rule: &DataFilterRule) -> String {
-    data_filter_rule_sql(rule)
+    // 签名会归一化反引号和双引号，因此可固定用 MySQL 生成期望文本。
+    data_filter_rule_sql(rule, DatabaseKind::MySql)
         .map(|sql| sql_fragment_signature(trim_wrapping_parentheses(sql.as_str())))
         .unwrap_or_default()
 }
@@ -687,18 +710,32 @@ fn sql_fragment_signature(text: &str) -> String {
     let mut index = 0usize;
     let mut in_single_quote = false;
     let mut in_backtick = false;
+    let mut in_double_quote = false;
 
     while index < text.len() {
         let ch = text[index..].chars().next().unwrap();
         match ch {
-            '\'' if !in_backtick => {
+            '\'' if !in_backtick && !in_double_quote => {
                 in_single_quote = !in_single_quote;
                 out.push(ch);
             }
-            '`' if !in_single_quote => {
+            '`' if !in_single_quote && !in_double_quote => {
+                if in_backtick && text[index + 1..].starts_with('`') {
+                    out.push('`');
+                    index += 2;
+                    continue;
+                }
                 in_backtick = !in_backtick;
             }
-            _ if in_single_quote || in_backtick => {
+            '"' if !in_single_quote && !in_backtick => {
+                if in_double_quote && text[index + 1..].starts_with('"') {
+                    out.push('"');
+                    index += 2;
+                    continue;
+                }
+                in_double_quote = !in_double_quote;
+            }
+            _ if in_single_quote || in_backtick || in_double_quote => {
                 out.push(ch);
             }
             _ if ch.is_whitespace() => {}
@@ -717,12 +754,20 @@ fn parse_data_sort_rules_text(text: &str) -> Option<Vec<DataSortRule>> {
     }
 
     let mut rules = Vec::new();
-    for part in text.split(',') {
+    for part in split_top_level_sql_list(text) {
         let part = part.trim();
         if part.is_empty() {
             continue;
         }
-        let (field, direction) = split_last_whitespace(part).unwrap_or((part, "ASC"));
+        let (field, direction) = match split_last_whitespace(part) {
+            Some((field, direction))
+                if direction.eq_ignore_ascii_case("ASC")
+                    || direction.eq_ignore_ascii_case("DESC") =>
+            {
+                (field, direction)
+            }
+            _ => (part, "ASC"),
+        };
         let field = parse_sql_identifier(field)?;
         let ascending = !direction.eq_ignore_ascii_case("DESC");
         rules.push(DataSortRule {
@@ -838,12 +883,13 @@ fn find_top_level_sql_keyword(text: &str, keyword: &str) -> Option<usize> {
     let mut depth = 0i32;
     let mut in_single_quote = false;
     let mut in_backtick = false;
+    let mut in_double_quote = false;
     let mut index = 0usize;
 
     while index < text.len() {
         let ch = text[index..].chars().next().unwrap();
         match ch {
-            '\'' if !in_backtick => {
+            '\'' if !in_backtick && !in_double_quote => {
                 if in_single_quote && text[index + 1..].starts_with('\'') {
                     index += 2;
                     continue;
@@ -852,7 +898,7 @@ fn find_top_level_sql_keyword(text: &str, keyword: &str) -> Option<usize> {
                 index += ch.len_utf8();
                 continue;
             }
-            '`' if !in_single_quote => {
+            '`' if !in_single_quote && !in_double_quote => {
                 if in_backtick && text[index + 1..].starts_with('`') {
                     index += 2;
                     continue;
@@ -861,14 +907,26 @@ fn find_top_level_sql_keyword(text: &str, keyword: &str) -> Option<usize> {
                 index += ch.len_utf8();
                 continue;
             }
-            '(' if !in_single_quote && !in_backtick => depth += 1,
-            ')' if !in_single_quote && !in_backtick => depth = (depth - 1).max(0),
+            '"' if !in_single_quote && !in_backtick => {
+                if in_double_quote && text[index + 1..].starts_with('"') {
+                    index += 2;
+                    continue;
+                }
+                in_double_quote = !in_double_quote;
+                index += ch.len_utf8();
+                continue;
+            }
+            '(' if !in_single_quote && !in_backtick && !in_double_quote => depth += 1,
+            ')' if !in_single_quote && !in_backtick && !in_double_quote => {
+                depth = (depth - 1).max(0)
+            }
             _ => {}
         }
 
         if depth == 0
             && !in_single_quote
             && !in_backtick
+            && !in_double_quote
             && upper_text[index..].starts_with(&upper_keyword)
             && sql_keyword_boundary(text, index, keyword.len())
         {
@@ -886,7 +944,7 @@ fn sql_keyword_boundary(text: &str, start: usize, len: usize) -> bool {
 }
 
 fn is_sql_identifier_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || ch == '_' || ch == '`'
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '`' || ch == '"'
 }
 
 fn data_sort_rules_after_header_sort(
@@ -916,14 +974,14 @@ fn data_sort_rules_after_header_sort(
     rules
 }
 
-fn data_sort_rules_text(rules: &[DataSortRule]) -> String {
+fn data_sort_rules_text(rules: &[DataSortRule], db_kind: DatabaseKind) -> String {
     rules
         .iter()
         .filter(|rule| rule.enabled)
         .map(|rule| {
             format!(
                 "{} {}",
-                sql_quote_ident(&rule.field),
+                sql_quote_ident(&rule.field, db_kind),
                 if rule.ascending { "ASC" } else { "DESC" }
             )
         })
@@ -976,6 +1034,8 @@ fn parse_sql_identifier(text: &str) -> Option<String> {
     }
     if text.starts_with('`') && text.ends_with('`') && text.len() >= 2 {
         Some(text[1..text.len() - 1].replace("``", "`"))
+    } else if text.starts_with('"') && text.ends_with('"') && text.len() >= 2 {
+        Some(text[1..text.len() - 1].replace("\"\"", "\""))
     } else if text.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
         Some(text.to_string())
     } else {
@@ -1026,20 +1086,14 @@ fn data_filter_like_sql(
         .join(format!(" {joiner} ").as_str())
 }
 
-fn sql_qualified_object_name(object: &ObjectPath) -> String {
-    let mut parts = Vec::new();
-    if let Some(database) = object.database.as_deref() {
-        parts.push(sql_quote_ident(database));
-    }
-    if let Some(schema) = object.schema.as_deref() {
-        parts.push(sql_quote_ident(schema));
-    }
-    parts.push(sql_quote_ident(&object.name));
-    parts.join(".")
+/// 按方言限定对象名（标识符引用规则统一收敛到 `SqlDialect::qualified_object_name`）。
+fn sql_qualified_object_name(object: &ObjectPath, db_kind: DatabaseKind) -> String {
+    sql_dialect(db_kind).qualified_object_name(object)
 }
 
-fn sql_quote_ident(value: &str) -> String {
-    format!("`{}`", value.replace('`', "``"))
+/// 按方言引用标识符（引用规则统一收敛到 `SqlDialect::quote_identifier`）。
+fn sql_quote_ident(value: &str, db_kind: DatabaseKind) -> String {
+    sql_dialect(db_kind).quote_identifier(value)
 }
 
 fn sql_quote_literal(value: &str) -> String {
@@ -1069,8 +1123,12 @@ fn data_change_item_count(changes: &DataChangeSet) -> usize {
     changes.dirty_cell_count() + changes.deletes.len()
 }
 
-fn data_change_sql_preview(page: &DataPage, changes: &DataChangeSet) -> String {
-    let table = sql_qualified_object_name(&changes.object);
+fn data_change_sql_preview(
+    page: &DataPage,
+    changes: &DataChangeSet,
+    db_kind: DatabaseKind,
+) -> String {
+    let table = sql_qualified_object_name(&changes.object, db_kind);
     let mut statements = Vec::new();
 
     for update in &changes.updates {
@@ -1083,13 +1141,13 @@ fn data_change_sql_preview(page: &DataPage, changes: &DataChangeSet) -> String {
             .map(|cell| {
                 format!(
                     "{} = {}",
-                    sql_quote_ident(&cell.column),
-                    sql_preview_cell_literal(&cell.value)
+                    sql_quote_ident(&cell.column, db_kind),
+                    sql_preview_cell_literal(&cell.value, db_kind)
                 )
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let where_clause = row_identity_sql(&update.identity);
+        let where_clause = row_identity_sql(&update.identity, db_kind);
         statements.push(format!(
             "UPDATE {table} SET {assignments} WHERE {where_clause};"
         ));
@@ -1108,11 +1166,11 @@ fn data_change_sql_preview(page: &DataPage, changes: &DataChangeSet) -> String {
         }
         let column_names = insert_values
             .iter()
-            .map(|(column, _)| sql_quote_ident(&column.name))
+            .map(|(column, _)| sql_quote_ident(&column.name, db_kind))
             .collect::<Vec<_>>();
         let values = insert_values
             .iter()
-            .map(|(_, value)| sql_preview_cell_literal(value))
+            .map(|(_, value)| sql_preview_cell_literal(value, db_kind))
             .collect::<Vec<_>>();
         statements.push(format!(
             "INSERT INTO {table} ({}) VALUES ({});",
@@ -1124,7 +1182,7 @@ fn data_change_sql_preview(page: &DataPage, changes: &DataChangeSet) -> String {
     for identity in &changes.deletes {
         statements.push(format!(
             "DELETE FROM {table} WHERE {};",
-            row_identity_sql(identity)
+            row_identity_sql(identity, db_kind)
         ));
     }
 
@@ -1227,38 +1285,39 @@ fn row_insert_sql(
     object: &ObjectPath,
     fields: &[RowFieldSnapshot],
     skip_primary_key: bool,
+    db_kind: DatabaseKind,
 ) -> String {
     let values = fields
         .iter()
         .filter(|field| !(skip_primary_key && field.primary_key))
         .filter(|field| !matches!(field.value, CellValue::Null))
         .collect::<Vec<_>>();
-    let table = sql_qualified_object_name(object);
+    let table = sql_qualified_object_name(object, db_kind);
     if values.is_empty() {
         return format!("INSERT INTO {table} DEFAULT VALUES;");
     }
     let columns = values
         .iter()
-        .map(|field| sql_quote_ident(&field.name))
+        .map(|field| sql_quote_ident(&field.name, db_kind))
         .collect::<Vec<_>>()
         .join(", ");
     let literals = values
         .iter()
-        .map(|field| sql_preview_cell_literal(&field.value))
+        .map(|field| sql_preview_cell_literal(&field.value, db_kind))
         .collect::<Vec<_>>()
         .join(", ");
     format!("INSERT INTO {table} ({columns}) VALUES ({literals});")
 }
 
-fn row_update_sql(object: &ObjectPath, fields: &[RowFieldSnapshot]) -> String {
+fn row_update_sql(object: &ObjectPath, fields: &[RowFieldSnapshot], db_kind: DatabaseKind) -> String {
     let assignments = fields
         .iter()
         .filter(|field| !field.primary_key)
         .map(|field| {
             format!(
                 "{} = {}",
-                sql_quote_ident(&field.name),
-                sql_preview_cell_literal(&field.value)
+                sql_quote_ident(&field.name, db_kind),
+                sql_preview_cell_literal(&field.value, db_kind)
             )
         })
         .collect::<Vec<_>>()
@@ -1269,8 +1328,8 @@ fn row_update_sql(object: &ObjectPath, fields: &[RowFieldSnapshot]) -> String {
         .map(|field| {
             format!(
                 "{} = {}",
-                sql_quote_ident(&field.name),
-                sql_preview_cell_literal(&field.value)
+                sql_quote_ident(&field.name, db_kind),
+                sql_preview_cell_literal(&field.value, db_kind)
             )
         })
         .collect::<Vec<_>>()
@@ -1282,13 +1341,13 @@ fn row_update_sql(object: &ObjectPath, fields: &[RowFieldSnapshot]) -> String {
     };
     format!(
         "UPDATE {} SET {} WHERE {};",
-        sql_qualified_object_name(object),
+        sql_qualified_object_name(object, db_kind),
         assignments,
         where_clause
     )
 }
 
-fn row_identity_sql(identity: &RowIdentity) -> String {
+fn row_identity_sql(identity: &RowIdentity, db_kind: DatabaseKind) -> String {
     if identity.values.is_empty() {
         return "1 = 0".to_string();
     }
@@ -1298,29 +1357,45 @@ fn row_identity_sql(identity: &RowIdentity) -> String {
         .map(|(column, value)| {
             format!(
                 "{} = {}",
-                sql_quote_ident(column),
-                sql_preview_cell_literal(value)
+                sql_quote_ident(column, db_kind),
+                sql_preview_cell_literal(value, db_kind)
             )
         })
         .collect::<Vec<_>>()
         .join(" AND ")
 }
 
-fn sql_preview_cell_literal(value: &CellValue) -> String {
+/// 单元格 SQL 字面量（按方言）：PG bytea 用 `'\x..'::bytea`（`X'..'` 非法）、jsonb 用 `::jsonb`；
+/// MySQL/SQLite 保持 `X'..'`、裸文本。
+fn sql_preview_cell_literal(value: &CellValue, db_kind: DatabaseKind) -> String {
+    let is_pg = db_kind == DatabaseKind::Postgres;
     match value {
         CellValue::Null => "NULL".to_string(),
         CellValue::Bool(true) => "TRUE".to_string(),
         CellValue::Bool(false) => "FALSE".to_string(),
         CellValue::I64(value) => value.to_string(),
         CellValue::F64(value) => value.to_string(),
-        CellValue::Text(value) | CellValue::Json(value) => sql_quote_literal(value),
+        // JSON 在 PG 需显式转 jsonb（文本字面量对 jsonb 列可隐式，但显式更稳且语义明确）。
+        CellValue::Json(value) => {
+            if is_pg {
+                format!("{}::jsonb", sql_quote_literal(value))
+            } else {
+                sql_quote_literal(value)
+            }
+        }
+        CellValue::Text(value) => sql_quote_literal(value),
         CellValue::BinarySummary(_) => "NULL".to_string(),
         CellValue::Bytes(value) => {
             let hex = value
                 .iter()
-                .map(|byte| format!("{byte:02X}"))
+                .map(|byte| format!("{byte:02x}"))
                 .collect::<String>();
-            format!("X'{hex}'")
+            if is_pg {
+                // PG hex bytea 字面量：'\xDEADBEEF'::bytea。
+                format!("'\\x{hex}'::bytea")
+            } else {
+                format!("X'{}'", hex.to_uppercase())
+            }
         }
     }
 }

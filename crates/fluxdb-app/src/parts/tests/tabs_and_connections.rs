@@ -26,6 +26,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         let event = controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
 
         assert_eq!(event, AppEvent::TabOpened(TabId(1)));
@@ -110,6 +111,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         let event = controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
 
         assert_eq!(event, AppEvent::TabOpened(TabId(1)));
@@ -196,6 +198,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -232,6 +235,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -256,6 +260,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::AddCreateTableColumn(TabId(1)));
         controller.dispatch(AppCommand::SelectCreateTableColumn {
@@ -314,6 +319,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -388,10 +394,12 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }]));
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
         });
 
         let create = create_table(&controller);
@@ -412,6 +420,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::AddCreateTableColumn(TabId(1)));
         controller.dispatch(AppCommand::AddCreateTableColumn(TabId(1)));
@@ -466,6 +475,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -527,6 +537,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -563,6 +574,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableColumnField {
             tab_id: TabId(1),
@@ -597,6 +609,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -652,6 +665,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -735,6 +749,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -784,6 +799,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -823,6 +839,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::AddCreateTableIndex(TabId(1)));
         controller.dispatch(AppCommand::SetCreateTableIndexField {
@@ -876,6 +893,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::AddCreateTableColumn(TabId(1)));
 
@@ -942,6 +960,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -1011,6 +1030,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(2),
             database: Some("main".to_string()),
+            schema: None,
         });
 
         let create = create_table(&controller);
@@ -1085,6 +1105,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -1127,6 +1148,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenCreateTable {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None,
         });
         controller.dispatch(AppCommand::SetCreateTableField {
             tab_id: TabId(1),
@@ -1171,6 +1193,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("fluxdb_demo".to_string()),
+            schema: None
         });
 
         assert_eq!(
@@ -1188,6 +1211,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("community_test".to_string()),
+            schema: None
         });
         assert_eq!(
             controller.dispatch(AppCommand::OpenSettings),
@@ -1298,6 +1322,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }]));
 
         let event = controller.dispatch(AppCommand::CreateConnection(ConnectionDraft {
@@ -1311,6 +1336,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }));
 
         assert!(matches!(
@@ -1355,6 +1381,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             options: std::collections::BTreeMap::from([("password".to_string(), password)]),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
 
         let first = controller.dispatch(AppCommand::CreateConnection(draft(
@@ -1377,6 +1404,81 @@ fn create_table(controller: &AppController) -> &CreateTableState {
     }
 
     #[test]
+    fn copy_of_postgres_connection_gets_independent_credential_ref_and_secret() {
+        // 复制连接：draft 携带原连接的结构化档案（含内联密钥），即便带旧 credential_ref，
+        // CreateConnection 也必须为副本派生全新 ref，且档案内联密钥原样保留（供新 ref 落 keychain）。
+        let mut controller = AppController::new();
+        let mut profile = fluxdb_core::PostgresConnectionProfile::default();
+        profile.basic.host = "127.0.0.1".to_string();
+        profile.basic.port = 5432;
+        profile.basic.username = "postgres".to_string();
+        profile.basic.password = fluxdb_core::SecretRef::inline("original-secret");
+        let draft = ConnectionDraft {
+            name: "开发环境-副本".to_string(),
+            kind: DatabaseKind::Postgres,
+            endpoint: Endpoint::Tcp {
+                host: "127.0.0.1".to_string(),
+                port: 5432,
+                database: None,
+            },
+            credential_ref: Some("gdb.connection.1".to_string()), // copy_connection 带过来的旧 ref
+            options: Default::default(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: Some(profile),
+        };
+        let AppEvent::ConnectionCreated(copy) = controller
+            .dispatch(AppCommand::CreateConnection(draft))
+        else {
+            panic!("expected connection created");
+        };
+        // 副本必须持有全新 ref，绝不能共享原连接的 ref。
+        assert_eq!(copy.credential_ref.as_deref(), Some("gdb.connection.1"), "无既有 id 时首连为 .1");
+        // 副本档案的内联密钥原样保留（内存态），可被 save_connection_secret 写入新 ref 的槽位。
+        assert_eq!(
+            copy.postgres_profile
+                .as_ref()
+                .and_then(|p| p.basic.password.inline.as_deref()),
+            Some("original-secret"),
+            "副本必须携带原密钥供新 ref 落 keychain"
+        );
+    }
+
+    #[test]
+    fn copy_of_mysql_connection_with_flat_password_gets_independent_ref() {
+        // MySQL 扁平密码路径：副本带旧 ref，也必须派生新 ref（as_create 的 has_credentials 由 options 判定）。
+        let mut controller = AppController::new();
+        let draft = ConnectionDraft {
+            name: "mysql-副本".to_string(),
+            kind: DatabaseKind::MySql,
+            endpoint: Endpoint::Tcp {
+                host: "127.0.0.1".to_string(),
+                port: 3306,
+                database: None,
+            },
+            credential_ref: Some("gdb.connection.7".to_string()),
+            options: std::collections::BTreeMap::from([(
+                "password".to_string(),
+                "mysql-secret".to_string(),
+            )]),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+        };
+        let AppEvent::ConnectionCreated(copy) = controller
+            .dispatch(AppCommand::CreateConnection(draft))
+        else {
+            panic!("expected connection created");
+        };
+        assert_eq!(
+            copy.credential_ref,
+            Some("gdb.connection.1".to_string()),
+            "副本派生新 ref，不沿用旧 ref"
+        );
+        assert_eq!(copy.options.get("password").map(String::as_str), Some("mysql-secret"));
+    }
+
+    #[test]
     fn sqlite_test_connection_uses_real_connector() {
         let mut controller = AppController::new();
 
@@ -1392,6 +1494,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }));
 
         assert!(matches!(
@@ -1409,6 +1512,8 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             name: "new_db".to_string(),
             charset: "utf8mb4".to_string(),
             collation: "utf8mb4_unicode_ci".to_string(),
+            owner: String::new(),
+            template: String::new(),
             path: None,
         }));
 
@@ -1459,6 +1564,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }]));
 
         let event = controller.dispatch(AppCommand::CreateDatabase(CreateDatabaseRequest {
@@ -1466,6 +1572,8 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             name: "analytics".to_string(),
             charset: String::new(),
             collation: String::new(),
+            owner: String::new(),
+            template: String::new(),
             path: Some(attached_path.clone()),
         }));
 
@@ -1578,10 +1686,12 @@ fn create_table(controller: &AppController) -> &CreateTableState {
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("main".to_string()),
+            schema: None
         });
         controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
             connection_id: ConnectionId(1),
             database: Some("other".to_string()),
+            schema: None
         });
 
         controller.dispatch(AppCommand::DisconnectDatabase {
@@ -1601,6 +1711,7 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             TabKind::QueryEditor(QueryEditorState {
                 connection_id: ConnectionId(1),
                 database: Some(database),
+                schema: None,
                 ..
             }) if database == "other"
         ));
@@ -1648,6 +1759,60 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             })
         ));
         assert_eq!(controller.state().active_tab, Some(TabId(2)));
+    }
+
+    /// 生命周期旧响应防覆盖：断开、重连、改配置、删对象后的迟到加载不得写回。
+    /// 单飞只防同 key 并发；这些场景由 connection_load_is_current 的「存在+连接+config 一致」判定兜底。
+    #[test]
+    fn stale_object_load_dropped_after_disconnect_reconnect_or_config_change() {
+        let mut controller = AppController::with_mock_data();
+        controller.dispatch(AppCommand::OpenConnection(ConnectionId(1))); // connected = true
+        let expected = controller.state().connections[0].config.clone();
+
+        // 加载发起时连接存在、连接中、config 未变 → 有效，可合并。
+        assert!(AppController::connection_load_is_current(
+            &controller.state,
+            expected.id,
+            Some(&expected)
+        ));
+
+        // 断开连接：connected=false → 迟到的对象加载应被丢弃。
+        controller.dispatch(AppCommand::DisconnectConnection(expected.id));
+        assert!(!AppController::connection_load_is_current(
+            &controller.state,
+            expected.id,
+            Some(&expected)
+        ));
+
+        // 重连（回到 connected=true、同 config）→ 再次有效。
+        controller.dispatch(AppCommand::OpenConnection(expected.id));
+        assert!(AppController::connection_load_is_current(
+            &controller.state,
+            expected.id,
+            Some(&expected)
+        ));
+
+        // 改配置：config 与发起时不同 → 丢弃。
+        let mut changed = expected.clone();
+        changed.endpoint = Endpoint::Tcp {
+            host: "changed-host".into(),
+            port: 3306,
+            database: None,
+        };
+        controller.dispatch(AppCommand::UpdateConnection(changed));
+        assert!(!AppController::connection_load_is_current(
+            &controller.state,
+            expected.id,
+            Some(&expected)
+        ));
+
+        // 删除连接：连接不存在 → 丢弃。
+        controller.dispatch(AppCommand::DeleteConnection(expected.id));
+        assert!(!AppController::connection_load_is_current(
+            &controller.state,
+            expected.id,
+            Some(&expected)
+        ));
     }
 
     #[test]

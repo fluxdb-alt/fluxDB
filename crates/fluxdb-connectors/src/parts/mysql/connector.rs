@@ -136,7 +136,10 @@ impl Connector for MySqlConnector {
         mysql_preview_data_export(config, path, fields, sort, filters)
     }
 
-    fn apply_changes(&self, changes: &DataChangeSet) -> fluxdb_core::Result<()> {
+    fn apply_changes(
+        &self,
+        changes: &DataChangeSet,
+    ) -> fluxdb_core::Result<AppliedChangeOutcome> {
         let Some(config) = self.config.as_ref() else {
             return Err(Error::new(
                 ErrorKind::Connection,
@@ -144,7 +147,9 @@ impl Connector for MySqlConnector {
             ));
         };
 
-        mysql_apply_changes(config, changes)
+        mysql_apply_changes(config, changes)?;
+        // 这些方言暂不返回插入身份：INSERT 补偿回退到编辑器已知的主键值。
+        Ok(AppliedChangeOutcome::default())
     }
 
     fn load_cell_binary(

@@ -464,6 +464,11 @@ pub struct CompletionItem {
     pub sort_text: String,
     pub priority: i32,
     pub commit_characters: Vec<char>,
+    /// 候选对象所属 schema/命名空间（provider 私有语义，核心只负责透传）。
+    ///
+    /// 用于把候选项的完整身份带进详情请求：详情解析按 (库, schema, 表) 命中元数据，
+    /// 避免同名跨 schema 取错对象；不参与渲染、过滤与排序。
+    pub schema: Option<String>,
 }
 
 impl CompletionItem {
@@ -481,6 +486,7 @@ impl CompletionItem {
             sort_text: String::new(),
             priority: 0,
             commit_characters: Vec::new(),
+            schema: None,
         }
     }
 

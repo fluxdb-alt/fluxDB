@@ -9,6 +9,53 @@ impl AppController {
             completion_index: Arc::new(Mutex::new(CompletionIndex::default())),
             completion_index_storage: None,
             recency: Arc::new(Mutex::new(RecencyFrequency::new())),
+            query_cancel_flags: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    /// 为标签登记一个新的查询取消标志（每次执行前调用），同时清掉已关闭标签的旧标志，
+    /// 避免长会话里标志表随历史标签单调增长。
+    fn register_query_cancel_flag(&mut self, tab_id: TabId) {
+        if let Ok(mut flags) = self.query_cancel_flags.lock() {
+            let open_tabs = self
+                .state
+                .tabs
+                .iter()
+                .map(|tab| tab.id)
+                .collect::<BTreeSet<_>>();
+            flags.retain(|tab_id, _| open_tabs.contains(tab_id));
+            flags.insert(
+                tab_id,
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            );
+        }
+    }
+
+    /// 取标签当前的取消标志；没有登记过（例如后台任务、测试直接派发执行）时返回 `None`，
+    /// 调用方按「不可取消」处理，与旧行为一致。
+    fn query_cancel_flag(&self, tab_id: TabId) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        self.query_cancel_flags
+            .lock()
+            .ok()
+            .and_then(|flags| flags.get(&tab_id).cloned())
+    }
+
+    /// 置位标签的取消标志：执行线程会在下一次检查点（每 100ms）发送服务端取消。
+    /// 返回是否确有在执行的查询（无标志 = 没有进行中的执行）。
+    fn request_query_cancel(&self, tab_id: TabId) -> bool {
+        let Some(flag) = self.query_cancel_flag(tab_id) else {
+            return false;
+        };
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
+    /// 查询完成后移除本次执行的取消标志，避免已经置位的旧标志污染后续不经过
+    /// `StartQueryExecution` 的执行入口。后台执行线程已经持有自己的 `Arc`，移除映射
+    /// 不会影响它正在进行的收尾。
+    fn clear_query_cancel_flag(&self, tab_id: TabId) {
+        if let Ok(mut flags) = self.query_cancel_flags.lock() {
+            flags.remove(&tab_id);
         }
     }
 
@@ -61,6 +108,22 @@ impl AppController {
         filters: &[FilterSpec],
     ) -> fluxdb_core::Result<DataPage> {
         self.load_data_page(object, Pagination::new(offset, limit), sort, filters)
+    }
+
+    /// 一致快照分页导出（PG 经单 REPEATABLE READ 事务，其余默认逐页）。
+    /// 供桌面导出驱动对 PG 获得全量一致快照，避免并发写行间漂移。
+    pub fn export_pages_for_connection(
+        &self,
+        object: &ObjectPath,
+        sort: &[SortSpec],
+        filters: &[FilterSpec],
+        on_cancel: &dyn Fn() -> bool,
+        on_page: &mut dyn FnMut(DataPage) -> bool,
+    ) -> fluxdb_core::Result<()> {
+        let config = self
+            .connection_config(object.connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        export_pages_for_connection(&config, object, sort, filters, on_cancel, on_page)
     }
 
     pub fn preview_data_export(
@@ -179,6 +242,33 @@ impl AppController {
                 replace_redis_key_row(target, key, row.clone());
             }
         }
+    }
+
+    /// 生命周期旧响应防覆盖判定：该连接当前仍存在、仍连接、且 config 与发起加载时一致。
+    ///
+    /// 单飞只保证同 key 无并行；断开、重连、改配置后迟到的旧响应不得写回新状态。
+    /// 这里是纯函数，便于单元测试覆盖各生命周期场景。
+    pub fn connection_load_is_current(
+        state: &AppState,
+        connection_id: ConnectionId,
+        expected_config: Option<&ConnectionConfig>,
+    ) -> bool {
+        state
+            .connections
+            .iter()
+            .find(|c| c.config.id == connection_id)
+            .is_some_and(|c| {
+                c.connected && expected_config.map(|expected| expected == &c.config).unwrap_or(false)
+            })
+    }
+
+    /// 实例包装：树加载完成时用当前 state 判断连接加载是否仍有效。
+    pub fn is_connection_load_current(
+        &self,
+        connection_id: ConnectionId,
+        expected_config: Option<&ConnectionConfig>,
+    ) -> bool {
+        Self::connection_load_is_current(&self.state, connection_id, expected_config)
     }
 
     pub fn merge_loaded_children(&mut self, parent: &ObjectPath, children: Vec<ObjectSummary>) {
@@ -323,6 +413,7 @@ impl AppController {
         &self,
         connection_id: ConnectionId,
         database: Option<String>,
+        schema: Option<String>,
         text: String,
         cursor: usize,
         explicit: bool,
@@ -330,6 +421,7 @@ impl AppController {
         self.query_completions_for_text_with_cancel(
             connection_id,
             database,
+            schema,
             text,
             cursor,
             explicit,
@@ -342,6 +434,7 @@ impl AppController {
         &self,
         connection_id: ConnectionId,
         database: Option<String>,
+        schema: Option<String>,
         text: String,
         cursor: usize,
         explicit: bool,
@@ -351,6 +444,7 @@ impl AppController {
         let editor = QueryEditorState {
             connection_id,
             database,
+            schema,
             text,
             origin: None,
             saved_fingerprint: None,
@@ -435,10 +529,12 @@ impl AppController {
     }
 
     /// F005：选中补全项的说明文档（懒加载）。表/视图→列清单、列→注释、函数等→名称。
-    /// 全部来自内存 CompletionIndex，无远程查询；对象不在索引 / 无可用文档返回 Error。
+    /// 表/视图优先读内存 CompletionIndex，索引未覆盖该对象时按 (库, schema, 表) 取一次
+    /// 列元数据并写回索引；对象取不到列 / 无可用文档返回 Error。
     ///
     /// `comment` 为候选自带的内联注释，仅对 Column 有意义（懒加载详情面板不另存
-    /// 全文快照，沿用候选在补全时可得的注释文本）。
+    /// 全文快照，沿用候选在补全时可得的注释文本）。`schema` 为候选携带的对象 schema
+    /// 作用域（见 `QueryCompletionItem::schema`），是命中列身份的必要信息。
     pub fn completion_documentation_for(
         &self,
         connection_id: ConnectionId,
@@ -446,6 +542,7 @@ impl AppController {
         kind: fluxdb_core::QueryCompletionKind,
         label: String,
         comment: Option<String>,
+        schema: Option<String>,
     ) -> CompletionDocumentationState {
         let no_cancel = || false;
         self.completion_documentation_for_with_cancel(
@@ -454,15 +551,16 @@ impl AppController {
             kind,
             label,
             comment,
+            schema,
             &no_cancel,
         )
     }
 
     /// F005 变体：带 latest-wins 取消回调的详情解析。
     ///
-    /// 让 UI 在选中项切换时把 `should_cancel` 绑定到新请求 id，列清单逐行组装期间
-    /// 一旦最新请求 id 变化即提前返回 `Loading`（停止旧请求线程），保证旧详情结果
-    /// 不覆盖新选中项。数据仍全部来自内存 `CompletionIndex`，无远程查询。
+    /// 让 UI 在选中项切换时把 `should_cancel` 绑定到新请求 id：索引未命中而需要按需
+    /// 取元数据时，旧请求在建连/查询阶段即可提前收敛；列清单逐行组装期间一旦最新请求
+    /// id 变化也立即返回 `Loading`，保证旧详情不覆盖新选中项。
     pub fn completion_documentation_for_with_cancel(
         &self,
         connection_id: ConnectionId,
@@ -470,6 +568,7 @@ impl AppController {
         kind: fluxdb_core::QueryCompletionKind,
         label: String,
         comment: Option<String>,
+        schema: Option<String>,
         should_cancel: &dyn Fn() -> bool,
     ) -> CompletionDocumentationState {
         let item = QueryCompletionItem {
@@ -480,9 +579,16 @@ impl AppController {
             documentation: comment,
             filter_text: None,
             sort_text: None,
-                    ..Default::default()
-};
-        self.completion_item_documentation(connection_id, database.as_deref(), &item, should_cancel)
+            schema,
+            ..Default::default()
+        };
+        self.completion_item_documentation(
+            connection_id,
+            database.as_deref(),
+            item.schema.as_deref(),
+            &item,
+            should_cancel,
+        )
     }
 
     /// 侧栏表/视图节点悬停预览：加载字段清单，供浮层预览卡渲染。

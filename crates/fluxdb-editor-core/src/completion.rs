@@ -109,6 +109,9 @@ pub struct DocumentationRequest {
     /// 候选自带的内联注释（仅 Column 有意义）。不缓存全文快照，沿用补全可得的
     /// 注释文本；`None` 表示无内联注释。
     pub comment: Option<String>,
+    /// 候选对象所属 schema（由候选项携带，`None` 表示未知/不适用）。
+    /// 详情解析据此按 (库, schema, 表) 查询完整身份。
+    pub schema: Option<String>,
     pub latest_request: Arc<std::sync::atomic::AtomicU64>,
     pub request_id: u64,
 }

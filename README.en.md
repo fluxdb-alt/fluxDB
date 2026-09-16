@@ -7,7 +7,7 @@
 ![macOS](https://img.shields.io/badge/macOS-supported-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%2F%20Linux%20planned-lightgrey)
 ![UI Framework](https://img.shields.io/badge/UI-GPUI-blue)
-![Databases](https://img.shields.io/badge/Databases-MySQL%20%7C%20SQLite%20%7C%20Redis-green)
+![Databases](https://img.shields.io/badge/Databases-MySQL%20%7C%20PostgreSQL%20%7C%20SQLite%20%7C%20Redis-green)
 
 ## Early-Stage Notice
 
@@ -45,11 +45,11 @@ The script builds a release binary, embeds Homebrew dynamic libraries, ad-hoc si
 
 ## About
 
-FluxDB is an open-source **cross-platform database manager / database GUI**, a native desktop app built on **Rust + GPUI**. It bundles a **SQL editor**, table structure management, data browsing and editing, and more, supporting **MySQL, SQLite, and Redis** through a unified connector layer. Whether you're looking for a database tool, a SQL editor, or a Rust desktop app reference, FluxDB is worth a look.
+FluxDB is an open-source **cross-platform database manager / database GUI**, a native desktop app built on **Rust + GPUI**. It bundles a **SQL editor**, table structure management, data browsing and editing, and more, supporting **MySQL, PostgreSQL, SQLite, and Redis** through a unified connector layer. Whether you're looking for a database tool, a SQL editor, or a Rust desktop app reference, FluxDB is worth a look.
 
 ### Core Capabilities
 
-- **Multi-database connectivity**: Supports **MySQL, SQLite, Redis** through a unified connector layer (`fluxdb-connectors`) — one interaction surface for three backends.
+- **Multi-database connectivity**: Supports **MySQL, PostgreSQL, SQLite, Redis** through a unified connector layer (`fluxdb-connectors`) — one interaction surface for four backends.
 - **SQL editor core** (`fluxdb-editor-core`): A standalone, business-decoupled general-purpose editor with syntax highlighting, code folding, Inlay/Block rendering, and a BlockMap/DisplayMap layered text model.
 - **Smart completion**: Keyword/table/column-level SQL completion with a documentation panel and semantic alignment.
 - **Table structure management**: Schema browsing, column info panel, DDL editor, table creation (including foreign keys), and table hover preview cards.
@@ -75,7 +75,7 @@ FluxDB is an open-source **cross-platform database manager / database GUI**, a n
 apps/fluxdb-desktop          Desktop entry point (GPUI app, content views, editor components)
 ├─ crates/fluxdb-app         App layer: query, completion, table info, data editing, Redis commands, etc.
 ├─ crates/fluxdb-core        Core layer: connections, connectors, data pagination, terminal, users/workbench
-├─ crates/fluxdb-connectors  Connector layer: common / mock / mysql / sqlite / redis
+├─ crates/fluxdb-connectors  Connector layer: common / mock / mysql / postgres / sqlite / redis
 ├─ crates/fluxdb-editor-core Generic editor core (syntax, folding, Inlay/Block, text model)
 ├─ crates/fluxdb-editor-language  Editor language adapter protocol
 └─ crates/fluxdb-storage     Storage layer
@@ -93,7 +93,7 @@ Design highlights:
 |-------|------|
 | Language | Rust |
 | UI framework | GPUI |
-| Connectors | MySQL / SQLite / Redis (ioredis adapter) |
+| Connectors | MySQL / PostgreSQL / SQLite / Redis (ioredis adapter) |
 | Testing | Dual test suites: fluxdb-app / fluxdb-desktop |
 
 ## Current Status
@@ -101,6 +101,7 @@ Design highlights:
 ### Completed
 
 - **MySQL**: Connection management, SQL editor with completion, table structure browsing/management (create/alter table, DDL), data browsing with editable write-back, SQL file execution, data export, backup list.
+- **PostgreSQL**: Connection management, SQL editor with completion, schema and object browsing, table structure management, editable data write-back, user and role administration, and native client tools.
 - **SQLite**: Base capabilities with the same interaction as MySQL.
 - **Redis**: Connection overview, key/value browsing and editing, workbench, embedded terminal commands.
 
@@ -112,6 +113,7 @@ Design highlights:
 ## Roadmap
 
 - [x] **MySQL support**: Connection management, SQL editor with completion, table structure browsing/management, editable data write-back, etc.
+- [x] **PostgreSQL support**: Connection management, schema and object browsing, SQL editor with completion, table structure management, editable data write-back, etc.
 - [x] **Redis support**: Connection overview, key/value browsing and editing, workbench, embedded terminal commands.
 - [ ] **Settings take full effect**: Some settings are not yet fully wired up; gradually make all preferences functional.
 - [ ] **Windows / Linux support**: Currently macOS only; add Windows and Linux packaging and adaptation.

@@ -77,7 +77,10 @@ impl Connector for MockConnector {
         })
     }
 
-    fn apply_changes(&self, changes: &DataChangeSet) -> fluxdb_core::Result<()> {
+    fn apply_changes(
+        &self,
+        changes: &DataChangeSet,
+    ) -> fluxdb_core::Result<AppliedChangeOutcome> {
         if changes.object.name == "FailSubmit" {
             return Err(Error::new(ErrorKind::Query, "模拟提交失败"));
         }
@@ -86,7 +89,8 @@ impl Connector for MockConnector {
             return Err(Error::new(ErrorKind::Query, "没有需要提交的更改"));
         }
 
-        Ok(())
+        // Mock 不产生真实身份：INSERT 补偿回退到编辑器已知的主键值。
+        Ok(AppliedChangeOutcome::default())
     }
 
     fn execute(&self, request: &QueryRequest) -> fluxdb_core::Result<QueryExecutionResult> {
@@ -164,6 +168,7 @@ impl Connector for MockConnector {
                 schema: object.path.schema,
                 name: object.path.name,
                 kind: object.path.kind,
+                comment: None,
             })
             .collect())
     }
@@ -177,6 +182,8 @@ impl Connector for MockConnector {
         Ok(mock_completion_columns(table)
             .into_iter()
             .map(|column| CompletionColumn {
+                database: _database.map(str::to_string),
+                schema: _schema.map(str::to_string),
                 table: table.to_string(),
                 name: column.name,
                 type_name: column.type_name,
@@ -212,11 +219,13 @@ impl Connector for MockConnector {
                 schema: None,
                 name: "refresh_product".to_string(),
                 kind: CompletionRoutineKind::Procedure,
+                signature: None,
             },
             CompletionRoutine {
                 schema: None,
                 name: "normalize_price".to_string(),
                 kind: CompletionRoutineKind::Function,
+                signature: None,
             },
         ]
         .into_iter()
