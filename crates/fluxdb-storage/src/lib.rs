@@ -343,9 +343,11 @@ impl Storage for FileStorage {
     }
 
     fn save_settings(&self, settings: &Settings) -> Result<()> {
-        fs::create_dir_all(&self.root).map_err(storage_error)?;
+        ensure_private_dir(&self.root)?;
         let text = toml::to_string_pretty(settings).map_err(storage_error)?;
-        fs::write(self.config_path(), text).map_err(storage_error)
+        fs::write(self.config_path(), text).map_err(storage_error)?;
+        // 配置文件收敛为 0o600（方案 §12.2；含存量旧文件）。
+        harden_file_perms(&self.config_path())
     }
 
     fn load_connections(&self) -> Result<Vec<ConnectionConfig>> {
@@ -659,6 +661,57 @@ fn storage_error(error: impl ToString) -> Error {
     Error::new(ErrorKind::Internal, error.to_string())
 }
 
+/// 单实例锁文件路径（方案 §12.1，方案 A）：
+/// - Linux：优先 `$XDG_RUNTIME_DIR/fluxdb.lock`（tmpfs 运行时目录）
+/// - macOS/Windows：持久化根目录下 `fluxdb.lock`
+/// 锁本体由 flock（Unix）/ 命名互斥量（Windows）持有，文件只是锚点；
+/// 进程退出（含强杀）时锁自动释放，不存在"崩溃后无法启动"的陈旧锁问题。
+pub fn runtime_lock_file() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+        {
+            return runtime_dir.join("fluxdb.lock");
+        }
+    }
+    FileStorage::default_root()
+        .unwrap_or_else(|_| std::env::temp_dir().join("fluxdb"))
+        .join("fluxdb.lock")
+}
+
+/// 创建仅属主可访问的目录（Unix 0o700，创建后立即收紧、不依赖 umask；Windows 为 no-op，
+/// ACL 收敛由方案 §12.2 后续 Windows 实测处理）。敏感目录（持久化根目录）统一走此函数。
+pub(crate) fn ensure_private_dir(path: &std::path::Path) -> Result<()> {
+    fs::create_dir_all(path).map_err(storage_error)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(storage_error)?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+/// 将已存在的文件权限收紧为仅属主可读写（Unix 0o600；Windows no-op）。
+/// 用于配置文件（历史上可能含明文 password option）与 SQLite 数据库。
+pub(crate) fn harden_file_perms(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(storage_error)?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
 fn read_toml_file<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
     let text = fs::read_to_string(path).map_err(storage_error)?;
     toml::from_str::<T>(&text).map_err(storage_error)
@@ -666,10 +719,16 @@ fn read_toml_file<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
 
 fn write_toml_file_if_changed<T: Serialize>(path: &PathBuf, value: &T) -> Result<()> {
     let text = toml::to_string_pretty(value).map_err(storage_error)?;
-    if path.exists() && fs::read_to_string(path).map_err(storage_error)? == text {
+    let existed = path.exists();
+    if existed && fs::read_to_string(path).map_err(storage_error)? == text {
+        // 内容未变也要收敛存量文件权限（升级场景：旧版本可能以宽松权限创建）。
+        harden_file_perms(path)?;
         return Ok(());
     }
-    fs::write(path, text).map_err(storage_error)
+    fs::write(path, text).map_err(storage_error)?;
+    // 配置/历史文件含业务数据，创建与覆写后均收紧为 0o600（方案 §12.2）。
+    harden_file_perms(path)?;
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -996,6 +1055,32 @@ mod tests {
     #[test]
     fn default_download_dir_is_absolute() {
         assert!(FileStorage::default_download_dir().is_absolute());
+    }
+
+    // 权限收敛（方案 §12.2）：root 0o700、config/db 0o600，存量宽松权限文件也必须被收紧。
+    #[cfg(unix)]
+    #[test]
+    fn perms_are_tightened_for_root_config_and_db() {
+        use std::os::unix::fs::PermissionsExt;
+        let storage = FileStorage::new(unique_temp_dir());
+        storage.save_settings(&Settings::default()).unwrap();
+
+        let mode = |p: &std::path::Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&storage.root), 0o700, "root 应为 0o700");
+        assert_eq!(mode(&storage.config_path()), 0o600, "config 应为 0o600");
+
+        // 预置一个宽松权限的存量 config，再次保存应被收紧。
+        fs::set_permissions(storage.config_path(), fs::Permissions::from_mode(0o644)).unwrap();
+        storage.save_settings(&Settings::default()).unwrap();
+        assert_eq!(mode(&storage.config_path()), 0o600, "存量 config 应被收紧");
+
+        let conn = storage.open_sqlite().unwrap();
+        drop(conn);
+        assert_eq!(
+            mode(&sqlite::db_path(&storage.root)),
+            0o600,
+            "db 应为 0o600"
+        );
     }
 
     #[test]
