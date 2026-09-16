@@ -365,6 +365,7 @@ impl Render for NavicatMain {
                     &self.backup_objects_scroll,
                     &self.backup_tasks,
                     self.backup_pg_client_missing,
+                    self.backup_mysql_client_missing,
                     colors,
                     cx,
                 ))

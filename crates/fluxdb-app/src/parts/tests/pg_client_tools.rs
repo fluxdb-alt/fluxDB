@@ -73,7 +73,10 @@ fn fake_pg_client_archive(version: &str, padding: usize) -> Vec<u8> {
 /// 本地测试 HTTP 服务：`support_range=false` 时忽略 Range 一律回 200（用于验证回退整包），
 /// `true` 时按 Range 回 206 并统计实际发出的字节数（用于验证「只下需要的部分」）。
 #[cfg(unix)]
-fn serve_archive(body: Vec<u8>, support_range: bool) -> (String, Arc<std::sync::atomic::AtomicU64>) {
+fn serve_archive(
+    body: Vec<u8>,
+    support_range: bool,
+) -> (String, Arc<std::sync::atomic::AtomicU64>) {
     use std::io::{BufRead as _, BufReader, Write as _};
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -225,11 +228,7 @@ fn managed_install_without_marker_is_ignored() {
     let complete = root.join("16.10-1").join("bin");
     std::fs::create_dir_all(&complete).unwrap();
     std::fs::write(complete.join("pg_dump"), b"#!/bin/sh\nexit 0\n").unwrap();
-    std::fs::write(
-        root.join("16.10-1").join(PG_CLIENT_INSTALL_MARKER),
-        b"16",
-    )
-    .unwrap();
+    std::fs::write(root.join("16.10-1").join(PG_CLIENT_INSTALL_MARKER), b"16").unwrap();
 
     let dirs: Vec<String> = pg_client_managed_dirs_in(&root)
         .into_iter()
@@ -346,7 +345,9 @@ fn pg_client_download_url_follows_server_major_version() {
     let url = pg_client_download_url("", Some(16)).unwrap();
     assert_eq!(
         url,
-        format!("https://get.enterprisedb.com/postgresql/postgresql-16.10-1-{platform}-binaries.zip")
+        format!(
+            "https://get.enterprisedb.com/postgresql/postgresql-16.10-1-{platform}-binaries.zip"
+        )
     );
     // 服务端版本未知时取内置最新版本（新客户端可备份旧服务端）。
     let fallback = pg_client_download_url("", None).unwrap();
@@ -359,9 +360,11 @@ fn pg_client_download_url_supports_custom_source() {
         return;
     }
     // 自建镜像：占位符按平台和版本替换。
-    let url =
-        pg_client_download_url("https://mirror.internal/pg/{version}/{platform}.zip", Some(17))
-            .unwrap();
+    let url = pg_client_download_url(
+        "https://mirror.internal/pg/{version}/{platform}.zip",
+        Some(17),
+    )
+    .unwrap();
     assert!(url.starts_with("https://mirror.internal/pg/17.6-1/"));
     // 直链：没有占位符时原样使用。
     let direct = pg_client_download_url("https://mirror.internal/pg/client.zip", Some(17)).unwrap();
@@ -428,4 +431,138 @@ fn discover_pg_clients_reports_version_and_source() {
     assert_eq!(configured.bin_dir, root.join("bin"));
     assert_eq!(configured.major_version, Some(18));
     std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+#[cfg(unix)]
+fn pg_client_reinstall_uses_same_root_for_bin_setting() {
+    let root = temp_pg_client_path("reinstall");
+    let (url, _) = serve_archive(fake_pg_client_archive("17.6", 0), true);
+    let cancel = AtomicBool::new(false);
+    let bin = download_pg_client(&url, &root, &cancel, &mut |_| {}).unwrap();
+    let mut settings = Settings::default();
+    settings.pg_client_dir = bin.display().to_string();
+    assert_eq!(pg_client_install_dir(&settings, "17.6-1"), root);
+    let again = download_pg_client(
+        &url,
+        &pg_client_install_dir(&settings, "17.6-1"),
+        &cancel,
+        &mut |_| {},
+    )
+    .unwrap();
+    assert_eq!(again, bin);
+    assert!(!bin.join("bin").exists());
+    settings.pg_client_dir = root.display().to_string();
+    assert_eq!(pg_client_install_dir(&settings, "17.6-1"), root);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn resolve_pg_client_without_requirement_preserves_directory_order() {
+    // 两个配置候选可复现多版本场景，不修改进程 PATH 或依赖本机安装。
+    let root = fake_pg_client_dir("priority", "16.10");
+    std::fs::copy(root.join("bin/pg_dump"), root.join("pg_dump")).unwrap();
+    std::fs::write(
+        root.join("pg_dump"),
+        b"#!/bin/sh\necho 'pg_dump (PostgreSQL) 18.1'\n",
+    )
+    .unwrap();
+    let mut settings = Settings::default();
+    settings.pg_client_dir = root.display().to_string();
+    let selected = resolve_pg_client_tool(&settings, PgClientTool::Dump, None).unwrap();
+    assert_eq!(
+        selected.program,
+        root.join("bin/pg_dump").display().to_string()
+    );
+    let compatible = resolve_pg_client_tool(&settings, PgClientTool::Dump, Some(18)).unwrap();
+    assert_eq!(
+        compatible.program,
+        root.join("pg_dump").display().to_string()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn pg_client_extract_does_not_follow_existing_links() {
+    let root = temp_pg_client_path("extract-links");
+    let outside = temp_pg_client_path("outside-file");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(&outside, b"keep me").unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("bin/pg_dump")).unwrap();
+    extract_pg_client_archive(
+        std::io::Cursor::new(fake_pg_client_archive("17.6", 0)),
+        &root,
+        false,
+        &AtomicBool::new(false),
+        &mut |_, _, _| {},
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(&outside).unwrap(), b"keep me");
+    assert!(
+        !std::fs::symlink_metadata(root.join("bin/pg_dump"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    let outside_dir = temp_pg_client_path("outside-dir");
+    std::fs::create_dir_all(&outside_dir).unwrap();
+    std::os::unix::fs::symlink(&outside_dir, root.join("bin")).unwrap();
+    assert!(
+        extract_pg_client_archive(
+            std::io::Cursor::new(fake_pg_client_archive("17.6", 0)),
+            &root,
+            false,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .is_err()
+    );
+    assert!(!outside_dir.join("pg_dump").exists());
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(outside_dir).unwrap();
+    std::fs::remove_file(outside).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn pg_client_archive_rejects_escaping_symlink_and_allows_library_alias() {
+    for link in [
+        "../../outside",
+        "/tmp/outside",
+        "..\\outside",
+        "libpq.5.dylib",
+    ] {
+        let root = temp_pg_client_path("archive-symlink");
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        archive
+            .add_symlink(
+                "pgsql/lib/libpq.dylib",
+                link,
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        let bytes = archive.finish().unwrap().into_inner();
+        let result = extract_pg_client_archive(
+            std::io::Cursor::new(bytes),
+            &root,
+            false,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        );
+        if link == "libpq.5.dylib" {
+            result.unwrap();
+            assert_eq!(
+                std::fs::read_link(root.join("lib/libpq.dylib")).unwrap(),
+                PathBuf::from(link)
+            );
+        } else {
+            assert!(result.is_err(), "应拒绝链接 {link}");
+            assert!(!root.join("lib/libpq.dylib").is_symlink());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

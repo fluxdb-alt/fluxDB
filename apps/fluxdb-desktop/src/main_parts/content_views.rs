@@ -149,11 +149,7 @@ fn content(
                 this.settings_font_size_slider.clone(),
                 this.settings_line_height_input.clone(),
                 this.settings_radius_input.clone(),
-                PgClientPanelState {
-                    source_input: this.settings_pg_client_source_input.clone(),
-                    status: this.pg_client_status.clone(),
-                    download: this.pg_client_download.clone(),
-                },
+                [this.pg_client.snapshot(NativeClientKind::Postgres), this.mysql_client.snapshot(NativeClientKind::MySql)],
                 this.settings_dangerous_actions_collapsed,
                 window,
                 cx,
@@ -242,7 +238,7 @@ include!("settings/navigation.rs");
 include!("settings/editor.rs");
 include!("settings/appearance.rs");
 include!("settings/system.rs");
-include!("settings/pg_client.rs");
+include!("settings/native_client.rs");
 include!("settings/rows.rs");
 include!("settings/preferences.rs");
 

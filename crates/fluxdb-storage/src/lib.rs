@@ -1041,6 +1041,8 @@ mod tests {
             )]),
             backup_dir: String::new(),
             mysqldump_path: String::new(),
+            mysql_client_dir: String::new(),
+            mysql_client_download_source: String::new(),
             sqlite3_path: String::new(),
             pg_dump_path: String::new(),
             pg_client_dir: String::new(),

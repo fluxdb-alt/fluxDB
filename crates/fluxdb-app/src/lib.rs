@@ -74,8 +74,17 @@ include!("parts/query_completion.rs");
 include!("parts/redis_commands.rs");
 include!("parts/redis_completion.rs");
 include!("parts/terminal_redis.rs");
+include!("parts/native_client_io.rs");
 include!("parts/pg_client_tools.rs");
+#[path = "parts/mysql_client_tools.rs"]
+mod mysql_client_tools;
+pub use mysql_client_tools::*;
 include!("parts/query_history.rs");
 include!("parts/workbench_history.rs");
 include!("parts/query_result_edit.rs");
 include!("parts/tests.rs");
+
+pub use fluxdb_connectors::{
+    MySqlClientVersion, MySqlDumpInvocation, MySqlDumpOptions, mysql_client_version,
+    mysql_dump_invocation,
+};

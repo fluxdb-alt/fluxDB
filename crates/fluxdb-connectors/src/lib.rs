@@ -44,3 +44,7 @@ include!("parts/shared_read_exec.rs");
 include!("parts/shared_read_sql.rs");
 include!("parts/shared_demo.rs");
 include!("parts/tests.rs");
+
+#[path = "parts/mysql/native_tools.rs"]
+mod mysql_native_tools;
+pub use mysql_native_tools::*;

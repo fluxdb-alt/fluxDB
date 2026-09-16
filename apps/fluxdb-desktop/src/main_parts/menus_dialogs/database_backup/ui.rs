@@ -19,6 +19,9 @@ impl NavicatMain {
     fn set_backup_lock_tables(&mut self, value: bool, cx: &mut Context<Self>) {
         if let Some(form) = &mut self.pending_backup_modal {
             form.lock_tables = value;
+            if value {
+                form.single_transaction = false;
+            }
             cx.notify();
         }
     }
@@ -26,6 +29,9 @@ impl NavicatMain {
     fn set_backup_single_transaction(&mut self, value: bool, cx: &mut Context<Self>) {
         if let Some(form) = &mut self.pending_backup_modal {
             form.single_transaction = value;
+            if value {
+                form.lock_tables = false;
+            }
             cx.notify();
         }
     }
@@ -104,6 +110,7 @@ fn database_backup_modal(
     objects_scroll: &VirtualListScrollHandle,
     tasks: &[BackupTaskState],
     pg_client_missing: bool,
+    mysql_client_missing: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
@@ -119,15 +126,12 @@ fn database_backup_modal(
             object_search_input,
             objects_scroll,
             pg_client_missing,
+            mysql_client_missing,
             colors,
             cx,
         ))
         .child(database_backup_modal_footer(
-            can_start,
-            None,
-            tasks,
-            colors,
-            cx,
+            can_start, None, tasks, colors, cx,
         ));
     database_backup_modal_shell(panel, colors, cx)
 }
@@ -174,10 +178,13 @@ fn database_backup_modal_shell(panel: Div, colors: UiColors, cx: &mut Context<Na
         .flex()
         .items_center()
         .justify_center()
-        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-            this.cancel_backup_modal(cx);
-            cx.stop_propagation();
-        }))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.cancel_backup_modal(cx);
+                cx.stop_propagation();
+            }),
+        )
         .child(panel)
 }
 
@@ -210,7 +217,10 @@ fn database_backup_modal_panel(colors: UiColors, cx: &mut Context<NavicatMain>) 
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
-fn database_backup_modal_header(colors: UiColors, cx: &mut Context<NavicatMain>) -> impl IntoElement {
+fn database_backup_modal_header(
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> impl IntoElement {
     div()
         .h(px(56.))
         .flex_none()
@@ -290,6 +300,7 @@ fn database_backup_modal_body(
     object_search_input: Entity<InputState>,
     objects_scroll: &VirtualListScrollHandle,
     pg_client_missing: bool,
+    mysql_client_missing: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -300,9 +311,20 @@ fn database_backup_modal_body(
         .flex()
         .flex_col()
         .gap_3()
-        // 缺少 PostgreSQL 客户端时先给横幅提示与前往设置的入口，避免点了备份才失败。
+        // 缺少原生客户端时先提示并提供设置入口，避免点了备份才看到启动错误。
         .when(pg_client_missing, |this| {
-            this.child(database_backup_pg_client_banner(colors, cx))
+            this.child(database_backup_client_banner(
+                NativeClientKind::Postgres,
+                colors,
+                cx,
+            ))
+        })
+        .when(mysql_client_missing, |this| {
+            this.child(database_backup_client_banner(
+                NativeClientKind::MySql,
+                colors,
+                cx,
+            ))
         })
         .child(match form.tab {
             BackupTab::General => {
@@ -330,7 +352,10 @@ fn database_backup_general_body(
         .flex()
         .flex_col()
         .gap_3()
-        .child(database_backup_target_input(form.database.clone().unwrap_or_default(), colors))
+        .child(database_backup_target_input(
+            form.database.clone().unwrap_or_default(),
+            colors,
+        ))
         .child(database_backup_mode_info(colors))
         .child(database_backup_file_name_row(file_name_input, colors))
         .child(database_backup_note_row(note_input, colors))
@@ -378,8 +403,12 @@ fn database_backup_target_input(database: String, colors: UiColors) -> Div {
 }
 
 /// 备份方式只读说明：统一自动选择（按库类型与工具自动判断原生或逻辑），不提供手动三选一。
-/// 缺少 PostgreSQL 客户端工具时的横幅：说明影响 + 直接跳到设置里下载或指定目录。
-fn database_backup_pg_client_banner(colors: UiColors, cx: &mut Context<NavicatMain>) -> Div {
+/// 缺少数据库客户端工具时的横幅：说明影响 + 直接跳到设置里下载或指定目录。
+fn database_backup_client_banner(
+    kind: NativeClientKind,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
     let accent = ComponentTheme::global(cx).warning;
     div()
         .flex()
@@ -388,23 +417,32 @@ fn database_backup_pg_client_banner(colors: UiColors, cx: &mut Context<NavicatMa
         .child(
             div().flex_1().min_w(px(0.)).child(
                 Alert::new(
-                    "backup-pg-client-missing",
-                    "未找到 pg_dump：PostgreSQL 备份依赖官方客户端工具，请先下载或指定客户端目录。",
+                    match kind {
+                        NativeClientKind::Postgres => "backup-pg-client-missing",
+                        NativeClientKind::MySql => "backup-mysql-client-missing",
+                    },
+                    match kind {
+                        NativeClientKind::Postgres => "未找到 pg_dump：PostgreSQL 备份依赖客户端工具，请先下载或指定客户端目录。",
+                        NativeClientKind::MySql => "未找到 mysqldump / mariadb-dump：MySQL/TiDB 原生备份依赖客户端工具。",
+                    },
                 )
                 .with_variant(AlertVariant::Warning)
                 .bg(alert_tint(accent, colors)),
             ),
         )
         .child(
-            Button::new("backup-pg-client-settings")
+            Button::new(match kind {
+                NativeClientKind::Postgres => "backup-pg-client-settings",
+                NativeClientKind::MySql => "backup-mysql-client-settings",
+            })
                 .label("前往设置")
                 .small()
                 .rounded(colors.radius)
-                .on_click(cx.listener(|this, _, _window, cx| {
+                .on_click(cx.listener(move |this, _, _window, cx| {
                     this.cancel_backup_modal(cx);
                     this.settings_panel_section = SettingsPanelSection::Data;
                     this.dispatch(AppCommand::OpenSettings, cx);
-                    this.detect_pg_client_tools(cx);
+                    this.detect_native_client_tools(kind, cx);
                 })),
         )
 }
@@ -423,10 +461,7 @@ fn database_backup_mode_info(colors: UiColors) -> Div {
         )
 }
 
-fn database_backup_file_name_row(
-    input: Entity<InputState>,
-    colors: UiColors,
-) -> Div {
+fn database_backup_file_name_row(input: Entity<InputState>, colors: UiColors) -> Div {
     div()
         .flex()
         .flex_col()
@@ -450,10 +485,9 @@ fn database_backup_file_name_row(
                 ),
         )
         .child(
-            div()
-                .text_size(px(11.))
-                .text_color(colors.muted)
-                .child("留空使用默认文件名（库名_时间戳.sql）；支持 {timestamp} / {database} 占位。"),
+            div().text_size(px(11.)).text_color(colors.muted).child(
+                "留空使用默认文件名（库名_时间戳.sql）；支持 {timestamp} / {database} 占位。",
+            ),
         )
 }
 
@@ -575,25 +609,23 @@ fn database_backup_checkbox_row(
                 .on_click(move |new_checked, _, cx| {
                     let value = *new_checked;
                     let field = field;
-                    let _ = view.update(cx, |this, cx| {
-                        match field {
-                            BackupCheckboxField::LockTables => this.set_backup_lock_tables(value, cx),
-                            BackupCheckboxField::SingleTransaction => {
-                                this.set_backup_single_transaction(value, cx)
-                            }
-                            BackupCheckboxField::IncludeRoutines => {
-                                this.set_backup_include_routines(value, cx)
-                            }
-                            BackupCheckboxField::IncludeSchema => {
-                                this.set_backup_include_schema(value, cx)
-                            }
-                            BackupCheckboxField::IncludeData => this.set_backup_include_data(value, cx),
-                            BackupCheckboxField::PgIncludeOwner => {
-                                this.set_backup_pg_include_owner(value, cx)
-                            }
-                            BackupCheckboxField::PgIncludeAcl => {
-                                this.set_backup_pg_include_acl(value, cx)
-                            }
+                    let _ = view.update(cx, |this, cx| match field {
+                        BackupCheckboxField::LockTables => this.set_backup_lock_tables(value, cx),
+                        BackupCheckboxField::SingleTransaction => {
+                            this.set_backup_single_transaction(value, cx)
+                        }
+                        BackupCheckboxField::IncludeRoutines => {
+                            this.set_backup_include_routines(value, cx)
+                        }
+                        BackupCheckboxField::IncludeSchema => {
+                            this.set_backup_include_schema(value, cx)
+                        }
+                        BackupCheckboxField::IncludeData => this.set_backup_include_data(value, cx),
+                        BackupCheckboxField::PgIncludeOwner => {
+                            this.set_backup_pg_include_owner(value, cx)
+                        }
+                        BackupCheckboxField::PgIncludeAcl => {
+                            this.set_backup_pg_include_acl(value, cx)
                         }
                     });
                 }),
@@ -706,9 +738,16 @@ fn database_backup_task_card(
                         .gap_2()
                         .text_size(px(11.))
                         .text_color(colors.muted)
-                        .child(format!("{} · {}", task.database.clone().unwrap_or_default(), task.mode.label()))
+                        .child(format!(
+                            "{} · {}",
+                            task.database.clone().unwrap_or_default(),
+                            task.mode.label()
+                        ))
                         .child("·")
-                        .child(format!("用时 {}s", elapsed_seconds(task.started_at, task.finished_at))),
+                        .child(format!(
+                            "用时 {}s",
+                            elapsed_seconds(task.started_at, task.finished_at)
+                        )),
                 ),
         )
         .child(
@@ -754,18 +793,16 @@ fn database_backup_log_list(
         );
     } else {
         // 顶部工具行：复制全部日志（含失败原因与跳过项）。
-        list = list.child(
-            div()
-                .flex()
-                .justify_end()
-                .pb_1()
-                .child(backup_text_button("复制全部", colors, {
-                    let all_text = all_text.clone();
-                    move |_, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(all_text.clone()));
-                    }
-                })),
-        );
+        list = list.child(div().flex().justify_end().pb_1().child(backup_text_button(
+            "复制全部",
+            colors,
+            {
+                let all_text = all_text.clone();
+                move |_, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(all_text.clone()));
+                }
+            },
+        )));
         let hidden_count = task.logs.len().saturating_sub(BACKUP_VISIBLE_LOG_LIMIT);
         if hidden_count > 0 {
             list = list.child(
@@ -822,13 +859,13 @@ fn backup_log_row(
                 .whitespace_normal()
                 .child(message),
         )
-        .child(div().flex_none().child(backup_text_button(
-            "复制",
-            colors,
-            move |_, _, cx| {
-                cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
-            },
-        )))
+        .child(
+            div()
+                .flex_none()
+                .child(backup_text_button("复制", colors, move |_, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                })),
+        )
 }
 
 fn database_backup_modal_footer(
@@ -865,7 +902,11 @@ fn database_backup_modal_footer(
         if !finished {
             footer = footer.child(
                 Button::new("backup-cancel-task")
-                    .label(if cancel_requested { "停止中" } else { "取消任务" })
+                    .label(if cancel_requested {
+                        "停止中"
+                    } else {
+                        "取消任务"
+                    })
                     .small()
                     .w(px(92.))
                     .disabled(cancel_requested)

@@ -1,6 +1,6 @@
 fn settings_data_panel(
     settings: &Settings,
-    pg_client: PgClientPanelState,
+    clients: [NativeClientPanelState; 2],
     colors: UiColors,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
@@ -39,7 +39,7 @@ fn settings_data_panel(
                 ))
                 .child(settings_path_row(
                     "mysqldump 路径",
-                    "MySQL/TiDB 原生备份工具路径，留空时使用系统 PATH 中的 mysqldump",
+                    "单独指定 mysqldump 可执行文件（旧配置优先级最高）；一般留空，改用下方「MySQL 客户端」",
                     AppIcon::Query,
                     &settings.mysqldump_path,
                     "settings-backup-mysqldump",
@@ -68,9 +68,7 @@ fn settings_data_panel(
                     cx,
                 )),
         )
-        .child(settings_pg_client_group(
-            settings, pg_client, colors, window, cx,
-        ))
+        .children(clients.into_iter().map(|client| settings_native_client_group(settings, client, colors, window, cx)))
 }
 
 /// 设置面板中一条可选择的路径行（目录或文件）。选择结果写入 settings_editor_draft 对应字段。
@@ -152,7 +150,11 @@ fn settings_choose_backup_path(
                             "settings-backup-pg-client-dir" => {
                                 this.settings_editor_draft.pg_client_dir = value;
                                 // 选完目录立刻复检，省去「保存后才知道选对没有」的来回。
-                                this.detect_pg_client_tools(cx);
+                                this.detect_native_client_tools(NativeClientKind::Postgres, cx);
+                            }
+                            "settings-backup-mysql-client-dir" => {
+                                this.settings_editor_draft.mysql_client_dir = value;
+                                this.detect_native_client_tools(NativeClientKind::MySql, cx);
                             }
                             _ => {}
                         }

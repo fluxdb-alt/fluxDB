@@ -215,9 +215,15 @@ pub struct Settings {
     /// 数据库备份文件的默认保存目录，为空时回退到系统下载目录。
     #[serde(default)]
     pub backup_dir: String,
-    /// 原生备份工具 mysqldump 的路径；为空时从系统 PATH 查找。
+    /// 兼容旧配置的 mysqldump 单文件路径；非空时优先于统一 MySQL 客户端目录。
     #[serde(default)]
     pub mysqldump_path: String,
+    /// MySQL 客户端安装根或 bin 目录；留空时自动发现，旧 mysqldump_path 优先。
+    #[serde(default)]
+    pub mysql_client_dir: String,
+    /// Windows 官方 ZIP 下载源（支持 {version} / {platform}），留空使用内置源。
+    #[serde(default)]
+    pub mysql_client_download_source: String,
     /// 原生备份工具 sqlite3 的路径；为空时从系统 PATH 查找。
     #[serde(default)]
     pub sqlite3_path: String,
@@ -271,6 +277,8 @@ impl Default for Settings {
             custom_keybindings: BTreeMap::new(),
             backup_dir: String::new(),
             mysqldump_path: String::new(),
+            mysql_client_dir: String::new(),
+            mysql_client_download_source: String::new(),
             sqlite3_path: String::new(),
             pg_dump_path: String::new(),
             pg_client_dir: String::new(),
