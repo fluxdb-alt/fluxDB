@@ -18,7 +18,7 @@
 
 ## AI-00
 
-**任务 ID / 状态**：AI-00 / 通过（run 4 证实三平台 fmt/check/release 构建/产物/core 测试全绿；唯一失败为既有 connector 测试，与跨平台无关）。
+**任务 ID / 状态**：AI-00 / 通过（run 4、run 5 均证实三平台 fmt/check/release 构建/产物/core 测试全绿；唯一失败为既有 connector 测试，三平台一致且与跨平台无关）。
 
 **代码基线**：
 - commit：`2e299c8507ece2d77d71e830657c8b36debe50c2`（`feat(tls): MySQL TLS 参数生效注入与连接对话框 SSL 模式下拉化`）
@@ -99,6 +99,7 @@
 - run 2：https://github.com/fluxdb-alt/fluxDB/actions/runs/35087627727
 - run 3：https://github.com/fluxdb-alt/fluxDB/actions/runs/35088628163
 - run 4：https://github.com/fluxdb-alt/fluxDB/actions/runs/35090704424
+- run 5（最终提交态确认，doc-only）：https://github.com/fluxdb-alt/fluxDB/actions/runs/35094618308
 
 **GUI/安装**：
 - 未覆盖（无 Windows/Linux 实体图形会话）；托盘/DPI/IME/真实 GPU 标记待验证
