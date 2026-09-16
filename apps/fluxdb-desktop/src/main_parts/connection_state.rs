@@ -296,8 +296,6 @@ enum ConnectionField {
     /// 连接串导入框
     DiscoveryUri,
     // —— PostgreSQL 专用文本字段 ——
-    /// TLS 模式："disable" / "prefer" / "require" / "verify-ca" / "verify-full"
-    PgTlsSslMode,
     /// 默认 schema（search_path 首段）
     PgDefaultSchema,
     /// 应用名
@@ -307,8 +305,6 @@ enum ConnectionField {
     /// 查询超时（秒）
     PgQueryTimeoutSecs,
     // —— MySQL / TiDB 专用文本字段 ——
-    /// TLS 模式："disabled" / "preferred" / "required"
-    MysqlTlsSslMode,
     /// 连接字符集
     MysqlCharset,
     /// 代理类型："socks5" / "http_connect"
@@ -463,9 +459,11 @@ struct NewConnectionInputs {
     ssh_password: Entity<InputState>,
     ssh_private_key: Entity<InputState>,
     ssh_passphrase: Entity<InputState>,
-    mysql_tls_ssl_mode: Entity<InputState>,
+    /// MySQL/TiDB SSL 模式下拉（SelectState 实体，避免渲染期读 NavicatMain 触发重入 panic）。
+    mysql_ssl_mode_select: Entity<SelectState<SearchableVec<String>>>,
     /// —— PostgreSQL 专用 ——
-    pg_tls_ssl_mode: Entity<InputState>,
+    /// PG SSL 模式下拉（同上）。
+    pg_ssl_mode_select: Entity<SelectState<SearchableVec<String>>>,
     pg_default_schema: Entity<InputState>,
     pg_application_name: Entity<InputState>,
     pg_connect_timeout: Entity<InputState>,
@@ -1217,8 +1215,6 @@ impl NewConnectionInputs {
         let (ssh_passphrase, ssh_passphrase_subscription) =
             input_state(ConnectionField::SshPassphrase, true, window, cx);
         // —— PostgreSQL 专用文本输入 ——
-        let (pg_tls_ssl_mode, pg_tls_ssl_mode_subscription) =
-            input_state(ConnectionField::PgTlsSslMode, false, window, cx);
         let (pg_default_schema, pg_default_schema_subscription) =
             input_state(ConnectionField::PgDefaultSchema, false, window, cx);
         let (pg_application_name, pg_application_name_subscription) =
@@ -1228,8 +1224,6 @@ impl NewConnectionInputs {
         let (pg_query_timeout, pg_query_timeout_subscription) =
             input_state(ConnectionField::PgQueryTimeoutSecs, false, window, cx);
         // —— MySQL / TiDB 专用文本输入 ——
-        let (mysql_tls_ssl_mode, mysql_tls_ssl_mode_subscription) =
-            input_state(ConnectionField::MysqlTlsSslMode, false, window, cx);
         let (mysql_charset, mysql_charset_subscription) =
             input_state(ConnectionField::MysqlCharset, false, window, cx);
         let (mysql_proxy_type, mysql_proxy_type_subscription) =
@@ -1323,6 +1317,61 @@ impl NewConnectionInputs {
             },
         );
 
+        // PG SSL 模式下拉：选项值即表单值（disable/prefer/require/verify-ca/verify-full）。
+        let pg_ssl_mode_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(vec![
+                    "disable".to_string(),
+                    "prefer".to_string(),
+                    "require".to_string(),
+                    "verify-ca".to_string(),
+                    "verify-full".to_string(),
+                ]),
+                Some(IndexPath::new(1)),
+                window,
+                cx,
+            )
+        });
+        let pg_ssl_mode_select_s = cx.subscribe(
+            &pg_ssl_mode_select,
+            move |this: &mut NavicatMain,
+                  _select,
+                  event: &SelectEvent<SearchableVec<String>>,
+                  cx| {
+                let SelectEvent::Confirm(value) = event;
+                if let Some(value) = value {
+                    this.new_connection_form.pg_tls_ssl_mode = value.clone();
+                    cx.notify();
+                }
+            },
+        );
+        // MySQL/TiDB SSL 模式下拉：选项值即表单值（disabled/preferred/required）。
+        let mysql_ssl_mode_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(vec![
+                    "disabled".to_string(),
+                    "preferred".to_string(),
+                    "required".to_string(),
+                ]),
+                Some(IndexPath::new(1)),
+                window,
+                cx,
+            )
+        });
+        let mysql_ssl_mode_select_s = cx.subscribe(
+            &mysql_ssl_mode_select,
+            move |this: &mut NavicatMain,
+                  _select,
+                  event: &SelectEvent<SearchableVec<String>>,
+                  cx| {
+                let SelectEvent::Confirm(value) = event;
+                if let Some(value) = value {
+                    this.new_connection_form.mysql_tls_ssl_mode = value.clone();
+                    cx.notify();
+                }
+            },
+        );
+
         Self {
             name,
             host,
@@ -1343,12 +1392,12 @@ impl NewConnectionInputs {
             ssh_password,
             ssh_private_key,
             ssh_passphrase,
-            pg_tls_ssl_mode,
+            pg_ssl_mode_select,
             pg_default_schema,
             pg_application_name,
             pg_connect_timeout,
             pg_query_timeout,
-            mysql_tls_ssl_mode,
+            mysql_ssl_mode_select,
             mysql_charset,
             mysql_proxy_type,
             mysql_ssh_connect_timeout,
@@ -1388,12 +1437,12 @@ impl NewConnectionInputs {
                 ssh_password_subscription,
                 ssh_private_key_subscription,
                 ssh_passphrase_subscription,
-                pg_tls_ssl_mode_subscription,
+                pg_ssl_mode_select_s,
                 pg_default_schema_subscription,
                 pg_application_name_subscription,
                 pg_connect_timeout_subscription,
                 pg_query_timeout_subscription,
-                mysql_tls_ssl_mode_subscription,
+                mysql_ssl_mode_select_s,
                 mysql_charset_subscription,
                 mysql_proxy_type_subscription,
                 mysql_ssh_connect_timeout_subscription,
@@ -1438,12 +1487,10 @@ impl NewConnectionInputs {
             ConnectionField::SshPassword => &self.ssh_password,
             ConnectionField::SshPrivateKey => &self.ssh_private_key,
             ConnectionField::SshPassphrase => &self.ssh_passphrase,
-            ConnectionField::PgTlsSslMode => &self.pg_tls_ssl_mode,
             ConnectionField::PgDefaultSchema => &self.pg_default_schema,
             ConnectionField::PgApplicationName => &self.pg_application_name,
             ConnectionField::PgConnectTimeoutSecs => &self.pg_connect_timeout,
             ConnectionField::PgQueryTimeoutSecs => &self.pg_query_timeout,
-            ConnectionField::MysqlTlsSslMode => &self.mysql_tls_ssl_mode,
             ConnectionField::MysqlCharset => &self.mysql_charset,
             ConnectionField::MysqlProxyType => &self.mysql_proxy_type,
             ConnectionField::MysqlSshConnectTimeout => &self.mysql_ssh_connect_timeout,
@@ -1496,12 +1543,6 @@ impl NewConnectionInputs {
         self.set_value(ConnectionField::SshPrivateKey, &form.ssh_private_key, window, cx);
         self.set_value(ConnectionField::SshPassphrase, &form.ssh_passphrase, window, cx);
         // —— MySQL / TiDB 专用 ——
-        self.set_value(
-            ConnectionField::MysqlTlsSslMode,
-            &form.mysql_tls_ssl_mode,
-            window,
-            cx,
-        );
         self.set_value(ConnectionField::MysqlCharset, &form.mysql_charset, window, cx);
         self.set_value(
             ConnectionField::MysqlProxyType,

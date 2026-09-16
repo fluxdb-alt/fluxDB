@@ -50,7 +50,7 @@ CREATE VIEW sales_v AS SELECT id, amount FROM tenant_a.orders;
 | 步骤 | 操作 | 测试断言 |
 |---|---|---|
 | A1 | `cargo run -p fluxdb-desktop` | 窗口进入事件循环，无 panic |
-| A2 | 新建连接 → 类型下拉选 PostgreSQL | PG 卡片可选；基础/TLS/SSH/高级四页签对 PG 开放 |
+| A2 | 新建连接 → 类型下拉选 PostgreSQL | PG 卡片可选；基础/TLS/SSH/高级四页签对 PG 开放（2026-09-16 起 TLS 页 SSL 模式为下拉：disable/prefer/require/verify-ca/verify-full，MySQL 侧为 disabled/preferred/required） |
 | A3 | 填 host `127.0.0.1`、port `5432`、维护库 `postgres`、user `postgres`、密码 `secret` → 保存并连接 | 测试成功；测试期间「测试」按钮 disabled + loading |
 | A4 | 侧栏出现 PG 连接，展开 auto 展开库 | 连上后自动显示 schema（public 等） |
 | A5 | 编辑该连接 → TLS/SSH/超时回填 | 表单值 = 档案值 |

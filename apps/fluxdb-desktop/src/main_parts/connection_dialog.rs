@@ -767,14 +767,10 @@ fn mysql_tls_mode_block(
         .child(
             h_form()
                 .label_width(px(112.))
-                .child(field_row_light(
+                .child(connection_select_field(
                     "SSL 模式",
-                    ConnectionField::MysqlTlsSslMode,
-                    inputs,
-                    false,
-                    colors,
-                    window,
-                    cx,
+                    &inputs.mysql_ssl_mode_select,
+                    "",
                 ))
                 .child(field_row_light(
                     "连接字符集",
@@ -791,21 +787,17 @@ fn mysql_tls_mode_block(
 /// PostgreSQL 的 TLS 模式（disable/prefer/require/verify-ca/verify-full）。
 fn postgres_tls_mode_block(
     inputs: &NewConnectionInputs,
-    colors: UiColors,
-    window: &mut Window,
-    cx: &mut Context<NavicatMain>,
+    _colors: UiColors,
+    _window: &mut Window,
+    _cx: &mut Context<NavicatMain>,
 ) -> Div {
     div().w_full().child(
         h_form()
             .label_width(px(112.))
-            .child(field_row_light(
+            .child(connection_select_field(
                 "SSL 模式",
-                ConnectionField::PgTlsSslMode,
-                inputs,
-                false,
-                colors,
-                window,
-                cx,
+                &inputs.pg_ssl_mode_select,
+                "",
             )),
     )
 }

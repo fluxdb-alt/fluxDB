@@ -542,6 +542,76 @@ mod ssh_tunnel_tests {
         assert!(read > 0, "应收到 KEXINIT 数据");
     }
 
+    /// 真库门控：SSH 隧道桥转发到**真实 PG**，并走完整 tokio-postgres 建连 + SCRAM 认证 + 查询。
+    ///
+    /// 环境：`FLUXDB_SSH_PG_SMOKE=jumphost:port:user:pass:pg_host:pg_port:pg_user:pg_pass`；
+    /// 未配置则跳过。复用 `open_tunnel_with`（App 同款 libssh2 桥），目标指 PG，然后让
+    /// tokio-postgres（App 同款驱动栈）连隧道本地端口做真实握手。这直接复现 App「测试连接」
+    /// 的完整路径——若此处报 `error communicating with the server`，即为桥/驱动层缺陷。
+    #[test]
+    fn ssh_tunnel_relays_to_real_pg() {
+        let Some(Ok(value)) = std::env::var_os("FLUXDB_SSH_PG_SMOKE").map(|v| v.into_string()) else {
+            return;
+        };
+        let p: Vec<&str> = value.split(':').collect();
+        if p.len() < 8 {
+            return;
+        }
+        let jh = p[0];
+        let jp: u16 = p[1].parse().unwrap_or(0);
+        let ju = p[2];
+        let jpw = p[3];
+        let pgh = p[4];
+        let pgp: u16 = p[5].parse().unwrap_or(0);
+        let pgu = p[6];
+        let pgpw = p[7];
+        if jh.is_empty() || jp == 0 || pgh.is_empty() || pgp == 0 {
+            return;
+        }
+        let auth = SshAuthParams {
+            username: ju.to_string(),
+            password: Some(jpw.to_string()),
+            private_key_path: String::new(),
+            passphrase: None,
+        };
+        // App PG 路径强制 verify_host_key: true（读取 ~/.ssh/known_hosts），此处对标打开。
+        let tunnel = open_tunnel_with(
+            (jh, jp),
+            &auth,
+            (pgh, pgp),
+            SshTunnelOptions {
+                connect_timeout_secs: 5,
+                keepalive_interval_secs: 0,
+                verify_host_key: true,
+                ..SshTunnelOptions::default()
+            },
+        )
+        .expect("建隧道应成功");
+
+        // App 同款：tokio-postgres 直连隧道本地端口（vv host 字段仅作 TLS SNI）。
+        let mut cfg = tokio_postgres::Config::new();
+        cfg.host("127.0.0.1")
+            .port(tunnel.local_port)
+            .user(pgu)
+            .password(pgpw)
+            .dbname("postgres");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let row: i32 = runtime.block_on(async {
+            let (client, conn) = cfg
+                .connect(tokio_postgres::NoTls)
+                .await
+                .expect("经隧道连 PG 并完成认证应成功（App 报 error communicating 的点）");
+            // drive conn 在同一 runtime 后台，逐出用后即弃。
+            tokio::spawn(conn);
+            let row = client.query_one("SELECT 1", &[]).await.expect("查询应成功");
+            row.get(0)
+        });
+        assert_eq!(row, 1);
+    }
+
     /// 集成口径：SSH 开启但缺跳板机主机时，拨号入口应报可读中文错误而不是静默降级为直连。
     #[test]
     fn dial_endpoint_rejects_empty_jump_host() {

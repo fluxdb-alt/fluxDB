@@ -93,6 +93,56 @@ mod tests {
         );
     }
 
+    /// 档案启用 TLS 时 URL 注入 ssl 参数；verify+CA 升级 VERIFY_CA，档案覆盖用户同名参数。
+    #[test]
+    fn mysql_connection_url_injects_tls_params_from_profile() {
+        let mut config = mysql_config();
+        let mut profile = fluxdb_core::MysqlConnectionProfile::default();
+        profile.basic.host = "127.0.0.1".to_string();
+        profile.basic.port = 3306;
+        profile.basic.username = "root".to_string();
+        profile.tls.enabled = true;
+        profile.tls.ssl_mode = fluxdb_core::MysqlSslMode::Required;
+        profile.tls.verify = true;
+        profile.tls.ca = fluxdb_core::SecretRef::inline("/tls dir/ca.crt".to_string());
+        profile.tls.client_cert = fluxdb_core::SecretRef::inline("/tls/client.crt".to_string());
+        profile.tls.client_key = fluxdb_core::SecretRef::inline("/tls/client.key".to_string());
+        config.mysql_profile = Some(profile);
+        // 用户自定义 ssl-mode 与档案冲突：档案应覆盖。
+        config.options.insert(
+            "url_params".to_string(),
+            "ssl-mode=DISABLED&timezone=%2B08:00".to_string(),
+        );
+
+        let url = mysql_connection_url(&config).unwrap();
+
+        assert!(
+            url.contains("timezone=%2B08:00&")
+                && url.contains("ssl-mode=VERIFY_CA"),
+            "档案 verify+CA 应升级 VERIFY_CA 并保留无关用户参数: {url}"
+        );
+        assert!(url.contains("ssl-ca=%2Ftls%20dir%2Fca.crt"), "CA 路径应编码注入: {url}");
+        assert!(url.contains("ssl-cert=%2Ftls%2Fclient.crt"), "客户端证书应注入: {url}");
+        assert!(url.contains("ssl-key=%2Ftls%2Fclient.key"), "客户端私钥应注入: {url}");
+        assert!(
+            url.rfind("ssl-mode=VERIFY_CA") > url.rfind("ssl-mode=DISABLED"),
+            "档案参数应排在用户参数之后（后解析覆盖）: {url}"
+        );
+    }
+
+    /// 档案未启用 TLS（或无档案）时不注入任何 ssl 参数，保持 sqlx 默认行为。
+    #[test]
+    fn mysql_connection_url_without_tls_profile_stays_default() {
+        let mut config = mysql_config();
+        let mut profile = fluxdb_core::MysqlConnectionProfile::default();
+        profile.tls.ssl_mode = fluxdb_core::MysqlSslMode::Required; // enabled=false，不注入
+        config.mysql_profile = Some(profile);
+
+        let url = mysql_connection_url(&config).unwrap();
+
+        assert!(!url.contains("ssl-mode"), "未启用 TLS 不应注入 ssl 参数: {url}");
+    }
+
     #[test]
     fn mysql_connection_url_rejects_non_tcp_endpoint() {
         let mut config = mysql_config();
@@ -3563,6 +3613,134 @@ SELECT item_id, name FROM audit_log;"
         );
     }
 
+    /// 构造带结构化 TLS 档案的 MySQL 冒烟配置（basic 取自 smoke 参数，其余字段默认）。
+    #[allow(clippy::too_many_arguments)]
+    fn mysql_tls_config(
+        params: (String, u16, String, String, String),
+        mode: fluxdb_core::MysqlSslMode,
+        verify: bool,
+        ca: Option<String>,
+        client_cert: Option<String>,
+        client_key: Option<String>,
+    ) -> ConnectionConfig {
+        let mut config = mysql_smoke_config(params.clone());
+        let (host, port, user, password, db) = params;
+        let mut profile = fluxdb_core::MysqlConnectionProfile::default();
+        profile.basic = fluxdb_core::MysqlBasicOptions {
+            host,
+            port,
+            database: db,
+            username: user,
+            password: fluxdb_core::SecretRef::inline(password),
+        };
+        profile.tls.enabled = true;
+        profile.tls.ssl_mode = mode;
+        profile.tls.verify = verify;
+        if let Some(ca) = ca {
+            profile.tls.ca = fluxdb_core::SecretRef::inline(ca);
+        }
+        if let Some(cert) = client_cert {
+            profile.tls.client_cert = fluxdb_core::SecretRef::inline(cert);
+        }
+        if let Some(key) = client_key {
+            profile.tls.client_key = fluxdb_core::SecretRef::inline(key);
+        }
+        config.mysql_profile = Some(profile);
+        config
+    }
+
+    /// 拆分 TLS 冒烟环境：`host:port:user:password:db|ca_path[|bad_ca_path[|ssl_user:ssl_pass]]`。
+    /// `bad_ca_path` 供「错误 CA 应被拒」负例；`ssl_user:ssl_pass` 应为 REQUIRE SSL 账号，
+    /// 供「DISABLED 模式连强制 TLS 账号应被拒」负例。
+    fn split_mysql_tls_env(
+        v: &str,
+    ) -> (
+        (String, u16, String, String, String),
+        Option<String>,
+        Option<String>,
+        Option<(String, String)>,
+    ) {
+        let mut it = v.split('|');
+        let params_raw = it.next().unwrap_or("");
+        let mut p = params_raw.split(':');
+        let params = (
+            p.next().unwrap_or("").to_string(),
+            p.next().and_then(|s| s.parse().ok()).unwrap_or(0),
+            p.next().unwrap_or("").to_string(),
+            p.next().unwrap_or("").to_string(),
+            p.next().unwrap_or("").to_string(),
+        );
+        let nonempty = |s: Option<&str>| s.filter(|s| !s.trim().is_empty()).map(str::to_string);
+        let ca = nonempty(it.next());
+        let bad_ca = nonempty(it.next());
+        let ssl_user = it
+            .next()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|s| s.split_once(':'))
+            .map(|(u, pw)| (u.to_string(), pw.to_string()));
+        (params, ca, bad_ca, ssl_user)
+    }
+
+    /// MySQL TLS 冒烟（环境门控）：
+    /// - required + verify + 正确 CA → VERIFY_CA 建连成功；
+    /// - 同配置换错误 CA → 证书链校验拒绝；
+    /// - DISABLED 模式连 REQUIRE SSL 账号 → 服务器拒绝（证明 disabled 真的禁用加密）。
+    #[test]
+    fn mysql_live_smoke_tls_modes() {
+        let Some(tls_env) = env("FLUXDB_MYSQL_SMOKE_TLS") else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_MYSQL_SMOKE_TLS，跳过 MySQL TLS 冒烟");
+            return;
+        };
+        let (params, ca, bad_ca, ssl_user) = split_mysql_tls_env(&tls_env);
+        let connector = MySqlConnector::new();
+
+        let ok = mysql_tls_config(
+            params.clone(),
+            fluxdb_core::MysqlSslMode::Required,
+            true,
+            ca,
+            None,
+            None,
+        );
+        assert!(
+            connector.test_connection(&ok).is_ok(),
+            "required + verify + 正确 CA 应建连成功（sqlx VERIFY_CA）"
+        );
+
+        if let Some(bad_ca) = bad_ca {
+            let bad = mysql_tls_config(
+                params.clone(),
+                fluxdb_core::MysqlSslMode::Required,
+                true,
+                Some(bad_ca),
+                None,
+                None,
+            );
+            assert!(
+                connector.test_connection(&bad).is_err(),
+                "verify + 错误 CA 应被拒绝"
+            );
+        }
+
+        if let Some((tls_user, tls_pass)) = ssl_user {
+            let mut disabled_params = params.clone();
+            disabled_params.2 = tls_user;
+            disabled_params.3 = tls_pass;
+            let disabled = mysql_tls_config(
+                disabled_params,
+                fluxdb_core::MysqlSslMode::Disabled,
+                true,
+                None,
+                None,
+                None,
+            );
+            assert!(
+                connector.test_connection(&disabled).is_err(),
+                "DISABLED 模式连 REQUIRE SSL 账号应被服务器拒绝"
+            );
+        }
+    }
+
     /// 构造 MySQL QueryRequest（复用 smoke config 的连接与库）。
     fn mysql_query_request(config: &ConnectionConfig) -> QueryRequest {
         QueryRequest {
@@ -3578,7 +3756,7 @@ SELECT item_id, name FROM audit_log;"
 
     // ===== T05 传输、安全策略与生命周期（真实冒烟，环境门控）=====
 
-    /// 读 `FLUXDB_PG_SMOKE_TLS=host:port:user:password:db:ca_path:server_name:hostname`、
+    /// 读 `FLUXDB_PG_SMOKE_TLS=host:port:user:password:db|ca_path|server_name|hostname`、
     ///   `FLUXDB_PG_SMOKE_TLS_BAD_CA`（错误 CA）与 `FLUXDB_PG_SMOKE_TLS_BAD_HOST`（错误主机名）各一个路径。
     /// 仅验证 TLS 握手方向，不依赖环境是否真的开启 TLS 之外的额外能力。
     /// 未配置时跳过。

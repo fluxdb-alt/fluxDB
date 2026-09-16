@@ -226,7 +226,11 @@ fn is_symlink_mode(mode: Option<u32>) -> bool {
 }
 
 /// 还原符号链接条目：条目内容即链接目标路径。
-fn write_symlink_entry(entry: &mut impl Read, target: &Path) -> fluxdb_core::Result<()> {
+///
+/// 返回 false 表示该条目被安全策略跳过：官方包（如 EDB macOS 版）里 pgAdmin 内嵌 Python
+/// framework 的 `libpython3.13.dylib -> ../Python` 是合法的跨目录链接，客户端工具并不依赖它；
+/// 这类条目不落盘、只记日志，不能让整次安装失败。非法链接一律不创建，安全边界不变。
+fn write_symlink_entry(entry: &mut impl Read, target: &Path) -> fluxdb_core::Result<bool> {
     let mut link = String::new();
     entry
         .read_to_string(&mut link)
@@ -241,15 +245,23 @@ fn write_symlink_entry(entry: &mut impl Read, target: &Path) -> fluxdb_core::Res
             .components()
             .any(|part| !matches!(part, std::path::Component::Normal(_)))
     {
-        return Err(internal_error(format!("不安全的客户端符号链接：{link}")));
+        tracing::warn!(
+            link = %link,
+            target = %target.display(),
+            "客户端压缩包含不受支持的跨目录符号链接，已跳过该条目"
+        );
+        return Ok(false);
     }
     let destination = target.with_file_name(&link);
     if std::fs::symlink_metadata(&destination)
         .is_ok_and(|metadata| metadata.file_type().is_symlink())
     {
-        return Err(internal_error(format!(
-            "客户端符号链接不能指向其他链接：{link}"
-        )));
+        tracing::warn!(
+            link = %link,
+            target = %target.display(),
+            "客户端压缩包符号链接指向其他链接，已跳过该条目"
+        );
+        return Ok(false);
     }
     match std::fs::remove_file(target) {
         Ok(()) => {}
@@ -259,7 +271,7 @@ fn write_symlink_entry(entry: &mut impl Read, target: &Path) -> fluxdb_core::Res
     #[cfg(unix)]
     std::os::unix::fs::symlink(&link, target)
         .map_err(|error| internal_error(format!("创建符号链接失败：{error}")))?;
-    Ok(())
+    Ok(true)
 }
 
 /// 还原可执行权限（zip 里的 unix mode 丢失会导致解压出来的 pg_dump 不可执行）。

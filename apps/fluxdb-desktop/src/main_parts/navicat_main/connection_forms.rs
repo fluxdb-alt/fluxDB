@@ -256,6 +256,15 @@ impl NavicatMain {
         self.new_connection_inputs.cloud_provider_select.update(cx, |select, cx| {
             select.set_selected_value(&cloud_provider, window, cx);
         });
+        // SSL 模式下拉回填：选项值与表单字段值相同，直接同步光标。
+        let pg_ssl_mode = self.new_connection_form.pg_tls_ssl_mode.clone();
+        self.new_connection_inputs.pg_ssl_mode_select.update(cx, |select, cx| {
+            select.set_selected_value(&pg_ssl_mode, window, cx);
+        });
+        let mysql_ssl_mode = self.new_connection_form.mysql_tls_ssl_mode.clone();
+        self.new_connection_inputs.mysql_ssl_mode_select.update(cx, |select, cx| {
+            select.set_selected_value(&mysql_ssl_mode, window, cx);
+        });
     }
 
     fn cancel_new_connection(&mut self, cx: &mut Context<Self>) {
@@ -323,13 +332,11 @@ impl NavicatMain {
             ConnectionField::SshPrivateKey => form.ssh_private_key = value,
             ConnectionField::SshPassphrase => form.ssh_passphrase = value,
             // —— PostgreSQL 专用 ——
-            ConnectionField::PgTlsSslMode => form.pg_tls_ssl_mode = value,
             ConnectionField::PgDefaultSchema => form.pg_default_schema = value,
             ConnectionField::PgApplicationName => form.pg_application_name = value,
             ConnectionField::PgConnectTimeoutSecs => form.pg_connect_timeout_secs = value,
             ConnectionField::PgQueryTimeoutSecs => form.pg_query_timeout_secs = value,
             // —— MySQL / TiDB 专用 ——
-            ConnectionField::MysqlTlsSslMode => form.mysql_tls_ssl_mode = value,
             ConnectionField::MysqlCharset => form.mysql_charset = value,
             ConnectionField::MysqlProxyType => form.mysql_proxy_type = value,
             ConnectionField::MysqlSshConnectTimeout => form.mysql_ssh_connect_timeout_secs = value,

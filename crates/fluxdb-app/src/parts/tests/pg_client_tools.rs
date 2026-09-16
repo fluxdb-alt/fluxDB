@@ -317,6 +317,16 @@ fn pg_client_archive_target_narrows_to_runtime_libraries_by_default() {
             "补齐轮应保留 {kept}"
         );
     }
+    // pgAdmin 内嵌 Python framework 的库与客户端工具无关，且与真依赖同名
+    // （libssl.3.dylib 会覆盖 pgsql/lib 里的同名库）、还带跨目录符号链接，两轮都不收。
+    for skipped in [
+        "pgsql/pgAdmin 4.app/Contents/Frameworks/Python.framework/Versions/3.13/lib/libssl.3.dylib",
+        "pgsql/pgAdmin 4.app/Contents/Frameworks/Python.framework/Versions/3.13/lib/libpython3.13.dylib",
+        "pgsql/pgAdmin 4.app/Contents/Frameworks/QtWidgets",
+    ] {
+        assert_eq!(pg_client_archive_target(skipped, false), None, "{skipped}");
+        assert_eq!(pg_client_archive_target(skipped, true), None, "{skipped}");
+    }
 }
 
 #[test]
@@ -529,40 +539,113 @@ fn pg_client_extract_does_not_follow_existing_links() {
 
 #[test]
 #[cfg(unix)]
-fn pg_client_archive_rejects_escaping_symlink_and_allows_library_alias() {
+fn pg_client_archive_skips_escaping_symlink_and_allows_library_alias() {
+    // 不安全的链接（绝对路径/跨目录/逃逸）不创建、也不让整包安装失败：
+    // 官方 macOS 包里 pgAdmin Python framework 的 `libpython -> ../Python` 就是合法的跨目录链接。
     for link in [
         "../../outside",
         "/tmp/outside",
         "..\\outside",
-        "libpq.5.dylib",
+        "../Python",
     ] {
         let root = temp_pg_client_path("archive-symlink");
         let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         archive
             .add_symlink(
+                // 用白名单里的 libpq 前缀命名，保证条目会被选取、真正走到链接还原逻辑。
                 "pgsql/lib/libpq.dylib",
                 link,
                 zip::write::SimpleFileOptions::default(),
             )
             .unwrap();
         let bytes = archive.finish().unwrap().into_inner();
-        let result = extract_pg_client_archive(
+        extract_pg_client_archive(
             std::io::Cursor::new(bytes),
             &root,
             false,
             &AtomicBool::new(false),
             &mut |_, _, _| {},
+        )
+        .unwrap_or_else(|error| panic!("跨目录链接 {link} 应被跳过而不是报错：{error}"));
+        assert!(
+            !std::fs::symlink_metadata(root.join("lib/libpq.dylib")).is_ok(),
+            "链接 {link} 不应落盘"
         );
-        if link == "libpq.5.dylib" {
-            result.unwrap();
-            assert_eq!(
-                std::fs::read_link(root.join("lib/libpq.dylib")).unwrap(),
-                PathBuf::from(link)
-            );
-        } else {
-            assert!(result.is_err(), "应拒绝链接 {link}");
-            assert!(!root.join("lib/libpq.dylib").is_symlink());
-        }
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    // 同目录的库别名链接（libpq.dylib -> libpq.5.dylib）仍正常还原。
+    let root = temp_pg_client_path("archive-symlink-alias");
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    archive
+        .add_symlink(
+            "pgsql/lib/libpq.dylib",
+            "libpq.5.dylib",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+    let bytes = archive.finish().unwrap().into_inner();
+    extract_pg_client_archive(
+        std::io::Cursor::new(bytes),
+        &root,
+        false,
+        &AtomicBool::new(false),
+        &mut |_, _, _| {},
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_link(root.join("lib/libpq.dylib")).unwrap(),
+        PathBuf::from("libpq.5.dylib")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn download_pg_client_tolerates_framework_symlinks_in_optional_round() {
+    use std::io::Write as _;
+
+    let install_dir = temp_pg_client_path("install-framework");
+    // 还原真实场景：pgAdmin Python framework 里的 libpython3.13.dylib -> ../Python
+    // 出现在补齐轮（include_optional=true）的选取范围里，不能让整次安装失败。
+    // pg_dump 脚本依赖非白名单的可选库 libicudata：精简轮校验必失败，强制走进补齐轮。
+    let archive = {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(&mut buffer);
+        let exec = zip::write::SimpleFileOptions::default().unix_permissions(0o755);
+        let data = zip::write::SimpleFileOptions::default().unix_permissions(0o644);
+        writer.start_file("pgsql/bin/pg_dump", exec).unwrap();
+        writer
+            .write_all(
+                b"#!/bin/sh\n\
+                  [ -f \"$(dirname \"$0\")/../lib/libicudata.77.1.dylib\" ] || exit 1\n\
+                  echo \"pg_dump (PostgreSQL) 18.1\"\n",
+            )
+            .unwrap();
+        writer.start_file("pgsql/bin/psql", exec).unwrap();
+        writer
+            .write_all(b"#!/bin/sh\necho \"psql (PostgreSQL) 18.1\"\n")
+            .unwrap();
+        writer.start_file("pgsql/lib/libpq.5.dylib", data).unwrap();
+        writer.write_all(b"fake dylib\n").unwrap();
+        writer
+            .start_file("pgsql/lib/libicudata.77.1.dylib", data)
+            .unwrap();
+        writer.write_all(b"fake icu\n").unwrap();
+        writer
+            .add_symlink("pgsql/lib/libpython3.13.dylib", "../Python", data)
+            .unwrap();
+        writer.finish().unwrap();
+        buffer.into_inner()
+    };
+    let (url, _served) = serve_archive(archive, true);
+    let cancel = AtomicBool::new(false);
+
+    let bin_dir = download_pg_client(&url, &install_dir, &cancel, &mut |_| {}).unwrap();
+
+    assert_eq!(pg_tool_major_at(&bin_dir.join("pg_dump")), Some(18));
+    let lib_dir = install_dir.join("lib");
+    assert!(!lib_dir.join("libpython3.13.dylib").exists());
+    assert!(lib_dir.join("libpq.5.dylib").is_file());
+    std::fs::remove_dir_all(&install_dir).ok();
 }

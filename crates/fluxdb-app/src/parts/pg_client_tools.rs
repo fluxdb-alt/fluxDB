@@ -571,6 +571,16 @@ fn pg_client_archive_target(entry_name: &str, include_optional: bool) -> Option<
         // 防御 zip slip：带上跳路径的条目一律丢弃。
         return None;
     }
+    // pgAdmin 的 GUI 与其内嵌 Python framework（如 macOS 包里的
+    // `pgAdmin 4.app/.../Python.framework/Versions/*/lib/`）和客户端工具无关：framework 里的
+    // libssl/libcrypto 等同名库会覆盖真正的依赖库，还有跨目录符号链接（libpython -> ../Python），
+    // 补齐轮也不收，直接按路径段排除。
+    if normalized
+        .split('/')
+        .any(|part| part.contains("pgAdmin") || part.ends_with(".framework"))
+    {
+        return None;
+    }
     let mut parts = normalized.rsplit('/');
     let name = parts.next()?;
     let parent = parts.next()?;

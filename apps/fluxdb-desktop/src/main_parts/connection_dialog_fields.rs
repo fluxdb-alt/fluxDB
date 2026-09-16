@@ -430,13 +430,11 @@ fn connection_field_placeholder(field: ConnectionField) -> &'static str {
         ConnectionField::SshPrivateKey => "私钥文件路径",
         ConnectionField::SshPassphrase => "私钥口令，可选",
         // —— PostgreSQL ——
-        ConnectionField::PgTlsSslMode => "prefer (disable/prefer/require/verify-ca/verify-full)",
         ConnectionField::PgDefaultSchema => "默认 schema，可选（如 public）",
         ConnectionField::PgApplicationName => "应用名，可选",
         ConnectionField::PgConnectTimeoutSecs => "5",
         ConnectionField::PgQueryTimeoutSecs => "0=不设限（statement_timeout）",
         // —— MySQL / TiDB ——
-        ConnectionField::MysqlTlsSslMode => "preferred (disabled/preferred/required)",
         ConnectionField::MysqlCharset => "utf8mb4",
         ConnectionField::MysqlProxyType => "socks5 (socks5/http_connect)",
         ConnectionField::MysqlSshConnectTimeout => "0=继承全局",
