@@ -2773,6 +2773,12 @@ fn main() {
                             settings_panel_section: SettingsPanelSection::Editor,
                             settings_editor_draft,
                             settings_dangerous_actions_collapsed: false,
+                            // 备份默认展开（常用），客户端默认折叠（标题右侧有状态摘要）。
+                            settings_data_groups_collapsed: SettingsDataGroupsCollapsed {
+                                backup: false,
+                                pg_client: true,
+                                mysql_client: true,
+                            },
                             settings_font_size_slider,
                             _settings_font_size_slider_subscription:
                                 settings_font_size_slider_subscription,

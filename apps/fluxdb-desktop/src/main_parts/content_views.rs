@@ -151,6 +151,7 @@ fn content(
                 this.settings_radius_input.clone(),
                 [this.pg_client.snapshot(NativeClientKind::Postgres), this.mysql_client.snapshot(NativeClientKind::MySql)],
                 this.settings_dangerous_actions_collapsed,
+                this.settings_data_groups_collapsed,
                 window,
                 cx,
             )

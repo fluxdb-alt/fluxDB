@@ -86,15 +86,76 @@ impl NativeClientState {
     }
 }
 
+/// 各客户端组内的「单独指定 dump 工具路径」行:从原「备份」分组迁入,
+/// 与对应客户端的目录/下载源放在一处,避免同一个库的配置分居两处。
+fn dump_path_row(
+    kind: NativeClientKind,
+    settings: &Settings,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Stateful<Div> {
+    match kind {
+        NativeClientKind::Postgres => settings_path_row(
+            "pg_dump 路径",
+            "单独指定 pg_dump 可执行文件（优先级最高）；一般留空，使用上方自动发现",
+            AppIcon::Database,
+            &settings.pg_dump_path,
+            "settings-backup-pg-dump",
+            false,
+            colors,
+            cx,
+        ),
+        NativeClientKind::MySql => settings_path_row(
+            "mysqldump 路径",
+            "单独指定 mysqldump 可执行文件（旧配置优先级最高）；一般留空，使用上方自动发现",
+            AppIcon::Query,
+            &settings.mysqldump_path,
+            "settings-backup-mysqldump",
+            false,
+            colors,
+            cx,
+        ),
+    }
+}
+
 fn settings_native_client_group(
     settings: &Settings,
     client: NativeClientPanelState,
+    collapsed: bool,
     colors: UiColors,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> GroupBox {
     let kind = client.kind;
     let downloading = client.download.is_some();
+    // 折叠时标题右侧的状态摘要:优先级 下载中 > 检测中 > 已检测/未找到 > 未检测。
+    // 检测失败时 status 会是安装引导文案(以「未找到」开头),摘要区分开,
+    // 避免没找到客户端还显示「已检测」误导。
+    let status_hint = if downloading {
+        "下载中..."
+    } else if client.detecting {
+        "检测中..."
+    } else if client
+        .status
+        .as_deref()
+        .is_some_and(|s| s.starts_with("未找到"))
+    {
+        "未找到"
+    } else if client.status.is_some() {
+        "已检测"
+    } else {
+        "未检测"
+    };
+    let group_enum = match kind {
+        NativeClientKind::Postgres => SettingsDataGroup::PgClient,
+        NativeClientKind::MySql => SettingsDataGroup::MySql,
+    };
+    let mut group =
+        settings_collapsible_group(group_enum, Some(status_hint), collapsed, colors, cx);
+    // 折叠时不渲染内部行（含下载源输入框同步），展开时恢复。
+    if collapsed {
+        return group;
+    }
     let status = client
         .download
         .as_ref()
@@ -141,7 +202,7 @@ fn settings_native_client_group(
             );
         }
     }
-    let mut group = settings_panel_group(kind.label(), colors)
+    group = group
         .child(
             settings_action_row(
                 "客户端状态",
@@ -166,23 +227,29 @@ fn settings_native_client_group(
                     .child(actions),
             ),
         )
-        .child(settings_path_row(
-            "客户端目录",
-            "可选安装根目录或 bin 目录；留空自动发现，下载也会安装到这里",
-            AppIcon::Folder,
-            kind.dir(settings),
-            kind.directory_id(),
-            true,
-            colors,
-            cx,
-        ));
+        .child(dump_path_row(kind, settings, colors, cx))
+.child({
+            // 未设置客户端目录时,占位直接展示本机默认搜索路径,让用户知道留空会发生什么。
+            let placeholder = match kind {
+                NativeClientKind::Postgres => fluxdb_app::pg_client_default_dirs_summary(),
+                NativeClientKind::MySql => fluxdb_app::mysql_client_default_dirs_summary(),
+            };
+            settings_path_row_with_placeholder(
+                "客户端目录",
+                "可选安装根目录或 bin 目录;留空自动发现,下载也会安装到这里",
+                AppIcon::Folder,
+                kind.dir(settings),
+                &placeholder,
+                kind.directory_id(),
+                true,
+                colors,
+                cx,
+            )
+        });
+    // 不再在组底部常驻安装引导文案:检测失败时状态行已显示同一句 install_hint,
+    // 常驻版本属于重复提示。
     if !kind.download_supported() {
-        return group.child(
-            div()
-                .text_size(px(12.))
-                .text_color(colors.muted)
-                .child(kind.install_hint()),
-        );
+        return group;
     }
     let input = &client.source_input;
     let focused = input.read(cx).focus_handle(cx).is_focused(window);

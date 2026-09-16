@@ -9,6 +9,7 @@ fn settings_content(
     radius_input: Entity<InputState>,
     clients: [NativeClientPanelState; 2],
     dangerous_actions_collapsed: bool,
+    data_groups: SettingsDataGroupsCollapsed,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -60,6 +61,7 @@ fn settings_content(
                                     radius_input,
                                     clients,
                                     dangerous_actions_collapsed,
+                                    data_groups,
                                     window,
                                     cx,
                                 )),
@@ -265,6 +267,7 @@ fn settings_panel_body(
     radius_input: Entity<InputState>,
     clients: [NativeClientPanelState; 2],
     dangerous_actions_collapsed: bool,
+    data_groups: SettingsDataGroupsCollapsed,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -297,7 +300,7 @@ fn settings_panel_body(
             settings_system_panel(&editor_draft, colors, cx)
         }
         SettingsPanelSection::Data => {
-            settings_data_panel(&editor_draft, clients, colors, window, cx)
+            settings_data_panel(&editor_draft, clients, data_groups, colors, window, cx)
         }
         SettingsPanelSection::ConnectionSecurity => settings_connection_security_panel(colors),
         SettingsPanelSection::DatabaseSupport => {

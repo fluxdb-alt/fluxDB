@@ -315,6 +315,79 @@ fn pg_client_versioned_dirs(root: impl AsRef<Path>) -> Vec<PathBuf> {
     versions.into_iter().map(|path| path.join("bin")).collect()
 }
 
+/// 未设置客户端目录时,设置页展示的「系统默认搜索路径」摘要。
+/// 只列系统标准安装路径与 PATH(不含用户配置和托管下载目录),取已存在的前几条避免刷屏。
+pub fn pg_client_default_dirs_summary() -> String {
+    default_dirs_summary(pg_client_system_dirs().into_iter().map(|dir| (dir, "系统")))
+}
+
+/// MySQL 版本的默认搜索路径摘要,系统目录规则与 `mysql_client_tools::candidate_dirs` 一致。
+pub fn mysql_client_default_dirs_summary() -> String {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if cfg!(target_os = "macos") {
+        for root in ["/opt/homebrew/opt", "/usr/local/opt"] {
+            for package in [
+                "mysql-client@8.4",
+                "mysql-client@8.0",
+                "mysql-client",
+                "mysql@8.4",
+                "mysql@8.0",
+                "mysql",
+                "mariadb",
+            ] {
+                dirs.push(PathBuf::from(root).join(package).join("bin"));
+            }
+        }
+        dirs.push(PathBuf::from("/usr/local/mysql/bin"));
+    } else if cfg!(windows) {
+        for root in ["ProgramFiles", "ProgramFiles(x86)"]
+            .iter()
+            .filter_map(std::env::var_os)
+        {
+            let root = PathBuf::from(root);
+            if let Ok(entries) = std::fs::read_dir(root.join("MySQL")) {
+                dirs.extend(entries.flatten().map(|entry| entry.path().join("bin")));
+            }
+            if let Ok(entries) = std::fs::read_dir(root) {
+                dirs.extend(
+                    entries
+                        .flatten()
+                        .filter(|entry| entry.file_name().to_string_lossy().starts_with("MariaDB"))
+                        .map(|entry| entry.path().join("bin")),
+                );
+            }
+        }
+    } else {
+        dirs.extend([
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/usr/local/mysql/bin"),
+        ]);
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
+    }
+    default_dirs_summary(dirs.into_iter().map(|dir| (dir, "系统")))
+}
+
+/// 通用摘要:去重后取本机已存在的前 3 条目录;一条都没有则提示依赖 PATH。
+fn default_dirs_summary(dirs: impl Iterator<Item = (PathBuf, &'static str)>) -> String {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut found: Vec<String> = Vec::new();
+    for (dir, _label) in dirs {
+        if !seen.insert(dir.clone()) {
+            continue;
+        }
+        if dir.is_dir() && found.len() < 3 {
+            found.push(dir.display().to_string());
+        }
+    }
+    if found.is_empty() {
+        "默认搜索路径:系统 PATH".to_string()
+    } else {
+        format!("默认搜索路径:{}", found.join("、"))
+    }
+}
+
 /// 扫描所有候选目录，返回实际存在 pg_dump 的客户端位置（已探测主版本号）。
 pub fn discover_pg_clients(settings: &Settings) -> Vec<PgClientLocation> {
     let binary = PgClientTool::Dump.binary_name();

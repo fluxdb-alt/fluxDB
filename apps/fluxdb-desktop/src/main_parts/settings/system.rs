@@ -1,10 +1,38 @@
 fn settings_data_panel(
     settings: &Settings,
     clients: [NativeClientPanelState; 2],
+    groups: SettingsDataGroupsCollapsed,
     colors: UiColors,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
+    // 备份组内容较多但属于常用配置，默认展开；客户端组默认折叠，标题右侧带状态摘要。
+    let backup_group = settings_collapsible_group(SettingsDataGroup::Backup, None, groups.backup, colors, cx);
+    let backup_group = if groups.backup {
+        backup_group
+    } else {
+        backup_group
+            .child(settings_path_row(
+                "备份目录",
+                "数据库备份文件默认保存目录，保存后生效",
+                AppIcon::Folder,
+                &settings.backup_dir,
+                "settings-backup-dir",
+                true,
+                colors,
+                cx,
+            ))
+            .child(settings_path_row(
+                "sqlite3 路径",
+                "SQLite 原生备份工具路径，留空时使用系统 PATH 中的 sqlite3",
+                AppIcon::Database,
+                &settings.sqlite3_path,
+                "settings-backup-sqlite3",
+                false,
+                colors,
+                cx,
+            ))
+    };
     div()
         .flex()
         .flex_col()
@@ -25,50 +53,105 @@ fn settings_data_panel(
                     cx,
                 )),
         )
+        .child(backup_group)
+        .children(clients.into_iter().map(|client| {
+            // 折叠状态按客户端类型区分，两个客户端组可独立展开/收起。
+            let collapsed = match client.kind {
+                NativeClientKind::Postgres => groups.pg_client,
+                NativeClientKind::MySql => groups.mysql_client,
+            };
+            settings_native_client_group(settings, client, collapsed, colors, window, cx)
+        }))
+}
+
+/// 「数据」页各分组的折叠状态。UI 瞬时态，不持久化；备份默认展开，客户端默认折叠。
+#[derive(Clone, Copy)]
+struct SettingsDataGroupsCollapsed {
+    backup: bool,
+    pg_client: bool,
+    mysql_client: bool,
+}
+
+/// 「数据」页里支持折叠的分组标识。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SettingsDataGroup {
+    Backup,
+    PgClient,
+    MySql,
+}
+
+impl SettingsDataGroup {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Backup => "备份",
+            Self::PgClient => "PostgreSQL 客户端",
+            Self::MySql => "MySQL 客户端",
+        }
+    }
+}
+
+impl NavicatMain {
+    fn toggle_settings_data_group(&mut self, group: SettingsDataGroup) {
+        let collapsed = &mut self.settings_data_groups_collapsed;
+        match group {
+            SettingsDataGroup::Backup => collapsed.backup = !collapsed.backup,
+            SettingsDataGroup::PgClient => collapsed.pg_client = !collapsed.pg_client,
+            SettingsDataGroup::MySql => collapsed.mysql_client = !collapsed.mysql_client,
+        }
+    }
+}
+
+/// 可折叠的设置分组：标题整行可点击切换折叠，右侧可挂状态摘要（如客户端检测状态）。
+/// 交互与编辑器页「危险 SQL 操作清单」一致：Chevron 指示方向 + on_mouse_down 切换。
+/// 不用 gpui-component 的 Accordion：其展开状态是组件内部 RenderOnce 临时态，
+/// 设置页每次重渲染会重建组件导致状态丢失；这里沿用仓库已有的折叠状态模式。
+fn settings_collapsible_group(
+    group: SettingsDataGroup,
+    status_hint: Option<&str>,
+    collapsed: bool,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> GroupBox {
+    let mut title = h_flex()
+        .w_full()
+        .gap_1()
+        .cursor_pointer()
+        .child(app_icon_box(
+            if collapsed {
+                AppIcon::ChevronRight
+            } else {
+                AppIcon::ChevronDown
+            },
+            24.,
+            13.,
+            colors.muted,
+        ))
         .child(
-            settings_panel_group("备份", colors)
-                .child(settings_path_row(
-                    "备份目录",
-                    "数据库备份文件默认保存目录，保存后生效",
-                    AppIcon::Folder,
-                    &settings.backup_dir,
-                    "settings-backup-dir",
-                    true,
-                    colors,
-                    cx,
-                ))
-                .child(settings_path_row(
-                    "mysqldump 路径",
-                    "单独指定 mysqldump 可执行文件（旧配置优先级最高）；一般留空，改用下方「MySQL 客户端」",
-                    AppIcon::Query,
-                    &settings.mysqldump_path,
-                    "settings-backup-mysqldump",
-                    false,
-                    colors,
-                    cx,
-                ))
-                .child(settings_path_row(
-                    "sqlite3 路径",
-                    "SQLite 原生备份工具路径，留空时使用系统 PATH 中的 sqlite3",
-                    AppIcon::Database,
-                    &settings.sqlite3_path,
-                    "settings-backup-sqlite3",
-                    false,
-                    colors,
-                    cx,
-                ))
-                .child(settings_path_row(
-                    "pg_dump 路径",
-                    "单独指定 pg_dump 可执行文件（优先级最高）；一般留空，改用下方「PostgreSQL 客户端」",
-                    AppIcon::Database,
-                    &settings.pg_dump_path,
-                    "settings-backup-pg-dump",
-                    false,
-                    colors,
-                    cx,
-                )),
+            div()
+                .text_size(px(12.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(group.title()),
         )
-        .children(clients.into_iter().map(|client| settings_native_client_group(settings, client, colors, window, cx)))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                this.toggle_settings_data_group(group);
+                cx.notify();
+            }),
+        );
+    if let Some(hint) = status_hint {
+        // 折叠时也能从标题右侧看到关键状态，避免为了看状态必须展开。
+        title = title.child(
+            div().flex_1().child(
+                h_flex()
+                    .ml_auto()
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child(hint.to_string()),
+            ),
+        );
+    }
+    settings_panel_group_el(title)
 }
 
 /// 设置面板中一条可选择的路径行（目录或文件）。选择结果写入 settings_editor_draft 对应字段。
@@ -77,6 +160,32 @@ fn settings_path_row(
     detail: &'static str,
     icon: AppIcon,
     value: &str,
+    button_id: &'static str,
+    directory: bool,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Stateful<Div> {
+    settings_path_row_with_placeholder(
+        title,
+        detail,
+        icon,
+        value,
+        "(未设置)",
+        button_id,
+        directory,
+        colors,
+        cx,
+    )
+}
+
+/// 同 `settings_path_row`,但未设置时的占位文案可自定义(如显示系统默认搜索路径)。
+#[allow(clippy::too_many_arguments)]
+fn settings_path_row_with_placeholder(
+    title: &'static str,
+    detail: &'static str,
+    icon: AppIcon,
+    value: &str,
+    placeholder: &str,
     button_id: &'static str,
     directory: bool,
     colors: UiColors,
@@ -96,7 +205,7 @@ fn settings_path_row(
                         .text_color(colors.muted)
                         .truncate()
                         .child(if value.trim().is_empty() {
-                            "（未设置）".to_string()
+                            placeholder.to_string()
                         } else {
                             value.to_string()
                         }),
@@ -350,14 +459,18 @@ fn settings_system_panel(
 }
 
 fn settings_panel_group(title: &'static str, _colors: UiColors) -> GroupBox {
+    settings_panel_group_el(
+        div()
+            .text_size(px(12.))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .child(title),
+    )
+}
+
+fn settings_panel_group_el(title: impl IntoElement) -> GroupBox {
     GroupBox::new()
         .with_variant(GroupBoxVariant::Outline)
-        .title(
-            div()
-                .text_size(px(12.))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(title),
-        )
+        .title(title)
         // GroupBox Outline 默认给内容区 p_4()(16px)+gap_4()(16px)，会在每行下方叠出明显留白。
         // 改由各设置行自身的行高/顶部分隔线(如 h(52.) + border_t_1) 统一控制间距，
         // 让所有设置项与分隔线之间间距紧凑一致。
@@ -383,7 +496,7 @@ fn settings_section_description(section: SettingsPanelSection) -> &'static str {
         SettingsPanelSection::Shortcuts => "查看应用和编辑器快捷键",
         SettingsPanelSection::Appearance => "主题和应用外观偏好",
         SettingsPanelSection::System => "启动、诊断、本地数据和高级选项",
-        SettingsPanelSection::Data => "数据表和查询结果显示偏好",
+        SettingsPanelSection::Data => "数据表、备份目录和数据库客户端配置",
         SettingsPanelSection::ConnectionSecurity => "连接行为和敏感信息策略",
         SettingsPanelSection::DatabaseSupport => "当前内置连接器和数据库能力状态",
         SettingsPanelSection::About => "应用信息和配置说明",
