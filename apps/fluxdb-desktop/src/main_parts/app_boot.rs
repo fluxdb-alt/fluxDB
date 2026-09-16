@@ -1,5 +1,14 @@
 fn main() {
-    let storage = FileStorage::default();
+    // 应用数据目录解析失败时明确报错退出（AI-01，方案 §4.1/§10.4-4：启动失败必须有证据），
+    // 不再静默回退到当前目录。日志系统此时未初始化，先以 stderr 输出；
+    // Windows GUI 子系统下 stderr 不可见的兜底可见性属后续任务（方案 §12.8）。
+    let storage = match FileStorage::try_default() {
+        Ok(storage) => storage,
+        Err(err) => {
+            eprintln!("FluxDB 无法解析应用数据目录，启动终止: {err}");
+            std::process::exit(1);
+        }
+    };
     let saved_settings = storage.load_settings().unwrap_or_default();
     // 最先初始化日志系统；guard 持有到 main 结束，保证日志 worker 线程存活。
     let _log_guard = init_logging(saved_settings.log_level, &saved_settings.log_path);

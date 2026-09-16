@@ -21,14 +21,10 @@ impl DataRowExportFormat {
 }
 
 fn default_data_export_directory() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        let downloads = PathBuf::from(home).join("Downloads");
-        if downloads.is_dir() {
-            return downloads;
-        }
-    }
-
-    std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir())
+    // 默认导出目录由 fluxdb-storage 统一解析（AI-01，方案 §12.4）：
+    // 平台下载目录（Known Folder / XDG）→ 用户主目录 → 临时目录；
+    // 不再回退到进程工作目录/安装目录（Windows 下可能是 System32 等不可写位置）。
+    fluxdb_storage::FileStorage::default_download_dir()
 }
 
 fn data_row_export_suggested_name(object: &ObjectPath, format: DataRowExportFormat) -> String {

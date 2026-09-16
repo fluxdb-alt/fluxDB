@@ -123,19 +123,45 @@ fn query_history_kind_to_storage(kind: QueryHistoryKind) -> &'static str {
     }
 }
 
+/// 资源目录按安装布局解析（AI-01，方案 §4.1）：
+/// - macOS：bundle `Contents/Resources/assets`（保持不变）
+/// - Windows：EXE 同级 `assets`
+/// - Linux（DEB）：安装前缀下 `share/fluxdb/assets`（EXE 位于 `<prefix>/bin`）
+/// 仅开发构建（debug_assertions）回退源码目录 `CARGO_MANIFEST_DIR/assets`；
+/// 发布构建找不到资源时记录错误日志并返回平台布局路径，便于诊断，
+/// 不再静默依赖构建机目录。
 fn app_assets_base_path() -> PathBuf {
     #[cfg(target_os = "macos")]
-    {
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(contents_dir) = exe_path.parent().and_then(|macos_dir| macos_dir.parent()) {
-                let bundled_assets = contents_dir.join("Resources").join("assets");
-                if bundled_assets.exists() {
-                    return bundled_assets;
-                }
-            }
+    let platform_assets = std::env::current_exe().ok().and_then(|exe_path| {
+        exe_path
+            .parent()
+            .and_then(|macos_dir| macos_dir.parent())
+            .map(|contents_dir| contents_dir.join("Resources").join("assets"))
+    });
+    #[cfg(target_os = "windows")]
+    let platform_assets = std::env::current_exe()
+        .ok()
+        .and_then(|exe_path| exe_path.parent().map(|exe_dir| exe_dir.join("assets")));
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let platform_assets = std::env::current_exe().ok().and_then(|exe_path| {
+        exe_path
+            .parent()
+            .and_then(|bin_dir| bin_dir.parent())
+            .map(|prefix| prefix.join("share").join("fluxdb").join("assets"))
+    });
+
+    if let Some(assets) = platform_assets {
+        if assets.exists() {
+            return assets;
         }
     }
 
+    if cfg!(not(debug_assertions)) {
+        tracing::warn!(
+            target: "fluxdb_desktop",
+            "发布构建未找到安装布局资源目录，图标等资源可能缺失（当前按开发目录回退）"
+        );
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
 }
 
