@@ -2375,7 +2375,7 @@ fn main() {
                             redis_hash_field_rows: Vec::new(),
                             redis_hash_field_hovered: None,
                             redis_hash_field_editing: None,
-                            redis_hash_full_value_viewer: Rc::new(RefCell::new(None)),
+                            redis_hash_full_value_viewer: Rc::new(std::cell::RefCell::new(None)),
                             pending_redis_hash_field_drawer: None,
                             redis_hash_field_drawer_rows: Vec::new(),
                             redis_hash_field_drawer_scroll: ScrollHandle::new(),
