@@ -15,6 +15,8 @@ fn main() {
         })
         .run(move |cx: &mut App| {
             set_dock_icon();
+            // Linux 首版无托盘；tray_icon.rs 仅在非 Linux 编译（见 main.rs include 与 Cargo.toml）。
+            #[cfg(not(target_os = "linux"))]
             install_tray_icon(cx);
             gpui_component::init(cx);
             register_sql_highlighter();
@@ -59,6 +61,8 @@ fn main() {
                     ..Default::default()
                 },
                 |window, cx| {
+                    // Linux 首版无托盘：不注册“关闭到托盘”拦截，走默认正常关闭/退出流程。
+                    #[cfg(not(target_os = "linux"))]
                     install_close_to_tray(window, cx);
                     let view = cx.new(|cx| {
                         let rename_group_input =

@@ -1,0 +1,98 @@
+name: CI
+
+# AI-00：三平台原生构建、测试与内部候选产物。
+# 本工作流只生成内部候选产物，不创建 tag、不公开发布 Release。
+# 各平台使用原生 runner；macOS 上的交叉 cargo check 不作为 Windows/Linux 验证通过依据。
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS (Apple Silicon)
+          - os: macos-14
+            target: aarch64-apple-darwin
+            arch: aarch64
+          # Windows x64 (MSVC)
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            arch: x64
+          # Linux x64 基线 (Ubuntu 22.04)
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            arch: x64
+    runs-on: ${{ matrix.os }}
+
+    timeout-minutes: 90
+
+    env:
+      CARGO_TERM_COLOR: always
+      TARGET: ${{ matrix.target }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # 按 docs/2026-09-14-windows-linux-support-plan.md §3.4 安装 GPUI/Linux 原生构建依赖。
+          # 包含: C/C++ 编译器、pkg-config、OpenSSL、fontconfig、FreeType、
+          #   xkbcommon、X11/XCB、Wayland 开发包，以及 wgpu 图形后端的库。
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake clang \
+            libssl-dev \
+            libfontconfig1-dev libfreetype6-dev \
+            libxkbcommon-dev libwayland-dev \
+            libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libdbus-1-dev
+
+      # Windows/Ubuntu/macOS 均使用 Cargo.lock + --locked，避免浮动依赖。
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ github.workspace }}
+          key: ${{ matrix.target }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Workspace check (locked)
+        run: cargo check --workspace --locked --target ${{ matrix.target }}
+
+      # 与数据库/SSH/凭据服务无关的单元测试；集成测试需要独立服务，不在本 job 强制。
+      - name: Test core crates
+        run: cargo test --locked --target ${{ matrix.target }} -p fluxdb-core -p fluxdb-editor-core -p fluxdb-editor-language
+
+      - name: Test storage/app/connectors
+        run: cargo test --locked --target ${{ matrix.target }} -p fluxdb-storage -p fluxdb-app -p fluxdb-connectors
+
+      - name: Build fluxdb-desktop (release, locked)
+        run: cargo build --locked --release --target ${{ matrix.target }} -p fluxdb-desktop
+
+      - name: Upload internal candidate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluxdb-desktop-${{ matrix.os }}-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/fluxdb-desktop*
+          if-no-files-found: error
+          retention-days: 14
