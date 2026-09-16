@@ -50,6 +50,10 @@
   - `apps/fluxdb-desktop/src/main.rs`：`include!("main_parts/tray_icon.rs")` 加 `#[cfg(not(target_os = "linux"))]`。
   - `apps/fluxdb-desktop/src/main_parts/app_boot.rs`：`install_tray_icon(cx)` 与 `install_close_to_tray(window, cx)` 两处调用加 `#[cfg(not(target_os = "linux"))]`；Linux 走默认正常关闭/退出流程（不注册“关闭到托盘”拦截）。Windows/macOS 托盘行为不变。
   - Cargo.lock 未改动（同版本仅移动 target 条件）。
+- **AI-00 首跑 CI 暴露并修复的 Linux 编译问题（第二个提交）**：
+  - 现象：Ubuntu 22.04 `cargo check --locked --workspace` 报 `error[E0425]/E0433: cannot find type RefCell`（2 处）。
+  - 根因：`tray_icon.rs` 顶部 `use std::cell::RefCell;` 依托 `include!` 的 crate-root 共享作用域，被 `app_boot.rs:2378`、`app_state.rs:712` 的裸 `RefCell` 隐式借用；Linux 排除托盘 include 后该导入消失才暴露出来。
+  - 修复：`app_boot.rs:2378`、`app_state.rs:712` 两处裸 `RefCell` 改为文件内已普遍使用的全限定 `std::cell::RefCell`（与同文件其他写法一致），消除对托盘文件作用域泄漏的依赖。提交 `8418daf`。
 
 **为何依赖/feature 决策与源码一致（已实读本地 registry 源码确认）**：
 - `gpui-pre-windows 0.3.3`：build.rs 仅在 `cfg(target_os="windows")` 且 `not(debug_assertions)` 时用 `fxc.exe` 编译 HLSL（release-only）；debug 构建 build.rs 为空。release 构建需要 fxc.exe（`GPUI_FXC_PATH` → PATH `where fxc.exe` → Windows SDK 注册表扫描），缺失则 `panic!`。windows-2022 镜像自带 VS Build Tools + Windows SDK 的 fxc。
@@ -78,25 +82,35 @@
   - `tests::pg_create_database_sql_builds_options_and_quotes`：断言失配（预期无 `TEMPLATE template0`）。
   - `tests::pg_build_table_ddl_round_trips_clauses`：断言失配（GENERATED 子句）。
   - 这 4 个失败与本次 AI-00 改动无关（AI-00 仅改 desktop 托盘 cfg；失败都在 `crates/fluxdb-connectors`，改动前即可复现）。属既有基线问题，不在 AI-00 范围；对应的 CI 步骤保留（不能靠跳过假装通过），会如实保持失败，由后续任务（或独立修复）处理。
-- Windows / Linux：无本机，用 GitHub Actions 原生 runner（待触发）；mac 上交叉 check 不能作为这些平台的验证
+- Windows / Linux：无本机，用 GitHub Actions 原生 runner；mac 上交叉 check 不能作为这些平台的验证（已确证由 CI 原生 runner 验证）
+
+**验证（GitHub Actions 原生 runner 首跑，run 35086174873）**：
+- **Windows x86_64-pc-windows-msvc（windows-2022）**：`cargo fmt --check` ✓；`cargo check --workspace --locked` ✓（原生 Windows 编译通过）；core/editor 测试 ✓；`Test storage/app/connectors` ✗ 为既有 connector 失败；release 构建因测试步骤中断未跑到。
+- **macOS aarch64（macos-14）**：fmt ✓；workspace check ✓；core 测试 ✓；connector 测试 ✗ 为既有失败；release 构建未跑到。
+- **Ubuntu 22.04 x86_64**：fmt ✓；`cargo check --workspace --locked` ✗ `exit 101`（`RefCell` 作用域问题，已定位根因并修复，见“改动”）；后续步骤未跑。
+- 三平台既有 connector 4 个失败（mac/Win 均复现）：`pg_plan_apply_*`（2 个，需真实 PG 服务，Connection refused）、`pg_create_database_sql_builds_options_and_quotes`、`pg_build_table_ddl_round_trips_clauses`（2 个真实断言失配）。基线缺陷，非 AI-00 引入，保留不跳过。
 
 **CI 链接/日志**：
-- 待运行后补充（push 触发后填 run URL）
+- 首跑失败：https://github.com/fluxdb-alt/fluxDB/actions/runs/35086174873 （PR #5）
+- 复跑（含 RefCell 修复）：run 35087627727（进行中）
 
 **GUI/安装**：
 - 未覆盖（无 Windows/Linux 实体图形会话）；托盘/DPI/IME/真实 GPU 标记待验证
 
 **已知问题**：
-- 未验证项：Windows/Linux GUI、IME、DPI、真实 GPU、托盘（Linux 首版排除）、安装包；Windows fxc/HLSL 发布构建链路；Linux GTK 排除后的实际无 GTK 编译（需 CI Ubuntu 实跑确认）。
-- 既有基线失败（非 AI-00 引入）：connectors 4 个测试失败（2 个需真实 PG 服务、2 个真实断言失配），见上验证节；已如实保留，不经由跳过伪装通过。
+- 未验证项：Windows/Linux GUI、IME、DPI、真实 GPU、托盘（Linux 首版排除）、安装包；Windows fxc/HLSL 发布构建链路（release 构建步骤在 connector 测试失败后未跑到，需复跑确认）；Linux GTK 排除后的无 GTK 编译（复跑确认中）。
+- 既有基线失败（非 AI-00 引入，阻塞 CI 全绿）：connectors 4 个测试失败（2 个需真实 PG 服务、2 个真实断言失配）。已如实保留，不经由跳过伪装通过。它们与跨平台适配无关，属于既有质量负债，建议后续作为独立修复处理；否则 mac/Win 的 connector 测试步骤将一直红。
 - 待验证：`gpui-fps 0.6.0` 默认启用 profiler（方案 §3.1 建议改诊断 feature 默认关闭）；当前不为 AI-00 改动，标记为后续决策。
 
-**阻塞项**：暂无硬阻塞。CI 全绿不自动等同跨平台可用（第 7 节门槛）；GUI 桌面流程未实测前仍只能交内部候选，不能宣布正式支持。
+**阻塞项**：
+- CI 全绿：暂被既有 connector 测试失败阻塞（同为 mac/Win）。这属于既有缺陷，不属于 AI-00 引入；AI-00 的三平台原生 *编译/check* 基线本身已可验证。
+- 正式跨平台可用声明：等待后续 AI-01～AI-06 与桌面 GUI 验收，见第 7 节门槛。
 
 **下一步**：
-- 推分支/PR 触发三平台 CI（native Ubuntu 22.04 / windows-2022 / macos-14），读取并记录各平台真实构建日志与退出码。
-- 若某平台编译失败，读日志定位根因（Linux 优先确认托盘裁剪后无需 GTK；Windows 确认 fxc/HLSL release 链路），做最小修复后复跑。
-- 记录 CI 运行链接与产物后，进入 AI-01（目录/日志/资源定位）。
+- 复跑（run 35087627727）确认 Ubuntu `cargo check` 通过（RefCell 修复生效）→ 记录三平台 check/测试/release 构建结果与产物链接。
+- 确认 Windows release 构建（fxc/HLSL 链路）与产物上传。
+- 既有 4 个 connector 测试失败与跨平台无关，评估独立修复或按需给 connector 测试启动真实 PG 服务（AI-04 集成范畴），避免长红。
+- 确认后进入 AI-01（目录/日志/资源定位）。
 - 需要的环境：GitHub Actions 原生 runner（已有）；Windows 11 / Linux 桌面 VM 用于后续 GUI/IME/DPI 验收（非 AI-00 必需）。
 
 ---
