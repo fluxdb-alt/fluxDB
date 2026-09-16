@@ -1,4 +1,3 @@
-use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -57,11 +56,70 @@ impl FileStorage {
         Self { root: root.into() }
     }
 
+    /// 解析默认持久化根目录（目录策略统一在此定义，见方案 §4.1）：
+    /// - macOS：`~/Library/Application Support/fluxdb`（与历史版本一致，旧数据不受影响）
+    /// - Windows：Known Folder LocalAppData 下的 `FluxDB`（即 `%LOCALAPPDATA%/FluxDB`）。
+    ///   注意 dirs::data_dir() 在 Windows 是 Roaming，必须用 data_local_dir()。
+    /// - Linux：`$XDG_DATA_HOME/fluxdb`，缺省 `~/.local/share/fluxdb`
+    ///
+    /// 解析失败（系统目录不存在等极端环境）返回 Err，由调用方给出可见错误；
+    /// 不再静默回退到当前目录/安装目录。
     pub fn default_root() -> Result<PathBuf> {
-        let home = env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or_else(|| Error::new(ErrorKind::Internal, "HOME 环境变量不存在"))?;
-        Ok(home.join("Library/Application Support/fluxdb"))
+        #[cfg(target_os = "macos")]
+        let base = dirs::data_dir();
+        #[cfg(target_os = "windows")]
+        let base = dirs::data_local_dir();
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let base = dirs::data_dir();
+
+        let base =
+            base.ok_or_else(|| Error::new(ErrorKind::Internal, "无法解析系统应用数据目录"))?;
+        // Windows 产品目录名用大写 FluxDB（计划 §4.1）；macOS/Linux 保持小写以兼容旧目录。
+        let app_dir = if cfg!(target_os = "windows") {
+            "FluxDB"
+        } else {
+            "fluxdb"
+        };
+        Ok(base.join(app_dir))
+    }
+
+    /// `default_root` 的显式失败版本，供启动路径使用：
+    /// 目录解析失败时由调用方输出可见错误并退出，而不是静默用错误目录继续运行。
+    pub fn try_default() -> Result<Self> {
+        Ok(Self::new(Self::default_root()?))
+    }
+
+    /// 默认日志目录（方案 §4.1）：
+    /// - Linux：`$XDG_STATE_HOME/fluxdb/logs`，缺省 `~/.local/state/fluxdb/logs`
+    /// - macOS/Windows：持久化根目录下 `logs/`（与历史布局一致）
+    ///
+    /// 日志目录解析失败不阻断启动，回退系统临时目录（调用方应记录该降级）。
+    pub fn default_log_dir() -> PathBuf {
+        let fallback = || std::env::temp_dir().join("fluxdb").join("logs");
+        #[cfg(target_os = "linux")]
+        {
+            let state = std::env::var_os("XDG_STATE_HOME")
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .or_else(|| dirs::home_dir().map(|h| h.join(".local/state")));
+            return state
+                .map(|s| s.join("fluxdb").join("logs"))
+                .unwrap_or_else(fallback);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Self::default_root()
+                .map(|root| root.join("logs"))
+                .unwrap_or_else(|_| fallback())
+        }
+    }
+
+    /// 默认导出下载目录（方案 §12.4）：优先平台下载目录（Known Folder / XDG），
+    /// 退回用户主目录，最后退回临时目录；不回退到进程工作目录/安装目录。
+    pub fn default_download_dir() -> PathBuf {
+        dirs::download_dir()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(std::env::temp_dir)
     }
 
     fn config_path(&self) -> PathBuf {
@@ -270,13 +328,6 @@ impl FileStorage {
             sqlite::KEY_REDIS_WORKBENCH_HISTORY,
             &entries[start..].to_vec(),
         )
-    }
-}
-
-impl Default for FileStorage {
-    fn default() -> Self {
-        let root = Self::default_root().unwrap_or_else(|_| PathBuf::from(".fluxdb"));
-        Self::new(root)
     }
 }
 
@@ -914,6 +965,39 @@ mod tests {
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+    // 平台目录解析：三平台 CI 各自原生运行，验证本平台分支（AI-01，方案 §4.1）。
+    #[test]
+    fn default_root_resolves_platform_data_dir() {
+        let root = FileStorage::default_root().expect("default_root 应能解析");
+        #[cfg(target_os = "macos")]
+        assert!(
+            root.ends_with("Library/Application Support/fluxdb"),
+            "macOS 根目录不符: {root:?}"
+        );
+        #[cfg(target_os = "windows")]
+        assert!(
+            root.ends_with("FluxDB") && root.to_string_lossy().contains("Local"),
+            "Windows 根目录应为 %LOCALAPPDATA%/FluxDB: {root:?}"
+        );
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        assert!(
+            root.ends_with("fluxdb") && root.to_string_lossy().contains(".local/share"),
+            "Linux 根目录应为 XDG data/fluxdb: {root:?}"
+        );
+    }
+
+    #[test]
+    fn default_log_dir_is_absolute() {
+        let dir = FileStorage::default_log_dir();
+        assert!(dir.is_absolute(), "日志目录应为绝对路径: {dir:?}");
+        assert!(dir.ends_with("logs"), "日志目录应以 logs 结尾: {dir:?}");
+    }
+
+    #[test]
+    fn default_download_dir_is_absolute() {
+        assert!(FileStorage::default_download_dir().is_absolute());
+    }
+
     #[test]
     fn missing_settings_returns_default() {
         let storage = FileStorage::new(unique_temp_dir());
@@ -1492,7 +1576,7 @@ mod tests {
 
     fn unique_temp_dir() -> PathBuf {
         let counter = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-        env::temp_dir().join(format!(
+        std::env::temp_dir().join(format!(
             "fluxdb-storage-test-{}-{}-{}",
             std::process::id(),
             counter,

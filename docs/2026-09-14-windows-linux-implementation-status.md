@@ -7,7 +7,7 @@
 | 任务 | 状态 |
 | --- | --- |
 | AI-00 复查基线、依赖、原生环境，建立最小 CI 构建任务 | 通过（三平台 fmt/check/release 构建/产物/core 测试全绿，仅剩既有 connector 失败） |
-| AI-01 目录/日志/资源定位 | 未开始 |
+| AI-01 目录/日志/资源定位 | 进行中（目录语义集群完成：storage 目录解析 / 日志目录 / 资源路径 / 默认导出目录；单实例 §12.1、文件权限 §12.2 未做） |
 | AI-02 凭据后端与错误传播 | 未开始 |
 | AI-03 窗口/托盘/字体/快捷键/IME | 未开始 |
 | AI-04 工具执行/SSH 隧道/PTY | 未开始 |
@@ -120,5 +120,47 @@
 - 既有 4 个 connector 测试失败与跨平台无关，评估独立修复/启动真实 PG，避免三平台长红。
 - 进入 AI-01（目录/日志/资源定位），需先确认真机/VM 与发布布局预期。
 - 需要的环境：GitHub Actions 原生 runner（已有）；Windows 11 / Linux 桌面 VM 用于后续 GUI/IME/DPI 验收（非 AI-00 必需）。
+
+---
+
+## AI-01
+
+**任务 ID / 状态**：AI-01 / 进行中（目录语义集群完成；§12.1 单实例、§12.2 文件权限未做，见"已知问题"）
+
+**代码基线**：分支 `codex/ai-00-win-linux-ci`，基于 AI-00 通过态（`134f2d3` 之后继续）。
+
+**改动（目录语义统一由 fluxdb-storage 定义，方案 §4.1）**：
+- `crates/fluxdb-storage/Cargo.toml`：新增直接依赖 `dirs = "6"`（锁内已有 6.0.0，无版本升级、无新包；Cargo.lock 仅 storage 依赖列表加一行，已评审）。
+- `crates/fluxdb-storage/src/lib.rs`：
+  - `default_root()` 平台化：macOS `~/Library/Application Support/fluxdb`（不变）；Windows `dirs::data_local_dir()` → `%LOCALAPPDATA%/FluxDB`（实读 dirs 6.0.0 源码确认 `data_dir()` 在 Windows 是 Roaming，必须用 `data_local_dir()`）；Linux `$XDG_DATA_HOME/fluxdb` 缺省 `~/.local/share/fluxdb`。解析失败返回 Err，不再静默回退。
+  - 新增 `try_default()`：显式失败版本，供启动路径给出可见错误。
+  - 删除 `impl Default`（原静默回退 `.fluxdb` 相对目录，属方案 §2 P0 问题；唯一调用方已改 `try_default`）。
+  - 新增 `default_log_dir()`：Linux `$XDG_STATE_HOME/fluxdb/logs` 缺省 `~/.local/state/fluxdb/logs`；macOS/Windows 根目录 `logs/`（历史布局不变）。解析失败回退系统临时目录（不阻断启动）。
+  - 新增 `default_download_dir()`：平台下载目录 → 用户主目录 → 临时目录（§12.4）。
+  - 新增 3 个平台解析测试（三平台 CI 各自原生验证本平台分支）。
+- `apps/fluxdb-desktop/src/main_parts/app_boot.rs`：`FileStorage::default()` → `try_default()`；解析失败 stderr 明确报错并 `exit(1)`（§10.4-4 启动失败必须有证据；Windows GUI 子系统 stderr 不可见的兜底属 §12.8 后续）。
+- `apps/fluxdb-desktop/src/main_parts/logging.rs`：删除重复的 `app_data_dir()`（HOME 拼接 + 回退当前目录，§2 P0）；`configured_log_dir` 改用 storage 的 `default_log_dir()`。
+- `apps/fluxdb-desktop/src/main_parts/app_boot_helpers.rs`：`app_assets_base_path()` 按安装布局解析：macOS bundle 不变；Windows EXE 同级 `assets`；Linux `<prefix>/share/fluxdb/assets`。仅 debug 构建回退 `CARGO_MANIFEST_DIR`；release 找不到资源时 `tracing::warn` 记录降级。
+- `apps/fluxdb-desktop/src/main_parts/data_editor_model/export.rs`：`default_data_export_directory()` 改用 `default_download_dir()`，不再回退 `current_dir()`（Windows 可能落到 System32）。文件名净化已有（`safe_data_export_filename_segment` + 时间戳基名避开保留名），未改动。
+
+**未做（AI-01 剩余子项）**：
+- §12.1 单实例守卫 + SQLite `busy_timeout`（涉及窗口激活交互，需独立实现与验证）。
+- §12.2 Unix 权限 0o700/0o600、Windows ACL 实测、临时凭据文件。
+- 不可写目录的 UI 级可见诊断（当前仅 stderr/warn 日志层）。
+
+**验证（macOS 本机实际执行）**：
+- `cargo check --workspace --locked` → 通过（无新警告）
+- `cargo test --locked -p fluxdb-storage` → 25 passed, 0 failed（含 3 个新目录解析测试）
+- `cargo test --locked -p fluxdb-app` → 459 passed, 0 failed
+- `cargo fmt --all -- --check` → 通过；`git diff --check` → 通过
+- `cargo run -p fluxdb-desktop`（debug）→ 主窗口正常启动并渲染，验证后退出
+- macOS 行为不变确认：`default_root` 仍解析为 `~/Library/Application Support/fluxdb`（新测试断言）
+- Windows/Linux：由三平台 CI 原生验证（含新平台测试）；GUI/目录可写性等实机行为待后续 VM
+
+**CI**：本批改动推送后由 PR #5 工作流验证（run 链接见 AI-00 节格式，补充于此）。
+
+**已知问题**：见上方"未做"列表；另 Linux 日志目录从根目录 `logs/` 变为 XDG state 目录，属方案既定布局（§4.1），已设置自定义 `log_path` 的用户不受影响。
+
+**下一步**：AI-01 剩余子项（§12.1 单实例决策 A/B、§12.2 权限）或按用户指示进入 AI-02（凭据后端）。
 
 ---
