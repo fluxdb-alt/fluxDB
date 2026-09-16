@@ -166,6 +166,8 @@ include!("main_parts/data_table_ui.rs");
 include!("main_parts/tree_helpers.rs");
 include!("main_parts/sidebar_visible_rows.rs");
 include!("main_parts/logging.rs");
+// Linux 首版不启用系统托盘（tray-icon 在 Linux 会无条件链接 GTK），托盘实现仅限 macOS/Windows。
+#[cfg(not(target_os = "linux"))]
 include!("main_parts/tray_icon.rs");
 include!("main_parts/app_boot.rs");
 include!("main_parts/app_boot_helpers.rs");
