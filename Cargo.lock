@@ -2149,6 +2149,7 @@ dependencies = [
  "gpui-pre-platform",
  "image",
  "lsp-types",
+ "nix",
  "portable-pty",
  "regex",
  "serde",
@@ -2162,6 +2163,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-json",
  "tree-sitter-sequel",
+ "windows 0.57.0",
 ]
 
 [[package]]

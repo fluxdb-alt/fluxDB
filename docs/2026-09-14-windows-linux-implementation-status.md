@@ -7,7 +7,7 @@
 | 任务 | 状态 |
 | --- | --- |
 | AI-00 复查基线、依赖、原生环境，建立最小 CI 构建任务 | 通过（三平台 fmt/check/release 构建/产物/core 测试全绿，仅剩既有 connector 失败） |
-| AI-01 目录/日志/资源定位 | 进行中（目录语义集群完成：storage 目录解析 / 日志目录 / 资源路径 / 默认导出目录；单实例 §12.1、文件权限 §12.2 未做） |
+| AI-01 目录/日志/资源定位 | 进行中（目录语义 + §12.1 单实例守卫 + §12.2 Unix 权限收敛完成；Windows ACL 实测、不可写 UI 诊断待做） |
 | AI-02 凭据后端与错误传播 | 未开始 |
 | AI-03 窗口/托盘/字体/快捷键/IME | 未开始 |
 | AI-04 工具执行/SSH 隧道/PTY | 未开始 |
@@ -125,7 +125,7 @@
 
 ## AI-01
 
-**任务 ID / 状态**：AI-01 / 进行中（目录语义集群完成；§12.1 单实例、§12.2 文件权限未做，见"已知问题"）
+**任务 ID / 状态**：AI-01 / 进行中（目录语义集群完成；§12.1 与 §12.2 见下方第二批小节）
 
 **代码基线**：分支 `codex/ai-00-win-linux-ci`，基于 AI-00 通过态（`134f2d3` 之后继续）。
 
@@ -162,5 +162,34 @@
 **已知问题**：见上方"未做"列表；另 Linux 日志目录从根目录 `logs/` 变为 XDG state 目录，属方案既定布局（§4.1），已设置自定义 `log_path` 的用户不受影响。
 
 **下一步**：AI-01 剩余子项（§12.1 单实例决策 A/B、§12.2 权限）或按用户指示进入 AI-02（凭据后端）。
+---
+
+## AI-01（第二批：§12.1 单实例 + §12.2 权限）
+
+**改动**：
+- 单实例守卫（方案 §12.1 选定方案 A）：
+  - `crates/fluxdb-storage/src/lib.rs`：新增 `runtime_lock_file()`（Linux 优先 `$XDG_RUNTIME_DIR/fluxdb.lock`，macOS/Windows 在持久化根目录）。
+  - 新增 `apps/fluxdb-desktop/src/main_parts/single_instance.rs`：Unix 用 `nix::fcntl::Flock`（flock 随进程退出自动释放，无陈旧锁）；Windows 用命名互斥量 `Global\FluxDBSingleInstance`（OS 管理生命周期）。锁基础设施失败时降级放行并记 warn（单实例是并发保护而非安全边界）。
+  - `app_boot.rs`：`main` 最先执行守卫；第二实例 Windows 用 `MessageBoxW` 提示（GUI 无控制台）、Unix 用 stderr，均 exit(1)。
+  - `Cargo.toml`：desktop 显式声明 `nix 0.28`（unix）与 `windows 0.57`（windows），均为锁内既有版本，无升级；Cargo.lock 仅依赖列表加两行。
+- 文件权限收敛（方案 §12.2，Unix 侧）：
+  - 新增 `ensure_private_dir`（root 0o700）与 `harden_file_perms`（文件 0o600），创建后立即设置、不依赖 umask；Windows 为 no-op（ACL 实测属后续）。
+  - 挂接点：`save_settings`（config.toml）、`write_toml_file_if_changed`（含历史/索引 toml，内容未变也收敛存量）、`sqlite::open`（db 0o600，WAL/SHM 继承）。
+  - **存量宽松权限文件也会被收紧**（升级场景）：config 内容未变时同样 harden；db 每次 open 收敛。
+  - 新增权限测试：root 0o700 / config 0o600 / 预置 0o644 存量 config 再保存被收紧 / db 0o600。
+
+**验证（macOS 本机实际执行）**：
+- `cargo test --locked -p fluxdb-storage` → 26 passed（含新权限测试）
+- `cargo test --locked -p fluxdb-app` → 连续两次 459 passed, 0 failed（注：中间一次链式验证中出现一次性 5 failed，复跑两轮均全过，判定为同链编译/残留进程干扰，非本改动回归）
+- 单实例端到端：首实例启动 → 第二实例 `FluxDB 已在运行，本次启动退出。` exit=1，首实例不受影响；强杀首实例后重启成功（无陈旧锁阻塞）
+- 真机权限：`fluxdb.sqlite` 收敛为 0o600；`fluxdb.lock` 创建；存量 `config.toml` 0o644 待下次设置变更时收敛（写路径收敛，不加启动特例）
+- `cargo check --workspace --locked`、`cargo fmt --all -- --check`、`git diff --check` → 通过
+- Windows/Linux：互斥量路径与 XDG_RUNTIME_DIR 锁路径由三平台 CI 原生编译验证；锁行为与 ACL 实测待目标平台
+
+**已知问题**：
+- 存量 `config.toml`（0o644）在下一次设置保存时才收敛——写路径收敛是正确位置，未加启动强制收敛特例。
+- Windows 命名互斥量、XDG_RUNTIME_DIR 锁、ACL 收敛均为编译级验证，行为实测待目标平台（GUI/VM）。
+
+**下一步**：AI-01 收尾（Windows ACL 实测、不可写目录 UI 诊断）或进入 AI-02（凭据后端）。
 
 ---

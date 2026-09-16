@@ -1,4 +1,10 @@
 fn main() {
+    // 单实例守卫最先执行（方案 §12.1 方案 A）：避免第二实例与首实例并发写同一
+    // SQLite/配置。第二实例明确提示并退出；锁基础设施失败时降级放行（见 single_instance.rs）。
+    if !acquire_single_instance() {
+        notify_second_instance_and_exit();
+    }
+
     // 应用数据目录解析失败时明确报错退出（AI-01，方案 §4.1/§10.4-4：启动失败必须有证据），
     // 不再静默回退到当前目录。日志系统此时未初始化，先以 stderr 输出；
     // Windows GUI 子系统下 stderr 不可见的兜底可见性属后续任务（方案 §12.8）。

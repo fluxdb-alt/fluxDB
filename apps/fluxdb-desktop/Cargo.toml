@@ -40,6 +40,18 @@ gpui-fps = "0.6.0"
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 tray-icon = { version = "0.23.1", default-features = false }
 
+# 单实例守卫（方案 §12.1 方案 A）：Unix 用 flock（nix），Windows 用命名互斥量。
+# 两库均已在 Cargo.lock（nix 0.28 经 portable-pty、windows 0.57 经 gpui 栈），无版本升级。
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.28", default-features = false, features = ["fs"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.57", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 
