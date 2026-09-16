@@ -864,6 +864,44 @@ struct NavicatMain {
     _user_admin_create_password_subscription: Subscription,
     user_admin_new_password_input: Entity<InputState>,
     _user_admin_new_password_subscription: Subscription,
+    // ===== PG 用户与角色工作台（改版）输入与选择器 =====
+    /// 常规页：角色名。
+    pg_role_name_input: Entity<InputState>,
+    _pg_role_name_subscription: Subscription,
+    /// 常规页：新密码（脱敏输入；确认密码不一致时保存禁用）。
+    pg_password_input: Entity<InputState>,
+    _pg_password_subscription: Subscription,
+    /// 常规页：确认密码（仅桌面层校验一致性，明文不进 App 状态）。
+    pg_password_confirm_input: Entity<InputState>,
+    _pg_password_confirm_subscription: Subscription,
+    /// 高级页：连接数限制文本（"-1" = 不限）。
+    pg_connection_limit_input: Entity<InputState>,
+    _pg_connection_limit_subscription: Subscription,
+    /// 常规页：自定义密码截止时间输入（选择「自定义截止时间」时显示）。
+    pg_valid_until_input: Entity<InputState>,
+    _pg_valid_until_subscription: Subscription,
+    /// 常规页：密码有效期模式选择（保持/清除/自定义）。
+    pg_valid_until_mode_select: Entity<SelectState<SearchableVec<String>>>,
+    _pg_valid_until_mode_select_subscription: Subscription,
+    /// 常规页：密码操作选择（保持不变/设置新密码/清除密码）。
+    pg_password_op_select: Entity<SelectState<SearchableVec<String>>>,
+    _pg_password_op_select_subscription: Subscription,
+    /// 权限页：目标数据库选择。
+    pg_grant_db_select: Entity<SelectState<SearchableVec<String>>>,
+    _pg_grant_db_select_subscription: Subscription,
+    /// 权限页：schema 选择。
+    pg_grant_schema_select: Entity<SelectState<SearchableVec<String>>>,
+    _pg_grant_schema_select_subscription: Subscription,
+    /// 权限页：对象选择（随对象种类变化）。
+    pg_grant_object_select: Entity<SelectState<SearchableVec<String>>>,
+    _pg_grant_object_select_subscription: Subscription,
+    /// 成员关系页：待添加的组角色（所属方向）选择。
+    pg_member_of_role_select: Entity<SelectState<SearchableVec<String>>>,
+    _pg_member_of_role_select_subscription: Subscription,
+    /// 成员关系页：ADMIN OPTION 开关（仅作用于新添加的成员授权草稿）。
+    pg_member_new_admin: bool,
+    /// 成员关系页：选项列表的数据指纹（避免每次渲染重建 select items）。
+    pg_select_items_fingerprint: String,
     user_admin_max_queries_input: Entity<InputState>,
     _user_admin_max_queries_subscription: Subscription,
     user_admin_max_updates_input: Entity<InputState>,
@@ -901,6 +939,10 @@ struct NavicatMain {
     _create_database_charset_select_subscription: Subscription,
     create_database_collation_select: Entity<SelectState<SearchableVec<String>>>,
     _create_database_collation_select_subscription: Subscription,
+    create_database_owner_input: Entity<InputState>,
+    _create_database_owner_subscription: Subscription,
+    create_database_template_input: Entity<InputState>,
+    _create_database_template_subscription: Subscription,
     danger_table_foreign_key_check_select: Entity<SelectState<SearchableVec<String>>>,
     _danger_table_foreign_key_check_select_subscription: Subscription,
     rename_table_input: Entity<InputState>,
@@ -924,9 +966,13 @@ struct NavicatMain {
     _completion_index_tasks: BTreeMap<(ConnectionId, Option<String>), Task<()>>,
     _table_info_tasks: BTreeMap<(TabId, TableInfoTab), Task<()>>,
     _user_admin_users_tasks: BTreeMap<TabId, Task<()>>,
+    _user_admin_pg_membership_tasks: BTreeMap<TabId, Task<()>>,
+    _user_admin_pg_target_tasks: BTreeMap<TabId, Task<()>>,
+    _user_admin_pg_object_grant_tasks: BTreeMap<TabId, Task<()>>,
     _user_admin_grants_tasks: BTreeMap<TabId, Task<()>>,
     _user_admin_member_grants_tasks: BTreeMap<TabId, Task<()>>,
     _user_admin_apply_tasks: BTreeMap<TabId, Task<()>>,
+    _user_admin_preview_tasks: BTreeMap<TabId, Task<()>>,
     _create_table_apply_tasks: BTreeMap<TabId, Task<()>>,
     _create_table_reference_columns_tasks: BTreeMap<(TabId, u64), Task<()>>,
     _cell_binary_download_tasks: BTreeMap<(TabId, usize, usize), Task<()>>,
@@ -943,6 +989,9 @@ struct NavicatMain {
     _danger_table_task: Option<Task<()>>,
     data_export_task_seq: u64,
     _test_connection_task: Option<Task<()>>,
+    _create_schema_task: Option<Task<()>>,
+    /// 连接保存/测试期间为 `true`，用于绑定“测试”“保存并连接”按钮 loading/禁用。
+    saving_connection: bool,
     /// Redis 连接串导入 / 云自动发现的异步任务。
     _redis_discover_task: Option<Task<()>>,
     /// Redis 连接串导入成功后，输入框实体待与表单重新同步的标记
@@ -950,6 +999,7 @@ struct NavicatMain {
     redis_discovery_pending_sync: bool,
     connection_context_menu: Option<ConnectionContextMenu>,
     database_context_menu: Option<DatabaseContextMenu>,
+    schema_context_menu: Option<SchemaContextMenu>,
     table_context_menu: Option<TableContextMenu>,
     table_group_context_menu: Option<TableGroupContextMenu>,
     table_folder_context_menu: Option<TableFolderContextMenu>,
@@ -1002,6 +1052,11 @@ struct NavicatMain {
     display_database_show_system: bool,
     pending_create_database: Option<CreateDatabaseForm>,
     create_database_running: BTreeSet<ConnectionId>,
+    /// 新建 schema 弹框：连接 id + 所属库 ObjectPath + schema 名。
+    pending_create_schema: Option<(ConnectionId, ObjectPath, String)>,
+    create_schema_running: bool,
+    create_schema_name_input: Entity<InputState>,
+    _create_schema_name_subscription: Subscription,
     new_connection_target_group: Option<ConnectionGroupId>,
     connecting_connections: BTreeSet<ConnectionId>,
     loading_databases: BTreeSet<String>,
@@ -1077,12 +1132,20 @@ struct NavicatMain {
     settings_editor_draft: Settings,
     /// 设置面板「危险 SQL 操作清单」折叠区是否展开（UI 瞬时状态，不进渲染快照）。
     settings_dangerous_actions_collapsed: bool,
+    /// 设置「数据」页备份/客户端分组的折叠状态（UI 瞬时状态，不进渲染快照）。
+    settings_data_groups_collapsed: SettingsDataGroupsCollapsed,
     settings_font_size_slider: Entity<SliderState>,
     _settings_font_size_slider_subscription: Subscription,
     settings_line_height_input: Entity<InputState>,
     _settings_line_height_subscription: Subscription,
     settings_radius_input: Entity<InputState>,
     _settings_radius_subscription: Subscription,
+    pg_client: NativeClientState,
+    mysql_client: NativeClientState,
+    /// 备份对话框打开时的预检结果：PostgreSQL 连接但本机缺少 pg_dump。
+    backup_pg_client_missing: bool,
+    /// 备份对话框打开时的预检结果：MySQL/TiDB 连接但本机缺少 mysqldump/mariadb-dump。
+    backup_mysql_client_missing: bool,
     query_output_heights: BTreeMap<TabId, f32>,
     query_output_widths: BTreeMap<TabId, f32>,
     query_output_resize_start: Option<QueryOutputResizeStart>,
@@ -1357,6 +1420,19 @@ struct BackupForm {
     include_data: bool,
     /// 常规：备注（可空）。备份成功后随表清单写入 {文件}.meta.json。
     note: String,
+    /// 高级（仅 PostgreSQL 原生 pg_dump）：导出属主（OWNER）；默认 false 传 `--no-owner`。
+    pg_include_owner: bool,
+    /// 高级（仅 PostgreSQL 原生 pg_dump）：导出 ACL 权限；默认 false 传 `--no-acl`。
+    pg_include_acl: bool,
+}
+
+/// PostgreSQL 客户端工具下载任务的 UI 状态（设置面板展示 + 取消）。
+#[derive(Clone, Debug)]
+struct PgClientDownloadState {
+    /// 展示给用户的进度文案，如「下载中 42%（138.2 MB / 329.9 MB）」。
+    message: String,
+    /// 取消标志，后台下载线程按分片检查。
+    cancel: Arc<AtomicBool>,
 }
 
 /// 备份文件的旁挂元数据（{备份文件}.meta.json）：记录表清单与备注。
@@ -1575,6 +1651,15 @@ struct DatabaseContextMenu {
     backup_only: bool,
 }
 
+/// PostgreSQL schema 节点右键菜单：与数据库菜单隔离，避免把 schema 当作数据库操作。
+#[derive(Clone, Debug)]
+struct SchemaContextMenu {
+    connection_id: ConnectionId,
+    database: String,
+    schema: String,
+    position: Point<Pixels>,
+}
+
 #[derive(Clone, Debug)]
 struct TableContextMenu {
     object_path: ObjectPath,
@@ -1635,6 +1720,8 @@ struct PendingDangerTableAction {
     object_path: ObjectPath,
     action: DangerTableAction,
     foreign_key_check: ForeignKeyCheckMode,
+    /// PG 清空表：是否 RESTART IDENTITY（默认 CONTINUE IDENTITY）。
+    restart_identity: bool,
     acknowledged: bool,
     error: Option<String>,
 }
@@ -1812,6 +1899,10 @@ struct CreateDatabaseForm {
     charset: String,
     database_kind: DatabaseKind,
     collation: String,
+    /// PostgreSQL OWNER（可选）。
+    owner: String,
+    /// PostgreSQL TEMPLATE（可选）。
+    template: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

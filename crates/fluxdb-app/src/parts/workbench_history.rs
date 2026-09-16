@@ -136,13 +136,16 @@ impl WorkbenchHistoryStore for AppController {
             WorkbenchHistoryScope::Sql {
                 connection_id,
                 database,
+                schema,
             } => self
                 .state
                 .query_history
                 .iter()
                 .enumerate()
                 .filter(|(_, entry)| {
-                    entry.connection_id == *connection_id && entry.database == *database
+                    entry.connection_id == *connection_id
+                        && entry.database == *database
+                        && entry.schema == *schema
                 })
                 .map(|(index, entry)| sql_history_item(entry, index))
                 .collect::<Vec<_>>(),
@@ -191,6 +194,7 @@ impl WorkbenchHistoryStore for AppController {
             WorkbenchHistoryScope::Sql {
                 connection_id,
                 database,
+                schema,
             } => {
                 // id 是 scope 过滤后列表的下标，还原出原记录的 (text, time) 再删除，
                 // 避免误删其他 scope 或相同文本的记录。
@@ -200,7 +204,9 @@ impl WorkbenchHistoryStore for AppController {
                     .iter()
                     .enumerate()
                     .filter(|(_, entry)| {
-                        entry.connection_id == *connection_id && entry.database == *database
+                        entry.connection_id == *connection_id
+                            && entry.database == *database
+                            && entry.schema == *schema
                     })
                     .nth(id as usize)
                     .map(|(_, entry)| (entry.text.clone(), entry.executed_at_unix_secs))
@@ -210,6 +216,7 @@ impl WorkbenchHistoryStore for AppController {
                 self.state.query_history.retain(|entry| {
                     entry.connection_id != *connection_id
                         || entry.database != *database
+                        || entry.schema != *schema
                         || entry.text != text
                         || entry.executed_at_unix_secs != time
                 });
@@ -230,9 +237,12 @@ impl WorkbenchHistoryStore for AppController {
             WorkbenchHistoryScope::Sql {
                 connection_id,
                 database,
+                schema,
             } => {
                 self.state.query_history.retain(|entry| {
-                    entry.connection_id != *connection_id || entry.database != *database
+                    entry.connection_id != *connection_id
+                        || entry.database != *database
+                        || entry.schema != *schema
                 });
             }
         }

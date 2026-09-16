@@ -100,10 +100,12 @@ impl NavicatMain {
     }
 
     fn sync_data_filter_builder_to_text(&mut self, tab_id: TabId) {
+        let db_kind = self
+            .data_editor_database_kind(tab_id);
         let text = self
             .data_filter_draft_rules
             .get(&tab_id)
-            .map(|rules| data_filter_rules_sql_pretty(rules))
+            .map(|rules| data_filter_rules_sql_pretty(rules, db_kind))
             .unwrap_or_default();
         if text.is_empty() {
             self.data_filter_texts.remove(&tab_id);
@@ -114,7 +116,7 @@ impl NavicatMain {
         if let Some(sort_text) = self
             .data_sort_draft_rules
             .get(&tab_id)
-            .map(|rules| data_sort_rules_text(rules))
+            .map(|rules| data_sort_rules_text(rules, db_kind))
             .filter(|text| !text.is_empty())
         {
             self.data_sort_texts.insert(tab_id, sort_text);

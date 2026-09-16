@@ -257,6 +257,7 @@
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let changes = DataChangeSet {
             object: ObjectPath {
@@ -277,6 +278,7 @@
                 }],
             }],
             deletes: Vec::new(),
+            insert_intents: None,
         };
 
         let result = apply_data_changes_for_connection(&config, &changes);

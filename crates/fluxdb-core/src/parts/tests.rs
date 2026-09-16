@@ -31,6 +31,7 @@ mod tests {
             options: BTreeMap::new(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
 
         let config = draft.into_config(ConnectionId(7));
@@ -169,6 +170,7 @@ mod tests {
                 }],
             }],
             deletes: Vec::new(),
+            insert_intents: None,
         };
 
         assert!(!changes.is_empty());
@@ -319,6 +321,21 @@ mod tests {
     }
 
     #[test]
+    fn mysql_drop_user_sql_escapes_account() {
+        let provider = database_user_admin_provider(DatabaseKind::MySql).unwrap();
+        let user = DatabaseUserIdentity {
+            user: "app'user".to_string(),
+            host: "host'name".to_string(),
+            plugin: None,
+        };
+
+        assert_eq!(
+            provider.drop_user_sql(&user),
+            "DROP USER 'app''user'@'host''name';"
+        );
+    }
+
+    #[test]
     fn mysql_alter_user_options_sql_are_escaped() {
         let provider = database_user_admin_provider(DatabaseKind::MySql).unwrap();
         let user = DatabaseUserIdentity {
@@ -465,6 +482,7 @@ mod tests {
             options: BTreeMap::new(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }
     }
 
@@ -725,5 +743,63 @@ mod tests {
         let a = info.iter().find(|r| r.c == 'a').unwrap();
         assert_eq!(a.byte_len, 1);
         assert_eq!(a.cell_len, 1);
+    }
+
+    // ===== PG 用户与角色工作台：属性 diff（T27 改版）=====
+
+    #[test]
+    fn pg_role_attributes_diff_create_fills_all() {
+        let draft = PgRoleDraft::new_create();
+        let attrs = pg_role_attributes_diff(None, &draft).unwrap();
+        assert_eq!(attrs.can_login, Some(true));
+        assert_eq!(attrs.inherit, Some(true));
+        assert_eq!(attrs.is_superuser, Some(false));
+        // 不限连接（-1）不下发 CONNECTION LIMIT。
+        assert_eq!(attrs.connection_limit, None);
+    }
+
+    #[test]
+    fn pg_role_attributes_diff_edit_only_changed_fields() {
+        let base = PgRole {
+            name: "app_user".into(),
+            can_login: true,
+            is_superuser: false,
+            can_create_db: false,
+            can_create_role: false,
+            inherit: true,
+            is_replication: false,
+            bypass_rls: false,
+            connection_limit: -1,
+            valid_until: None,
+            comment: None,
+        };
+        // 无变化 → None。
+        let draft = PgRoleDraft::from_role(&base);
+        assert!(pg_role_attributes_diff(Some(&base), &draft).is_none());
+        // 改连接数 + 清除有效期。
+        let mut draft = PgRoleDraft::from_role(&base);
+        draft.connection_limit_text = "20".into();
+        draft.valid_until = PgValidUntilOp::Clear;
+        let attrs = pg_role_attributes_diff(Some(&base), &draft).unwrap();
+        assert_eq!(attrs.connection_limit, Some(20));
+        assert_eq!(attrs.valid_until, Some(PgValidUntilOp::Clear));
+        // 相同 valid_until 文本视为未变。
+        let mut base_with_until = base.clone();
+        base_with_until.valid_until = Some("2026-12-31 00:00:00+08".into());
+        let mut draft_same = PgRoleDraft::from_role(&base_with_until);
+        draft_same.valid_until = PgValidUntilOp::At("2026-12-31 00:00:00+08".into());
+        assert!(pg_role_attributes_diff(Some(&base_with_until), &draft_same).is_none());
+        // 非法连接数文本 → None（由保存入口报错）。
+        let mut draft_bad = PgRoleDraft::from_role(&base);
+        draft_bad.connection_limit_text = "abc".into();
+        assert!(pg_role_attributes_diff(Some(&base), &draft_bad).is_none());
+    }
+
+    #[test]
+    fn pg_password_op_debug_is_redacted() {
+        let op = PgPasswordOp::Set("super-secret".into());
+        let rendered = format!("{op:?}");
+        assert!(!rendered.contains("super-secret"), "Debug 不得带出明文密码: {rendered}");
+        assert!(rendered.contains("********"));
     }
 }

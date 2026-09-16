@@ -41,7 +41,33 @@ impl NavicatMain {
         }
         menu.position = clamp_context_menu_position(menu.position, 238., 314., window);
         self.database_context_menu = Some(menu);
+        self.schema_context_menu = None;
         self.connection_context_menu = None;
+        self.table_context_menu = None;
+        self.table_group_context_menu = None;
+        self.table_folder_context_menu = None;
+        self.tab_context_menu = None;
+        self.data_cell_context_menu = None;
+        self.data_row_context_menu = None;
+        self.tab_switcher = None;
+        self.group_context_menu = None;
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    fn show_schema_context_menu(
+        &mut self,
+        mut menu: SchemaContextMenu,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pending_rename_table_folder.is_some() {
+            self.confirm_rename_table_folder(cx);
+        }
+        menu.position = clamp_context_menu_position(menu.position, 214., 164., window);
+        self.schema_context_menu = Some(menu);
+        self.connection_context_menu = None;
+        self.database_context_menu = None;
         self.table_context_menu = None;
         self.table_group_context_menu = None;
         self.table_folder_context_menu = None;
@@ -67,6 +93,7 @@ impl NavicatMain {
         self.table_context_menu = Some(menu);
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_group_context_menu = None;
         self.table_folder_context_menu = None;
         self.tab_context_menu = None;
@@ -91,6 +118,7 @@ impl NavicatMain {
         self.table_group_context_menu = Some(menu);
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_context_menu = None;
         self.table_folder_context_menu = None;
         self.tab_context_menu = None;
@@ -115,6 +143,7 @@ impl NavicatMain {
         self.table_folder_context_menu = Some(menu);
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_context_menu = None;
         self.table_group_context_menu = None;
         self.tab_context_menu = None;
@@ -139,6 +168,7 @@ impl NavicatMain {
         self.tab_context_menu = Some(TabContextMenu { tab_id, position });
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_context_menu = None;
         self.table_group_context_menu = None;
         self.table_folder_context_menu = None;
@@ -166,6 +196,7 @@ impl NavicatMain {
         self.group_context_menu = Some(GroupContextMenu { group_id, position });
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_context_menu = None;
         self.table_group_context_menu = None;
         self.table_folder_context_menu = None;
@@ -190,6 +221,7 @@ impl NavicatMain {
         self.data_cell_context_menu = Some(menu);
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_context_menu = None;
         self.table_group_context_menu = None;
         self.table_folder_context_menu = None;
@@ -213,6 +245,7 @@ impl NavicatMain {
         self.data_row_context_menu = Some(menu);
         self.connection_context_menu = None;
         self.database_context_menu = None;
+        self.schema_context_menu = None;
         self.table_context_menu = None;
         self.table_group_context_menu = None;
         self.table_folder_context_menu = None;
@@ -283,6 +316,7 @@ impl NavicatMain {
                     AppCommand::OpenCreateTable {
                         connection_id: object_path.connection_id,
                         database: object_path.database.clone(),
+                        schema: object_path.schema.clone(),
                     },
                     cx,
                 );
@@ -339,6 +373,7 @@ impl NavicatMain {
                     AppCommand::OpenCreateTable {
                         connection_id: menu.connection_id,
                         database: Some(menu.database),
+                        schema: None,
                     },
                     cx,
                 );
@@ -653,6 +688,11 @@ impl NavicatMain {
             return;
         };
         let object = row_snapshots[0].object.clone();
+        // 复制为 SQL 时按该连接方言渲染字面量/标识符（PG 双引号 + `'\x..'::bytea`）。
+        let copy_db_kind = object
+            .as_ref()
+            .map(|object| self.connection_database_kind(object.connection_id))
+            .unwrap_or(DatabaseKind::MySql);
         let text = match kind {
             DataRowCopyKind::Json if row_snapshots.len() > 1 => row_json_array_text(
                 row_snapshots
@@ -669,7 +709,7 @@ impl NavicatMain {
                 };
                 row_snapshots
                     .iter()
-                    .map(|snapshot| row_insert_sql(object, snapshot.fields.as_slice(), false))
+                    .map(|snapshot| row_insert_sql(object, snapshot.fields.as_slice(), false, copy_db_kind))
                     .collect::<Vec<_>>()
                     .join("\n")
             }
@@ -680,7 +720,7 @@ impl NavicatMain {
                 };
                 row_snapshots
                     .iter()
-                    .map(|snapshot| row_insert_sql(object, snapshot.fields.as_slice(), true))
+                    .map(|snapshot| row_insert_sql(object, snapshot.fields.as_slice(), true, copy_db_kind))
                     .collect::<Vec<_>>()
                     .join("\n")
             }
@@ -691,7 +731,7 @@ impl NavicatMain {
                 };
                 row_snapshots
                     .iter()
-                    .map(|snapshot| row_update_sql(object, snapshot.fields.as_slice()))
+                    .map(|snapshot| row_update_sql(object, snapshot.fields.as_slice(), copy_db_kind))
                     .collect::<Vec<_>>()
                     .join("\n")
             }
@@ -817,6 +857,11 @@ impl NavicatMain {
     ) {
         let task_id = self.next_data_export_task_id();
         let row_count = rows.len();
+        // 导出 SQL 字面量按连接方言渲染；在 spawn 前解析，避免把 self 借入异步块。
+        let export_db_kind = object
+            .as_ref()
+            .map(|object| self.connection_database_kind(object.connection_id))
+            .unwrap_or(DatabaseKind::MySql);
         self.show_message(
             format!("选择保存位置后导出 {} 行", row_count),
             AppMessageKind::Success,
@@ -885,6 +930,7 @@ impl NavicatMain {
                             format,
                             object.as_ref(),
                             rows.as_slice(),
+                            export_db_kind,
                         )
                             .map(|_| path)
                     }

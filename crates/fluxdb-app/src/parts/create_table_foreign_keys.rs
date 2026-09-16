@@ -2,6 +2,7 @@
 enum CreateTableSqlDialect {
     MySql,
     Sqlite,
+    Postgres,
 }
 
 fn create_table_add_foreign_key(create: &mut CreateTableState) {
@@ -384,6 +385,7 @@ fn create_table_foreign_key_lines(
             columns.push(match dialect {
                 CreateTableSqlDialect::MySql => quote_mysql_identifier(column),
                 CreateTableSqlDialect::Sqlite => quote_sqlite_identifier(column),
+                CreateTableSqlDialect::Postgres => quote_postgres_identifier(column),
             });
         }
         if columns.is_empty() {
@@ -416,12 +418,20 @@ fn create_table_foreign_key_lines(
                 columns.join(", "),
                 quote_sqlite_identifier(referenced_table)
             ),
+            // PG 的限定层级是 schema.table：referenced_database 字段承载 schema（§9.2）。
+            CreateTableSqlDialect::Postgres => format!(
+                "CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {}",
+                quote_postgres_identifier(name),
+                columns.join(", "),
+                create_table_postgres_referenced_table(create, foreign_key)
+            ),
         };
         let quoted = referenced_columns
             .iter()
             .map(|column| match dialect {
                 CreateTableSqlDialect::MySql => quote_mysql_identifier(column),
                 CreateTableSqlDialect::Sqlite => quote_sqlite_identifier(column),
+                CreateTableSqlDialect::Postgres => quote_postgres_identifier(column),
             })
             .collect::<Vec<_>>();
         line.push_str(" (");
@@ -454,6 +464,29 @@ fn create_table_mysql_referenced_table(
         )
     } else {
         quote_mysql_identifier(foreign_key.referenced_table.trim())
+    }
+}
+
+/// PG 外键引用表：`referenced_database` 字段承载 schema。
+///
+/// 始终带 schema 限定：CREATE TABLE 内的未限定引用按 search_path 解析，而新建表所在的
+/// schema 往往不在 search_path（如显式指定的业务 schema），不限定会直接建表失败。
+/// 只有当前 schema 与引用 schema 都未知时才退化为裸表名。
+fn create_table_postgres_referenced_table(
+    create: &CreateTableState,
+    foreign_key: &CreateTableForeignKey,
+) -> String {
+    let referenced_schema = foreign_key.referenced_database.trim();
+    let schema = if referenced_schema.is_empty() {
+        create.schema.trim()
+    } else {
+        referenced_schema
+    };
+    let table = quote_postgres_identifier(foreign_key.referenced_table.trim());
+    if schema.is_empty() {
+        table
+    } else {
+        format!("{}.{table}", quote_postgres_identifier(schema))
     }
 }
 

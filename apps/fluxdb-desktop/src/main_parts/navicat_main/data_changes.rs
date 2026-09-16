@@ -77,6 +77,15 @@ impl NavicatMain {
             },
             cx,
         );
+        // 保存/提交失败用底部 toast 提示（与页面其它操作一致），失败不静默。
+        if let AppEvent::Failed(error) = &event {
+            let text = if error.title.is_empty() {
+                error.message.clone()
+            } else {
+                format!("{}：{}", error.title, error.message)
+            };
+            self.show_message(text, AppMessageKind::Error, cx);
+        }
         if !matches!(event, AppEvent::Failed(_))
             && let Some(request) = query_refresh
         {

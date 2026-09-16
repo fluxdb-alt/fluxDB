@@ -778,10 +778,14 @@ fn sidebar_search(
                     .child(app_icon(AppIcon::Close, 13., colors.muted))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |_, _, window, cx| {
+                        cx.listener(move |this, _, window, cx| {
                             search_input_for_clear.update(cx, |input, cx| {
                                 input.set_value("", window, cx);
                             });
+                            // set_value 走 silent 替换不触发 InputEvent::Change，订阅不会更新 sidebar_search，
+                            // 需在此同步清空搜索词，否则下方列表仍按旧关键词过滤
+                            this.sidebar_search = String::new();
+                            cx.notify();
                             cx.stop_propagation();
                         }),
                     ),

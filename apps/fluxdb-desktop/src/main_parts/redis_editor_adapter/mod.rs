@@ -436,6 +436,8 @@ mod tests {
                 kind: CompletionKind::Command,
                 label: "SET".to_string(),
                 comment,
+                // Redis 候选项不携带 schema（SQL 专用身份字段）。
+                schema: None,
                 latest_request: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
                 request_id: 1,
             };

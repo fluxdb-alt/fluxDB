@@ -43,9 +43,14 @@ fn settings_section_changed(
         }
         SettingsPanelSection::Data => {
             saved.data_table_page_size != draft.data_table_page_size
-                || saved.backup_dir != draft.backup_dir
-                || saved.mysqldump_path != draft.mysqldump_path
-                || saved.sqlite3_path != draft.sqlite3_path
+        || saved.backup_dir != draft.backup_dir
+        || saved.mysqldump_path != draft.mysqldump_path
+        || saved.mysql_client_dir != draft.mysql_client_dir
+        || saved.mysql_client_download_source != draft.mysql_client_download_source
+        || saved.sqlite3_path != draft.sqlite3_path
+        || saved.pg_dump_path != draft.pg_dump_path
+        || saved.pg_client_dir != draft.pg_client_dir
+        || saved.pg_client_download_source != draft.pg_client_download_source
         }
         SettingsPanelSection::ConnectionSecurity
         | SettingsPanelSection::DatabaseSupport
@@ -97,7 +102,12 @@ fn settings_apply_backup_fields(settings: &mut Settings, draft: &Settings) {
     settings.data_table_page_size = draft.data_table_page_size;
     settings.backup_dir = draft.backup_dir.clone();
     settings.mysqldump_path = draft.mysqldump_path.clone();
+    settings.mysql_client_dir = draft.mysql_client_dir.clone();
+    settings.mysql_client_download_source = draft.mysql_client_download_source.clone();
     settings.sqlite3_path = draft.sqlite3_path.clone();
+    settings.pg_dump_path = draft.pg_dump_path.clone();
+    settings.pg_client_dir = draft.pg_client_dir.clone();
+    settings.pg_client_download_source = draft.pg_client_download_source.clone();
 }
 
 fn reset_settings_section(
@@ -121,6 +131,22 @@ fn reset_settings_section(
             cx.notify();
         }
         SettingsPanelSection::Appearance => this.reset_appearance_settings(cx),
+        SettingsPanelSection::Data => {
+            let defaults = Settings::default();
+            this.settings_editor_draft.data_table_page_size = defaults.data_table_page_size;
+            this.settings_editor_draft.backup_dir = defaults.backup_dir;
+            this.settings_editor_draft.mysqldump_path = defaults.mysqldump_path;
+            this.settings_editor_draft.mysql_client_dir = defaults.mysql_client_dir;
+            this.settings_editor_draft.mysql_client_download_source =
+                defaults.mysql_client_download_source;
+            this.settings_editor_draft.sqlite3_path = defaults.sqlite3_path;
+            this.settings_editor_draft.pg_dump_path = defaults.pg_dump_path;
+            this.settings_editor_draft.pg_client_dir = defaults.pg_client_dir;
+            this.settings_editor_draft.pg_client_download_source =
+                defaults.pg_client_download_source;
+            this.show_message("已恢复默认数据设置，点击保存后生效", AppMessageKind::Info, cx);
+            cx.notify();
+        }
         _ => {}
     }
 }
@@ -285,4 +311,3 @@ fn settings_status_id(title: &'static str, label: &'static str) -> u64 {
         }
     }
 }
-

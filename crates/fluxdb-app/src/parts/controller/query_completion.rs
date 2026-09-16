@@ -8,75 +8,7 @@ fn join_on_fk_score(score: i32, column_is_fk_child: bool) -> i32 {
     }
 }
 
-/// T051：后台刷新 worker——取 index 中已有的（旧）表名，在线拉取这些表的列并写回 index。
-/// 与同步 warm 共用同一批 free connector 查询函数，不依赖控制器 `&self`，故可由独立线程执行。
-/// 返回 (刷新表数, 刷新列数)。刷新仅对成功拉取的列写回，失败时旧候选保留。
-fn refresh_index_columns_in_background(
-    index: &Mutex<CompletionIndex>,
-    config: &ConnectionConfig,
-    connection_id: ConnectionId,
-    database: Option<&str>,
-    schema: Option<&str>,
-) -> fluxdb_core::Result<(usize, usize)> {
-    // T052：按影响范围限制刷新对象。库级 dirty → 刷新整库；
-    // 仅部分表 dirty（非库级）→ 只刷新那些表，避免每次 DDL 都重刷整库。
-    let table_names: Vec<String> = {
-        let Ok(guard) = index.lock() else {
-            return Ok((0, 0));
-        };
-        let database_wide = guard.is_database_dirty(connection_id, database, schema);
-        let dirty_tables = guard
-            .dirty_table_names(connection_id, database, schema)
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        guard
-            .database_tables(connection_id, database, schema)
-            .into_iter()
-            .filter(|table| matches!(table.kind, ObjectKind::Table | ObjectKind::View))
-            .filter(|table| {
-                database_wide
-                    || dirty_tables.is_empty()
-                    || dirty_tables.contains(&table.name.to_ascii_lowercase())
-            })
-            .map(|table| table.name)
-            .collect()
-    };
-    if table_names.is_empty() {
-        return Ok((0, 0));
-    }
-    let columns = list_completion_columns_for_tables_for_connection_with_cancel(
-        config,
-        database,
-        schema,
-        &table_names,
-        &|| false,
-    )?;
-    let refreshed_columns = columns.len();
-    let mut by_table: BTreeMap<String, Vec<CompletionColumn>> = BTreeMap::new();
-    for column in columns {
-        by_table
-            .entry(column.table.to_ascii_lowercase())
-            .or_default()
-            .push(column);
-    }
-    if let Ok(mut guard) = index.lock() {
-        for table in &table_names {
-            let table_columns = by_table
-                .remove(&table.to_ascii_lowercase())
-                .unwrap_or_default();
-            // replace_table_columns 内部 touch_meta → 更新 last_verified_at 并清 dirty，索引转为 fresh。
-            guard.replace_table_columns(
-                connection_id,
-                database,
-                schema,
-                table,
-                table_columns,
-                config.kind,
-            );
-        }
-    }
-    Ok((table_names.len(), refreshed_columns))
-}
+include!("completion_refresh.rs");
 
 fn completion_expectation_label(expectation: CompletionExpectation) -> &'static str {
     match expectation {
@@ -137,8 +69,28 @@ fn quote_completion_insert_text(
 
 impl AppController {
     fn execute_query(&self, request: &QueryRequest) -> fluxdb_core::Result<QueryExecutionResult> {
+        self.execute_query_with_cancel(request, &|| false)
+    }
+
+    /// 带取消信号执行：`should_cancel` 返回 true 时执行器在检查点向服务端发送取消
+    /// （PG 走 CancelToken，不是本地硬超时），并按「已取消」收尾。
+    /// 查询编辑器标签把「停止」按钮的取消标志接到这里；其余调用方传 `|| false`，
+    /// 与 `execute_query` 旧路径行为一致（`execute` 与无取消的 `execute_with_progress` 等价）。
+    fn execute_query_with_cancel(
+        &self,
+        request: &QueryRequest,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<QueryExecutionResult> {
         let rollback_snapshots = self.query_history_rollback_snapshots(request)?;
-        let mut execution = self.execute_query_raw(request)?;
+        let config = self
+            .connection_config(request.connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        let mut execution = execute_query_for_connection_with_progress(
+            config,
+            request,
+            &mut |_| {},
+            should_cancel,
+        )?;
         execution.rollback_snapshots = rollback_snapshots;
         Ok(execution)
     }
@@ -183,7 +135,16 @@ impl AppController {
             TabKind::QueryEditor(editor) => Some(QueryRequest {
                 connection_id: editor.connection_id,
                 database: editor.database.clone(),
-                text: sql_text_for_execution(&text, fluxdb_core::Pagination::DEFAULT_LIMIT),
+                // 查询编辑器标签拥有独占会话；带进度执行也必须复用该会话，
+                // 否则 BEGIN/COMMIT、临时表和 SET 会退化为每次新连接。
+                session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
+                schema: editor.schema.clone(),
+                text: sql_text_for_execution(
+                    &text,
+                    fluxdb_core::Pagination::DEFAULT_LIMIT,
+                    self.connection_kind(editor.connection_id)
+                        .unwrap_or(DatabaseKind::MySql),
+                ),
                 mode: fluxdb_core::QueryMode::Selection,
                 options,
             }),
@@ -207,6 +168,7 @@ impl AppController {
         &self,
         connection_id: ConnectionId,
         database: Option<String>,
+        schema: Option<String>,
         text: String,
         options: QueryExecutionOptions,
         on_summary: &mut dyn FnMut(QueryExecutionSummary),
@@ -215,7 +177,13 @@ impl AppController {
         let request = QueryRequest {
             connection_id,
             database,
-            text: sql_text_for_execution(&text, fluxdb_core::Pagination::DEFAULT_LIMIT),
+            schema,
+            session_id: None,
+            text: sql_text_for_execution(
+                &text,
+                fluxdb_core::Pagination::DEFAULT_LIMIT,
+                self.connection_kind(connection_id).unwrap_or(DatabaseKind::MySql),
+            ),
             mode: fluxdb_core::QueryMode::Selection,
             options,
         };
@@ -284,7 +252,8 @@ impl AppController {
                     replace_end: context.replace_end,
                 });
             }
-            let (table_database, table_schema) = completion_namespace_scope(&context, database);
+            let (table_database, table_schema) =
+                completion_namespace_scope(&context, database, config.kind);
             let tables = self.indexed_completion_tables_with_cancel(
                 config,
                 editor.connection_id,
@@ -300,7 +269,11 @@ impl AppController {
                 );
                 Vec::new()
             });
-            items.extend(table_completion_items(tables, &context.prefix));
+            items.extend(table_completion_items(
+                tables,
+                &context.prefix,
+                table_schema.as_deref(),
+            ));
         }
 
         if context.suggest_schemas {
@@ -482,7 +455,7 @@ impl AppController {
                 });
             }
             let routines = self
-                .completion_routines_with_cancel(
+                .indexed_completion_routines_with_cancel(
                     config,
                     editor.connection_id,
                     database,
@@ -514,7 +487,7 @@ impl AppController {
                 });
             }
             let routines = self
-                .completion_routines_with_cancel(
+                .indexed_completion_routines_with_cancel(
                     config,
                     editor.connection_id,
                     database,
@@ -581,7 +554,7 @@ impl AppController {
                 });
             }
             let triggers = self
-                .completion_triggers_with_cancel(
+                .indexed_completion_triggers_with_cancel(
                     config,
                     editor.connection_id,
                     database,
@@ -601,8 +574,14 @@ impl AppController {
                     label: trigger.name.clone(),
                     insert_text: trigger.name,
                     kind: QueryCompletionKind::Trigger,
-                    detail: trigger.table,
-                    documentation: None,
+                    detail: trigger.table.clone(),
+                    // 文档提示：触发器所属 schema 与表，便于确认作用于哪个对象（§8.4）。
+                    documentation: match (trigger.schema.as_deref(), trigger.table.as_deref()) {
+                        (Some(schema), Some(table)) => Some(format!("触发器（schema {schema}）\n表：{table}")),
+                        (None, Some(table)) => Some(format!("触发器\n表：{table}")),
+                        (Some(schema), None) => Some(format!("触发器（schema {schema}）")),
+                        (None, None) => None,
+                    },
                     filter_text: None,
                     sort_text: None,
                                     ..Default::default()
@@ -733,7 +712,7 @@ impl AppController {
                                     config,
                                     connection_id,
                                     table.database.as_deref().or(database),
-                                    None,
+                                    table.schema.as_deref(),
                                     &table.name,
                                     &|| batch_cancelled,
                                 )
@@ -803,7 +782,7 @@ impl AppController {
                                     config,
                                     connection_id,
                                     column_database,
-                                    None,
+                                    target.schema.as_deref(),
                                     &target.table,
                                     &|| batch_cancelled,
                                 )
@@ -812,7 +791,7 @@ impl AppController {
                                     config,
                                     connection_id,
                                     column_database,
-                                    None,
+                                    target.schema.as_deref(),
                                     &target.table,
                                     &|| batch_cancelled,
                                 )
@@ -891,7 +870,7 @@ impl AppController {
                     config,
                     editor.connection_id,
                     column_database,
-                    None,
+                    target.schema.as_deref(),
                     &target.table,
                     should_cancel,
                 )
@@ -931,6 +910,7 @@ impl AppController {
             filter_text: Some("*".to_string()),
             sort_text: None,
             insert_text_format: InsertTextFormat::PlainText,
+            schema: None,
         }])
     }
 
@@ -977,7 +957,7 @@ impl AppController {
                 config,
                 editor.connection_id,
                 column_database,
-                None,
+                target.schema.as_deref(),
                 &target.table,
                 should_cancel,
             ) else {
@@ -1030,7 +1010,7 @@ impl AppController {
                 config,
                 editor.connection_id,
                 column_database,
-                None,
+                target.schema.as_deref(),
                 &target.table,
                 should_cancel,
             ) else {
@@ -1063,8 +1043,23 @@ impl AppController {
         let Some(storage) = &self.completion_index_storage else {
             return false;
         };
-        let Ok(Some(snapshot)) = storage.load_completion_index(config, database, schema) else {
-            return false;
+        let snapshot = match storage.load_completion_index(config, database, schema) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => return false,
+            // 快照读失败（文件损坏 / 旧版本格式）：按无快照处理，但必须留下可检索的痕迹，
+            // 否则「索引看起来从不落盘」只能靠翻代码猜。
+            Err(error) => {
+                tracing::warn!(
+                    target: "gdb_sql_completion",
+                    op = "completion_index_load",
+                    error = %error,
+                    connection_id = ?connection_id,
+                    database,
+                    schema,
+                    "补全索引快照读取失败，按无快照继续"
+                );
+                return false;
+            }
         };
         if snapshot.connection_id != connection_id {
             return false;
@@ -1101,7 +1096,21 @@ impl AppController {
         {
             return;
         }
-        let _ = storage.save_completion_index(config, database, schema, &snapshot);
+        if let Err(error) = storage.save_completion_index(config, database, schema, &snapshot) {
+            // 落盘失败不影响本次补全（内存索引仍可用），但下次冷启动会白跑一遍目录查询，
+            // 故必须告警而不是静默丢弃。
+            tracing::warn!(
+                target: "gdb_sql_completion",
+                op = "completion_index_save",
+                error = %error,
+                connection_id = ?connection_id,
+                database,
+                schema,
+                table_count = snapshot.tables.len(),
+                column_count = snapshot.columns.len(),
+                "补全索引快照落盘失败"
+            );
+        }
     }
 
     fn indexed_completion_tables(
@@ -1206,52 +1215,17 @@ impl AppController {
         }
         if let Ok(index) = self.completion_index.lock() {
             let columns = index.database_columns(connection_id, database, schema, prefix);
-            if !columns.is_empty() {
+            if index.has_database_index(connection_id, database, schema) {
                 return Ok(columns);
             }
         }
-        if self.load_persisted_completion_index(config, connection_id, database, schema)
-            && let Ok(index) = self.completion_index.lock()
-        {
-            let columns = index.database_columns(connection_id, database, schema, prefix);
-            if !columns.is_empty() {
-                return Ok(columns);
-            }
-        }
-
-        let tables = self.indexed_completion_tables_with_cancel(
-            config,
-            connection_id,
-            database,
-            schema,
-            should_cancel,
-        )?;
-        let table_names = tables
-            .iter()
-            .filter(|table| matches!(table.kind, ObjectKind::Table | ObjectKind::View))
-            .map(|table| table.name.clone())
-            .collect::<Vec<_>>();
-        if table_names.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        self.refresh_completion_index_tables_with_cancel(
-            config,
-            connection_id,
-            database,
-            schema,
-            &table_names,
-            should_cancel,
-        )?;
-        if should_cancel() {
-            return Ok(Vec::new());
-        }
+        // 过期快照同样可用于当前请求，后台刷新负责更新。
+        self.load_persisted_completion_index(config, connection_id, database, schema);
         if let Ok(index) = self.completion_index.lock() {
-            let result = index.database_columns(connection_id, database, schema, prefix);
-            drop(index);
-            self.save_persisted_completion_index(config, connection_id, database, schema);
-            return Ok(result);
+            return Ok(index.database_columns(connection_id, database, schema, prefix));
         }
+
+        // 前缀没有候选不代表索引缺失；全库列补全只读缓存，禁止按键触发全库扫描。
         Ok(Vec::new())
     }
 
@@ -1275,6 +1249,12 @@ impl AppController {
         }
 
         let tables = self.indexed_completion_tables(config, connection_id, database, schema)?;
+        // 大库仅预热表名；列由实际引用表的补全与详情按需加载。
+        if tables.len() >= COMPLETION_METADATA_LIMIT as usize {
+            tracing::debug!(target: "gdb_sql_completion", op = "index_warmup", table_count = tables.len(), "大库跳过全库列预热");
+            self.save_persisted_completion_index(config, connection_id, database, schema);
+            return Ok(());
+        }
         let mut table_names = tables
             .iter()
             .filter(|table| matches!(table.kind, ObjectKind::Table | ObjectKind::View))
@@ -1421,24 +1401,21 @@ impl AppController {
             let mut by_table: BTreeMap<String, Vec<CompletionColumn>> = BTreeMap::new();
             for column in columns {
                 by_table
-                    .entry(column.table.to_ascii_lowercase())
+                    .entry(column.table.clone())
                     .or_default()
                     .push(column);
             }
+            for table in &chunk {
+                by_table.entry(table.clone()).or_default();
+            }
             if let Ok(mut index) = self.completion_index.lock() {
-                for table in &chunk {
-                    let table_columns = by_table
-                        .remove(&table.to_ascii_lowercase())
-                        .unwrap_or_default();
-                    index.replace_table_columns(
-                        connection_id,
-                        database,
-                        schema,
-                        table,
-                        table_columns,
-                        config.kind,
-                    );
-                }
+                index.replace_table_columns_batch(
+                    connection_id,
+                    database,
+                    schema,
+                    by_table,
+                    config.kind,
+                );
             }
         }
         Ok(())
@@ -1509,28 +1486,55 @@ impl AppController {
         Ok(tables)
     }
 
-    /// 收集 schema 候选（P1.5）：索引中已索引的 (database, schema) > 已加载对象 > 当前库名。
+    /// 收集 schema 候选（P1.5）：合并索引中的 namespace 与对象树已加载的 schema。
+    ///
+    /// 索引只覆盖已预热的表（PostgreSQL 通常是 search_path 内的表），
+    /// 不能因为索引非空就丢掉对象树中已加载的其他 schema。
     fn completion_schemas(
         &self,
-        _config: &ConnectionConfig,
+        config: &ConnectionConfig,
         connection_id: ConnectionId,
         database: Option<&str>,
     ) -> fluxdb_core::Result<Vec<(Option<String>, Option<String>)>> {
+        let database_matches = |candidate: Option<&str>| {
+            config.kind != DatabaseKind::Postgres
+                || database.is_none_or(|database| {
+                    candidate.is_none_or(|candidate| candidate.eq_ignore_ascii_case(database))
+                })
+        };
+
+        let mut schemas = Vec::new();
         if let Ok(index) = self.completion_index.lock() {
-            let schemas = index.database_schemas(connection_id);
-            if !schemas.is_empty() {
-                return Ok(schemas);
-            }
+            schemas.extend(
+                index
+                    .database_schemas(connection_id)
+                    .into_iter()
+                    .filter(|(candidate, _)| database_matches(candidate.as_deref())),
+            );
         }
-        let mut schemas: Vec<(Option<String>, Option<String>)> = loaded_completion_tables(
-            &self.state,
-            connection_id,
-            None,
-            None,
-        )
-        .into_iter()
-        .map(|table| (table.database, table.schema))
-        .collect();
+
+        if let Some(connection) = self
+            .state
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == connection_id)
+        {
+            schemas.extend(connection.objects.iter().filter_map(|object| {
+                if !database_matches(object.path.database.as_deref()) {
+                    return None;
+                }
+                match object.path.kind {
+                    ObjectKind::Schema => {
+                        Some((object.path.database.clone(), Some(object.path.name.clone())))
+                    }
+                    ObjectKind::Table | ObjectKind::View => {
+                        Some((object.path.database.clone(), object.path.schema.clone()))
+                    }
+                    _ => None,
+                }
+            }));
+        }
+
         if schemas.is_empty() {
             if let Some(database) = database {
                 schemas.push((Some(database.to_string()), None));
@@ -1618,6 +1622,89 @@ impl AppController {
             elapsed_us = started.elapsed().as_micros() as u64,
         );
         Ok(columns)
+    }
+
+    /// 例程候选：索引优先（含签名，随快照持久化），未命中再走连接器并写回索引。
+    ///
+    /// 与 tables/columns 同一形态：索引里已有该 scope 的例程就直接复用，避免每次补全
+    /// 重新拉 catalog；写入后同步持久化，重开应用无需重建。
+    /// 表操作（重命名/复制/删除）成功后失效该 scope 的补全缓存。
+    ///
+    /// 表操作直接执行 SQL、不走查询历史记录路径，故不会经过 `mark_query_history_completion_dirty`；
+    /// 这里按 scope 标脏，后台刷薪触发时会重取表清单与列，旧名/已删表不再被建议（§9.3）。
+    fn mark_table_action_completion_dirty(&self, object: &ObjectPath) {
+        self.invalidate_completion_metadata(object.connection_id, object.database.as_deref(), object.schema.as_deref(), None);
+    }
+
+    fn indexed_completion_routines_with_cancel(
+        &self,
+        config: &ConnectionConfig,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<Vec<CompletionRoutine>> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(index) = self.completion_index.lock() {
+            let routines = index.database_routines(connection_id, database, schema);
+            if !routines.is_empty() {
+                return Ok(routines);
+            }
+        }
+        let routines =
+            self.completion_routines_with_cancel(config, connection_id, database, schema, should_cancel)?;
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(mut index) = self.completion_index.lock() {
+            index.insert_routines(
+                connection_id,
+                database,
+                schema,
+                routines.clone(),
+                config.kind,
+            );
+        }
+        self.save_persisted_completion_index(config, connection_id, database, schema);
+        Ok(routines)
+    }
+
+    /// 触发器候选：索引优先，未命中再走连接器并写回索引（同例程形态）。
+    fn indexed_completion_triggers_with_cancel(
+        &self,
+        config: &ConnectionConfig,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<Vec<CompletionTrigger>> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(index) = self.completion_index.lock() {
+            let triggers = index.database_triggers(connection_id, database, schema);
+            if !triggers.is_empty() {
+                return Ok(triggers);
+            }
+        }
+        let triggers =
+            self.completion_triggers_with_cancel(config, connection_id, database, schema, should_cancel)?;
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(mut index) = self.completion_index.lock() {
+            index.insert_triggers(
+                connection_id,
+                database,
+                schema,
+                triggers.clone(),
+                config.kind,
+            );
+        }
+        self.save_persisted_completion_index(config, connection_id, database, schema);
+        Ok(triggers)
     }
 
     fn completion_routines_with_cancel(
@@ -1839,8 +1926,10 @@ impl AppController {
     }
 
     /// T054：选中项完整对象说明（懒加载）。候选构建时不调用；仅当选中的候选需要
-    /// 更完整说明（如表/视图的列清单）时按需解析。数据全部来自 `CompletionIndex`，
-    /// 无远程查询。对象不在索引 / 无可用描述返回 `Error`。
+    /// 更完整说明（如表/视图的列清单）时按需解析。表/视图优先读 `CompletionIndex`；
+    /// 索引未覆盖该对象（search_path 之外的表、索引刚被清空等）时按
+    /// `(库, schema, 表)` 的完整身份取一次列元数据并写回索引。取不到 / 无可用描述
+    /// 返回 `Error`。
     ///
     /// - 表/视图 → 结构元数据：列清单「列名  类型  注释」（注释为空省略）。
     /// - 列 → 内联注释（候选携带的 `documentation`）。
@@ -1850,16 +1939,32 @@ impl AppController {
         &self,
         connection_id: ConnectionId,
         database: Option<&str>,
+        schema: Option<&str>,
         item: &QueryCompletionItem,
         should_cancel: &dyn Fn() -> bool,
     ) -> CompletionDocumentationState {
         match item.kind {
             QueryCompletionKind::Table | QueryCompletionKind::View => {
-                let columns = self
-                    .completion_index
-                    .lock()
-                    .map(|index| index.table_columns(connection_id, database, None, &item.label))
-                    .unwrap_or_default();
+                // 已判废的请求直接返回 Loading：不占用线程/连接做无谓取数（latest-wins）。
+                if should_cancel() {
+                    return CompletionDocumentationState::Loading;
+                }
+                let (schema, table) = documentation_object_identity(schema, &item.label);
+                let columns = match self.documentation_table_columns(
+                    connection_id,
+                    database,
+                    schema,
+                    table,
+                    should_cancel,
+                ) {
+                    Ok(columns) => columns,
+                    // 元数据来源不可用与「对象没有列」是两回事，如实区分，不谎报成不存在。
+                    Err(reason) => {
+                        return CompletionDocumentationState::Error(format!(
+                            "列元数据不可用：{reason}"
+                        ));
+                    }
+                };
                 if columns.is_empty() {
                     return CompletionDocumentationState::Error("对象不在索引或没有列".to_string());
                 }
@@ -1900,6 +2005,134 @@ impl AppController {
             _ => CompletionDocumentationState::Error("无可用文档".to_string()),
         }
     }
+
+    /// 详情面板取某对象列清单的元数据来源，与列补全共用同一条链路：
+    /// 内存索引 → 盘上快照 → 已打开数据编辑页的列 → 连接器（取到后写回索引与快照）。
+    /// 因此同一张表「按需拉一次」之后，再次悬停即直接命中。
+    ///
+    /// `Err(原因)` 表示元数据来源不可用（连接不存在 / 拉取失败），与「对象确实没有列」
+    /// 区分开：调用方对前者提示「列元数据不可用」，对后者提示「对象不在索引或没有列」，
+    /// 不把连接故障谎报成对象不存在。
+    ///
+    /// 该路径不读 `settings.enable_completion_index`：详情是用户显式选中单个对象的
+    /// 动作，与「按前缀批量补全」不同，读写索引不会造成额外批量开销。
+    fn documentation_table_columns(
+        &self,
+        connection_id: ConnectionId,
+        database: Option<&str>,
+        schema: Option<&str>,
+        table: &str,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> Result<Vec<CompletionColumn>, String> {
+        if should_cancel() {
+            return Ok(Vec::new());
+        }
+        if let Ok(index) = self.completion_index.lock() {
+            let columns = index.table_columns(connection_id, database, schema, table);
+            if !columns.is_empty() {
+                tracing::debug!(
+                    target: "gdb_sql_completion",
+                    op = "documentation_columns",
+                    connection_id = ?connection_id,
+                    database,
+                    schema,
+                    table,
+                    cache_hit = true,
+                    item_count = columns.len(),
+                    "详情列清单命中索引"
+                );
+                return Ok(columns);
+            }
+        }
+        let Some(config) = self.connection_config(connection_id) else {
+            tracing::warn!(
+                target: "gdb_sql_completion",
+                op = "documentation_columns",
+                connection_id = ?connection_id,
+                database,
+                schema,
+                table,
+                "连接不存在，详情无法取列元数据"
+            );
+            return Err("连接不存在".to_string());
+        };
+        // 内存索引会被 DDL / 执行查询等命令整体清空（见 should_clear_completion_cache），
+        // 但盘上快照仍在：先尝试恢复，避免用户每执行一次查询后悬停都重新建连取数。
+        if self.load_persisted_completion_index(&config, connection_id, database, schema)
+            && let Ok(index) = self.completion_index.lock()
+        {
+            let columns = index.table_columns(connection_id, database, schema, table);
+            if !columns.is_empty() {
+                tracing::debug!(
+                    target: "gdb_sql_completion",
+                    op = "documentation_columns",
+                    connection_id = ?connection_id,
+                    database,
+                    schema,
+                    table,
+                    cache_hit = true,
+                    source = "persisted",
+                    item_count = columns.len(),
+                    "详情列清单命中盘上快照"
+                );
+                return Ok(columns);
+            }
+        }
+        let started = std::time::Instant::now();
+        let columns = self
+            .indexed_table_completion_columns_with_cancel(
+                &config,
+                connection_id,
+                database,
+                schema,
+                table,
+                should_cancel,
+            )
+            .map_err(|error| {
+                tracing::warn!(
+                    target: "gdb_sql_completion",
+                    op = "documentation_columns",
+                    error = %error,
+                    connection_id = ?connection_id,
+                    database,
+                    schema,
+                    table,
+                    "详情列元数据不可用"
+                );
+                error.to_string()
+            })?;
+        tracing::debug!(
+            target: "gdb_sql_completion",
+            op = "documentation_columns",
+            connection_id = ?connection_id,
+            database,
+            schema,
+            table,
+            cache_hit = false,
+            item_count = columns.len(),
+            elapsed_us = started.elapsed().as_micros() as u64,
+            "详情列清单按需拉取（并写回索引）"
+        );
+        Ok(columns)
+    }
+}
+
+/// 详情查询用的对象身份：优先用候选携带的 schema 作用域；未携带时从限定的 label
+/// （`schema.table`，跨 schema 同名消歧时由补全项加前缀）里拆出 schema。
+///
+/// 拆 label 只是兜底：正常路径下（`FROM tenant_a.`）schema 由候选直接携带，
+/// 只有 search_path 多 schema 同名表这种消歧场景才会走到 label 拆分。
+fn documentation_object_identity<'a>(
+    schema: Option<&'a str>,
+    label: &'a str,
+) -> (Option<&'a str>, &'a str) {
+    if schema.is_some() {
+        return (schema, label);
+    }
+    match label.rsplit_once('.') {
+        Some((schema, table)) if !schema.is_empty() && !table.is_empty() => (Some(schema), table),
+        _ => (None, label),
+    }
 }
 
 /// T054：选中项完整对象说明的懒加载状态。
@@ -1914,7 +2147,8 @@ pub enum CompletionDocumentationState {
 }
 
 fn query_history_tables(sql: &str) -> Vec<String> {
-    let mut tables = extract_referenced_tables(sql)
+    // 历史记录这里只消费表名，限定名按哪种方言拆分不影响结果。
+    let mut tables = extract_referenced_tables(sql, DatabaseKind::MongoDb)
         .into_iter()
         .map(|table| table.name)
         .collect::<BTreeSet<_>>();

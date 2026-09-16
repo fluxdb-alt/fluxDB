@@ -3,6 +3,21 @@ impl AppController {
         if should_clear_completion_cache(&command) {
             self.clear_completion_cache();
         }
+        // 对象刷新保留旧候选，仅标记相关索引失效，避免主线程释放并重建整个索引。
+        match &command {
+            AppCommand::RefreshObject(Some(object)) => self.invalidate_completion_metadata(
+                object.connection_id, object.database.as_deref(), object.schema.as_deref(), None,
+            ),
+            AppCommand::RefreshObject(None) | AppCommand::RefreshConnectionTree => {
+                let scopes = self.completion_index.lock().ok()
+                    .map(|index| index.metas.keys().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                for scope in scopes {
+                    self.invalidate_completion_metadata(scope.connection_id, scope.database.as_deref(), scope.schema.as_deref(), None);
+                }
+            }
+            _ => {}
+        }
 
         match command {
             AppCommand::LoadConnections => {
@@ -108,6 +123,9 @@ impl AppController {
                     let endpoint_changed = connection.config.kind != config.kind
                         || connection.config.endpoint != config.endpoint;
                     connection.config = config.clone();
+                    // 配置已变更：旧会话按旧档案建立，一律释放（含仅改密码/TLS 的情况）。
+                    fluxdb_connectors::pg_close_connection_sessions(config.id);
+                    settle_closed_query_history(&mut self.state.query_history, config.id, None);
                     if endpoint_changed {
                         connection.connected = false;
                         connection.expanded = false;
@@ -233,6 +251,7 @@ impl AppController {
                             options: BTreeMap::new(),
                             redis_profile: Some(profile),
                             mysql_profile: None,
+                            postgres_profile: None,
                         };
                         AppEvent::RedisConnectionDiscovered(draft)
                     }
@@ -289,6 +308,10 @@ impl AppController {
                 connection.connected = false;
                 connection.expanded = false;
                 connection.objects.clear();
+                // 断开即释放该连接的全部 PG 会话：连接驱动、SSH 桥线程随会话 drop 收敛，
+                // 不再挂到空闲 TTL（设计 §3.3）。
+                fluxdb_connectors::pg_close_connection_sessions(connection_id);
+                settle_closed_query_history(&mut self.state.query_history, connection_id, None);
                 self.state
                     .tabs
                     .retain(|tab| !tab_belongs_to_connection(tab, connection_id));
@@ -347,6 +370,8 @@ impl AppController {
                 AppEvent::ObjectsLoaded(None, connection.objects.clone())
             }
             AppCommand::DeleteConnection(connection_id) => {
+                fluxdb_connectors::pg_close_connection_sessions(connection_id);
+                settle_closed_query_history(&mut self.state.query_history, connection_id, None);
                 let original_len = self.state.connections.len();
                 self.state
                     .connections
@@ -424,6 +449,99 @@ impl AppController {
                     Err(error) => self.fail(error),
                 }
             }
+            AppCommand::CreateSchema {
+                connection_id,
+                database,
+                schema,
+            } => {
+                let Some(connection) = self
+                    .state
+                    .connections
+                    .iter_mut()
+                    .find(|connection| connection.config.id == connection_id)
+                else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                let config = connection.config.clone();
+                if let Err(error) = create_schema_for_connection(
+                    &config,
+                    connection_id,
+                    database.as_str(),
+                    schema.as_str(),
+                ) {
+                    return self.fail(error);
+                }
+                // 建 schema 成功后通知 UI 失效该库 schema 缓存并重取（见 SchemaCreated 消费点）。
+                AppEvent::SchemaCreated { connection_id, schema }
+            }
+            AppCommand::LoadPgRoles(connection_id) => {
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.list_roles(connection_id)
+                }) {
+                    Ok(roles) => AppEvent::PgRolesLoaded(connection_id, roles),
+                    Err(error) => self.fail(error),
+                }
+            }
+            AppCommand::CreatePgRole {
+                connection_id,
+                name,
+                can_login,
+                password,
+            } => {
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.create_role(connection_id, &name, can_login, password.as_deref())
+                }) {
+                    Ok(()) => AppEvent::PgRoleChanged(connection_id),
+                    Err(error) => self.fail(error),
+                }
+            }
+            AppCommand::AlterPgRolePassword {
+                connection_id,
+                name,
+                password,
+            } => {
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.alter_role_password(connection_id, &name, &password)
+                }) {
+                    Ok(()) => AppEvent::PgRoleChanged(connection_id),
+                    Err(error) => self.fail(error),
+                }
+            }
+            AppCommand::RenamePgRole {
+                connection_id,
+                old_name,
+                new_name,
+            } => {
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.rename_role(connection_id, &old_name, &new_name)
+                }) {
+                    Ok(()) => AppEvent::PgRoleChanged(connection_id),
+                    Err(error) => self.fail(error),
+                }
+            }
+            AppCommand::DropPgRole { connection_id, name } => {
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.drop_role(connection_id, &name)
+                }) {
+                    Ok(()) => AppEvent::PgRoleChanged(connection_id),
+                    Err(error) => self.fail(error),
+                }
+            }
             AppCommand::DeleteDatabase {
                 connection_id,
                 database,
@@ -471,7 +589,9 @@ impl AppController {
                         self.state.last_error = None;
                         connection.connected = true;
                         connection.expanded = true;
-                        connection.objects = objects;
+                        // 删除库后重拉连接第一层：只替换库/schema 层并保留仍存活库下已加载的表/视图，
+                        // 避免整体替换把其他已展开库的深层对象（表/视图）一并清掉。
+                        replace_connection_level0(connection, objects);
                         AppEvent::DatabaseDeleted {
                             connection_id,
                             database,
@@ -508,7 +628,9 @@ impl AppController {
                             let config = connection.config.clone();
                             match list_objects_for_connection(&config, None) {
                                 Ok(objects) => {
-                                    connection.objects = objects.clone();
+                                    // 刷新连接第一层：保留仍存活库下已加载的表/视图，避免整体替换
+                                    // 把其他已展开库的深层对象（表/视图）一并清掉。
+                                    replace_connection_level0(connection, objects.clone());
                                     all_objects.extend(objects);
                                 }
                                 Err(error) => return self.fail(error),
@@ -1258,14 +1380,15 @@ impl AppController {
                 filters,
             } => self.apply_data_changes_command(tab_id, sort, filters),
             AppCommand::OpenQueryEditor(connection_id) => {
-                self.open_query_editor(connection_id, None)
+                self.open_query_editor(connection_id, None, None)
             }
             AppCommand::OpenUserAdmin(connection_id) => self.open_user_admin(connection_id),
             AppCommand::OpenSettings => self.open_settings(),
             AppCommand::OpenQueryEditorInDatabase {
                 connection_id,
                 database,
-            } => self.open_query_editor(connection_id, database),
+                schema,
+            } => self.open_query_editor(connection_id, database, schema),
             AppCommand::OpenRedisWorkbench {
                 connection_id,
                 database,
@@ -1278,1060 +1401,6 @@ impl AppController {
                 connection_id,
                 database,
             } => self.open_redis_pubsub(connection_id, database),
-            AppCommand::OpenCreateTable {
-                connection_id,
-                database,
-            } => {
-                let Some(config) = self.connection_config(connection_id) else {
-                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
-                };
-                let database_kind = config.kind;
-                let tab_id = self.next_tab_id();
-                let create = CreateTableState::new(connection_id, database, database_kind);
-                self.push_tab(TabState {
-                    id: tab_id,
-                    title: create.tab_title(),
-                    kind: TabKind::CreateTable(create),
-                    dirty: false,
-                });
-                AppEvent::TabOpened(tab_id)
-            }
-            AppCommand::OpenDesignTable(object) => {
-                let Some(config) = self.connection_config(object.connection_id) else {
-                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
-                };
-                let columns = match list_completion_columns_for_connection(
-                    &config,
-                    object.database.as_deref(),
-                    object.schema.as_deref(),
-                    &object.name,
-                ) {
-                    Ok(columns) => columns,
-                    Err(error) => return self.fail(error),
-                };
-                let indexes = match load_table_info_for_connection(&config, &object, TableInfoTab::Indexes) {
-                    Ok(TableInfoResult::Indexes(indexes)) => indexes,
-                    Ok(_) => Vec::new(),
-                    Err(error) => return self.fail(error),
-                };
-                let foreign_keys = match load_table_info_for_connection(&config, &object, TableInfoTab::ForeignKeys) {
-                    Ok(TableInfoResult::ForeignKeys(foreign_keys)) => foreign_keys,
-                    Ok(_) => Vec::new(),
-                    Err(error) => return self.fail(error),
-                };
-                let triggers = match load_table_info_for_connection(&config, &object, TableInfoTab::Triggers) {
-                    Ok(TableInfoResult::Triggers(triggers)) => triggers,
-                    Ok(_) => Vec::new(),
-                    Err(error) => return self.fail(error),
-                };
-                let ddl = match load_table_info_for_connection(&config, &object, TableInfoTab::Ddl) {
-                    Ok(TableInfoResult::Ddl(ddl)) => Some(ddl),
-                    Ok(_) => None,
-                    Err(error) => return self.fail(error),
-                };
-                let database_kind = config.kind;
-                let tab_id = self.next_tab_id();
-                let create = CreateTableState::design(
-                    object,
-                    database_kind,
-                    columns,
-                    indexes,
-                    foreign_keys,
-                    triggers,
-                    ddl,
-                );
-                self.push_tab(TabState {
-                    id: tab_id,
-                    title: create.tab_title(),
-                    kind: TabKind::CreateTable(create),
-                    dirty: false,
-                });
-                AppEvent::TabOpened(tab_id)
-            }
-            AppCommand::RenameTable { object, new_name } => {
-                let Some(config) = self.connection_config(object.connection_id).cloned() else {
-                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
-                };
-                let new_name = new_name.trim().to_string();
-                let sql = match rename_table_sql_preview(config.kind, &object.name, &new_name) {
-                    Ok(sql) => sql,
-                    Err(message) => return self.fail(Error::new(ErrorKind::Query, message)),
-                };
-                let request = QueryRequest {
-                    connection_id: object.connection_id,
-                    database: object.database.clone(),
-                    text: sql,
-                    mode: fluxdb_core::QueryMode::All,
-                    options: QueryExecutionOptions {
-                        continue_on_error: false,
-                        split_statements: true,
-                        ..QueryExecutionOptions::default()
-                    },
-                };
-                let execution = match self.execute_query(&request) {
-                    Ok(execution) => execution,
-                    Err(error) => return self.fail(error),
-                };
-                if let Some(summary) = execution.summaries.iter().find(|summary| !summary.success) {
-                    return self.fail(Error::new(ErrorKind::Query, summary.message.clone()));
-                }
-
-                let mut renamed = object.clone();
-                renamed.name = new_name.clone();
-                if let Some(connection) = self
-                    .state
-                    .connections
-                    .iter_mut()
-                    .find(|connection| connection.config.id == object.connection_id)
-                {
-                    for summary in &mut connection.objects {
-                        if summary.path == object {
-                            summary.path = renamed.clone();
-                        }
-                    }
-                }
-                for tab in &mut self.state.tabs {
-                    if let TabKind::DataEditor(editor) = &mut tab.kind
-                        && editor.object == object
-                    {
-                        editor.object = renamed.clone();
-                        editor.page = None;
-                        editor.original_page = None;
-                        editor.changes = None;
-                        editor.loading = true;
-                        editor.table_info = TableInfoState::default();
-                        tab.title = new_name.clone();
-                        tab.dirty = false;
-                    }
-                }
-                self.state.last_error = None;
-                AppEvent::TableRenamed { object, new_name }
-            }
-            AppCommand::CopyTable {
-                object,
-                new_name,
-                copy_data,
-            } => {
-                let Some(config) = self.connection_config(object.connection_id).cloned() else {
-                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
-                };
-                let new_name = new_name.trim().to_string();
-                let source_ddl = if config.kind == DatabaseKind::Sqlite {
-                    match self.load_table_ddl(&object) {
-                        Ok(ddl) => Some(ddl),
-                        Err(error) => return self.fail(error),
-                    }
-                } else {
-                    None
-                };
-                let sql = match copy_table_sql_preview_with_source_ddl(
-                    config.kind,
-                    &object.name,
-                    &new_name,
-                    copy_data,
-                    source_ddl.as_deref(),
-                ) {
-                    Ok(sql) => sql,
-                    Err(message) => return self.fail(Error::new(ErrorKind::Query, message)),
-                };
-                let request = QueryRequest {
-                    connection_id: object.connection_id,
-                    database: object.database.clone(),
-                    text: sql,
-                    mode: fluxdb_core::QueryMode::All,
-                    options: QueryExecutionOptions {
-                        continue_on_error: false,
-                        split_statements: true,
-                        ..QueryExecutionOptions::default()
-                    },
-                };
-                let execution = match self.execute_query(&request) {
-                    Ok(execution) => execution,
-                    Err(error) => return self.fail(error),
-                };
-                if let Some(summary) = execution.summaries.iter().find(|summary| !summary.success) {
-                    return self.fail(Error::new(ErrorKind::Query, summary.message.clone()));
-                }
-
-                let mut copied = object.clone();
-                copied.name = new_name.clone();
-                if let Some(connection) = self
-                    .state
-                    .connections
-                    .iter_mut()
-                    .find(|connection| connection.config.id == object.connection_id)
-                    && !connection
-                        .objects
-                        .iter()
-                        .any(|summary| summary.path == copied)
-                {
-                    connection.objects.push(ObjectSummary {
-                        path: copied,
-                        rows: None,
-                        modified_at: None,
-                        comment: None,
-                    });
-                }
-                self.state.last_error = None;
-                AppEvent::TableCopied { object, new_name }
-            }
-            AppCommand::DropTable {
-                object,
-                foreign_key_check,
-            } => {
-                let Some(config) = self.connection_config(object.connection_id).cloned() else {
-                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
-                };
-                let sql = match drop_table_sql_preview(config.kind, &object.name, foreign_key_check)
-                {
-                    Ok(sql) => sql,
-                    Err(message) => return self.fail(Error::new(ErrorKind::Query, message)),
-                };
-                let request = QueryRequest {
-                    connection_id: object.connection_id,
-                    database: object.database.clone(),
-                    text: sql,
-                    mode: fluxdb_core::QueryMode::All,
-                    options: QueryExecutionOptions {
-                        continue_on_error: false,
-                        split_statements: true,
-                        ..QueryExecutionOptions::default()
-                    },
-                };
-                let execution = match self.execute_query(&request) {
-                    Ok(execution) => execution,
-                    Err(error) => return self.fail(error),
-                };
-                if let Some(summary) = execution.summaries.iter().find(|summary| !summary.success) {
-                    return self.fail(Error::new(ErrorKind::Query, summary.message.clone()));
-                }
-
-                if let Some(connection) = self
-                    .state
-                    .connections
-                    .iter_mut()
-                    .find(|connection| connection.config.id == object.connection_id)
-                {
-                    connection.objects.retain(|summary| summary.path != object);
-                }
-                self.state.tabs.retain(|tab| match &tab.kind {
-                    TabKind::DataEditor(editor) => editor.object != object,
-                    TabKind::CreateTable(create) => match &create.mode {
-                        CreateTableMode::Design { object: design_object, .. } => {
-                            design_object != &object
-                        }
-                        CreateTableMode::Create => true,
-                    },
-                    _ => true,
-                });
-                if self
-                    .state
-                    .active_tab
-                    .is_some_and(|tab_id| !self.state.tabs.iter().any(|tab| tab.id == tab_id))
-                {
-                    self.state.active_tab = self.state.tabs.last().map(|tab| tab.id);
-                }
-                self.state.last_error = None;
-                AppEvent::TableDropped(object)
-            }
-            AppCommand::TruncateTable {
-                object,
-                foreign_key_check,
-            } => {
-                let Some(config) = self.connection_config(object.connection_id).cloned() else {
-                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
-                };
-                let sql =
-                    match truncate_table_sql_preview(config.kind, &object.name, foreign_key_check)
-                    {
-                    Ok(sql) => sql,
-                    Err(message) => return self.fail(Error::new(ErrorKind::Query, message)),
-                    };
-                let request = QueryRequest {
-                    connection_id: object.connection_id,
-                    database: object.database.clone(),
-                    text: sql,
-                    mode: fluxdb_core::QueryMode::All,
-                    options: QueryExecutionOptions {
-                        continue_on_error: false,
-                        split_statements: true,
-                        ..QueryExecutionOptions::default()
-                    },
-                };
-                let execution = match self.execute_query(&request) {
-                    Ok(execution) => execution,
-                    Err(error) => return self.fail(error),
-                };
-                if let Some(summary) = execution.summaries.iter().find(|summary| !summary.success) {
-                    return self.fail(Error::new(ErrorKind::Query, summary.message.clone()));
-                }
-
-                self.state.last_error = None;
-                AppEvent::TableTruncated(object)
-            }
-            AppCommand::StartCreateTableApply(tab_id) => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    if let Some(message) = create.validation_error() {
-                        return self.fail(Error::new(ErrorKind::Query, message));
-                    }
-                    create.applying = true;
-                    create.apply_error = None;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::ApplyCreateTable(tab_id) => match self.apply_create_table(tab_id) {
-                Ok(()) => AppEvent::CreateTableApplied(tab_id),
-                Err(error) => AppEvent::Failed(UserFacingError::from(error)),
-            },
-            AppCommand::FinishCreateTableApply { tab_id, result } => match result {
-                Ok(()) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id)
-                        && let TabKind::CreateTable(create) = &mut tab.kind
-                    {
-                        create.applying = false;
-                        create.apply_error = None;
-                        tab.dirty = false;
-                        AppEvent::CreateTableApplied(tab_id)
-                    } else {
-                        self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                    }
-                }
-                Err(error) => {
-                    if let Some(tab) = self.find_tab_mut(tab_id)
-                        && let TabKind::CreateTable(create) = &mut tab.kind
-                    {
-                        create.applying = false;
-                        create.apply_error = Some(error.clone());
-                    }
-                    self.state.last_error = Some(error.clone());
-                    AppEvent::Failed(error)
-                }
-            },
-            AppCommand::SetCreateTableField {
-                tab_id,
-                field,
-                value,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.set_field(field, value);
-                    tab.title = create.tab_title();
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SetCreateTableOptionField {
-                tab_id,
-                field,
-                value,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.set_option_field(field, value);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::ToggleCreateTablePartitionEnabled(tab_id) => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.toggle_partition_enabled();
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SetCreateTablePartitionField {
-                tab_id,
-                field,
-                value,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.set_partition_field(field, value);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SelectCreateTableTab { tab_id, create_tab } => {
-                let Some(create) = self.find_create_table_mut(tab_id) else {
-                    return self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"));
-                };
-                if create_tab == CreateTableTab::Ddl && !create.is_design() {
-                    return AppEvent::TabActivated(tab_id);
-                }
-                create.active_tab = create_tab;
-                AppEvent::TabActivated(tab_id)
-            }
-            AppCommand::SelectCreateTableColumn { tab_id, column_id } => {
-                let Some(create) = self.find_create_table_mut(tab_id) else {
-                    return self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"));
-                };
-                create.select_column(column_id);
-                AppEvent::TabActivated(tab_id)
-            }
-            AppCommand::AddCreateTableColumn(tab_id) => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.add_column();
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableColumnUp { tab_id, column_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_column_up(column_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableColumnDown { tab_id, column_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_column_down(column_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::RemoveCreateTableColumn { tab_id, column_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.remove_column(column_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SetCreateTableColumnField {
-                tab_id,
-                column_id,
-                field,
-                value,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.set_column_field(column_id, field, value);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::ToggleCreateTableColumnFlag {
-                tab_id,
-                column_id,
-                flag,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.toggle_column_flag(column_id, flag);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SelectCreateTableIndex { tab_id, index_id } => {
-                let Some(create) = self.find_create_table_mut(tab_id) else {
-                    return self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"));
-                };
-                create.select_index(index_id);
-                AppEvent::TabActivated(tab_id)
-            }
-            AppCommand::AddCreateTableIndex(tab_id) => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.add_index();
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableIndexUp { tab_id, index_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_index_up(index_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableIndexDown { tab_id, index_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_index_down(index_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::RemoveCreateTableIndex { tab_id, index_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.remove_index(index_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SetCreateTableIndexField {
-                tab_id,
-                index_id,
-                field,
-                value,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.set_index_field(index_id, field, value);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::AddCreateTableIndexColumn { tab_id, index_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.add_index_column(index_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableIndexColumnUp {
-                tab_id,
-                index_id,
-                column_index,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_index_column_up(index_id, column_index);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableIndexColumnDown {
-                tab_id,
-                index_id,
-                column_index,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_index_column_down(index_id, column_index);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::RemoveCreateTableIndexColumn {
-                tab_id,
-                index_id,
-                column_index,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.remove_index_column(index_id, column_index);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SetCreateTableIndexColumnField {
-                tab_id,
-                index_id,
-                column_index,
-                field,
-                value,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.set_index_column_field(index_id, column_index, field, value);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SelectCreateTableCheck { tab_id, check_id } => {
-                let Some(create) = self.find_create_table_mut(tab_id) else {
-                    return self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"));
-                };
-                create.select_check(check_id);
-                AppEvent::TabActivated(tab_id)
-            }
-            AppCommand::AddCreateTableCheck(tab_id) => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.add_check();
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableCheckUp { tab_id, check_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_check_up(check_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableCheckDown { tab_id, check_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_check_down(check_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::RemoveCreateTableCheck { tab_id, check_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.remove_check(check_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SetCreateTableCheckField {
-                tab_id,
-                check_id,
-                field,
-                value,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.set_check_field(check_id, field, value);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::ToggleCreateTableCheckNotEnforced { tab_id, check_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.toggle_check_not_enforced(check_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SelectCreateTableForeignKey {
-                tab_id,
-                foreign_key_id,
-            } => {
-                let Some(create) = self.find_create_table_mut(tab_id) else {
-                    return self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"));
-                };
-                create.select_foreign_key(foreign_key_id);
-                AppEvent::TabActivated(tab_id)
-            }
-            AppCommand::AddCreateTableForeignKey(tab_id) => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.add_foreign_key();
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableForeignKeyUp {
-                tab_id,
-                foreign_key_id,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_foreign_key_up(foreign_key_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableForeignKeyDown {
-                tab_id,
-                foreign_key_id,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_foreign_key_down(foreign_key_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::RemoveCreateTableForeignKey {
-                tab_id,
-                foreign_key_id,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.remove_foreign_key(foreign_key_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SetCreateTableForeignKeyField {
-                tab_id,
-                foreign_key_id,
-                field,
-                value,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.set_foreign_key_field(foreign_key_id, field, value);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::StartCreateTableReferenceColumnsLoad {
-                tab_id,
-                foreign_key_id,
-            } => {
-                let Some(create) = self.find_create_table_mut(tab_id) else {
-                    return self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"));
-                };
-                create.start_foreign_key_reference_columns_load(foreign_key_id);
-                AppEvent::TabActivated(tab_id)
-            }
-            AppCommand::LoadCreateTableReferenceColumns {
-                tab_id,
-                foreign_key_id,
-            } => match self.load_create_table_reference_columns(tab_id, foreign_key_id) {
-                Ok(columns) => AppEvent::CreateTableReferenceColumnsLoaded {
-                    tab_id,
-                    foreign_key_id,
-                    columns,
-                },
-                Err(error) => AppEvent::Failed(UserFacingError::from(error)),
-            },
-            AppCommand::FinishCreateTableReferenceColumnsLoad {
-                tab_id,
-                foreign_key_id,
-                result,
-            } => {
-                let Some(create) = self.find_create_table_mut(tab_id) else {
-                    return self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"));
-                };
-                create.finish_foreign_key_reference_columns_load(foreign_key_id, result.clone());
-                match result {
-                    Ok(columns) => AppEvent::CreateTableReferenceColumnsLoaded {
-                        tab_id,
-                        foreign_key_id,
-                        columns,
-                    },
-                    Err(error) => {
-                        self.state.last_error = Some(error.clone());
-                        AppEvent::Failed(error)
-                    }
-                }
-            }
-            AppCommand::AddCreateTableForeignKeyColumn {
-                tab_id,
-                foreign_key_id,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.add_foreign_key_column(foreign_key_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::AddCreateTableForeignKeyReferencedColumn {
-                tab_id,
-                foreign_key_id,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.add_foreign_key_referenced_column(foreign_key_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableForeignKeyReferencedColumnUp {
-                tab_id,
-                foreign_key_id,
-                column_index,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_foreign_key_referenced_column_up(foreign_key_id, column_index);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableForeignKeyReferencedColumnDown {
-                tab_id,
-                foreign_key_id,
-                column_index,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_foreign_key_referenced_column_down(foreign_key_id, column_index);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::RemoveCreateTableForeignKeyReferencedColumn {
-                tab_id,
-                foreign_key_id,
-                column_index,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.remove_foreign_key_referenced_column(foreign_key_id, column_index);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SetCreateTableForeignKeyReferencedColumn {
-                tab_id,
-                foreign_key_id,
-                column_index,
-                value,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.set_foreign_key_referenced_column(foreign_key_id, column_index, value);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableForeignKeyColumnUp {
-                tab_id,
-                foreign_key_id,
-                column_index,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_foreign_key_column_up(foreign_key_id, column_index);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableForeignKeyColumnDown {
-                tab_id,
-                foreign_key_id,
-                column_index,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_foreign_key_column_down(foreign_key_id, column_index);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::RemoveCreateTableForeignKeyColumn {
-                tab_id,
-                foreign_key_id,
-                column_index,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.remove_foreign_key_column(foreign_key_id, column_index);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SetCreateTableForeignKeyColumn {
-                tab_id,
-                foreign_key_id,
-                column_index,
-                value,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.set_foreign_key_column(foreign_key_id, column_index, value);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SelectCreateTableTrigger { tab_id, trigger_id } => {
-                let Some(create) = self.find_create_table_mut(tab_id) else {
-                    return self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"));
-                };
-                create.select_trigger(trigger_id);
-                AppEvent::TabActivated(tab_id)
-            }
-            AppCommand::AddCreateTableTrigger(tab_id) => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.add_trigger();
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableTriggerUp { tab_id, trigger_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_trigger_up(trigger_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::MoveCreateTableTriggerDown { tab_id, trigger_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.move_trigger_down(trigger_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::RemoveCreateTableTrigger { tab_id, trigger_id } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.remove_trigger(trigger_id);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SetCreateTableTriggerField {
-                tab_id,
-                trigger_id,
-                field,
-                value,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.set_trigger_field(trigger_id, field, value);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-            AppCommand::SetCreateTableTriggerEvent {
-                tab_id,
-                trigger_id,
-                event,
-            } => {
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::CreateTable(create) = &mut tab.kind
-                {
-                    create.set_trigger_event(trigger_id, event);
-                    tab.dirty = true;
-                    AppEvent::TabActivated(tab_id)
-                } else {
-                    self.fail(Error::new(ErrorKind::Internal, "新建表标签页不存在"))
-                }
-            }
-
             AppCommand::UpdateQueryText { tab_id, text } => {
                 if let Some(tab) = self.find_tab_mut(tab_id)
                     && let TabKind::QueryEditor(editor) = &mut tab.kind
@@ -2629,6 +1698,9 @@ impl AppController {
                 }
             }
             AppCommand::StartQueryExecution(tab_id) => {
+                // 每次执行前登记一个全新的取消标志：既重置上一次「停止」的残留置位，
+                // 也让后台执行线程能拿到与「停止」按钮同一个标志。
+                self.register_query_cancel_flag(tab_id);
                 if let Some(tab) = self.find_tab_mut(tab_id)
                     && let TabKind::QueryEditor(editor) = &mut tab.kind
                 {
@@ -2639,13 +1711,33 @@ impl AppController {
                     self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"))
                 }
             }
+            AppCommand::CancelQueryExecution(tab_id) => {
+                // 没有登记标志（该标签当前没有在执行的查询）时不报错，只如实记录，避免
+                // 「停止」按钮在竞态窗口内点两次就弹错误。
+                let had_running_query = self.request_query_cancel(tab_id);
+                tracing::info!(
+                    target: "fluxdb_app",
+                    tab_id = tab_id.0,
+                    had_running_query,
+                    "已请求取消查询执行"
+                );
+                AppEvent::QueryCancelRequested(tab_id)
+            }
             AppCommand::ExecuteQuery(tab_id) => {
                 let options = self.default_query_execution_options();
                 let request = self.find_tab(tab_id).and_then(|tab| match &tab.kind {
                     TabKind::QueryEditor(editor) => Some(QueryRequest {
                         connection_id: editor.connection_id,
                         database: editor.database.clone(),
-                        text: sql_text_for_execution(&editor.text, options.page_size),
+                        // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
+                        session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
+                        schema: editor.schema.clone(),
+                        text: sql_text_for_execution(
+                            &editor.text,
+                            options.page_size,
+                            self.connection_kind(editor.connection_id)
+                                .unwrap_or(DatabaseKind::MySql),
+                        ),
                         mode: fluxdb_core::QueryMode::All,
                         options,
                     }),
@@ -2656,7 +1748,14 @@ impl AppController {
                     return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
                 };
 
-                match self.execute_query(&request) {
+                let cancel_flag = self.query_cancel_flag(tab_id);
+                let result = self.execute_query_with_cancel(&request, &|| {
+                    query_cancel_requested(&cancel_flag)
+                });
+                // 取消标志只属于本次执行。执行器已经返回后立即回收，不能等 UI 的异步
+                // Finish 命令，否则直接调用 App 层的入口会遗留已置位标志。
+                self.clear_query_cancel_flag(tab_id);
+                match result {
                     Ok(execution) => {
                         let result_editors = query_result_editors(self, &request, &execution);
                         let active_result_editor = result_editors.keys().next().copied();
@@ -2708,7 +1807,15 @@ impl AppController {
                     TabKind::QueryEditor(editor) => Some(QueryRequest {
                         connection_id: editor.connection_id,
                         database: editor.database.clone(),
-                        text: sql_text_for_execution(&text, options.page_size),
+                        // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
+                        session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
+                        schema: editor.schema.clone(),
+                        text: sql_text_for_execution(
+                            &text,
+                            options.page_size,
+                            self.connection_kind(editor.connection_id)
+                                .unwrap_or(DatabaseKind::MySql),
+                        ),
                         mode: fluxdb_core::QueryMode::Selection,
                         options,
                     }),
@@ -2719,7 +1826,12 @@ impl AppController {
                     return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
                 };
 
-                match self.execute_query(&request) {
+                let cancel_flag = self.query_cancel_flag(tab_id);
+                let result = self.execute_query_with_cancel(&request, &|| {
+                    query_cancel_requested(&cancel_flag)
+                });
+                self.clear_query_cancel_flag(tab_id);
+                match result {
                     Ok(execution) => {
                         let result_editors = query_result_editors(self, &request, &execution);
                         let active_result_editor = result_editors.keys().next().copied();
@@ -2756,6 +1868,7 @@ impl AppController {
             }
             AppCommand::FinishQueryExecution { tab_id, result } => match result {
                 Ok(execution) => {
+                    self.clear_query_cancel_flag(tab_id);
                     let history_request = self.find_tab(tab_id).and_then(|tab| {
                         let TabKind::QueryEditor(editor) = &tab.kind else {
                             return None;
@@ -2763,6 +1876,9 @@ impl AppController {
                         Some(QueryRequest {
                             connection_id: editor.connection_id,
                             database: editor.database.clone(),
+                            // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
+                            session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
+                            schema: editor.schema.clone(),
                             text: editor.text.clone(),
                             mode: fluxdb_core::QueryMode::All,
                             options: QueryExecutionOptions::default(),
@@ -2795,6 +1911,7 @@ impl AppController {
                     AppEvent::QueryFinished(tab_id, execution)
                 }
                 Err(error) => {
+                    self.clear_query_cancel_flag(tab_id);
                     let history_request = self.find_tab(tab_id).and_then(|tab| {
                         let TabKind::QueryEditor(editor) = &tab.kind else {
                             return None;
@@ -2802,7 +1919,15 @@ impl AppController {
                         Some(QueryRequest {
                             connection_id: editor.connection_id,
                             database: editor.database.clone(),
-                            text: sql_text_for_execution(&editor.text, Pagination::DEFAULT_LIMIT),
+                            // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
+                            session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
+                            schema: editor.schema.clone(),
+                            text: sql_text_for_execution(
+                                &editor.text,
+                                Pagination::DEFAULT_LIMIT,
+                                self.connection_kind(editor.connection_id)
+                                    .unwrap_or(DatabaseKind::MySql),
+                            ),
                             mode: fluxdb_core::QueryMode::All,
                             options: QueryExecutionOptions::default(),
                         })
@@ -2836,11 +1961,13 @@ impl AppController {
                     let Some(summary) = first_successful_result_summary(&execution).cloned() else {
                         return self.fail(Error::new(ErrorKind::Internal, "刷新结果页没有返回结果摘要"));
                     };
-                    let Some((connection_id, database)) =
+                    let Some((connection_id, database, schema)) =
                         self.find_tab(tab_id).and_then(|tab| match &tab.kind {
-                            TabKind::QueryEditor(editor) => {
-                                Some((editor.connection_id, editor.database.clone()))
-                            }
+                            TabKind::QueryEditor(editor) => Some((
+                                editor.connection_id,
+                                editor.database.clone(),
+                                editor.schema.clone(),
+                            )),
                             _ => None,
                         })
                     else {
@@ -2852,6 +1979,9 @@ impl AppController {
                     let request = QueryRequest {
                         connection_id,
                         database,
+                        schema,
+                        // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
+                        session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
                         text: summary.sql.clone(),
                         mode: fluxdb_core::QueryMode::Selection,
                         options: QueryExecutionOptions::default(),
@@ -2922,10 +2052,12 @@ impl AppController {
                 }
                 AppEvent::TabActivated(tab_id)
             }
-            AppCommand::LoadUserAdminUsers(tab_id) => match self.load_user_admin_users(tab_id) {
-                Ok(users) => AppEvent::UserAdminUsersLoaded(tab_id, users),
-                Err(error) => AppEvent::Failed(UserFacingError::from(error)),
-            },
+            AppCommand::LoadUserAdminUsers(tab_id) => {
+                match self.load_user_admin_users(tab_id) {
+                    Ok(users) => AppEvent::UserAdminUsersLoaded(tab_id, users),
+                    Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+                }
+            }
             AppCommand::StartUserAdminUsersLoad(tab_id) => {
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
                     admin.loading_users = true;
@@ -3117,6 +2249,641 @@ impl AppController {
                     admin.new_password.clear();
                     admin.reset_advanced_defaults();
                     admin.selected_user = Some(admin.draft_user_identity());
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::EndUserAdminCreateUser(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.creating_user = false;
+                    admin.grants.clear();
+                    admin.grants_loaded_user = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::BeginUserAdminDeleteUser(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    // 仅在选中了已有用户（非新建草稿态）时允许弹出删除确认。
+                    if let Some(selected) = admin.selected_user.clone().filter(|_| !admin.creating_user) {
+                        admin.pending_delete_user = Some(selected);
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::CancelUserAdminDeleteUser(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pending_delete_user = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SelectPgRole { tab_id, name } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_selected_role = Some(name.clone());
+                    // 切换角色是新的编辑会话：目标选择、成员/授权草稿和预览都不能带到新角色。
+                    admin.pg_reset_role_editor_session();
+                    // 从基线派生干净草稿：右侧面板始终以草稿渲染；干净草稿不计脏。
+                    admin.pg_reset_draft_from_baseline();
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgRoleSwitchPending { tab_id, target } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_pending_switch = Some(target);
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgCancelSwitchRole(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_pending_switch = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::DiscardPgDraftAndSelect { tab_id, name } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_selected_role = Some(name.clone());
+                    admin.pg_reset_role_editor_session();
+                    admin.pg_reset_draft_from_baseline();
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgBeginCreateRole(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    // 新建也是独立编辑会话；旧角色的权限目标/成员状态不能带入新建表单。
+                    admin.pg_selected_role = None;
+                    admin.pg_reset_role_editor_session();
+                    admin.pg_draft = Some(PgRoleDraft::new_create());
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgCancelDraft(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_draft = None;
+                    admin.pg_membership_edits.clear();
+                    admin.pg_grant_edits.clear();
+                    admin.pg_plan_preview = None;
+                    admin.pg_plan_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftName { tab_id, name } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    if let Some(draft) = admin.pg_draft.as_mut() {
+                        draft.name = name;
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftCanLogin { tab_id, can_login } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    if let Some(draft) = admin.pg_draft.as_mut() {
+                        draft.can_login = can_login;
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftAttr { tab_id, field, value } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && let Some(draft) = admin.pg_draft.as_mut()
+                {
+                    match field {
+                        PgDraftAttrField::IsSuperuser => draft.is_superuser = value,
+                        PgDraftAttrField::CanCreateDb => draft.can_create_db = value,
+                        PgDraftAttrField::CanCreateRole => draft.can_create_role = value,
+                        PgDraftAttrField::Inherit => draft.inherit = value,
+                        PgDraftAttrField::IsReplication => draft.is_replication = value,
+                        PgDraftAttrField::BypassRls => draft.bypass_rls = value,
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftConnectionLimit { tab_id, value } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && let Some(draft) = admin.pg_draft.as_mut()
+                {
+                    draft.connection_limit_text = value;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftValidUntil { tab_id, op } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && let Some(draft) = admin.pg_draft.as_mut()
+                {
+                    draft.valid_until = op;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftPasswordOp { tab_id, op } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && let Some(draft) = admin.pg_draft.as_mut()
+                {
+                    draft.password = op;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgDraftPassword { tab_id, password } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && let Some(draft) = admin.pg_draft.as_mut()
+                {
+                    draft.password = PgPasswordOp::Set(password);
+                }
+                AppEvent::TabActivated(tab_id)
+            }
+            AppCommand::StartUserAdminPgRolesLoad(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_roles_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::LoadUserAdminPgRoles(tab_id) => {
+                let Some(connection_id) = self
+                    .user_admin_state(tab_id)
+                    .map(|admin| admin.connection_id)
+                else {
+                    return self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"));
+                };
+                match self.list_pg_roles_for_connection(connection_id) {
+                    Ok(roles) => AppEvent::UserAdminPgRolesLoaded(tab_id, roles),
+                    Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+                }
+            }
+            AppCommand::FinishUserAdminPgRolesLoad { tab_id, result } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    match result {
+                        Ok(roles) => {
+                            admin.pg_roles = roles;
+                            admin.pg_roles_error = None;
+                            // 选中角色被删除后回退到第一个角色；无角色则清空选择。
+                            let names: Vec<String> =
+                                admin.pg_roles.iter().map(|role| role.name.clone()).collect();
+                            if !names.iter().any(|name| Some(name) == admin.pg_selected_role.as_ref()) {
+                                admin.pg_selected_role = names.first().cloned();
+                            }
+                            // 刷新是重新读取服务端基线：右侧会话态与权限目标都回到初始态。
+                            admin.pg_reset_role_editor_session();
+                            admin.pg_reset_draft_from_baseline();
+                        }
+                        Err(error) => {
+                            // 失败保留旧数据（UI 标记未刷新），显示错误并可重试。
+                            admin.pg_roles_error = Some(error.clone());
+                        }
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::StartPgMembershipsLoad(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_memberships_loaded = false;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::LoadPgMemberships(tab_id) => {
+                let Some(connection_id) = self
+                    .user_admin_state(tab_id)
+                    .map(|admin| admin.connection_id)
+                else {
+                    return self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"));
+                };
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                let member_options_supported = role_operation_for_connection(&config, |connector| {
+                    connector.supports_member_options(connection_id)
+                })
+                .unwrap_or(false);
+                match self.list_pg_memberships_for_connection(connection_id) {
+                    Ok(memberships) => AppEvent::UserAdminPgMembershipsLoaded(
+                        tab_id,
+                        memberships,
+                        member_options_supported,
+                    ),
+                    Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+                }
+            }
+            AppCommand::FinishPgMembershipsLoad { tab_id, result, member_options_supported } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_member_options_supported = Some(member_options_supported);
+                    match result {
+                        Ok(memberships) => {
+                            admin.pg_memberships = memberships;
+                            admin.pg_memberships_loaded = true;
+                        }
+                        Err(error) => {
+                            // 失败保留旧数据并标记未加载，不显示为「无成员」。
+                            admin.pg_memberships_loaded = false;
+                            admin.pg_plan_error = Some(error.clone());
+                        }
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgMembershipGrant { tab_id, role, member, admin: admin_option, inherit, set } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    let edit = PgRoleChange::GrantMembership {
+                        role: role.clone(),
+                        member: member.clone(),
+                        admin: admin_option,
+                        inherit,
+                        set,
+                    };
+                    // 同 (role, member) 只保留一条最新变更，避免重复提交。
+                    if let Some(index) = admin.pg_membership_edit_index(&role, &member) {
+                        admin.pg_membership_edits[index] = edit;
+                    } else {
+                        admin.pg_membership_edits.push(edit);
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgMembershipRevoke { tab_id, role, member } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    let edit = PgRoleChange::RevokeMembership {
+                        role: role.clone(),
+                        member: member.clone(),
+                    };
+                    if let Some(index) = admin.pg_membership_edit_index(&role, &member) {
+                        admin.pg_membership_edits[index] = edit;
+                    } else {
+                        admin.pg_membership_edits.push(edit);
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgMembershipRemoveEdit { tab_id, index } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && index < admin.pg_membership_edits.len()
+                {
+                    admin.pg_membership_edits.remove(index);
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    AppEvent::TabActivated(tab_id)
+                }
+            }
+            AppCommand::SetPgGrantDatabase { tab_id, database } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    // 一期同批只允许一个数据库：切换数据库前 UI 已确认保存或放弃授权草稿；
+                    // 目标选择也必须清空，避免旧库的 schema/object 被带到新库。对象种类保留。
+                    let kind = admin.pg_grant_kind;
+                    admin.pg_reset_grant_target_session();
+                    admin.pg_grant_kind = kind;
+                    admin.pg_grant_database = database;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::StartPgGrantTargetsLoad(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_loading_targets = true;
+                    admin.pg_targets_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::LoadPgGrantTargets { tab_id, database } => {
+                let Some(connection_id) = self
+                    .user_admin_state(tab_id)
+                    .map(|admin| admin.connection_id)
+                else {
+                    return self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"));
+                };
+                let Some(config) = self.connection_config(connection_id).cloned() else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                match role_operation_for_connection(&config, |connector| {
+                    connector.list_grant_targets(connection_id, &database)
+                }) {
+                    Ok(lists) => AppEvent::UserAdminPgGrantTargetsLoaded(tab_id, lists),
+                    Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+                }
+            }
+            AppCommand::FinishPgGrantTargetsLoad { tab_id, result } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_loading_targets = false;
+                    match result {
+                        Ok(lists) => admin.pg_grant_targets = Some(lists),
+                        Err(error) => admin.pg_targets_error = Some(error),
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgToggleGrant { tab_id, privilege, scope, op, grant_option } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    let edit = match op {
+                        PgGrantEditOp::Grant => PgRoleChange::GrantObject {
+                            privilege: privilege.clone(),
+                            scope: scope.clone(),
+                            grantee: admin.pg_effective_grantee_name(),
+                            grant_option,
+                        },
+                        PgGrantEditOp::Revoke => PgRoleChange::RevokeObject {
+                            privilege: privilege.clone(),
+                            scope: scope.clone(),
+                            grantee: admin.pg_effective_grantee_name(),
+                        },
+                        PgGrantEditOp::RevokeGrantOption => PgRoleChange::RevokeGrantOption {
+                            privilege: privilege.clone(),
+                            scope: scope.clone(),
+                            grantee: admin.pg_effective_grantee_name(),
+                        },
+                    };
+                    if let Some(index) = admin.pg_grant_edit_index(&privilege, &scope) {
+                        admin.pg_grant_edits[index] = edit;
+                    } else {
+                        admin.pg_grant_edits.push(edit);
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgRemoveGrantEdit { tab_id, index } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id)
+                    && index < admin.pg_grant_edits.len()
+                {
+                    admin.pg_grant_edits.remove(index);
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    AppEvent::TabActivated(tab_id)
+                }
+            }
+            AppCommand::StartPgPlanPreview(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_preview_loading = true;
+                    admin.pg_plan_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::LoadPgPlanPreview(tab_id) => match self.build_pg_role_plan(tab_id) {
+                Ok(plan) => {
+                    if plan.is_empty() {
+                        AppEvent::UserAdminPgPlanPreview(tab_id, Vec::new())
+                    } else {
+                        let connection_id = self
+                            .user_admin_state(tab_id)
+                            .map(|admin| admin.connection_id);
+                        let Some(connection_id) = connection_id else {
+                            return self
+                                .fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"));
+                        };
+                        let Some(config) = self.connection_config(connection_id).cloned() else {
+                            return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                        };
+                        match role_operation_for_connection(&config, |connector| {
+                            connector.render_role_plan(connection_id, &plan, true)
+                        }) {
+                            Ok(stmts) => AppEvent::UserAdminPgPlanPreview(tab_id, stmts),
+                            Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+                        }
+                    }
+                }
+                Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+            },
+            AppCommand::FinishPgPlanPreview { tab_id, result } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_preview_loading = false;
+                    match result {
+                        Ok(stmts) => {
+                            admin.pg_plan_preview = Some(stmts.clone());
+                            admin.pg_plan_preview_masked = admin
+                                .pg_draft
+                                .as_ref()
+                                .is_some_and(|draft| {
+                                    matches!(&draft.password, PgPasswordOp::Set(_))
+                                });
+                            admin.pg_plan_error = None;
+                        }
+                        Err(error) => {
+                            admin.pg_plan_preview = None;
+                            admin.pg_plan_error = Some(error);
+                        }
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::StartPgPlanApply(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    if admin.pg_save_status == PgRoleSaveStatus::Saving {
+                        return AppEvent::TabActivated(tab_id);
+                    }
+                    admin.pg_save_status = PgRoleSaveStatus::Saving;
+                    admin.pg_plan_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::ApplyPgRolePlan(tab_id) => {
+                // 由 App 构建（校验）计划并单事务应用；结果无论成败都带计划回传 Finish。
+                match self.build_pg_role_plan(tab_id) {
+                    Ok(plan) => {
+                        let Some(connection_id) = self
+                            .user_admin_state(tab_id)
+                            .map(|admin| admin.connection_id)
+                        else {
+                            return self
+                                .fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"));
+                        };
+                        let Some(config) = self.connection_config(connection_id).cloned() else {
+                            return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                        };
+                        let result =
+                            role_operation_for_connection(&config, |connector| {
+                                connector.apply_role_plan(connection_id, &plan)
+                            });
+                        match result {
+                            Ok(_) => {
+                                AppEvent::UserAdminPgRolePlanFinished(tab_id, plan, Ok(Vec::new()))
+                            }
+                            Err(error) => AppEvent::UserAdminPgRolePlanFinished(
+                                tab_id,
+                                plan,
+                                Err(UserFacingError::from(error)),
+                            ),
+                        }
+                    }
+                    Err(error) => AppEvent::UserAdminPgRolePlanFinished(
+                        tab_id,
+                        PgRoleSavePlan {
+                            database: None,
+                            role_name: String::new(),
+                            changes: Vec::new(),
+                        },
+                        Err(UserFacingError::from(error)),
+                    ),
+                }
+            }
+            AppCommand::FinishPgRolePlanApply { tab_id, plan, result } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    match result {
+                        Ok(_) => {
+                            admin.pg_save_status = PgRoleSaveStatus::Idle;
+                            admin.pg_draft = None;
+                            admin.pg_membership_edits.clear();
+                            admin.pg_grant_edits.clear();
+                            admin.pg_plan_preview = None;
+                            // 应用成功后对象权限基线已变化，标记过期等待重新读取。
+                            admin.pg_loaded_target.clear();
+                            // 改名后选中角色跟随新身份。
+                            admin.pg_selected_role = Some(plan.role_name.clone());
+                        }
+                        Err(error) => {
+                            // 失败保留草稿；结果不确定时（连接中断）标记待核实，不直接重试。
+                            admin.pg_save_status = if error.retryable {
+                                PgRoleSaveStatus::Idle
+                            } else {
+                                PgRoleSaveStatus::NeedsVerify
+                            };
+                            admin.pg_plan_error = Some(error.clone());
+                        }
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgBeginDeleteRole(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    if let Some(name) = admin
+                        .pg_selected_role
+                        .clone()
+                        .filter(|name| !UserAdminState::pg_is_predefined_role(name))
+                    {
+                        admin.pg_pending_delete = Some(name);
+                    }
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::PgCancelDeleteRole(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_pending_delete = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetPgRoleFilter { tab_id, filter } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_role_filter = filter;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::SetUserAdminPgGrantTarget {
+                tab_id,
+                kind,
+                schema,
+                object,
+                signature,
+            } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.pg_grant_kind = kind;
+                    admin.pg_grant_schema = schema;
+                    admin.pg_grant_object = object;
+                    admin.pg_grant_signature = signature;
+                    // 目标已变化：旧请求结果不可用；桌面层同时取消旧 Task，避免悬挂 loading。
+                    admin.loading_pg_grants = false;
+                    admin.pg_grants_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::LoadUserAdminPgObjectGrants(tab_id) => {
+                match self.load_pg_object_grants(tab_id) {
+                    Ok(result) => AppEvent::UserAdminPgObjectGrantsLoaded(tab_id, Ok(result)),
+                    Err(error) => AppEvent::UserAdminPgObjectGrantsLoaded(
+                        tab_id,
+                        Err(error.into()),
+                    ),
+                }
+            }
+            AppCommand::StartUserAdminPgObjectGrantsLoad(tab_id) => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    admin.loading_pg_grants = true;
+                    admin.pg_grants_error = None;
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
+                }
+            }
+            AppCommand::FinishUserAdminPgObjectGrantsLoad {
+                tab_id,
+                target_fingerprint,
+                result,
+            } => {
+                if let Some(admin) = self.user_admin_state_mut(tab_id) {
+                    // 读取期间目标可能已被用户切换；过期结果不能结束新目标的
+                    // loading，也不能覆盖新目标状态。
+                    if pg_grant_target_fingerprint(admin) == target_fingerprint {
+                        admin.loading_pg_grants = false;
+                        match result {
+                            Ok((grants, effective)) => {
+                                admin.pg_object_grants = Some(grants);
+                                admin.pg_effective_grants = effective;
+                                admin.pg_grants_error = None;
+                                // 记录已加载目标指纹，供 UI 判断选择器目标是否已过期需重取。
+                                admin.pg_loaded_target = target_fingerprint;
+                            }
+                            Err(error) => {
+                                admin.pg_object_grants = None;
+                                admin.pg_effective_grants.clear();
+                                admin.pg_grants_error = Some(error);
+                            }
+                        }
+                    }
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))
@@ -3453,6 +3220,7 @@ impl AppController {
                     return AppEvent::TabCloseRequested(tab_id);
                 }
 
+                self.release_tab_query_sessions(&[tab_id]);
                 self.state.tabs.retain(|tab| tab.id != tab_id);
                 if self.state.pending_dirty_tab_close == Some(tab_id) {
                     self.state.pending_dirty_tab_close = None;
@@ -3470,6 +3238,8 @@ impl AppController {
                     .iter()
                     .find(|tab| tab_ids.contains(&tab.id))
                     .map(|tab| tab.id);
+                let closed_ids = tab_ids.iter().copied().collect::<Vec<_>>();
+                self.release_tab_query_sessions(&closed_ids);
                 self.state.tabs.retain(|tab| !tab_ids.contains(&tab.id));
                 if self
                     .state
@@ -3494,6 +3264,7 @@ impl AppController {
                     return self.fail(Error::new(ErrorKind::Internal, "没有待关闭的标签页"));
                 }
 
+                self.release_tab_query_sessions(&[tab_id]);
                 self.state.tabs.retain(|tab| tab.id != tab_id);
                 self.state.pending_dirty_tab_close = None;
                 if self.state.active_tab == Some(tab_id) {
@@ -3552,11 +3323,42 @@ impl AppController {
                 }
                 AppEvent::SettingsSaved
             }
+            // 建表/设计表/表操作命令经域路由转发至 dispatch_table_command，
+            // 避免在此巨型 match 中持续膨胀（未在此处显式匹配的其余命令兜底转发）。
+            _ => self.dispatch_table_command(command),
         }
     }
 }
 
 impl AppController {
+    /// 释放与这些标签页绑定的独占查询会话（关闭标签时调用）。
+    ///
+    /// 标签的查询会话 id 就是 `tab_id`（见各 `QueryRequest` 构造点）；标签关闭后连接由
+    /// 服务端回收，未提交事务随之回滚——不这样做，连接会一直挂到空闲 TTL 才消失。
+    fn release_tab_query_sessions(&mut self, tab_ids: &[TabId]) {
+        // 关标签先置位取消标志（标签关了就不该再让服务端跑下去），再从表里移除；
+        // 仍在收尾的执行线程持的是自己的 `Arc`，置位照常生效。
+        if let Ok(mut flags) = self.query_cancel_flags.lock() {
+            for tab_id in tab_ids {
+                if let Some(flag) = flags.remove(tab_id) {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+        for tab in &self.state.tabs {
+            if !tab_ids.contains(&tab.id) {
+                continue;
+            }
+            if let TabKind::QueryEditor(editor) = &tab.kind {
+                fluxdb_connectors::pg_close_query_session(
+                    editor.connection_id,
+                    fluxdb_core::QuerySessionId(tab.id.0),
+                );
+                settle_closed_query_history(&mut self.state.query_history, editor.connection_id, Some(fluxdb_core::QuerySessionId(tab.id.0)));
+            }
+        }
+    }
+
     fn default_query_execution_options(&self) -> QueryExecutionOptions {
         QueryExecutionOptions {
             // 直接透传 page_size：0 表示「不限制」，不能经 Pagination::new 的
@@ -3668,26 +3470,16 @@ impl AppController {
         if let Some(message) = create.validation_error() {
             return Err(Error::new(ErrorKind::Query, message));
         }
-        if create.is_design() {
+        // PG 的 CREATE TABLE / ALTER 计划是同批事务性语句：走单批路径（与设计模式一致），
+        // 不套用 MySQL/SQLite 的「建表 SQL + 单独触发器」拆分（那会丢掉 PG 触发器）。
+        if create.is_design() || create.database_kind == DatabaseKind::Postgres {
+            if create.database_kind == DatabaseKind::Postgres {
+                self.ensure_postgres_design_not_stale(&create)?;
+            }
             let sql = create
                 .sql_preview()
                 .map_err(|message| Error::new(ErrorKind::Query, message))?;
-            let request = QueryRequest {
-                connection_id: create.connection_id,
-                database: create.database.clone(),
-                text: sql,
-                mode: fluxdb_core::QueryMode::All,
-                options: QueryExecutionOptions {
-                    continue_on_error: false,
-                    split_statements: true,
-                    ..QueryExecutionOptions::default()
-                },
-            };
-            let execution = self.execute_query(&request)?;
-            if let Some(summary) = execution.summaries.iter().find(|summary| !summary.success) {
-                return Err(Error::new(ErrorKind::Query, summary.message.clone()));
-            }
-            return Ok(());
+            return self.apply_postgres_or_design_sql(&create, &sql);
         }
         let mut base_create = create.clone();
         base_create.triggers.clear();
@@ -3707,6 +3499,14 @@ impl AppController {
             let request = QueryRequest {
                 connection_id: create.connection_id,
                 database: create.database.clone(),
+                session_id: None,
+                // 建表向导的 schema 作用域随状态下传（PG 显式 schema 时与会话 search_path 对齐）。
+                schema: create
+                    .schema
+                    .trim()
+                    .is_empty()
+                    .then_some(None)
+                    .unwrap_or_else(|| Some(create.schema.trim().to_string())),
                 text: sql,
                 mode: fluxdb_core::QueryMode::All,
                 options: QueryExecutionOptions {
@@ -3719,9 +3519,88 @@ impl AppController {
             if let Some(summary) = execution.summaries.iter().find(|summary| !summary.success) {
                 return Err(Error::new(ErrorKind::Query, summary.message.clone()));
             }
+            self.mark_query_history_completion_dirty(&request, &request.text);
         }
         Ok(())
     }
+
+    /// 执行 PG 建表/设计 SQL：同一事务内提交，失败整体回滚（§9.2）。
+    ///
+    /// 生成的语句都是事务性 DDL（不含 CREATE INDEX CONCURRENTLY 等），因此统一包裹
+    /// `BEGIN … COMMIT`；任一条失败时不执行 COMMIT，连接释放即回滚，不会留下半套结构。
+    fn apply_postgres_or_design_sql(
+        &self,
+        create: &CreateTableState,
+        sql: &str,
+    ) -> fluxdb_core::Result<()> {
+        let text = format!("BEGIN;
+{sql}
+COMMIT;");
+        let request = QueryRequest {
+            connection_id: create.connection_id,
+            database: create.database.clone(),
+            session_id: None,
+            schema: create
+                .schema
+                .trim()
+                .is_empty()
+                .then_some(None)
+                .unwrap_or_else(|| Some(create.schema.trim().to_string())),
+            text,
+            mode: fluxdb_core::QueryMode::All,
+            options: QueryExecutionOptions {
+                continue_on_error: false,
+                split_statements: true,
+                ..QueryExecutionOptions::default()
+            },
+        };
+        let execution = self.execute_query(&request)?;
+        if let Some(summary) = execution.summaries.iter().find(|summary| !summary.success) {
+            return Err(Error::new(ErrorKind::Query, summary.message.clone()));
+        }
+        self.mark_query_history_completion_dirty(&request, &request.text);
+        Ok(())
+    }
+
+    /// 外部 DDL 保护：保存前重查表结构，与打开设计器时的 DDL 不一致就拒绝应用（§9.2）。
+    ///
+    /// 不拿过期快照覆盖别人的改动；用户刷新后重新预览即可继续。
+    fn ensure_postgres_design_not_stale(&self, create: &CreateTableState) -> fluxdb_core::Result<()> {
+        let CreateTableMode::Design {
+            object,
+            original_ddl: Some(original_ddl),
+            ..
+        } = &create.mode
+        else {
+            return Ok(());
+        };
+        let config = self
+            .connection_config(create.connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        let current = table_ddl_for_connection(config, object)?;
+        // 打开设计器时基线经 format_sql_text_for_dialect 规整（load_table_info_for_connection 的 Ddl 路径）。
+        // 校验侧必须用同一步规整：否则原始 DDL 与规整 DDL 对同一表逐字不等，会把「自己保存的改动」误判为外部变化。
+        let current = format_sql_text_for_dialect(&current, config.kind);
+        if current.trim() != original_ddl.trim() {
+            tracing::warn!(
+                target: "gdb_create_table",
+                connection_id = ?create.connection_id,
+                table = %object.name,
+                "表结构已在外部变化，拒绝应用过期设计"
+            );
+            return Err(Error::new(
+                ErrorKind::Query,
+                "表结构已在外部变化，请重新打开设计器并确认预览后再保存",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// 查询取消判定：标志未登记（非编辑器执行/后台任务）视为不可取消，与旧行为一致。
+fn query_cancel_requested(flag: &Option<Arc<std::sync::atomic::AtomicBool>>) -> bool {
+    flag.as_ref()
+        .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 fn query_result_summary_has_result_tab(summary: &QueryExecutionSummary) -> bool {

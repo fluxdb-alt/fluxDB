@@ -33,7 +33,20 @@ impl NavicatMain {
                 self.copy_connection(connection_id, cx);
             }
             ConnectionMenuAction::Refresh => {
-                self.open_connection_from_sidebar(connection_id, cx);
+                // 已展开连接：刷新连接树，只换第一层并保留已加载的表/视图（避免 open_connection_from_sidebar
+                // 整体重开把已加载的深层表清空）；未展开时才视为首次打开。
+                let expanded = self
+                    .controller
+                    .state()
+                    .connections
+                    .iter()
+                    .find(|c| c.config.id == connection_id)
+                    .is_some_and(|c| c.expanded);
+                if expanded {
+                    self.refresh_connection_tree(cx);
+                } else {
+                    self.open_connection_from_sidebar(connection_id, cx);
+                }
             }
             ConnectionMenuAction::SelectDatabases => {
                 self.show_display_database_modal(connection_id, window, cx);
@@ -168,6 +181,7 @@ impl NavicatMain {
                         AppCommand::OpenQueryEditorInDatabase {
                             connection_id: menu.connection_id,
                             database: Some(menu.database),
+                            schema: None
                         },
                         cx,
                     );
@@ -214,15 +228,73 @@ impl NavicatMain {
                     AppCommand::OpenCreateTable {
                         connection_id: menu.connection_id,
                         database: Some(menu.database),
+                        schema: None,
                     },
                     cx,
                 );
+            }
+            DatabaseMenuAction::NewSchema => {
+                self.show_create_schema_modal(menu.database_path.clone(), window, cx);
             }
             DatabaseMenuAction::FindInDatabase => {
                 self.show_message("在数据库中查找入口已就绪", AppMessageKind::Info, cx);
             }
             DatabaseMenuAction::Delete => {
                 self.request_delete_database(menu.connection_id, menu.database, window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn handle_schema_menu_action(
+        &mut self,
+        action: SchemaMenuAction,
+        menu: SchemaContextMenu,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.schema_context_menu = None;
+        // schema 路径：供懒加载/刷新复用。
+        let schema_path = ObjectPath {
+            connection_id: menu.connection_id,
+            database: Some(menu.database.clone()),
+            schema: Some(menu.schema.clone()),
+            name: menu.schema.clone(),
+            kind: ObjectKind::Schema,
+        };
+        match action {
+            SchemaMenuAction::NewQuery => {
+                self.dispatch(
+                    AppCommand::OpenQueryEditorInDatabase {
+                        connection_id: menu.connection_id,
+                        database: Some(menu.database.clone()),
+                        schema: Some(menu.schema.clone()),
+                    },
+                    cx,
+                );
+            }
+            SchemaMenuAction::NewTable => {
+                self.dispatch(
+                    AppCommand::OpenCreateTable {
+                        connection_id: menu.connection_id,
+                        database: Some(menu.database.clone()),
+                        schema: Some(menu.schema.clone()),
+                    },
+                    cx,
+                );
+            }
+            SchemaMenuAction::SetDefault => {
+                self.show_message("设置默认 schema 入口已就绪", AppMessageKind::Info, cx);
+            }
+            SchemaMenuAction::Refresh => {
+                let schema_key = schema_tree_key(
+                    menu.connection_id,
+                    &menu.database,
+                    &menu.schema,
+                );
+                self.loaded_database_children.remove(&schema_key);
+                // 按 schema 路径重载关系（load_database_children 内部按 key 去重并置 loading）。
+                self.load_database_children(schema_path, schema_key, cx);
             }
         }
         cx.notify();
@@ -353,6 +425,16 @@ impl NavicatMain {
         cx: &mut Context<Self>,
     ) {
         self.connection_context_menu = None;
+        // 删库保护：该连接下有未保存或运行中的查询时禁止直接删除，先处理/断开，避免静默丢数据。
+        let warning = self.disconnect_connection_warning(connection_id);
+        if warning.unsaved_queries > 0 || warning.running_queries > 0 {
+            self.show_message(
+                "该连接存在未保存或运行中的查询，请先保存/关闭或先断开连接再删除",
+                AppMessageKind::Warning,
+                cx,
+            );
+            return;
+        }
         self.pending_delete_connection = Some(connection_id);
         self.focus_handle.focus(window, cx);
         cx.notify();
@@ -440,6 +522,23 @@ impl NavicatMain {
         cx: &mut Context<Self>,
     ) {
         self.database_context_menu = None;
+        // 删库保护：该库下存在未保存或运行中的查询时禁止直接删除，避免静默丢数据。
+        let has_active_query = self.controller.state().tabs.iter().any(|tab| {
+            let TabKind::QueryEditor(editor) = &tab.kind else {
+                return false;
+            };
+            editor.connection_id == connection_id
+                && editor.database.as_deref() == Some(database.as_str())
+                && (editor.has_unsaved_sql() || editor.running)
+        });
+        if has_active_query {
+            self.show_message(
+                "该数据库存在未保存或运行中的查询，请先保存/关闭相关查询再删除",
+                AppMessageKind::Warning,
+                cx,
+            );
+            return;
+        }
         self.pending_delete_database = Some(PendingDeleteDatabase {
             connection_id,
             database,
@@ -676,7 +775,7 @@ impl NavicatMain {
         };
         if !matches!(
             connection.config.kind,
-            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Sqlite
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Sqlite | DatabaseKind::Postgres
         ) {
             self.show_message(
                 "当前连接类型暂不支持新建数据库",
@@ -688,27 +787,37 @@ impl NavicatMain {
 
         self.connection_context_menu = None;
         self.group_context_menu = None;
+        let is_postgres = connection.config.kind == DatabaseKind::Postgres;
         self.pending_create_database = Some(CreateDatabaseForm {
             connection_id,
             database_kind: connection.config.kind,
             database_name: String::new(),
-            charset: "utf8mb4".to_string(),
-            collation: "utf8mb4_unicode_ci".to_string(),
+            // PG：charset 即 ENCODING、collation 即 LC_COLLATE/LC_CTYPE(locale)。
+            charset: if is_postgres { "UTF8".to_string() } else { "utf8mb4".to_string() },
+            collation: if is_postgres { "C".to_string() } else { "utf8mb4_unicode_ci".to_string() },
+            owner: String::new(),
+            template: String::new(),
         });
         self.create_database_name_input.update(cx, |input, cx| {
             input.set_value(String::new(), window, cx);
             input.focus(window, cx);
         });
+        let charset_options = if is_postgres {
+            pg_create_database_encoding_options()
+        } else {
+            create_database_charset_options()
+        };
+        let collation_options = if is_postgres {
+            pg_locale_options().iter().map(|s| s.to_string()).collect()
+        } else {
+            create_database_collation_options("utf8mb4")
+        };
         self.create_database_charset_select.update(cx, |select, cx| {
-            select.set_items(SearchableVec::new(create_database_charset_options()), window, cx);
+            select.set_items(SearchableVec::new(charset_options), window, cx);
             select.set_selected_index(Some(IndexPath::new(0)), window, cx);
         });
         self.create_database_collation_select.update(cx, |select, cx| {
-            select.set_items(
-                SearchableVec::new(create_database_collation_options("utf8mb4")),
-                window,
-                cx,
-            );
+            select.set_items(SearchableVec::new(collation_options), window, cx);
             select.set_selected_index(Some(IndexPath::new(0)), window, cx);
         });
         cx.notify();
@@ -719,28 +828,129 @@ impl NavicatMain {
         cx.notify();
     }
 
+    fn show_create_schema_modal(
+        &mut self,
+        database_path: ObjectPath,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let connection_id = database_path.connection_id;
+        self.database_context_menu = None;
+        self.pending_create_schema = Some((connection_id, database_path, String::new()));
+        self.create_schema_name_input.update(cx, |input, cx| {
+            input.set_value(String::new(), window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn cancel_create_schema_modal(&mut self, cx: &mut Context<Self>) {
+        self.pending_create_schema = None;
+        cx.notify();
+    }
+
+    fn confirm_create_schema(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some((connection_id, database_path, schema)) = self.pending_create_schema.clone() else {
+            return;
+        };
+        let schema = schema.trim().to_string();
+        if schema.is_empty() {
+            self.show_message("请输入 schema 名称", AppMessageKind::Warning, cx);
+            return;
+        }
+        if self.create_schema_running {
+            self.show_message("正在新建 schema", AppMessageKind::Warning, cx);
+            return;
+        }
+        self.create_schema_running = true;
+        let schema_display = schema.clone();
+        let database_path_display = database_path.clone();
+        // 目标库取右键所在的数据库节点（database 字段优先，回退节点名）：schema 必须建在
+        // 用户选中的库里，不能落到连接的维护库。
+        let target_database = database_path
+            .database
+            .clone()
+            .unwrap_or_else(|| database_path.name.clone());
+        let mut controller = self.controller.clone();
+        let task = cx.spawn(async move |view, cx| {
+            let (_, event) = cx
+                .background_spawn(async move {
+                    let event = controller.dispatch(AppCommand::CreateSchema {
+                        connection_id,
+                        database: target_database,
+                        schema: schema.clone(),
+                    });
+                    (controller, event)
+                })
+                .await;
+            let _ = cx.update(|cx| {
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| {
+                    this.create_schema_running = false;
+                    match &event {
+                        AppEvent::SchemaCreated { connection_id: _, schema: _ } => {
+                            // 成功后失效该库 schema 缓存并重取：清 loaded 标记，触发重载。
+                            this.invalidate_database_schema_cache(&database_path_display, cx);
+                            this.show_message(
+                                format!("schema `{schema_display}` 创建成功"),
+                                AppMessageKind::Success,
+                                cx,
+                            );
+                            this.pending_create_schema = None;
+                        }
+                        AppEvent::Failed(error) => {
+                            this.show_message(
+                                format!("新建 schema 失败：{}", error.message),
+                                AppMessageKind::Error,
+                                cx,
+                            );
+                        }
+                        _ => {
+                            this.show_message("新建 schema 失败", AppMessageKind::Error, cx);
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+        });
+        self._create_schema_task = Some(task);
+        cx.notify();
+    }
+
     fn select_create_database_charset(
         &mut self,
         charset: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let collation = default_collation_for_charset(charset);
+        // PG：charset 即 ENCODING，collation 保持 PG locale 选项，不套用 MySQL 排序规则。
+        let is_postgres = self
+            .pending_create_database
+            .as_ref()
+            .is_some_and(|form| form.database_kind == DatabaseKind::Postgres);
+        let collation = if is_postgres {
+            "C".to_string()
+        } else {
+            default_collation_for_charset(charset).to_string()
+        };
         if let Some(form) = &mut self.pending_create_database {
             form.charset = charset.to_string();
-            form.collation = collation.to_string();
+            form.collation = collation.clone();
         }
         let charset_value = charset.to_string();
         self.create_database_charset_select.update(cx, |select, cx| {
             select.set_selected_value(&charset_value, window, cx);
         });
+        let collation_options = if is_postgres {
+            pg_locale_options().iter().map(|s| s.to_string()).collect()
+        } else {
+            create_database_collation_options(charset)
+        };
         self.create_database_collation_select.update(cx, |select, cx| {
-            select.set_items(
-                SearchableVec::new(create_database_collation_options(charset)),
-                window,
-                cx,
-            );
-            select.set_selected_value(&collation.to_string(), window, cx);
+            select.set_items(SearchableVec::new(collation_options), window, cx);
+            select.set_selected_value(&collation, window, cx);
         });
         cx.notify();
     }
@@ -785,24 +995,25 @@ impl NavicatMain {
             self.show_message("连接不存在", AppMessageKind::Error, cx);
             return;
         };
-        let needs_charset = matches!(
+        // MySQL/TiDB 需要 charset+collation；PG 需要 ENCODING+locale（复用 charset/collation 字段）。
+        let requires_charset = matches!(
             connection_config.kind,
-            DatabaseKind::MySql | DatabaseKind::TiDb
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Postgres
         );
-        let charset = if needs_charset {
+        let charset = if requires_charset {
             let charset = form.charset.trim().to_string();
             if charset.is_empty() {
-                self.show_message("请输入字符集", AppMessageKind::Warning, cx);
+                self.show_message("请输入编码/字符集", AppMessageKind::Warning, cx);
                 return;
             }
             charset
         } else {
             String::new()
         };
-        let collation = if needs_charset {
+        let collation = if requires_charset {
             let collation = form.collation.trim().to_string();
             if collation.is_empty() {
-                self.show_message("请输入排序规则", AppMessageKind::Warning, cx);
+                self.show_message("请输入排序规则/locale", AppMessageKind::Warning, cx);
                 return;
             }
             collation
@@ -829,6 +1040,8 @@ impl NavicatMain {
                 .unwrap_or_else(|| database_name.clone()),
             charset,
             collation,
+            owner: form.owner.trim().to_string(),
+            template: form.template.trim().to_string(),
             path: sqlite_target.as_ref().map(|(_, path)| path.clone()),
         };
         self.create_database_running.insert(form.connection_id);

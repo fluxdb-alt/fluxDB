@@ -80,9 +80,25 @@ fn replace_loaded_children(
         .as_deref()
         .filter(|database| !database.is_empty())
         .unwrap_or(&parent.name);
+    // PostgreSQL 按 schema 懒加载：展开某一 schema 时只替换该 schema 的表/视图，
+    // 不得清掉同库其他 schema 已加载的对象（跨 schema 同名同时保留）。
+    let schema_scope = object_path_schema(parent);
+    // DB 级加载（schema_scope=None）时，仅当本次 children 真的是表/视图清单（MySQL/TiDB）
+    // 才按整库清单替换；若是 PG 返回的 schema 列表（不含表/视图），则不能据此清空整库表，
+    // 否则数据库节点上右键刷新会把所有已加载的表/视图误删。
+    let clears_database_tables = schema_scope.is_none()
+        && children
+            .iter()
+            .any(|child| matches!(child.path.kind, ObjectKind::Table | ObjectKind::View));
     current.retain(|object| {
         let same_database = object.path.database.as_deref().unwrap_or("main") == database;
-        !(same_database && matches!(object.path.kind, ObjectKind::Table | ObjectKind::View))
+        if !(same_database && matches!(object.path.kind, ObjectKind::Table | ObjectKind::View)) {
+            return true;
+        }
+        match schema_scope {
+            Some(schema) => object.path.schema.as_deref() != Some(schema),
+            None => !clears_database_tables,
+        }
     });
     current.extend(children);
 }
@@ -160,6 +176,11 @@ fn path_database_name(path: &ObjectPath) -> &str {
     path.database.as_deref().unwrap_or("main")
 }
 
+/// 对象的 schema 作用域：PG 对象携带 schema；其余数据库为 `None`。
+fn object_path_schema(path: &ObjectPath) -> Option<&str> {
+    path.schema.as_deref().filter(|schema| !schema.is_empty())
+}
+
 fn tab_belongs_to_connection(tab: &TabState, connection_id: ConnectionId) -> bool {
     match &tab.kind {
         TabKind::ObjectList(list) => list
@@ -183,3 +204,81 @@ fn tab_belongs_to_connection(tab: &TabState, connection_id: ConnectionId) -> boo
 
 #[allow(dead_code)]
 fn _keep_query_request_visible(_: QueryRequest) {}
+
+#[cfg(test)]
+mod table_info_tests {
+    use super::*;
+
+    fn obj(database: Option<&str>, schema: Option<&str>, name: &str, kind: ObjectKind) -> ObjectSummary {
+        ObjectSummary {
+            path: ObjectPath {
+                connection_id: ConnectionId(1),
+                database: database.map(str::to_string),
+                schema: schema.map(str::to_string),
+                name: name.to_string(),
+                kind,
+            },
+            rows: None,
+            modified_at: None,
+            comment: None,
+        }
+    }
+
+    #[test]
+    fn replace_loaded_children_scopes_to_schema_for_postgres() {
+        // PG 已有 public.a 与 tenant_b.a（同名跨 schema）。
+        let mut current = vec![
+            obj(Some("appdb"), Some("public"), "a", ObjectKind::Table),
+            obj(Some("appdb"), Some("tenant_b"), "a", ObjectKind::Table),
+            obj(Some("appdb"), Some("tenant_b"), "other", ObjectKind::View),
+        ];
+        // 展开 tenant_b：加载 tenant_b 的关系，不得清掉 public 的同名 a。
+        let mut children = vec![
+            obj(Some("appdb"), Some("tenant_b"), "a", ObjectKind::Table),
+            obj(Some("appdb"), Some("tenant_b"), "b", ObjectKind::Table),
+        ];
+        let parent = obj(Some("appdb"), Some("tenant_b"), "tenant_b", ObjectKind::Schema);
+        replace_loaded_children(&mut current, &parent.path, children);
+        let names: Vec<(String, Option<String>)> = current
+            .iter()
+            .map(|o| (o.path.name.clone(), o.path.schema.clone()))
+            .collect();
+        // public.a 保留；tenant_b 的关系被替换为 a+b；tenant_b.other(视图) 被同一 schema 加载清掉。
+        assert!(names.contains(&("a".to_string(), Some("public".to_string()))));
+        assert!(names.contains(&("a".to_string(), Some("tenant_b".to_string()))));
+        assert!(names.contains(&("b".to_string(), Some("tenant_b".to_string()))));
+        assert!(!names.contains(&("other".to_string(), Some("tenant_b".to_string()))));
+        // 表/视图都只按 schema 清，不越界到 public。
+        assert_eq!(
+            current
+                .iter()
+                .filter(|o| o.path.schema.as_deref() == Some("public"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn replace_loaded_children_without_schema_keeps_legacy_database_scope() {
+        // MySQL：父为 Database（无 schema），仍清整个库的表/视图。
+        let mut current = vec![obj(Some("db1"), None, "a", ObjectKind::Table)];
+        let parent = obj(Some("db1"), None, "db1", ObjectKind::Database);
+        let mut children = vec![obj(Some("db1"), None, "b", ObjectKind::Table)];
+        replace_loaded_children(&mut current, &parent.path, children);
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0].path.name, "b");
+    }
+
+    #[test]
+    fn replace_loaded_children_database_level_postgres_schema_list_keeps_tables() {
+        // PG：数据库节点右键刷新返回的是该库的 schema 列表（不含表），不能据此清空已加载的表。
+        let mut current = vec![obj(Some("appdb"), Some("public"), "a", ObjectKind::Table)];
+        let parent = obj(Some("appdb"), None, "appdb", ObjectKind::Database);
+        let mut children = vec![obj(Some("appdb"), Some("public"), "public", ObjectKind::Schema)];
+        replace_loaded_children(&mut current, &parent.path, children);
+        // public 表 a 保留；仅并入新到的 schema 条目。
+        assert_eq!(current.len(), 2);
+        assert!(current.iter().any(|o| o.path.name == "a"));
+        assert!(current.iter().any(|o| o.path.name == "public"));
+    }
+}

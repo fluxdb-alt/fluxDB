@@ -1,7 +1,10 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fluxdb_core::{CellUpdate, Endpoint, Error, ErrorKind, QueryMode, RowIdentity};
+    use fluxdb_core::{
+        CellUpdate, Endpoint, Error, ErrorKind, PostgresSslMode, QueryExecutionOptions, QueryMode,
+        RowIdentity,
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -88,6 +91,56 @@ mod tests {
             url,
             "mysql://root%20user:p%40ss%20word@127.0.0.1:3306/app%20db?ssl-mode=DISABLED&timezone=%2B08:00"
         );
+    }
+
+    /// 档案启用 TLS 时 URL 注入 ssl 参数；verify+CA 升级 VERIFY_CA，档案覆盖用户同名参数。
+    #[test]
+    fn mysql_connection_url_injects_tls_params_from_profile() {
+        let mut config = mysql_config();
+        let mut profile = fluxdb_core::MysqlConnectionProfile::default();
+        profile.basic.host = "127.0.0.1".to_string();
+        profile.basic.port = 3306;
+        profile.basic.username = "root".to_string();
+        profile.tls.enabled = true;
+        profile.tls.ssl_mode = fluxdb_core::MysqlSslMode::Required;
+        profile.tls.verify = true;
+        profile.tls.ca = fluxdb_core::SecretRef::inline("/tls dir/ca.crt".to_string());
+        profile.tls.client_cert = fluxdb_core::SecretRef::inline("/tls/client.crt".to_string());
+        profile.tls.client_key = fluxdb_core::SecretRef::inline("/tls/client.key".to_string());
+        config.mysql_profile = Some(profile);
+        // 用户自定义 ssl-mode 与档案冲突：档案应覆盖。
+        config.options.insert(
+            "url_params".to_string(),
+            "ssl-mode=DISABLED&timezone=%2B08:00".to_string(),
+        );
+
+        let url = mysql_connection_url(&config).unwrap();
+
+        assert!(
+            url.contains("timezone=%2B08:00&")
+                && url.contains("ssl-mode=VERIFY_CA"),
+            "档案 verify+CA 应升级 VERIFY_CA 并保留无关用户参数: {url}"
+        );
+        assert!(url.contains("ssl-ca=%2Ftls%20dir%2Fca.crt"), "CA 路径应编码注入: {url}");
+        assert!(url.contains("ssl-cert=%2Ftls%2Fclient.crt"), "客户端证书应注入: {url}");
+        assert!(url.contains("ssl-key=%2Ftls%2Fclient.key"), "客户端私钥应注入: {url}");
+        assert!(
+            url.rfind("ssl-mode=VERIFY_CA") > url.rfind("ssl-mode=DISABLED"),
+            "档案参数应排在用户参数之后（后解析覆盖）: {url}"
+        );
+    }
+
+    /// 档案未启用 TLS（或无档案）时不注入任何 ssl 参数，保持 sqlx 默认行为。
+    #[test]
+    fn mysql_connection_url_without_tls_profile_stays_default() {
+        let mut config = mysql_config();
+        let mut profile = fluxdb_core::MysqlConnectionProfile::default();
+        profile.tls.ssl_mode = fluxdb_core::MysqlSslMode::Required; // enabled=false，不注入
+        config.mysql_profile = Some(profile);
+
+        let url = mysql_connection_url(&config).unwrap();
+
+        assert!(!url.contains("ssl-mode"), "未启用 TLS 不应注入 ssl 参数: {url}");
     }
 
     #[test]
@@ -398,6 +451,7 @@ mod tests {
                     ],
                 }],
                 updates: Vec::new(),
+                insert_intents: None,
                 deletes: Vec::new(),
             })
             .unwrap();
@@ -415,6 +469,7 @@ mod tests {
                         value: CellValue::Text("600".to_string()),
                     }],
                 }],
+                insert_intents: None,
                 deletes: Vec::new(),
             })
             .unwrap();
@@ -470,6 +525,7 @@ mod tests {
                         value: CellValue::Text("after".to_string()),
                     }],
                 }],
+                insert_intents: None,
                 deletes: Vec::new(),
             })
             .unwrap();
@@ -932,6 +988,7 @@ mod tests {
                     object: object.clone(),
                     inserts: vec![row(key, kind, value, ttl)],
                     updates: Vec::new(),
+                    insert_intents: None,
                     deletes: Vec::new(),
                 })
                 .unwrap();
@@ -954,6 +1011,7 @@ mod tests {
             object: object.clone(),
             inserts: vec![row(&cases[0].0, "string", "x", "")],
             updates: Vec::new(),
+            insert_intents: None,
             deletes: Vec::new(),
         });
         assert!(duplicate.is_err());
@@ -963,6 +1021,7 @@ mod tests {
             object: object.clone(),
             inserts: vec![row(&format!("{prefix}:empty"), "list", "", "")],
             updates: Vec::new(),
+            insert_intents: None,
             deletes: Vec::new(),
         });
         assert!(empty_list.is_err());
@@ -1492,6 +1551,8 @@ mod tests {
             name: "app-db".to_string(),
             charset: "utf8mb4".to_string(),
             collation: "utf8mb4_unicode_ci".to_string(),
+            owner: String::new(),
+            template: String::new(),
             path: None,
         })
         .unwrap();
@@ -1506,6 +1567,8 @@ mod tests {
             name: "app".to_string(),
             charset: "utf8mb4;drop".to_string(),
             collation: "utf8mb4_unicode_ci".to_string(),
+            owner: String::new(),
+            template: String::new(),
             path: None,
         });
         assert!(result.is_err());
@@ -1542,12 +1605,15 @@ mod tests {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         let request = CreateDatabaseRequest {
             connection_id: config.id,
             name: "created".to_string(),
             charset: String::new(),
             collation: String::new(),
+            owner: String::new(),
+            template: String::new(),
             path: Some(path.clone()),
         };
 
@@ -1567,6 +1633,7 @@ mod tests {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         assert!(SqliteConnector::with_config(config)
             .create_database(&request)
@@ -1621,6 +1688,7 @@ mod tests {
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         };
         fluxdb_core::set_sqlite_attached_database(&mut config, "analytics", attached_path);
 
@@ -1761,7 +1829,8 @@ mod tests {
 
         let objects = connector.list_objects(Some(&databases[0].path)).unwrap();
 
-        assert_eq!(objects.len(), 2);
+        // mock 元数据集（T081）当前提供 4 张关联表
+        assert_eq!(objects.len(), 4);
         assert_eq!(objects[0].path.name, "Product");
     }
 
@@ -2154,6 +2223,7 @@ mod tests {
                 deletes: vec![fluxdb_core::RowIdentity {
                     values: [("id".to_string(), CellValue::I64(2))].into(),
                 }],
+                insert_intents: None,
             })
             .unwrap();
 
@@ -2240,6 +2310,7 @@ mod tests {
                     values: vec![CellValue::Null, CellValue::Null],
                 }],
                 updates: Vec::new(),
+                insert_intents: None,
                 deletes: Vec::new(),
             })
             .unwrap();
@@ -2488,6 +2559,8 @@ mod tests {
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "select * from Product".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions::default(),
@@ -2507,6 +2580,8 @@ mod tests {
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "select * from Product；\nselect * from Product".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions::default(),
@@ -2525,6 +2600,8 @@ mod tests {
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "select error; select * from Product".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions::default(),
@@ -2545,6 +2622,8 @@ mod tests {
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "select error; select * from Product".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions {
@@ -2568,6 +2647,8 @@ mod tests {
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "select * from Product; select * from Product".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions {
@@ -2600,6 +2681,37 @@ SELECT 1;",
     }
 
     #[test]
+    fn split_sql_keeps_dollar_quoted_function_body_together() {
+        // PostgreSQL 美元引用（$$ 与 $tag$）体内的分号不得被切分。
+        let statements = split_sql_statements(
+            "DROP TABLE IF EXISTS t CASCADE; CREATE FUNCTION f() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql; CREATE TRIGGER t_i AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION f(); SELECT 1; SELECT 2;",
+        );
+        assert_eq!(statements.len(), 5);
+        assert_eq!(statements[1], "CREATE FUNCTION f() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql");
+        // 关键：分号切分不得破坏函数体（体内分号原样保留在单条语句里）。
+        assert!(statements[1].contains("RETURN NEW; END; $$"));
+        let statements = split_sql_statements("SELECT $1 FROM t WHERE x = $2; DO $$ BEGIN RAISE NOTICE 'x; y'; END $$;");
+        assert_eq!(statements.len(), 2);
+    }
+
+    #[test]
+    fn split_sql_keeps_adjacent_dollar_blocks_as_separate_statements() {
+        // 回归：相邻的美元引用块（DO / 函数）后的分号不得被吞掉。
+        // 旧实现用 chars.nth(len-1) 跳过结束标签，Peekable::nth 会多消费一个元素，
+        // 把块后的 `;` 吞掉，导致多个 DO 黏成一条，PG 以 prepare 执行时报
+        // 「cannot insert multiple commands into a prepared statement」(SQLSTATE 42601)。
+        let statements = split_sql_statements(
+            "CREATE TABLE t2 (LIKE t INCLUDING ALL);\n\
+             DO $$ DECLARE r record; BEGIN a := 1; END $$;\n\
+             DO $$ BEGIN b := 2; END $$;",
+        );
+        assert_eq!(statements.len(), 3);
+        assert!(statements[0].starts_with("CREATE TABLE"));
+        assert!(statements[1].starts_with("DO $$") && statements[1].contains("a := 1"));
+        assert!(statements[2].starts_with("DO $$") && statements[2].contains("b := 2"));
+    }
+
+    #[test]
     fn execute_with_progress_reports_summaries_and_honors_cancel() {
         let connector = MockConnector::sqlite();
         let seen = std::cell::Cell::new(0);
@@ -2610,6 +2722,8 @@ SELECT 1;",
                 &QueryRequest {
                     connection_id: ConnectionId(1),
                     database: Some("main".to_string()),
+                    schema: None,
+                    session_id: None,
                     text: "select * from Product; select * from Product".to_string(),
                     mode: QueryMode::All,
                     options: fluxdb_core::QueryExecutionOptions::default(),
@@ -2625,6 +2739,27 @@ SELECT 1;",
         assert_eq!(execution.summaries.len(), 1);
         assert_eq!(summaries.len(), 1);
         assert!(summaries[0].success);
+    }
+
+    #[test]
+    fn query_result_page_size_zero_keeps_all_rows() {
+        let page = query_rows_to_page(
+            vec![Column {
+                name: "id".to_string(),
+                type_name: Some("INTEGER".to_string()),
+                nullable: false,
+                primary_key: true,
+                comment: None,
+            }],
+            vec![1_i64, 2, 3],
+            0,
+            0,
+            |value, _, _| CellValue::I64(*value),
+        );
+
+        assert_eq!(page.rows.len(), 3);
+        assert_eq!(page.limit, 0);
+        assert!(!page.has_more);
     }
 
     #[test]
@@ -2663,6 +2798,8 @@ SELECT 1;",
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "SELECT id, name FROM items; UPDATE items SET name = 'new' WHERE id = 1"
                     .to_string(),
                 mode: QueryMode::All,
@@ -2695,6 +2832,8 @@ SELECT 1;",
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
 CREATE TABLE audit_log (item_id INTEGER, name TEXT);
 CREATE TRIGGER items_ai AFTER INSERT ON items
@@ -2755,6 +2894,8 @@ SELECT item_id, name FROM audit_log;"
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "SELECT * FROM missing_table; SELECT id, name FROM items".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions::default(),
@@ -2771,6 +2912,8 @@ SELECT item_id, name FROM audit_log;"
             .execute(&QueryRequest {
                 connection_id: ConnectionId(1),
                 database: Some("main".to_string()),
+                schema: None,
+                session_id: None,
                 text: "SELECT * FROM missing_table; SELECT id, name FROM items".to_string(),
                 mode: QueryMode::All,
                 options: fluxdb_core::QueryExecutionOptions {
@@ -2823,6 +2966,7 @@ SELECT item_id, name FROM audit_log;"
                     value: CellValue::Text("Touring Bike".to_string()),
                 }],
             }],
+            insert_intents: None,
             deletes: Vec::new(),
         });
 
@@ -2842,6 +2986,7 @@ SELECT item_id, name FROM audit_log;"
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }
     }
 
@@ -2859,6 +3004,7 @@ SELECT item_id, name FROM audit_log;"
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
+            postgres_profile: None,
         }
     }
 
@@ -2885,6 +3031,7 @@ SELECT item_id, name FROM audit_log;"
                 ..Default::default()
             }),
             mysql_profile: None,
+            postgres_profile: None,
         }
     }
 
@@ -2963,4 +3110,3750 @@ SELECT item_id, name FROM audit_log;"
             std::process::id()
         ))
     }
+
+    // —— PostgreSQL（T04）——
+
+    pub(crate) fn postgres_config() -> ConnectionConfig {
+        ConnectionConfig {
+            id: ConnectionId(4),
+            name: "PG Local".to_string(),
+            kind: DatabaseKind::Postgres,
+            endpoint: Endpoint::Tcp {
+                host: "127.0.0.1".to_string(),
+                port: 5432,
+                database: Some("postgres".to_string()),
+            },
+            credential_ref: None,
+            options: Default::default(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: Some(fluxdb_core::PostgresConnectionProfile {
+                basic: fluxdb_core::PostgresBasicOptions {
+                    host: "127.0.0.1".to_string(),
+                    port: 5432,
+                    maintenance_database: "postgres".to_string(),
+                    username: "postgres".to_string(),
+                    password: fluxdb_core::SecretRef::inline("secret"),
+                },
+                ..Default::default()
+            }),
+        }
+    }
+
+    pub(crate) fn pg_query_request(config: &ConnectionConfig, session_id: Option<QuerySessionId>) -> QueryRequest {
+        QueryRequest {
+            connection_id: config.id,
+            database: None,
+            schema: None,
+            text: "SELECT 1".to_string(),
+            mode: QueryMode::All,
+            options: QueryExecutionOptions::default(),
+            session_id,
+        }
+    }
+
+    /// 构造自定义 SQL 的查询请求（供管理类集成测试执行 DDL/清理）。
+    pub(crate) fn pg_qtxt(config: &ConnectionConfig, text: &str) -> QueryRequest {
+        QueryRequest {
+            text: text.to_string(),
+            ..pg_query_request(config, None)
+        }
+    }
+
+    #[test]
+    fn pg_config_rejects_missing_profile() {
+        let config = sqlite_config(); // postgres_profile = None
+        let err = pg_config(&config, "postgres").unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Connection);
+    }
+
+    #[test]
+    fn pg_config_accepts_tls_after_t05() {
+        // T05 起 TLS 由 `pg_connect` 按传输层解析，`pg_config` 只填认证/库/超时，不再拒绝。
+        let mut config = postgres_config();
+        let profile = config.postgres_profile.as_mut().unwrap();
+        profile.tls.enabled = true;
+        profile.tls.ssl_mode = fluxdb_core::PostgresSslMode::Require;
+        let cfg = pg_config(&config, "postgres").unwrap();
+        assert!(cfg.get_user().is_some());
+    }
+
+    #[test]
+    fn pg_session_keys_isolate_by_session_id_and_role() {
+        let config = postgres_config();
+        // 两个不同 session_id → 不同会话键（连接/事务互不串扰）。
+        let a = pg_session_key_for(&pg_query_request(&config, Some(QuerySessionId(1))), "postgres");
+        let b = pg_session_key_for(&pg_query_request(&config, Some(QuerySessionId(2))), "postgres");
+        assert_ne!(a, b);
+        // 同 session_id → 相同会话键（复用同一连接，事务跨查询保持）。
+        let a2 = pg_session_key_for(&pg_query_request(&config, Some(QuerySessionId(1))), "postgres");
+        assert_eq!(a, a2);
+        // 无 session_id → 隔离瞬态键，与显式会话键不同。
+        let transient = pg_session_key_for(&pg_query_request(&config, None), "postgres");
+        assert_ne!(transient, a);
+        assert!(matches!(transient.purpose, PgSessionPurpose::Transient));
+    }
+
+    #[test]
+    fn pg_execute_empty_query_is_guard_failure() {
+        let connector = PostgresConnector::with_config(postgres_config());
+        let mut request = pg_query_request(&postgres_config(), None);
+        request.text = "   \n  ".to_string(); // 空语句（无服务器也应在切分阶段失败）
+        let err = connector.execute(&request).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Query);
+    }
+
+    /// 真实 PG 冒烟（T04 验收）：需要外部 PostgreSQL。
+    ///
+    /// 通过 `FLUXDB_PG_SMOKE=host:port:user:password:db` 启用；未设置时直接跳过。
+    /// 覆盖：真实建连 + 认证 + 版本读取；SELECT 返回真实行；两个显式查询会话互不串事务。
+    #[test]
+    fn pg_live_smoke_connect_and_version() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG 冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::new();
+        // 真实建连 + 认证 + version() 读取（test_connection 内部执行 SELECT version()）。
+        assert!(
+            connector.test_connection(&config).is_ok(),
+            "真实 PG 建连/认证/版本读取失败"
+        );
+    }
+
+    #[test]
+    fn pg_live_smoke_select_rows() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let mut request = pg_query_request(&config, None);
+        request.text = "SELECT 1 AS one, 'x'::text AS t".to_string();
+        let result = connector.execute(&request).expect("SELECT 应成功");
+        let summary = &result.summaries[0];
+        assert!(summary.success, "SELECT 应报 success：{}", summary.message);
+        assert_eq!(summary.returned_rows, 1);
+        assert_eq!(result.results.len(), 1);
+        let page = &result.results[0];
+        assert_eq!(page.rows.len(), 1);
+    }
+
+    #[test]
+    fn pg_live_smoke_transient_sessions_do_not_leak_transactions() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        // 会话 A 开启事务写一行但未提交。
+        let mut setup = pg_query_request(&config, Some(QuerySessionId(100)));
+        setup.text = "DROP TABLE IF EXISTS t04_leak; CREATE TABLE t04_leak(id int); \
+                      BEGIN; INSERT INTO t04_leak VALUES (1)".to_string();
+        connector.execute(&setup).expect("A 建表并开启事务");
+
+        // 会话 B（不同 session_id = 不同连接）：不应看到 A 未提交的行。
+        let mut check = pg_query_request(&config, Some(QuerySessionId(200)));
+        check.text = "SELECT count(*) AS c FROM t04_leak".to_string();
+        let result = connector.execute(&check).expect("B 查询应成功");
+        let page = &result.results[0];
+        let first = &page.rows[0].values[0];
+        assert_eq!(
+            *first,
+            CellValue::I64(0),
+            "不同会话不应看到未提交事务的行（互不串事务）"
+        );
+
+        // 收尾：A 提交（不删表，留给下面复核可见性）。
+        let mut commit = pg_query_request(&config, Some(QuerySessionId(100)));
+        commit.text = "COMMIT".to_string();
+        connector.execute(&commit).expect("A 提交");
+
+        // 会话复用回归（P0-1）：上面这条 COMMIT 能成功本身就证明「同一 session_id 的两次
+        // 执行落在同一连接上」——否则服务端会报 no transaction in progress。此处再显式确认
+        // 提交后的行对第三方会话可见，避免只是「看起来没报错」。
+        let mut after = pg_query_request(&config, Some(QuerySessionId(300)));
+        after.text = "SELECT count(*) AS c FROM t04_leak".to_string();
+        let after_result = connector.execute(&after).expect("提交后查询应成功");
+        assert_eq!(
+            after_result.results[0].rows[0].values[0],
+            CellValue::I64(1),
+            "同会话 COMMIT 后，写入应对其它会话可见"
+        );
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t04_leak".to_string();
+        connector.execute(&cleanup).expect("清理应成功");
+    }
+
+    /// 查询会话内切换 schema 作用域：不重建连接（事务保住），search_path 当场生效。
+    #[test]
+    fn pg_live_smoke_query_session_switches_schema_without_losing_transaction() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let session = QuerySessionId(400);
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "DROP SCHEMA IF EXISTS t04_scope_a CASCADE; \
+                      DROP SCHEMA IF EXISTS t04_scope_b CASCADE; \
+                      CREATE SCHEMA t04_scope_a; CREATE SCHEMA t04_scope_b"
+            .to_string();
+        connector.execute(&setup).expect("建两个 schema");
+
+        // 在 scope_a 内开启事务写入（未提交）。
+        let mut begin = pg_query_request(&config, Some(session));
+        begin.schema = Some("t04_scope_a".to_string());
+        begin.text = "CREATE TABLE t(id int); BEGIN; INSERT INTO t VALUES (1)".to_string();
+        connector.execute(&begin).expect("scope_a 建表并开启事务");
+
+        // 同一 session 切到 scope_b：应复用同一连接（事务存活），且 search_path 立即生效。
+        let mut switched = pg_query_request(&config, Some(session));
+        switched.schema = Some("t04_scope_b".to_string());
+        switched.text = "SELECT current_schema() AS s".to_string();
+        let result = connector.execute(&switched).expect("切 schema 后查询应成功");
+        assert_eq!(
+            result.results[0].rows[0].values[0],
+            CellValue::Text("t04_scope_b".to_string()),
+            "切换后的 search_path 应立即生效"
+        );
+
+        // 回到 scope_a 提交：若中途换过连接，这里的 COMMIT 会报 no transaction in progress。
+        let mut back = pg_query_request(&config, Some(session));
+        back.schema = Some("t04_scope_a".to_string());
+        back.text = "COMMIT".to_string();
+        connector.execute(&back).expect("切 schema 不应丢掉事务，COMMIT 应成功");
+
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP SCHEMA IF EXISTS t04_scope_a CASCADE; DROP SCHEMA IF EXISTS t04_scope_b CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理应成功");
+    }
+
+    /// 配置代际：改主机/端口/账号/密码都会换 key，旧会话不再被复用（P0-4）。
+    #[test]
+    fn pg_config_generation_changes_with_connection_settings() {
+        let base = postgres_config();
+        let original = pg_config_generation(&base);
+
+        let mut other_port = base.clone();
+        if let Some(profile) = other_port.postgres_profile.as_mut() {
+            profile.basic.port = profile.basic.port.wrapping_add(1);
+        }
+        assert_ne!(
+            original,
+            pg_config_generation(&other_port),
+            "端口变化应换代际"
+        );
+
+        let mut other_password = base.clone();
+        if let Some(profile) = other_password.postgres_profile.as_mut() {
+            profile.basic.password = fluxdb_core::SecretRef::inline("changed-secret");
+        }
+        assert_ne!(
+            original,
+            pg_config_generation(&other_password),
+            "仅改密码也应换代际（否则会继续复用旧凭据的连接）"
+        );
+
+        assert_eq!(
+            original,
+            pg_config_generation(&base),
+            "同一配置的代际必须稳定"
+        );
+    }
+
+    /// 读 FLUXDB_PG_SMOKE 环境变量 → (host, port, user, password, db)。
+    fn pg_smoke_params() -> Option<(String, u16, String, String, String)> {
+        let value = std::env::var("FLUXDB_PG_SMOKE").ok()?;
+        let mut parts = value.split(':');
+        let host = parts.next()?.to_string();
+        let port: u16 = parts.next()?.parse().ok()?;
+        let user = parts.next()?.to_string();
+        let password = parts.next()?.to_string();
+        let db = parts.next()?.to_string();
+        Some((host, port, user, password, db))
+    }
+
+    fn pg_smoke_config((host, port, user, password, db): (String, u16, String, String, String)) -> ConnectionConfig {
+        ConnectionConfig {
+            id: ConnectionId(9),
+            name: "PG Smoke".to_string(),
+            kind: DatabaseKind::Postgres,
+            endpoint: Endpoint::Tcp {
+                host: host.clone(),
+                port,
+                database: Some(db.clone()),
+            },
+            credential_ref: None,
+            options: Default::default(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: Some(fluxdb_core::PostgresConnectionProfile {
+                basic: fluxdb_core::PostgresBasicOptions {
+                    host,
+                    port,
+                    maintenance_database: db,
+                    username: user,
+                    password: fluxdb_core::SecretRef::inline(&password),
+                },
+                ..Default::default()
+            }),
+        }
+    }
+
+    /// 读 `FLUXDB_MYSQL_SMOKE=host:port:user:password:db`（T28 真库回归，环境门控）。
+    fn mysql_smoke_params() -> Option<(String, u16, String, String, String)> {
+        let value = std::env::var("FLUXDB_MYSQL_SMOKE").ok()?;
+        let mut parts = value.split(':');
+        let host = parts.next()?.to_string();
+        let port: u16 = parts.next()?.parse().ok()?;
+        let user = parts.next()?.to_string();
+        let password = parts.next()?.to_string();
+        let db = parts.next()?.to_string();
+        Some((host, port, user, password, db))
+    }
+
+    fn mysql_smoke_config((host, port, user, password, db): (String, u16, String, String, String)) -> ConnectionConfig {
+        let mut options = std::collections::BTreeMap::new();
+        options.insert("username".to_string(), user);
+        options.insert("password".to_string(), password);
+        options.insert("database".to_string(), db.clone());
+        ConnectionConfig {
+            id: ConnectionId(10),
+            name: "MySQL Smoke".to_string(),
+            kind: DatabaseKind::MySql,
+            endpoint: Endpoint::Tcp {
+                host: host.clone(),
+                port,
+                database: Some(db),
+            },
+            credential_ref: None,
+            options,
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+        }
+    }
+
+    /// T28 真库回归：MySQL `test_connection` 在 PG 接入后仍应成功（隔离库，环境门控）。
+    #[test]
+    fn mysql_live_smoke_test_connection_regressed_by_postgres() {
+        let Some(params) = mysql_smoke_params() else {
+            return;
+        };
+        let config = mysql_smoke_config(params);
+        let connector = MySqlConnector::with_config(config.clone());
+        connector
+            .test_connection(&config)
+            .expect("MySQL 连接在 PG 接入后应仍成功（T28 回归）");
+    }
+
+    /// T28 MySQL 真库功能回归：连接/DDL/写/读/查询/补全/结构/导出/清理全链路。
+    /// 覆盖 PG 接入可能共享影响的分层（shared 数据读写、补全、结构、导出）。
+    #[test]
+    fn mysql_live_smoke_full_regression() {
+        let Some(params) = mysql_smoke_params() else {
+            return;
+        };
+        let (_, _, _, _, db) = params.clone();
+        let config = mysql_smoke_config(params);
+        let connector = MySqlConnector::with_config(config.clone());
+        connector.test_connection(&config).expect("test_connection");
+
+        let run = |sql: &str| {
+            let mut request = mysql_query_request(&config);
+            request.text = sql.to_string();
+            connector.execute(&request).expect("execute");
+        };
+        run("DROP TABLE IF EXISTS t28_reg");
+        run("CREATE TABLE t28_reg (id INT PRIMARY KEY, name VARCHAR(50), score INT)");
+        run("INSERT INTO t28_reg (id, name, score) VALUES (1,'alice',10),(2,'bob',20),(3,'carol',30)");
+
+        let path = ObjectPath {
+            connection_id: config.id,
+            kind: ObjectKind::Table,
+            database: Some(db.clone()),
+            schema: None,
+            name: "t28_reg".to_string(),
+        };
+
+        // 读（load_data）
+        let page = connector
+            .load_data(&path, 0, 100, &[], &[])
+            .expect("load_data");
+        assert_eq!(page.rows.len(), 3, "应读到 3 行");
+
+        // 查询（execute SELECT 返回结果集）
+        let mut q = mysql_query_request(&config);
+        q.text = "SELECT count(*) AS c FROM t28_reg".to_string();
+        let result = connector.execute(&q).expect("execute select");
+        assert!(
+            result.results.first().is_some_and(|p| !p.rows.is_empty()),
+            "查询应返回结果集"
+        );
+
+        // 写（apply_changes：更新）
+        let change = DataChangeSet {
+            object: path.clone(),
+            inserts: Vec::new(),
+            updates: vec![RowUpdate {
+                identity: RowIdentity {
+                    values: std::collections::BTreeMap::from([(
+                        "id".to_string(),
+                        CellValue::I64(1),
+                    )]),
+                },
+                cells: vec![CellUpdate {
+                    column: "score".to_string(),
+                    value: CellValue::I64(99),
+                }],
+            }],
+            deletes: Vec::new(),
+            insert_intents: None,
+        };
+        connector.apply_changes(&change).expect("apply_changes 更新");
+        let mut check = mysql_query_request(&config);
+        check.text = "SELECT score FROM t28_reg WHERE id = 1".to_string();
+        let checked = connector.execute(&check).expect("execute check");
+        let updated = checked
+            .results
+            .first()
+            .and_then(|p| p.rows.first())
+            .and_then(|row| row.values.first())
+            .map(CellValue::display_label)
+            .unwrap_or_default();
+        assert_eq!(updated, "99", "更新后 id=1 的 score 应为 99，实际 {updated:?}");
+
+        // 补全（表/列）
+        let tables = connector
+            .list_completion_tables(Some(&db), None, "t28_reg", 50)
+            .expect("completion tables");
+        assert!(
+            tables.iter().any(|t| t.name == "t28_reg"),
+            "补全应含 t28_reg：{tables:?}"
+        );
+        let columns = connector
+            .list_completion_columns(Some(&db), None, "t28_reg")
+            .expect("completion columns");
+        assert!(
+            columns.iter().any(|c| c.name == "score"),
+            "列补全应含 score"
+        );
+
+        // 结构（索引 + DDL）
+        let indexes = connector.list_indexes(&path).expect("list_indexes");
+        assert!(
+            indexes.iter().any(|i| i.name.contains("PRIMARY") || i.is_primary),
+            "结构应含主键索引：{indexes:?}"
+        );
+        let ddl = connector.table_ddl(&path).expect("table_ddl");
+        assert!(ddl.contains("t28_reg"), "DDL 应含表名：{ddl}");
+
+        // 导出（计数预览）
+        let preview = connector
+            .preview_data_export(&path, &["id".to_string(), "name".to_string()], &[], &[])
+            .expect("preview_data_export");
+        assert_eq!(preview.row_count, 3, "导出计数应为 3");
+
+        // 清理
+        run("DROP TABLE IF EXISTS t28_reg");
+    }
+
+    /// T13 MySQL 单语句取消：`SELECT SLEEP(120)` 在用户「停止」后应经 `KILL QUERY` 立即
+    /// 中止（远早于硬超时），并如实标「已取消：结果待核实」，不误报 SQL 错误。
+    #[test]
+    fn mysql_live_smoke_cancel_token_stops_long_query_promptly() {
+        let Some(params) = mysql_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_MYSQL_SMOKE，跳过 MySQL 取消冒烟");
+            return;
+        };
+        let config = mysql_smoke_config(params);
+
+        let mut req = mysql_query_request(&config);
+        req.text = "SELECT SLEEP(120);".to_string();
+        let start = std::time::Instant::now();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let mut result = QueryExecutionResult {
+            summaries: Vec::new(),
+            results: Vec::new(),
+            rollback_snapshots: Vec::new(),
+        };
+        // 语句跑起来约 1.2s 后触发取消（模拟用户在长查询期间点「停止」）。
+        let err = mysql_execute_query_with_progress(
+            &config,
+            &req,
+            &mut |s| result.summaries.push(s),
+            &|| {
+                flag.store(
+                    start.elapsed() > std::time::Duration::from_millis(1200),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                flag.load(std::sync::atomic::Ordering::Relaxed)
+            },
+        )
+        .err();
+        let _ = cancelled;
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "真实取消应 <20s 返回（KILL QUERY 远早于 mysql 自身长超时）：{elapsed:?}"
+        );
+        assert!(
+            err.is_none(),
+            "取消应作为语句级结果（结果待核实）返回而非整体抛错：{err:?}"
+        );
+        assert!(
+            result.summaries.iter().any(|s| !s.success && s.message == "已取消：结果待核实"),
+            "应标记「已取消：结果待核实」：{:#?}",
+            result.summaries
+        );
+    }
+
+    /// 构造带结构化 TLS 档案的 MySQL 冒烟配置（basic 取自 smoke 参数，其余字段默认）。
+    #[allow(clippy::too_many_arguments)]
+    fn mysql_tls_config(
+        params: (String, u16, String, String, String),
+        mode: fluxdb_core::MysqlSslMode,
+        verify: bool,
+        ca: Option<String>,
+        client_cert: Option<String>,
+        client_key: Option<String>,
+    ) -> ConnectionConfig {
+        let mut config = mysql_smoke_config(params.clone());
+        let (host, port, user, password, db) = params;
+        let mut profile = fluxdb_core::MysqlConnectionProfile::default();
+        profile.basic = fluxdb_core::MysqlBasicOptions {
+            host,
+            port,
+            database: db,
+            username: user,
+            password: fluxdb_core::SecretRef::inline(password),
+        };
+        profile.tls.enabled = true;
+        profile.tls.ssl_mode = mode;
+        profile.tls.verify = verify;
+        if let Some(ca) = ca {
+            profile.tls.ca = fluxdb_core::SecretRef::inline(ca);
+        }
+        if let Some(cert) = client_cert {
+            profile.tls.client_cert = fluxdb_core::SecretRef::inline(cert);
+        }
+        if let Some(key) = client_key {
+            profile.tls.client_key = fluxdb_core::SecretRef::inline(key);
+        }
+        config.mysql_profile = Some(profile);
+        config
+    }
+
+    /// 拆分 TLS 冒烟环境：`host:port:user:password:db|ca_path[|bad_ca_path[|ssl_user:ssl_pass]]`。
+    /// `bad_ca_path` 供「错误 CA 应被拒」负例；`ssl_user:ssl_pass` 应为 REQUIRE SSL 账号，
+    /// 供「DISABLED 模式连强制 TLS 账号应被拒」负例。
+    fn split_mysql_tls_env(
+        v: &str,
+    ) -> (
+        (String, u16, String, String, String),
+        Option<String>,
+        Option<String>,
+        Option<(String, String)>,
+    ) {
+        let mut it = v.split('|');
+        let params_raw = it.next().unwrap_or("");
+        let mut p = params_raw.split(':');
+        let params = (
+            p.next().unwrap_or("").to_string(),
+            p.next().and_then(|s| s.parse().ok()).unwrap_or(0),
+            p.next().unwrap_or("").to_string(),
+            p.next().unwrap_or("").to_string(),
+            p.next().unwrap_or("").to_string(),
+        );
+        let nonempty = |s: Option<&str>| s.filter(|s| !s.trim().is_empty()).map(str::to_string);
+        let ca = nonempty(it.next());
+        let bad_ca = nonempty(it.next());
+        let ssl_user = it
+            .next()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|s| s.split_once(':'))
+            .map(|(u, pw)| (u.to_string(), pw.to_string()));
+        (params, ca, bad_ca, ssl_user)
+    }
+
+    /// MySQL TLS 冒烟（环境门控）：
+    /// - required + verify + 正确 CA → VERIFY_CA 建连成功；
+    /// - 同配置换错误 CA → 证书链校验拒绝；
+    /// - DISABLED 模式连 REQUIRE SSL 账号 → 服务器拒绝（证明 disabled 真的禁用加密）。
+    #[test]
+    fn mysql_live_smoke_tls_modes() {
+        let Some(tls_env) = env("FLUXDB_MYSQL_SMOKE_TLS") else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_MYSQL_SMOKE_TLS，跳过 MySQL TLS 冒烟");
+            return;
+        };
+        let (params, ca, bad_ca, ssl_user) = split_mysql_tls_env(&tls_env);
+        let connector = MySqlConnector::new();
+
+        let ok = mysql_tls_config(
+            params.clone(),
+            fluxdb_core::MysqlSslMode::Required,
+            true,
+            ca,
+            None,
+            None,
+        );
+        assert!(
+            connector.test_connection(&ok).is_ok(),
+            "required + verify + 正确 CA 应建连成功（sqlx VERIFY_CA）"
+        );
+
+        if let Some(bad_ca) = bad_ca {
+            let bad = mysql_tls_config(
+                params.clone(),
+                fluxdb_core::MysqlSslMode::Required,
+                true,
+                Some(bad_ca),
+                None,
+                None,
+            );
+            assert!(
+                connector.test_connection(&bad).is_err(),
+                "verify + 错误 CA 应被拒绝"
+            );
+        }
+
+        if let Some((tls_user, tls_pass)) = ssl_user {
+            let mut disabled_params = params.clone();
+            disabled_params.2 = tls_user;
+            disabled_params.3 = tls_pass;
+            let disabled = mysql_tls_config(
+                disabled_params,
+                fluxdb_core::MysqlSslMode::Disabled,
+                true,
+                None,
+                None,
+                None,
+            );
+            assert!(
+                connector.test_connection(&disabled).is_err(),
+                "DISABLED 模式连 REQUIRE SSL 账号应被服务器拒绝"
+            );
+        }
+    }
+
+    /// 构造 MySQL QueryRequest（复用 smoke config 的连接与库）。
+    fn mysql_query_request(config: &ConnectionConfig) -> QueryRequest {
+        QueryRequest {
+            connection_id: config.id,
+            database: config.options.get("database").cloned(),
+            session_id: None,
+            schema: None,
+            text: String::new(),
+            mode: QueryMode::All,
+            options: QueryExecutionOptions::default(),
+        }
+    }
+
+    // ===== T05 传输、安全策略与生命周期（真实冒烟，环境门控）=====
+
+    /// 读 `FLUXDB_PG_SMOKE_TLS=host:port:user:password:db|ca_path|server_name|hostname`、
+    ///   `FLUXDB_PG_SMOKE_TLS_BAD_CA`（错误 CA）与 `FLUXDB_PG_SMOKE_TLS_BAD_HOST`（错误主机名）各一个路径。
+    /// 仅验证 TLS 握手方向，不依赖环境是否真的开启 TLS 之外的额外能力。
+    /// 未配置时跳过。
+    ///
+    /// 覆盖 T05 验收：
+    /// - verify-full 用正确 CA + 正确主机名 → 建连成功；
+    /// - verify-full 用错误 CA（不受信）→ 拒绝；
+    /// - verify-full 用正确 CA 但错误主机名 → 拒绝（校验 DNS/主机名）。
+    #[test]
+    fn pg_live_smoke_tls_verify_full() {
+        let tls = env("FLUXDB_PG_SMOKE_TLS");
+        let bad_ca = env("FLUXDB_PG_SMOKE_TLS_BAD_CA");
+        let bad_host = env("FLUXDB_PG_SMOKE_TLS_BAD_HOST");
+        let (params, ca_path, server_name, _hostname) = match tls {
+            Some(v) => split_tls_env(&v),
+            None => return,
+        };
+        let connector = PostgresConnector::new();
+
+        // 正确 CA + 正确主机名。
+        let ok = tls_config(&params, ca_path.as_deref(), &server_name);
+        assert!(
+            connector.test_connection(&ok).is_ok(),
+            "verify-full 正确 CA + 主机名应建连成功"
+        );
+
+        if let Some(path) = bad_ca {
+            let bad = tls_config(&params, Some(&path), &server_name);
+            assert!(
+                connector.test_connection(&bad).is_err(),
+                "verify-full 错误 CA 应被拒绝"
+            );
+        }
+
+        if let Some(name) = bad_host {
+            let bad = tls_config(&params, ca_path.as_deref(), &name);
+            assert!(
+                connector.test_connection(&bad).is_err(),
+                "verify-full 主机名不匹配应被拒绝"
+            );
+        }
+    }
+
+    /// 组装 verify-full 配置（TLS 启用、VerifyFull、显式 server_name）。
+    fn tls_config(
+        params: &(String, u16, String, String, String),
+        ca_path: Option<&str>,
+        server_name: &str,
+    ) -> ConnectionConfig {
+        let mut config = pg_smoke_config(params.clone());
+        if let Some(profile) = config.postgres_profile.as_mut() {
+            profile.tls.enabled = true;
+            profile.tls.ssl_mode = fluxdb_core::PostgresSslMode::VerifyFull;
+            profile.tls.server_name = server_name.to_string();
+            if let Some(path) = ca_path {
+                profile.tls.ca = fluxdb_core::SecretRef::inline(path);
+            }
+        }
+        config
+    }
+
+    /// 拆分 TLS 冒烟字段：`host:port:user:password:db|ca_path|server_name|hostname`。
+    /// 返回 (pg 参数, ca_path, server_name, hostname)。
+    fn split_tls_env(v: &str) -> ((String, u16, String, String, String), Option<String>, String, String) {
+        let mut it = v.split('|');
+        let params_raw = it.next().unwrap_or("");
+        let host = params_raw.split(':').next().unwrap_or("").to_string();
+        let port = params_raw
+            .split(':')
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let user = params_raw.split(':').nth(2).unwrap_or("").to_string();
+        let password = params_raw.split(':').nth(3).unwrap_or("").to_string();
+        let db = params_raw.split(':').nth(4).unwrap_or("").to_string();
+        let ca_path = it.next().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        let server_name = it.next().unwrap_or(&host).to_string();
+        let hostname = it.next().unwrap_or(&host).to_string();
+        ((host, port, user, password, db), ca_path, server_name, hostname)
+    }
+
+    // ===== T06 对象树与真实路由（真实冒烟，环境门控）=====
+
+    /// 真实 PG 对象浏览（T06 验收）：数据库 → schema → 表/视图 三层真实 pg_catalog 路由。
+    ///
+    /// 覆盖：列出数据库（含配置的库）；库下列 schema（过滤系统 schema）；
+    /// schema 列表/视图（含同名对象由 schema 区分、物化视图/分区表归入 Table/View）。
+    /// 临时创建 t06_table / t06_view 后列出并校验，最后清理。
+    #[test]
+    fn pg_live_smoke_object_tree() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG 对象树冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let db_name = config
+            .postgres_profile
+            .as_ref()
+            .unwrap()
+            .basic
+            .maintenance_database
+            .clone();
+
+        // 1) 根层：数据库列表应包含配置的维护库。
+        let databases = connector.list_objects(None).expect("列出数据库应成功");
+        assert!(
+            databases.iter().any(|o| o.path.name == db_name),
+            "数据库列表应包含配置的维护库 {}",
+            db_name
+        );
+
+        // 2) 数据库层：schema 列表应包含 public，且不包含 information_schema / pg_* 系统 schema。
+        let db_path = databases
+            .iter()
+            .find(|o| o.path.name == db_name)
+            .cloned()
+            .expect("配置的库应存在")
+            .path;
+        let schemas = connector.list_objects(Some(&db_path)).expect("列出 schema 应成功");
+        assert!(
+            schemas.iter().any(|o| o.path.name == "public"),
+            "public schema 应在列表内"
+        );
+        assert!(
+            schemas
+                .iter()
+                .all(|o| o.path.name != "information_schema" && !o.path.name.starts_with("pg_")),
+            "系统 schema 不应出现在对象树"
+        );
+
+        // 3) 建临时表/视图，在 public 下列出关系并断言 kind 正确。
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "DROP VIEW IF EXISTS t06_view; DROP TABLE IF EXISTS t06_table; \
+                      CREATE TABLE t06_table(id int); CREATE VIEW t06_view AS SELECT 1 AS one"
+            .to_string();
+        connector.execute(&setup).expect("建临时表/视图应成功");
+
+        let public_path = schemas
+            .iter()
+            .find(|o| o.path.name == "public")
+            .expect("public schema 应存在")
+            .path
+            .clone();
+        let relations = connector
+            .list_objects(Some(&public_path))
+            .expect("列出关系应成功");
+        assert!(
+            relations.iter().any(|o| o.path.name == "t06_table"
+                && o.path.kind == ObjectKind::Table
+                && o.path.schema.as_deref() == Some("public")),
+            "t06_table 应以 public 下的 Table 出现"
+        );
+        assert!(
+            relations
+                .iter()
+                .any(|o| o.path.name == "t06_view" && o.path.kind == ObjectKind::View),
+            "t06_view 应以 View 出现"
+        );
+
+        // 4) 清理临时对象。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP VIEW t06_view; DROP TABLE t06_table".to_string();
+        connector.execute(&cleanup).expect("清理临时对象应成功");
+    }
+
+    // ===== T07 建库/删库（单元 + 真实冒烟）=====
+
+    #[test]
+    fn pg_create_database_sql_builds_options_and_quotes() {
+        let request = CreateDatabaseRequest {
+            connection_id: ConnectionId(9),
+            name: "app-db".to_string(),
+            charset: "UTF8".to_string(),
+            collation: "zh_CN.UTF-8".to_string(),
+            owner: String::new(),
+            template: String::new(),
+            path: None,
+        };
+        assert_eq!(
+            pg_create_database_sql(&request).unwrap(),
+            "CREATE DATABASE \"app-db\" ENCODING 'UTF8' LC_COLLATE 'zh_CN.UTF-8' LC_CTYPE 'zh_CN.UTF-8'"
+        );
+
+        // 空名称拒绝；含引号/分号的 locale 拒绝（防注入）。
+        let bad_name = CreateDatabaseRequest { name: "  ".into(), ..request.clone() };
+        assert!(pg_create_database_sql(&bad_name).is_err());
+        let bad_col = CreateDatabaseRequest { collation: "zh_CN'; DROP SCHEMA public; --".into(), ..request.clone() };
+        assert!(pg_create_database_sql(&bad_col).is_err());
+
+        // OWNER / TEMPLATE 按标识符引用生成；name 里带引号/分号、owner 带空格均拒绝。
+        let with_owner_template = CreateDatabaseRequest {
+            owner: "report_reader".into(),
+            template: "template0".into(),
+            ..request.clone()
+        };
+        assert_eq!(
+            pg_create_database_sql(&with_owner_template).unwrap(),
+            "CREATE DATABASE \"app-db\" ENCODING 'UTF8' LC_COLLATE 'zh_CN.UTF-8' LC_CTYPE 'zh_CN.UTF-8' OWNER \"report_reader\" TEMPLATE \"template0\""
+        );
+        let bad_owner = CreateDatabaseRequest { owner: "r; DROP".into(), ..request.clone() };
+        assert!(pg_create_database_sql(&bad_owner).is_err());
+        let bad_template = CreateDatabaseRequest { template: "t x".into(), ..request };
+        assert!(pg_create_database_sql(&bad_template).is_err());
+    }
+
+    #[test]
+    fn pg_quote_identifier_escapes_double_quotes() {
+        assert_eq!(pg_quote_identifier("plain"), "\"plain\"");
+        assert_eq!(pg_quote_identifier("a\"b"), "\"a\"\"b\"");
+    }
+
+    /// 真实建/删库（T07 验收）：建库（charset/collation）→ 对象树可见 → 删库；维护库保护。
+    /// T20 建 schema：空名/控制字符/超长名在连接前即拒绝。
+    ///
+    /// 带空格、分号、引号、中文的名字**不拒绝**——它们会被 `pg_quote_identifier` 引号包裹后下发，
+    /// 引号内不存在注入面；早期白名单把这类真实合法名一起挡掉了（与设计 §13.1 的
+    /// 「带双引号/点/空格/Unicode 名称」验收要求冲突）。
+    #[test]
+    fn pg_create_schema_rejects_untrusted_names_before_connect() {
+        let config = postgres_config();
+        let too_long = "s".repeat(64);
+        for bad in ["", "  ", "a\0b", too_long.as_str()] {
+            assert!(
+                pg_create_schema(&config, ConnectionId(9), "postgres", bad).is_err(),
+                "{bad:?} 应被拒绝"
+            );
+        }
+        for ok in ["a b", "a;DROP", "a'b", "租户_甲"] {
+            assert!(
+                is_pg_quotable_object_name(ok),
+                "{ok:?} 是合法 schema 名（引用后无注入面），不应拒绝"
+            );
+        }
+    }
+
+    /// 真实 PG：建 schema → 对象树 schema 清单可见 → 删除。
+    #[test]
+    fn pg_live_smoke_create_schema() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let name = format!("t20_smoke_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+        connector
+            .create_schema(config.id, "postgres", &name)
+            .expect("建 schema 应成功");
+        // 删除该 schema（隔离测试环境清理）。
+        let remove = format!("DROP SCHEMA IF EXISTS \"{name}\"");
+        let mut req = pg_query_request(&config, None);
+        req.text = remove;
+        connector.execute(&req).expect("清理 schema 应成功");
+    }
+
+    /// 真实 PG：角色 CRUD + 成员关系 + 对象授权（隔离环境，测试后清理角色）。
+    #[test]
+    fn pg_live_smoke_role_crud_and_membership() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let role = format!("t26_role_{suffix}");
+        let group = format!("t26_grp_{suffix}");
+
+        // 建 NOLOGIN 组角色 + LOGIN 用户（带密码）。
+        connector
+            .create_role(config.id, &group, false, None)
+            .expect("建组角色应成功");
+        connector
+            .create_role(config.id, &role, true, Some("T26_pw_1"))
+            .expect("建登录角色应成功");
+
+        // 列表可见，属性正确。
+        let roles = connector.list_roles(config.id).expect("列角色应成功");
+        let created = roles.iter().find(|r| r.name == role).expect("新角色应在列表");
+        assert!(created.can_login, "LOGIN 角色 can_login 应为 true");
+        let group_role = roles.iter().find(|r| r.name == group).expect("组角色应在列表");
+        assert!(!group_role.can_login, "NOLOGIN 角色 can_login 应为 false");
+
+        // 成员关系：role 加入 group，带 ADMIN OPTION（PG16 成员级 INHERIT/SET 选项）。
+        connector
+            .grant_role_membership(config.id, &group, &role, true, true, true)
+            .expect("成员授权应成功");
+        let members = connector
+            .list_role_membership(config.id)
+            .expect("列成员关系应成功");
+        assert!(
+            members
+                .iter()
+                .any(|m| m.grantee == group && m.member == role && m.admin_option),
+            "应含带 ADMIN OPTION 的成员关系：{members:?}"
+        );
+        // 成员级 INHERIT/SET 选项（PG16+）：非默认 inherit=false 写回并读回一致。
+        // PG≤14 无 inherit_option/set_option 列（回填默认 true），无法表达非默认，跳过该断言。
+        let supports_member_options = pg_server_major_version(&config)
+            .ok()
+            .flatten()
+            .is_some_and(|major| major >= 16);
+        connector
+            .grant_role_membership(config.id, &group, &role, false, false, true)
+            .expect("成员授权(INHERIT FALSE)应成功");
+        let members2 = connector
+            .list_role_membership(config.id)
+            .expect("列成员关系应成功");
+        if supports_member_options {
+            assert!(
+                members2
+                    .iter()
+                    .any(|m| m.grantee == group
+                        && m.member == role
+                        && !m.admin_option
+                        && !m.inherit_option
+                        && m.set_option),
+                "INHERIT FALSE/SET TRUE 应读回一致：{members2:?}"
+            );
+        } else {
+            // PG≤14：成员选项恒默认（inherit/set=true），仅断言成员关系存在且无 ADMIN。
+            assert!(
+                members2
+                    .iter()
+                    .any(|m| m.grantee == group && m.member == role && m.inherit_option),
+                "PG≤14 成员关系应存在且回填默认选项：{members2:?}"
+            );
+        }
+        connector
+            .revoke_role_membership(config.id, &group, &role)
+            .expect("撤销成员关系应成功");
+
+        // 角色选项：经 alter_role_options 切换可登录 LOGIN，列表读回一致。
+        connector
+            .alter_role_options(
+                config.id,
+                &role,
+                Some(true), // can_login
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("切换 LOGIN 应成功");
+        let roles_after = connector.list_roles(config.id).expect("列角色应成功");
+        assert!(
+            roles_after.iter().any(|r| r.name == role && r.can_login),
+            "alter_role_options 后 LOGIN 应读回 true：{roles_after:?}"
+        );
+        // 再关闭 LOGIN，读回 false（离线账户语义，与 MySQL 禁用账号等价）。
+        connector
+            .alter_role_options(
+                config.id,
+                &role,
+                Some(false),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("关闭 LOGIN 应成功");
+        let roles_final = connector.list_roles(config.id).expect("列角色应成功");
+        assert!(
+            roles_final.iter().any(|r| r.name == role && !r.can_login),
+            "alter_role_options 后 LOGIN 应读回 false：{roles_final:?}"
+        );
+
+        // 改密码 + 重命名。
+        connector
+            .alter_role_password(config.id, &role, "T26_pw_2")
+            .expect("改密码应成功");
+        let renamed = format!("t26_role2_{suffix}");
+        connector
+            .rename_role(config.id, &role, &renamed)
+            .expect("重命名角色应成功");
+
+        // 清理（先删组成员归属已撤销，直接 DROP）。
+        connector
+            .drop_role(config.id, &renamed)
+            .expect("删除登录角色应成功");
+        connector
+            .drop_role(config.id, &group)
+            .expect("删除组角色应成功");
+    }
+
+    /// T24：原生脚本检测（COPY FROM STDIN / psql 元命令），且不被字符串/注释误判。
+    #[test]
+    fn pg_script_native_mode_detection() {
+        // 普通多语句：不需要原生模式。
+        assert!(!pg_script_needs_native_mode(
+            "CREATE TABLE t(id int);\nINSERT INTO t VALUES (1);\n"
+        ));
+        // 函数体含分号/字符串：仍不需要原生模式。
+        assert!(!pg_script_needs_native_mode(
+            "CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END $$ LANGUAGE plpgsql;"
+        ));
+        // 字符串里出现 \copy / COPY..FROM STDIN 字样：不应误判。
+        assert!(!pg_script_needs_native_mode(
+            "INSERT INTO t VALUES ('\\copy not a command');"
+        ));
+        assert!(!pg_script_needs_native_mode(
+            "INSERT INTO t VALUES ('COPY x FROM STDIN');"
+        ));
+        // 注释里的元命令：不误判。
+        assert!(!pg_script_needs_native_mode(
+            "-- \\copy t from stdin\nSELECT 1;\n"
+        ));
+        // 真 COPY FROM STDIN：需要原生模式。
+        assert!(pg_script_needs_native_mode(
+            "COPY t (id) FROM stdin;\n1\n2\n\\.\n"
+        ));
+        // psql 元命令 \copy：需要原生模式。
+        assert!(pg_script_needs_native_mode(
+            "\\copy t (id) FROM 'data.csv' WITH CSV\n"
+        ));
+        // \set 元命令（缩进行首）：需要原生模式。
+        assert!(pg_script_needs_native_mode(
+            "  \\set foo bar\nSELECT 1;\n"
+        ));
+    }
+
+    /// T24：psql 调用参数不把密码放进 argv，只经 env；含非交互与 ON_ERROR_STOP。
+    #[test]
+    fn pg_psql_invocation_keeps_password_out_of_argv() {
+        let invocation = pg_psql_invocation(
+            "db.internal",
+            5432,
+            "app",
+            "appdb",
+            "/tmp/script.sql",
+            Some("s3cret"),
+            true,
+            PostgresSslMode::Require,
+        );
+        assert_eq!(invocation.program, "psql");
+        assert!(invocation.args.contains(&"--no-psqlrc".to_string()));
+        assert!(invocation.args.contains(&"ON_ERROR_STOP=1".to_string()));
+        assert!(invocation.args.contains(&"/tmp/script.sql".to_string()));
+        // 密码与 TLS 模式都只走 env（PGPASSWORD / PGSSLMODE），绝不出现在 argv。
+        assert!(
+            !invocation.args.iter().any(|arg| arg.contains("s3cret")),
+            "密码不得进入 argv：{:?}",
+            invocation.args
+        );
+        assert!(
+            !invocation.args.iter().any(|arg| arg.contains("sslmode")),
+            "sslmode 不得进入 argv：{:?}",
+            invocation.args
+        );
+        assert!(
+            invocation.env.iter().any(|(k, v)| k == "PGSSLMODE" && v == "require"),
+            "Require 应注入 PGSSLMODE=require"
+        );
+        assert!(
+            invocation.env.iter().any(|(k, v)| k == "PGPASSWORD" && v == "s3cret"),
+            "应注入 PGPASSWORD"
+        );
+        // 无密码且 Prefer 时不注入任何 env；ON_ERROR_STOP=off。
+        let no_pw = pg_psql_invocation("h", 5432, "u", "d", "f", None, false, PostgresSslMode::Prefer);
+        assert!(no_pw.env.is_empty());
+        assert!(no_pw.args.contains(&"ON_ERROR_STOP=off".to_string()));
+    }
+
+    /// sslmode 映射：各 TLS 模式 → psql/pg_dump 可识别值，Prefer 省略。
+    #[test]
+    fn pg_sslmode_value_maps_tls_modes() {
+        use fluxdb_core::PostgresSslMode as S;
+        assert_eq!(pg_sslmode_value(S::Disabled), Some("disable"));
+        assert_eq!(pg_sslmode_value(S::Require), Some("require"));
+        assert_eq!(pg_sslmode_value(S::VerifyCa), Some("verify-ca"));
+        assert_eq!(pg_sslmode_value(S::VerifyFull), Some("verify-full"));
+        assert_eq!(pg_sslmode_value(S::Prefer), None);
+    }
+
+    /// pg_dump 调用参数：默认 plain+inserts+no-owner+no-acl；owner/acl 勾选才保留；
+    /// 结构/数据范围；表过滤；密码与 sslmode 只入 env 不入 argv。
+    #[test]
+    fn pg_dump_invocation_builds_scope_owner_acl_and_keeps_secrets_in_env() {
+        use fluxdb_core::PostgresSslMode;
+        let iv = pg_dump_invocation(
+            "pg_dump",
+            "h",
+            5432,
+            "u",
+            "db",
+            Some("secret"),
+            PostgresSslMode::Require,
+            PgDumpScope::Full,
+            false,
+            false,
+            &[],
+        );
+        assert!(iv.args.contains(&"--format=plain".to_string()));
+        assert!(iv.args.contains(&"--inserts".to_string()));
+        assert!(iv.args.contains(&"--no-owner".to_string()));
+        assert!(iv.args.contains(&"--no-acl".to_string()));
+        assert!(!iv.args.iter().any(|a| a.contains("secret")), "密码不得入 argv");
+        assert!(!iv.args.iter().any(|a| a.contains("sslmode")), "sslmode 不得入 argv");
+        assert!(iv.env.iter().any(|(k, v)| k == "PGPASSWORD" && v == "secret"));
+        assert!(iv.env.iter().any(|(k, v)| k == "PGSSLMODE" && v == "require"));
+
+        // 勾选 owner/acl：不再追加 --no-owner/--no-acl。
+        let with_owner = pg_dump_invocation(
+            "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::Prefer,
+            PgDumpScope::Full, true, true, &[],
+        );
+        assert!(!with_owner.args.contains(&"--no-owner".to_string()));
+        assert!(!with_owner.args.contains(&"--no-acl".to_string()));
+
+        // 结构/数据范围。
+        let schema_only = pg_dump_invocation(
+            "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::Prefer,
+            PgDumpScope::SchemaOnly, false, false, &[],
+        );
+        assert!(schema_only.args.contains(&"--schema-only".to_string()));
+        let data_only = pg_dump_invocation(
+            "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::Prefer,
+            PgDumpScope::DataOnly, false, false, &[],
+        );
+        assert!(data_only.args.contains(&"--data-only".to_string()));
+
+        // 表过滤：按 -t schema.table 透传。
+        let tables = pg_dump_invocation(
+            "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::Prefer,
+            PgDumpScope::Full, false, false, &["public.t".to_string(), "s.q".to_string()],
+        );
+        assert!(tables.args.windows(2).any(|w| w[0] == "-t" && w[1] == "public.t"));
+        assert!(tables.args.windows(2).any(|w| w[0] == "-t" && w[1] == "s.q"));
+    }
+
+    /// pg_dump 版本兼容：客户端主版本不得低于服务器主版本；未知则放行。
+    #[test]
+    fn pg_dump_version_compatibility_and_parsing() {
+        assert_eq!(pg_tool_major_version("pg_dump (PostgreSQL) 16.15"), Some(16));
+        assert_eq!(pg_tool_major_version("pg_dump (PostgreSQL) 14.11"), Some(14));
+        assert!(pg_dump_version_compatible(Some(16), Some(16)));
+        assert!(pg_dump_version_compatible(Some(17), Some(14)));
+        assert!(!pg_dump_version_compatible(Some(14), Some(16)));
+        assert!(pg_dump_version_compatible(None, Some(16)));
+        assert!(pg_dump_version_compatible(Some(14), None));
+    }
+
+    /// 真实 PG：对象权限读取（aclexplode）+ 授权/撤销往返。
+    #[test]
+    fn pg_live_smoke_relation_grants_roundtrip() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let role = format!("t26_grantee_{suffix}");
+        connector
+            .create_role(config.id, &role, true, None)
+            .expect("建授权角色应成功");
+
+        // 建临时表 + 授权 SELECT（schema 限定句柄）。
+        let mut setup = pg_query_request(&config, None);
+        setup.text = format!(
+            "DROP TABLE IF EXISTS t26_acl CASCADE; \
+             CREATE TABLE t26_acl(id int); \
+             GRANT SELECT ON \"public\".\"t26_acl\" TO \"{role}\";"
+        );
+        connector.execute(&setup).expect("建表+授权应成功");
+
+        let grants = connector
+            .list_relation_grants(config.id, "public", "t26_acl")
+            .expect("列对象权限应成功");
+        assert!(
+            grants
+                .iter()
+                .any(|(grantee, privilege, _)| grantee == &role && privilege == "SELECT"),
+            "应含 {role} 的 SELECT 授权：{grants:?}"
+        );
+
+        // 清理表与角色。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t26_acl CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理表应成功");
+        connector.drop_role(config.id, &role).expect("清理角色应成功");
+    }
+
+    /// T26：广义对象权限读取（数据库/schema/表/序列/函数），经 `PgObjectGrantScope` 分支。
+    #[test]
+    fn pg_live_smoke_object_grants_per_scope() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let role = format!("t26_scope_{suffix}");
+        connector
+            .create_role(config.id, &role, true, None)
+            .expect("建授权角色应成功");
+
+        // 建 schema/表/序列 + 函数，并对 role 执行各类对象授权。
+        let mut setup = pg_query_request(&config, None);
+        setup.text = format!(
+            "CREATE SCHEMA t26_sco; \
+             CREATE TABLE t26_sco.tbl(id int); \
+             CREATE SEQUENCE t26_sco.seq; \
+             CREATE FUNCTION t26_sco.fn(a int) RETURNS int LANGUAGE sql AS 'SELECT a'; \
+             GRANT SELECT ON t26_sco.tbl TO \"{role}\"; \
+             GRANT USAGE ON SEQUENCE t26_sco.seq TO \"{role}\"; \
+             GRANT EXECUTE ON FUNCTION t26_sco.fn(int) TO \"{role}\";"
+        );
+        connector.execute(&setup).expect("建对象+授权应成功");
+
+        // 表 SELECT：显式条目命中；owner 标记正确；ACL 非 NULL。
+        let table = connector
+            .list_object_grants(
+                config.id,
+                &fluxdb_core::PgObjectGrantScope::Relation {
+                    schema: "t26_sco".into(),
+                    name: "tbl".into(),
+                    kind: fluxdb_core::PgRelationKind::Table,
+                },
+            )
+            .expect("列表权限应成功");
+        assert_eq!(table.owner, "postgres", "表 owner 应为 postgres");
+        assert!(!table.acl_is_null, "被授权后 ACL 不应为 NULL");
+        assert!(
+            table
+                .entries
+                .iter()
+                .any(|e| e.grantee == role && e.privilege == "SELECT" && !e.is_owner),
+            "表应含 {role} 的 SELECT（非 owner 标记）：{:?}",
+            table.entries
+        );
+        // owner 的权限来自属主身份而非 ACL：owner 自己的 DEFAULT 条目不因显式授权而被误当可撤销的直接授权。
+        assert!(
+            table.entries.iter().any(|e| e.is_owner),
+            "owner 应有 is_owner 标记：{:?}",
+            table.entries
+        );
+        // 序列 USAGE。
+        let seq_grants = connector
+            .list_object_grants(
+                config.id,
+                &fluxdb_core::PgObjectGrantScope::Relation {
+                    schema: "t26_sco".into(),
+                    name: "seq".into(),
+                    kind: fluxdb_core::PgRelationKind::Sequence,
+                },
+            )
+            .expect("列序列权限应成功");
+        assert!(
+            seq_grants
+                .entries
+                .iter()
+                .any(|e| e.grantee == role && e.privilege == "USAGE"),
+            "序列应含 {role} 的 USAGE：{:?}",
+            seq_grants.entries
+        );
+        // 函数 EXECUTE（按签名区分重载）。签名即 pg_get_function_identity_arguments 输出
+        // （`a integer` 含参数名），T27 从补全/元数据侧取同源字符串。
+        let fn_grants = connector
+            .list_object_grants(
+                config.id,
+                &fluxdb_core::PgObjectGrantScope::Routine {
+                    schema: "t26_sco".into(),
+                    name: "fn".into(),
+                    signature: "a integer".into(),
+                },
+            )
+            .expect("列函数权限应成功");
+        assert!(
+            fn_grants
+                .entries
+                .iter()
+                .any(|e| e.grantee == role && e.privilege == "EXECUTE"),
+            "函数应含 {role} 的 EXECUTE：{:?}",
+            fn_grants.entries
+        );
+        // schema：未显式授权时 ACL 为 NULL = 默认权限（owner 全权），**不等于没有权限**——
+        // 断言 acl_is_null=true 且 owner 正确，供 UI 明示「默认权限」而非空表。
+        let schema_grants = connector
+            .list_object_grants(
+                config.id,
+                &fluxdb_core::PgObjectGrantScope::Schema {
+                    schema: "t26_sco".into(),
+                },
+            )
+            .expect("列 schema 权限应成功");
+        assert!(schema_grants.acl_is_null, "schema 未授权应为默认（NULL ACL）");
+        assert_eq!(schema_grants.owner, "postgres", "schema owner 应为 postgres");
+        assert!(schema_grants.entries.is_empty(), "NULL ACL 无显式条目");
+        // PUBLIC 授权（表）：grant PUBLIC SELECT 后显式条目含空 grantee。
+        let mut pub_setup = pg_query_request(&config, None);
+        pub_setup.text = "GRANT SELECT ON t26_sco.tbl TO PUBLIC".to_string();
+        connector.execute(&pub_setup).expect("PUBLIC 授权应成功");
+        let table_public = connector
+            .list_object_grants(
+                config.id,
+                &fluxdb_core::PgObjectGrantScope::Relation {
+                    schema: "t26_sco".into(),
+                    name: "tbl".into(),
+                    kind: fluxdb_core::PgRelationKind::Table,
+                },
+            )
+            .expect("列表权限应成功");
+        assert!(
+            table_public
+                .entries
+                .iter()
+                .any(|e| e.grantee.is_empty() && e.privilege == "SELECT"),
+            "PUBLIC 授权应以空 grantee 呈现：{:?}",
+            table_public.entries
+        );
+
+        // 授权（含 GRANT OPTION）+ 撤销往返：经连接器 grant_object_privilege/revoke_object_privilege。
+        let tbl_scope = fluxdb_core::PgObjectGrantScope::Relation {
+            schema: "t26_sco".into(),
+            name: "tbl".into(),
+            kind: fluxdb_core::PgRelationKind::Table,
+        };
+        connector
+            .grant_object_privilege(
+                config.id,
+                "INSERT",
+                &tbl_scope,
+                &role,
+                true,
+            )
+            .expect("带 GRANT OPTION 授权应成功");
+        let after_grant = connector
+            .list_object_grants(config.id, &tbl_scope)
+            .expect("列表权限应成功");
+        assert!(
+            after_grant
+                .entries
+                .iter()
+                .any(|e| e.grantee == role && e.privilege == "INSERT" && e.grant_option),
+            "应含 {role} 的 INSERT（带 GRANT OPTION）：{:?}",
+            after_grant.entries
+        );
+        connector
+            .revoke_object_privilege(
+                config.id,
+                "INSERT",
+                &tbl_scope,
+                &role,
+            )
+            .expect("撤销授权应成功");
+        let after_revoke = connector
+            .list_object_grants(config.id, &tbl_scope)
+            .expect("列表权限应成功");
+        assert!(
+            !after_revoke
+                .entries
+                .iter()
+                .any(|e| e.grantee == role && e.privilege == "INSERT"),
+            "撤销后不应再有 {role} 的 INSERT：{:?}",
+            after_revoke.entries
+        );
+
+        // 清理对象与角色。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP SCHEMA t26_sco CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理 schema 应成功");
+        connector
+            .drop_role(config.id, &role)
+            .expect("清理角色应成功");
+    }
+
+    /// T26：角色**有效**权限——区分直接授权与经成员关系继承（+PUBLIC/owner），防止把继承误当可直接撤销。
+    #[test]
+    fn pg_live_smoke_role_effective_grants() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let direct_role = format!("t26_direct_{suffix}");
+        let inherit_role = format!("t26_inherit_{suffix}");
+        let none_role = format!("t26_none_{suffix}");
+        let group = format!("t26_group_{suffix}");
+        for r in [&direct_role, &inherit_role, &none_role] {
+            connector.create_role(config.id, r, true, None).expect("建登录角色应成功");
+        }
+        connector
+            .create_role(config.id, &group, false, None)
+            .expect("建组角色应成功");
+        // direct_role 直接授权 SELECT；group 授权 SELECT，inherit_role 仅是 group 成员 → 继承。
+        connector
+            .grant_role_membership(config.id, &group, &inherit_role, false, true, true)
+            .expect("inherit_role 加入 group 应成功");
+        let mut setup = pg_query_request(&config, None);
+        setup.text = format!(
+            "CREATE TABLE t26_eff(id int); \
+             GRANT SELECT ON t26_eff TO \"{direct_role}\"; \
+             GRANT SELECT ON t26_eff TO \"{group}\";"
+        );
+        connector.execute(&setup).expect("建表+授权应成功");
+
+        let scope = fluxdb_core::PgObjectGrantScope::Relation {
+            schema: "public".into(),
+            name: "t26_eff".into(),
+            kind: fluxdb_core::PgRelationKind::Table,
+        };
+        let direct = connector
+            .role_effective_grants(config.id, &scope, &direct_role)
+            .expect("读取直接角色有效权限应成功");
+        let d = direct
+            .iter()
+            .find(|g| g.privilege == "SELECT")
+            .expect("SELECT 应在有效权限列表中");
+        assert!(d.effective && d.direct, "直接授权：effective 且 direct");
+
+        // 继承角色：effective SELECT=true（经 group），但 direct=false（未对该角色显式授权）——
+        // 不可直接撤销，撤销应作用于 group。
+        let inherited = connector
+            .role_effective_grants(config.id, &scope, &inherit_role)
+            .expect("读取继承角色有效权限应成功");
+        let i = inherited
+            .iter()
+            .find(|g| g.privilege == "SELECT")
+            .expect("SELECT 应在有效权限列表中");
+        assert!(
+            i.effective && !i.direct,
+            "继承角色：effective=true 但 direct=false（不可直接撤销）：{:?}",
+            inherited
+        );
+
+        // 无授权角色：effective=false。
+        let none = connector
+            .role_effective_grants(config.id, &scope, &none_role)
+            .expect("读取无权限角色应成功");
+        let n = none
+            .iter()
+            .find(|g| g.privilege == "SELECT")
+            .expect("SELECT 应在列表中");
+        assert!(!n.effective && !n.direct, "无权限角色应 effective=false");
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t26_eff CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理表应成功");
+        connector.drop_role(config.id, &group).expect("清理组角色应成功");
+        for r in [&direct_role, &inherit_role, &none_role] {
+            connector.drop_role(config.id, r).expect("清理角色应成功");
+        }
+    }
+
+    /// T23：一致快照导出分页——单 REPEATABLE READ 事务内完整、无重漏行、可取消。
+    #[test]
+    fn pg_live_smoke_export_pages_snapshot() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let path = ObjectPath {
+            connection_id: ConnectionId(1),
+            kind: ObjectKind::Table,
+            database: Some(db_name),
+            schema: Some("public".to_string()),
+            name: "t23_export".to_string(),
+        };
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t23_export CASCADE; \
+            CREATE TABLE t23_export(id integer PRIMARY KEY, payload text); \
+            INSERT INTO t23_export (id, payload) \
+                SELECT g, repeat('x', 50) FROM generate_series(1, 10000) g; \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建表+10000 行应成功");
+
+        // 完整导出：收集全部 id，验证无重漏。
+        let mut seen = std::collections::HashSet::new();
+        let mut pages: usize = 0;
+        let mut collected: usize = 0;
+        let cancel = || false;
+        let mut on_page = |page: DataPage| {
+            pages += 1;
+            for row in &page.rows {
+                if let CellValue::I64(id) = row.values[0] {
+                    seen.insert(id);
+                }
+            }
+            collected += page.rows.len();
+            true
+        };
+        pg_export_pages(&config, &path, &[], &[], &cancel, &mut on_page)
+            .expect("快照导出应成功");
+        assert_eq!(collected, 10000, "应完整导出全部行");
+        assert_eq!(seen.len(), 10000, "id 不应重复/缺失");
+        assert!(pages >= 3, "10000 行应跨多页：{pages}");
+
+        // 取消：导出少量后置 cancel → 提前结束。
+        let mut visited: usize = 0;
+        let cancel_early = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_flag = cancel_early.clone();
+        let mut on_page_cancel = |page: DataPage| {
+            visited += page.rows.len();
+            if visited >= 3000 {
+                cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                false // 提前停止
+            } else {
+                true
+            }
+        };
+        pg_export_pages(&config, &path, &[], &[], &cancel, &mut on_page_cancel)
+            .expect("取消导出不应报错");
+        assert!(visited < 10000, "取消后不应导出全部：{visited}");
+
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t23_export CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理表应成功");
+    }
+
+    #[test]
+    fn pg_live_smoke_create_delete_database() {
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let db_name = config
+            .postgres_profile
+            .as_ref()
+            .unwrap()
+            .basic
+            .maintenance_database
+            .clone();
+
+        // 建库：UTF8 编码（不强制 locale —— 测试容器模板库 collation 固定 en_US.utf8，
+        // 传不匹配的 locale 会报 collation 不兼容；locale 映射已由单元测试覆盖）。
+        let create = CreateDatabaseRequest {
+            connection_id: config.id,
+            name: "t07_db".to_string(),
+            charset: "UTF8".to_string(),
+            collation: String::new(),
+            owner: String::new(),
+            template: String::new(),
+            path: None,
+        };
+        connector.create_database(&create).expect("建库应成功");
+        let databases = connector.list_objects(None).expect("列库应成功");
+        assert!(
+            databases.iter().any(|o| o.path.name == "t07_db"),
+            "新建的 t07_db 应出现在对象树"
+        );
+
+        // 维护库保护：删除当前维护库应被拒绝。
+        let guard = connector.delete_database(config.id, &db_name);
+        assert!(guard.is_err(), "删除当前维护库应被拒绝");
+
+        // 删库：对象树不再包含。
+        connector.delete_database(config.id, "t07_db").expect("删库应成功");
+        let after = connector.list_objects(None).expect("列库应成功");
+        assert!(
+            !after.iter().any(|o| o.path.name == "t07_db"),
+            "删除后 t07_db 不应再出现"
+        );
+    }
+
+    // ===== T08 结构元数据（单元 + 真实冒烟）=====
+
+    /// 合成一个覆盖 列默认/identity/generated/PK/唯一/CHECK/FK/索引/注释 的完整结构，
+    /// 用于校验 DDL 重建的片段与顺序（纯函数，不依赖服务器）。
+    fn t08_structure() -> TableStructure {
+        TableStructure {
+            database: Some("db".to_string()),
+            schema: Some("public".to_string()),
+            name: "t08_master".to_string(),
+            kind: ObjectKind::Table,
+            columns: vec![
+                ColumnMeta {
+                    name: "id".into(),
+                    ordinal: 1,
+                    data_type: "integer".into(),
+                    type_schema: Some("pg_catalog".into()),
+                    type_name: Some("int4".into()),
+                    nullable: false,
+                    default_expr: None,
+                    is_identity: true,
+                    identity_generation: Some("a".into()),
+                    is_generated: false,
+                    is_editable: false,
+                    primary_key: true,
+                    unique_key: false,
+                    comment: None,
+                },
+                ColumnMeta {
+                    name: "name".into(),
+                    ordinal: 2,
+                    data_type: "character varying(50)".into(),
+                    type_schema: Some("pg_catalog".into()),
+                    type_name: Some("varchar".into()),
+                    nullable: false,
+                    default_expr: Some("'n/a'::character varying".into()),
+                    is_identity: false,
+                    identity_generation: None,
+                    is_generated: false,
+                    is_editable: true,
+                    primary_key: false,
+                    unique_key: true,
+                    comment: Some("名称".into()),
+                },
+                ColumnMeta {
+                    name: "total".into(),
+                    ordinal: 3,
+                    data_type: "numeric(10,2)".into(),
+                    type_schema: Some("pg_catalog".into()),
+                    type_name: Some("numeric".into()),
+                    nullable: true,
+                    default_expr: None,
+                    is_identity: false,
+                    identity_generation: None,
+                    is_generated: false,
+                    is_editable: true,
+                    primary_key: false,
+                    unique_key: false,
+                    comment: None,
+                },
+                ColumnMeta {
+                    name: "full_name".into(),
+                    ordinal: 4,
+                    data_type: "text".into(),
+                    type_schema: Some("pg_catalog".into()),
+                    type_name: Some("text".into()),
+                    nullable: true,
+                    default_expr: None,
+                    is_identity: false,
+                    identity_generation: None,
+                    is_generated: true,
+                    is_editable: false,
+                    primary_key: false,
+                    unique_key: false,
+                    comment: None,
+                },
+            ],
+            primary_key: vec!["id".into()],
+            foreign_keys: vec![ForeignKeyMeta {
+                name: "t08_master_parent_fk".into(),
+                columns: vec!["parent_id".into()],
+                ref_schema: Some("public".into()),
+                ref_table: "t08_parent".into(),
+                ref_columns: vec!["id".into()],
+                on_delete: Some("CASCADE".into()),
+                on_update: Some("SET NULL".into()),
+                match_type: Some("s".into()),
+                deferrable: true,
+                initially_deferred: true,
+                definition: "FOREIGN KEY (parent_id) REFERENCES public.t08_parent(id)".into(),
+            }],
+            checks: vec![CheckMeta {
+                name: "t08_master_total_check".into(),
+                expression: "(total >= 0)".into(),
+                definition: "CHECK ((total >= 0))".into(),
+            }],
+            unique_keys: vec![UniqueKeyMeta {
+                name: "t08_master_name_key".into(),
+                columns: vec!["name".into()],
+                is_constraint: true,
+                definition: "UNIQUE (name)".into(),
+            }],
+            indexes: vec![
+                IndexMeta {
+                    name: "t08_master_lower_idx".into(),
+                    columns: vec![IndexColumnItem {
+                        column: None,
+                        expression: Some("lower(name)".into()),
+                        descending: false,
+                        nulls_first: false,
+                    }],
+                    include_columns: vec!["total".into()],
+                    is_unique: false,
+                    is_primary: false,
+                    index_type: Some("btree".into()),
+                    predicate: Some("(total > 0)".into()),
+                    valid: true,
+                    definition:
+                        "CREATE INDEX t08_master_lower_idx ON public.t08_master USING btree (lower(name)) INCLUDE (total) WHERE (total > 0)"
+                            .into(),
+                },
+                IndexMeta {
+                    name: "t08_master_pkey".into(),
+                    columns: vec![IndexColumnItem {
+                        column: Some("id".into()),
+                        expression: None,
+                        descending: false,
+                        nulls_first: false,
+                    }],
+                    include_columns: vec![],
+                    is_unique: true,
+                    is_primary: true,
+                    index_type: Some("btree".into()),
+                    predicate: None,
+                    valid: true,
+                    definition: "CREATE UNIQUE INDEX t08_master_pkey ON public.t08_master USING btree (id)".into(),
+                },
+                IndexMeta {
+                    name: "t08_master_name_key".into(),
+                    columns: vec![IndexColumnItem {
+                        column: Some("name".into()),
+                        expression: None,
+                        descending: false,
+                        nulls_first: false,
+                    }],
+                    include_columns: vec![],
+                    is_unique: true,
+                    is_primary: false,
+                    index_type: Some("btree".into()),
+                    predicate: None,
+                    valid: true,
+                    definition: "CREATE UNIQUE INDEX t08_master_name_key ON public.t08_master USING btree (name)".into(),
+                },
+            ],
+            triggers: vec![TriggerMeta {
+                name: "t08_master_audit".into(),
+                event: "INSERT OR UPDATE".into(),
+                timing: "AFTER".into(),
+                level: "ROW".into(),
+                function: "public.audit_fn()".into(),
+                enabled: true,
+                definition: "CREATE TRIGGER t08_master_audit AFTER INSERT OR UPDATE ON public.t08_master FOR EACH ROW EXECUTE FUNCTION public.audit_fn()".into(),
+            }],
+            comment: Some("主表".into()),
+        }
+    }
+
+    #[test]
+    fn pg_build_table_ddl_round_trips_clauses() {
+        let ddl = build_table_ddl(&t08_structure());
+
+        // 列定义：identity、默认、NOT NULL、generated 都在位。
+        assert!(ddl.contains("\"id\" integer GENERATED ALWAYS AS IDENTITY NOT NULL"));
+        assert!(ddl.contains("\"name\" character varying(50) DEFAULT 'n/a'::character varying NOT NULL"));
+        assert!(ddl.contains("\"full_name\" text GENERATED ALWAYS AS (expr) STORED"));
+        // 主键 / 唯一约束。
+        assert!(ddl.contains("PRIMARY KEY (\"id\")"));
+        assert!(ddl.contains("CONSTRAINT \"t08_master_name_key\" UNIQUE (\"name\")"));
+        // CHECK 表达式。
+        assert!(ddl.contains("CONSTRAINT \"t08_master_total_check\" CHECK ((total >= 0))"));
+        // 外键：动作/延迟属性。
+        assert!(ddl.contains("CONSTRAINT \"t08_master_parent_fk\" FOREIGN KEY (\"parent_id\") REFERENCES \"public\".\"t08_parent\" (\"id\") ON DELETE CASCADE ON UPDATE SET NULL DEFERRABLE INITIALLY DEFERRED"));
+        // 独立表达式索引保留（含 INCLUDE/predicate）；主键与唯一约束背衬索引不应重复出现。
+        assert!(ddl.contains("CREATE INDEX t08_master_lower_idx ON public.t08_master USING btree (lower(name)) INCLUDE (total) WHERE (total > 0);"));
+        assert!(!ddl.contains("CREATE UNIQUE INDEX t08_master_pkey"));
+        assert!(!ddl.contains("CREATE UNIQUE INDEX t08_master_name_key"));
+        // 注释。
+        assert!(ddl.contains("COMMENT ON TABLE \"public\".\"t08_master\" IS '主表';"));
+        assert!(ddl.contains("COMMENT ON COLUMN \"public\".\"t08_master\".\"name\" IS '名称';"));
+    }
+
+    #[test]
+    fn pg_split_index_keys_respects_nesting_and_quotes() {
+        let def = "CREATE INDEX i ON s.t USING btree (lower(name), \"weird col\" DESC NULLS LAST) INCLUDE (x) WHERE (a > 0)";
+        let keys = pg_split_index_keys(def);
+        assert_eq!(keys, vec!["lower(name)", "\"weird col\" DESC NULLS LAST"]);
+        // 表达式键项解析（attnum==0 信号驱动）。
+        let expr_item = pg_parse_index_item(&keys[0], true);
+        assert!(expr_item.column.is_none());
+        assert_eq!(expr_item.expression.as_deref(), Some("lower(name)"));
+        // 列 + DESC + NULLS LAST 解析（命名列）。
+        let col_item = pg_parse_index_item(&keys[1], false);
+        assert_eq!(col_item.column.as_deref(), Some("\"weird col\""));
+        assert!(col_item.descending);
+        assert!(!col_item.nulls_first);
+    }
+
+    #[test]
+    fn pg_trigger_bits_decode_event_and_timing() {
+        // AFTER INSERT OR UPDATE（ROW）: ROW=1, AFTER 无位, INSERT=4, UPDATE=16 → 1|4|16=21。
+        assert_eq!(pg_trigger_event(21), "INSERT OR UPDATE");
+        assert_eq!(pg_trigger_timing(21), "AFTER");
+        // BEFORE DELETE（ROW）: 1|2|8=11。
+        assert_eq!(pg_trigger_event(11), "DELETE");
+        assert_eq!(pg_trigger_timing(11), "BEFORE");
+        // INSTEAD OF（STATEMENT? 实际行级）: INSTEAD=64|INSERT=4 = 68。
+        assert_eq!(pg_trigger_timing(68), "INSTEAD OF");
+    }
+
+    #[test]
+    fn pg_indexes_from_structure_keeps_expression_item() {
+        let structure = t08_structure();
+        let indexes = pg_indexes_from_structure(&structure);
+        let expr_index = indexes
+            .iter()
+            .find(|i| i.name == "t08_master_lower_idx")
+            .expect("表达式索引应在索引列表");
+        assert_eq!(expr_index.columns, vec!["lower(name)"]);
+        assert_eq!(expr_index.index_type.as_deref(), Some("btree"));
+        assert!(!expr_index.is_unique);
+        assert!(!expr_index.is_primary);
+    }
+
+    #[test]
+    fn pg_foreign_keys_from_structure_joins_composite_columns() {
+        let mut structure = t08_structure();
+        structure.foreign_keys = vec![ForeignKeyMeta {
+            name: "fk_multi".into(),
+            columns: vec!["a".into(), "b".into()],
+            ref_schema: Some("public".into()),
+            ref_table: "t".into(),
+            ref_columns: vec!["x".into(), "y".into()],
+            on_delete: None,
+            on_update: None,
+            match_type: Some("s".into()),
+            deferrable: false,
+            initially_deferred: false,
+            definition: String::new(),
+        }];
+        let fks = pg_foreign_keys_from_structure(&structure);
+        assert_eq!(fks.len(), 1);
+        // 复合外键按序位折叠展示，不丢序、不出现笛卡尔积排列。
+        assert_eq!(fks[0].column, "a, b");
+        assert_eq!(fks[0].ref_column, "x, y");
+        assert_eq!(fks[0].ref_table, "t");
+    }
+
+    #[test]
+    fn pg_triggers_from_structure_maps_display() {
+        let structure = t08_structure();
+        let triggers = pg_triggers_from_structure(&structure);
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(triggers[0].name, "t08_master_audit");
+        assert_eq!(triggers[0].event, "AFTER INSERT OR UPDATE");
+        assert_eq!(triggers[0].timing, "ROW");
+        assert!(triggers[0].body.as_deref().unwrap().starts_with("CREATE TRIGGER"));
+    }
+
+    /// T08 真实冒烟：在维护库 public 下建一张含 列/PK/唯一/FK/CHECK/表达式索引/触发器/注释
+    /// 的表，逐 tab 校验元数据投影与 DDL 重建，随后清理。
+    #[test]
+    fn pg_live_smoke_table_info() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG 结构元数据冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TRIGGER IF EXISTS t08_audit ON t08_parent CASCADE; \
+            DROP TABLE IF EXISTS t08_child CASCADE; \
+            DROP TABLE IF EXISTS t08_master CASCADE; \
+            DROP TABLE IF EXISTS t08_parent CASCADE; \
+            CREATE TABLE t08_parent(id integer PRIMARY KEY); \
+            CREATE TABLE t08_child( \
+                id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, \
+                name varchar(50) NOT NULL DEFAULT 'x'::varchar, \
+                total numeric(10,2) CHECK (total >= 0), \
+                parent_id integer \
+            ); \
+            ALTER TABLE t08_child ADD CONSTRAINT t08_child_parent_fk \
+                FOREIGN KEY (parent_id) REFERENCES t08_parent(id) ON DELETE CASCADE; \
+            ALTER TABLE t08_child ADD CONSTRAINT t08_child_name_key UNIQUE (name); \
+            CREATE INDEX t08_child_lower_idx ON t08_child (lower(name)); \
+            COMMENT ON TABLE t08_child IS '子表'; \
+            COMMENT ON COLUMN t08_child.name IS '名称'; \
+            CREATE OR REPLACE FUNCTION t08_audit_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql; \
+            CREATE TRIGGER t08_audit AFTER INSERT OR UPDATE ON t08_child \
+                FOR EACH ROW EXECUTE FUNCTION t08_audit_fn(); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建临时结构应成功");
+
+        let child_path = ObjectPath {
+            connection_id: config.id,
+            database: config
+                .postgres_profile
+                .as_ref()
+                .unwrap()
+                .basic
+                .maintenance_database
+                .clone()
+                .into(),
+            schema: Some("public".to_string()),
+            name: "t08_child".to_string(),
+            kind: ObjectKind::Table,
+        };
+
+        // 索引：含主键/唯一约束背衬/表达式索引；表达式键项、INCLUDE/predicate 不丢。
+        let indexes = connector.list_indexes(&child_path).expect("列索引应成功");
+        let pkey = indexes.iter().find(|i| i.name == "t08_child_pkey").expect("主键索引存在");
+        assert!(pkey.is_primary && pkey.is_unique);
+        let lower = indexes
+            .iter()
+            .find(|i| i.name == "t08_child_lower_idx")
+            .expect("表达式索引存在");
+        assert!(
+            lower.columns.iter().any(|c| c.contains("lower")),
+            "表达式键项应保留，实际 {:?}",
+            lower.columns
+        );
+        let name_key = indexes
+            .iter()
+            .find(|i| i.name == "t08_child_name_key")
+            .expect("唯一约束背衬索引存在");
+        assert!(name_key.is_unique);
+
+        // 外键：本表列→被引用表 正确投影（无笛卡尔积）。
+        let fks = connector.list_foreign_keys(&child_path).expect("列外键应成功");
+        assert!(
+            fks.iter().any(|f| f.name == "t08_child_parent_fk"
+                && f.column == "parent_id"
+                && f.ref_schema.as_deref() == Some("public")
+                && f.ref_table == "t08_parent"
+                && f.ref_column == "id"),
+            "外键投影应与建表一致，实际 {:?}",
+            fks
+        );
+
+        // 触发器：用户触发器可见，内部约束触发器被过滤。
+        let triggers = connector.list_triggers(&child_path).expect("列触发器应成功");
+        assert!(
+            triggers.iter().any(|t| t.name == "t08_audit" && t.timing == "ROW"),
+            "用户触发器应可见，实际 {:?}",
+            triggers
+        );
+
+        // DDL：重建包含 列/约束/索引/注释。
+        let ddl = connector.table_ddl(&child_path).expect("表 DDL 应成功");
+        assert!(ddl.contains("\"id\" integer GENERATED BY DEFAULT AS IDENTITY"));
+        // pg_get_expr 会把 varchar 规整为 character varying，DDL 重建以此为准。
+        assert!(ddl.contains("DEFAULT 'x'::character varying"));
+        assert!(ddl.contains("PRIMARY KEY (\"id\")"));
+        assert!(ddl.contains("CONSTRAINT \"t08_child_parent_fk\""));
+        assert!(ddl.contains("ON DELETE CASCADE"));
+        assert!(ddl.contains("CREATE INDEX t08_child_lower_idx"));
+        assert!(ddl.contains("COMMENT ON TABLE \"public\".\"t08_child\" IS '子表';"));
+
+        // 视图 DDL 走 pg_get_viewdef。
+        let mut view_setup = pg_query_request(&config, None);
+        view_setup.text = "CREATE OR REPLACE VIEW t08_view AS SELECT id, name FROM t08_child".to_string();
+        connector.execute(&view_setup).expect("建视图应成功");
+        let view_path = ObjectPath {
+            connection_id: config.id,
+            database: child_path.database.clone(),
+            schema: Some("public".to_string()),
+            name: "t08_view".to_string(),
+            kind: ObjectKind::View,
+        };
+        let view_ddl = connector.table_ddl(&view_path).expect("视图 DDL 应成功");
+        assert!(
+            view_ddl.contains("CREATE OR REPLACE VIEW") && view_ddl.contains("t08_view"),
+            "视图 DDL 应由 viewdef 重建，实际 {view_ddl}"
+        );
+        connector
+            .execute(&{
+                let mut c = pg_query_request(&config, None);
+                c.text = "DROP VIEW t08_view".to_string();
+                c
+            })
+            .expect("清理视图应成功");
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TRIGGER IF EXISTS t08_audit ON t08_child; \
+                        DROP FUNCTION IF EXISTS t08_audit_fn(); \
+                        DROP TABLE IF EXISTS t08_child CASCADE; \
+                        DROP TABLE IF EXISTS t08_parent CASCADE"
+            .to_string();
+        connector.execute(&cleanup).expect("清理临时结构应成功");
+    }
+
+    fn env(key: &str) -> Option<String> {
+        std::env::var(key).ok().filter(|v| !v.is_empty())
+    }
+
+    // ---- T09 值转换、参数编码与 bytea ----
+
+    #[test]
+    fn pg_type_base_strips_modifiers_and_array_suffix() {
+        assert_eq!(pg_type_base("int4"), "int4");
+        assert_eq!(pg_type_base("varchar"), "varchar");
+        assert_eq!(pg_type_base("varchar(50)"), "varchar");
+        assert_eq!(pg_type_base("numeric(10,2)"), "numeric");
+        assert_eq!(pg_type_base("integer[]"), "integer");
+        assert_eq!(pg_type_base("text[]"), "text");
+        assert_eq!(pg_type_base(" double precision "), "double precision");
+    }
+
+    /// 逐值生成 `$n` 占位并分别绑定各自的值（回归：曾误用 `values[0].1` 让所有占位绑定同一值）。
+    #[test]
+    fn pg_insert_sql_binds_each_column_value() {
+        let mkcol = |name: &str, ty: &str| Column {
+            name: name.to_string(),
+            type_name: Some(ty.to_string()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        };
+        let c_id = mkcol("id", "int4");
+        let c_name = mkcol("name", "text");
+        let c_note = mkcol("note", "text");
+        let v_one = CellValue::I64(1);
+        let v_alice = CellValue::Text("alice".to_string());
+        let v_bob = CellValue::Text("bob".to_string());
+        let values = vec![(&c_id, &v_one), (&c_name, &v_alice), (&c_note, &v_bob)];
+        let (sql, _params) = pg_insert_sql("\"public\".\"t\"", &values).unwrap();
+        assert!(
+            sql.contains("(\"id\", \"name\", \"note\")") && sql.contains("VALUES ($1, $2, $3)"),
+            "插入 SQL 应带三列三占位，实际 {sql}"
+        );
+    }
+
+    #[test]
+    fn pg_insert_sql_empty_values_falls_back_to_default() {
+        let (sql, params) = pg_insert_sql("\"public\".\"t\"", &[]).unwrap();
+        assert_eq!(sql, "INSERT INTO \"public\".\"t\" DEFAULT VALUES");
+        assert!(params.is_empty());
+    }
+
+    /// 三态意图下 `pg_insert_values`：Default 省略、Null 显式 NULL、Value 写值、生成列剔除。
+    #[test]
+    fn pg_insert_values_respects_three_state_intents() {
+        let mkcol = |name: &str, ty: &str| Column {
+            name: name.to_string(),
+            type_name: Some(ty.to_string()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        };
+        let c_id = mkcol("id", "int4");
+        let c_name = mkcol("name", "text");
+        let c_gen = mkcol("gen", "int4"); // 模拟服务端生成列
+        let columns = vec![c_id.clone(), c_name.clone(), c_gen.clone()];
+        let row = Row { values: vec![CellValue::Null, CellValue::Null, CellValue::Null] };
+
+        // Default / Value / 生成列 → 只写 name；Null 列省略由数据库默认值填充。
+        let intents = vec![
+            WriteValue::Default,
+            WriteValue::Value(CellValue::Text("alice".to_string())),
+            WriteValue::Null,
+        ];
+        let generated: std::collections::BTreeSet<String> =
+            ["gen".to_string()].into_iter().collect();
+
+        let built = pg_insert_values(&row, &columns, &generated, Some(&intents)).unwrap();
+        assert_eq!(built.len(), 1, "仅未生成列且非 Default 的列被写入，实际 {built:?}");
+        assert_eq!(built[0].0.name, "name");
+        assert_eq!(built[0].1, &CellValue::Text("alice".to_string()));
+
+        // 显式 Null 意图 → 写入 NULL（区别于 Default 省略）。
+        let intents_null = vec![
+            WriteValue::Null,
+            WriteValue::Default,
+            WriteValue::Null,
+        ];
+        let built_null = pg_insert_values(&row, &columns, &generated, Some(&intents_null)).unwrap();
+        assert_eq!(built_null.len(), 1);
+        assert_eq!(built_null[0].0.name, "id");
+        assert_eq!(built_null[0].1, &CellValue::Null);
+    }
+
+    #[test]
+    fn pg_identity_where_maps_null_value_to_is_null() {
+        let id_val = CellValue::I64(7);
+        let null_val = CellValue::Null;
+        let identity = RowIdentity {
+            values: [("id".to_string(), id_val), ("deleted_at".to_string(), null_val)].into(),
+        };
+        let c_id = Column {
+            name: "id".to_string(),
+            type_name: Some("int4".to_string()),
+            nullable: false,
+            primary_key: true,
+            comment: None,
+        };
+        let c_del = Column {
+            name: "deleted_at".to_string(),
+            type_name: Some("timestamptz".to_string()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        };
+        let columns = vec![c_id, c_del];
+        let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
+        let where_sql = pg_identity_where(&mut params, &identity, &columns).unwrap();
+        // BTreeMap 按键升序迭代：deleted_at 在 id 之前。
+        // 身份按服务器文本比较（列投影 `::text`，参数以 text 绑定），
+        // 匹配整型 PK → 数字序列化与服务端 text 推断不一致的修复。
+        assert_eq!(
+            where_sql,
+            " WHERE \"deleted_at\" IS NULL AND \"id\"::text IS NOT DISTINCT FROM ($1)::text"
+        );
+        assert_eq!(params.len(), 1);
+        // 身份参数必须以 text（String）绑定，数字类型会触发 serialization 错误，
+        // 此处仅在 SQL 层面校验文本比较形式，实际绑定正确性由真库冒烟覆盖。
+    }
+
+    #[test]
+    fn pg_identity_where_rejects_empty_identity() {
+        let identity = RowIdentity { values: Default::default() };
+        assert!(pg_identity_where(&mut Vec::new(), &identity, &[]).is_err());
+    }
+
+    #[test]
+    fn pg_next_param_binds_null_as_option_none() {
+        let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
+        let p1 = pg_next_param(&mut params, &CellValue::Null, None);
+        let p2 = pg_next_param(&mut params, &CellValue::Text("x".to_string()), None);
+        assert_eq!(p1, "$1");
+        assert_eq!(p2, "$2");
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn pg_order_by_clause_appends_primary_key_tiebreaker() {
+        let mkcol = |name: &str, pk: bool| Column {
+            name: name.to_string(),
+            type_name: Some("int4".to_string()),
+            nullable: false,
+            primary_key: pk,
+            comment: None,
+        };
+        let columns = vec![
+            mkcol("id", true),
+            mkcol("score", false),
+            mkcol("name", false),
+        ];
+        // 无用户排序：追加主键 ASC 作为稳定 tie breaker。
+        assert_eq!(
+            pg_order_by_clause(&[], &columns),
+            " ORDER BY \"__fluxdb_source\".\"id\"",
+            "无用户排序时应只按主键稳定排序"
+        );
+        // 用户排序与主键不同列：主键追加在末尾，逗号分隔。
+        let sort = [SortSpec { field: "score".to_string(), direction: SortDirection::Desc }];
+        assert_eq!(
+            pg_order_by_clause(&sort, &columns),
+            " ORDER BY \"__fluxdb_source\".\"score\" DESC, \"__fluxdb_source\".\"id\"",
+            "同值行应按主键稳定排序"
+        );
+        // 用户已按主键排：不重复追加。
+        let sort = [SortSpec { field: "id".to_string(), direction: SortDirection::Asc }];
+        assert_eq!(
+            pg_order_by_clause(&sort, &columns),
+            " ORDER BY \"__fluxdb_source\".\"id\" ASC"
+        );
+        // 无主键表：保持共享排序原样，不额外 ORDER。
+        let no_pk = vec![mkcol("score", false)];
+        assert_eq!(pg_order_by_clause(&[], &no_pk), "");
+    }
+
+    #[test]
+    fn pg_data_sort_qualifies_source_column_to_avoid_text_alias_ordering() {
+        assert_eq!(
+            pg_data_source_column("id"),
+            "\"__fluxdb_source\".\"id\""
+        );
+        assert_eq!(
+            pg_data_source_column("a\"b"),
+            "\"__fluxdb_source\".\"a\"\"b\""
+        );
+    }
+
+    #[test]
+    fn mysql_order_by_clause_qualifies_source_column_to_avoid_text_alias_ordering() {
+        let mkcol = |name: &str, pk: bool| Column {
+            name: name.to_string(),
+            type_name: Some("int".to_string()),
+            nullable: false,
+            primary_key: pk,
+            comment: None,
+        };
+        let columns = vec![
+            mkcol("id", true),
+            mkcol("score", false),
+            mkcol("name", false),
+        ];
+        // 排序列必须通过源表别名引用真实列，避免命中 CAST 成 CHAR 的同名输出别名。
+        assert_eq!(
+            mysql_order_by_clause(&[], &columns),
+            " ORDER BY `__fluxdb_source`.`id`",
+            "无用户排序时应只按主键稳定排序"
+        );
+        let sort = [SortSpec { field: "score".to_string(), direction: SortDirection::Desc }];
+        assert_eq!(
+            mysql_order_by_clause(&sort, &columns),
+            " ORDER BY `__fluxdb_source`.`score` DESC, `__fluxdb_source`.`id`",
+            "同值行应按主键稳定排序"
+        );
+        let sort = [SortSpec { field: "id".to_string(), direction: SortDirection::Asc }];
+        assert_eq!(
+            mysql_order_by_clause(&sort, &columns),
+            " ORDER BY `__fluxdb_source`.`id` ASC"
+        );
+        let no_pk = vec![mkcol("score", false)];
+        assert_eq!(mysql_order_by_clause(&[], &no_pk), "");
+        // 引用需要转义（如含反引号的列名），别名限定不破坏转义。
+        assert_eq!(
+            mysql_data_source_column("a`b"),
+            "`__fluxdb_source`.`a``b`"
+        );
+    }
+
+    #[test]
+    fn pg_where_params_rejects_unknown_column_and_missing_value() {
+        let mkcol = |name: &str, ty: &str| Column {
+            name: name.to_string(),
+            type_name: Some(ty.to_string()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        };
+        let columns = vec![mkcol("id", "int4"), mkcol("name", "text")];
+
+        // 过滤引用不存在的列：显式报错，不静默忽略。
+        let unknown = vec![FilterSpec {
+            field: "nope".to_string(),
+            op: FilterOp::Eq,
+            values: vec![CellValue::Text("x".to_string())],
+            enabled: true,
+        }];
+        let err = pg_where_params(&unknown, &columns).unwrap_err();
+        assert!(err.to_string().contains("nope"), "应指出缺失列名: {err}");
+
+        // 空 IN：缺值操作必须显式报错。
+        let empty_in = vec![FilterSpec {
+            field: "id".to_string(),
+            op: FilterOp::InList,
+            values: vec![],
+            enabled: true,
+        }];
+        assert!(
+            pg_where_params(&empty_in, &columns).is_err(),
+            "空 IN 应报错而非丢弃"
+        );
+    }
+
+    #[test]
+    fn pg_where_params_translates_typed_and_pattern_filters() {
+        let mkcol = |name: &str, ty: &str| Column {
+            name: name.to_string(),
+            type_name: Some(ty.to_string()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        };
+        let columns = vec![
+            mkcol("id", "int4"),
+            mkcol("price", "numeric(8,2)"),
+            mkcol("name", "text"),
+        ];
+        // 文本值写非字符串列 → 双重转换占位（对齐 T09 绑定策略）。
+        let between = vec![FilterSpec {
+            field: "price".to_string(),
+            op: FilterOp::Between,
+            values: vec![
+                CellValue::Text("1.00".to_string()),
+                CellValue::Text("9.99".to_string()),
+            ],
+            enabled: true,
+        }];
+        let (where_sql, params) = pg_where_params(&between, &columns).unwrap();
+        assert!(
+            where_sql.contains("CAST(CAST($1 AS text) AS numeric(8,2))")
+                && where_sql.contains("CAST(CAST($2 AS text) AS numeric(8,2))"),
+            "numeric 列应有双重转换占位: {where_sql}"
+        );
+        assert_eq!(params.len(), 2);
+
+        // Contains → LIKE `%值%` 参数化。
+        let contains = vec![FilterSpec {
+            field: "name".to_string(),
+            op: FilterOp::Contains,
+            values: vec![CellValue::Text("alice".to_string())],
+            enabled: true,
+        }];
+        let (where_sql, params) = pg_where_params(&contains, &columns).unwrap();
+        assert!(
+            where_sql.contains("\"name\" LIKE $1"),
+            "Contains 应翻译为 LIKE: {where_sql}"
+        );
+        assert_eq!(params.len(), 1);
+    }
+
+    /// T09 冒烟：建含类型化字段与 bytea 的表 → 类型化读取 + 二进制投影 →
+    /// 编辑提交(插/改/删) + 单格完整二进制读取。真实 PG 才跑。
+    #[test]
+    fn pg_live_smoke_typed_read_binary_and_apply_changes() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T09 冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t09_typed CASCADE; \
+            CREATE TABLE t09_typed( \
+                id integer PRIMARY KEY, \
+                price numeric(8,2), \
+                ratio double precision, \
+                tags text[], \
+                meta jsonb, \
+                payload bytea, \
+                created_at timestamptz \
+            ); \
+            INSERT INTO t09_typed \
+                (id, price, ratio, tags, meta, payload, created_at) VALUES \
+                (1, 12.50, 0.25, ARRAY['a','b'], '{\"k\":1}', \
+                 decode('deadbeef','hex'), '2024-01-02 03:04:05+00'); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建临时结构应成功");
+
+        let path = ObjectPath {
+            connection_id: config.id,
+            database: config
+                .postgres_profile
+                .as_ref()
+                .unwrap()
+                .basic
+                .maintenance_database
+                .clone()
+                .into(),
+            schema: Some("public".to_string()),
+            name: "t09_typed".to_string(),
+            kind: ObjectKind::Table,
+        };
+
+        // 有条件的完整读取：类型化值应解码为对应 CellValue（numeric 文本、jsonb Json、bytea 摘要）。
+        let page = connector.load_data(&path, 0, 50, &[], &[]).expect("读取数据应成功");
+        assert_eq!(page.rows.len(), 1, "应读到 1 行");
+        let row = &page.rows[0];
+        let index_of = |name: &str| page.columns.iter().position(|c| c.name == name).unwrap();
+        let i_price = index_of("price");
+        let i_ratio = index_of("ratio");
+        let i_tags = index_of("tags");
+        let i_meta = index_of("meta");
+        let i_payload = index_of("payload");
+        assert_eq!(row.values[i_price], CellValue::Text("12.50".to_string()));
+        assert_eq!(row.values[i_ratio], CellValue::F64(0.25));
+        assert_eq!(row.values[i_tags], CellValue::Text("{a,b}".to_string()));
+        assert_eq!(row.values[i_meta], CellValue::Json("{\"k\": 1}".to_string()));
+        // bytea 走摘要投影：非空、长度 4（deadbeef）。
+        match &row.values[i_payload] {
+            CellValue::BinarySummary(summary) => {
+                assert!(!summary.is_null, "payload 不应为 NULL");
+                assert_eq!(summary.byte_length, 4);
+                assert_eq!(summary.preview_hex, Some("deadbeef".to_string()));
+            }
+            other => panic!("bytea 应以摘要投影，实际 {other:?}"),
+        }
+
+        // 单格完整二进制读取：能得到原始 4 字节。
+        let identity = RowIdentity {
+            values: [("id".to_string(), CellValue::I64(1))].into(),
+        };
+        let bytes = connector
+            .load_cell_binary(&path, &identity, "payload")
+            .expect("完整二进制读取应成功");
+        assert_eq!(bytes, vec![0xde, 0xad, 0xbe, 0xef]);
+
+        // 编辑提交：更新价格、改 bytea、插入新行、删除该行 —— 单事务可回滚语义由连接器保证。
+        let mut changes = DataChangeSet {
+            object: path.clone(),
+            inserts: vec![Row {
+                values: vec![
+                    CellValue::I64(2),
+                    CellValue::Text("9.99".to_string()),
+                    CellValue::F64(-1.0),
+                    CellValue::Text("{}".to_string()),
+                    CellValue::Json("null".to_string()),
+                    CellValue::Bytes(vec![0x01, 0x02]),
+                    CellValue::Null, // created_at
+                ],
+            }],
+            updates: vec![RowUpdate {
+                identity: identity.clone(),
+                cells: vec![
+                    CellUpdate {
+                        column: "price".to_string(),
+                        value: CellValue::Text("20.00".to_string()),
+                    },
+                    CellUpdate {
+                        column: "payload".to_string(),
+                        value: CellValue::Bytes(vec![0xca, 0xfe]),
+                    },
+                ],
+            }],
+            deletes: vec![],
+            insert_intents: None,
+        };
+        connector.apply_changes(&changes).expect("插入+更新应成功");
+
+        // 校验更新结果。
+        let page2 = connector.load_data(&path, 0, 50, &[], &[]).expect("重新读取应成功");
+        let rows = page2.rows.iter().any(|r| {
+            matches!(r.values[index_of("price")], CellValue::Text(ref p) if p == "20.00")
+        });
+        assert!(rows, "更新后的价格应生效");
+        let new_bytes = connector
+            .load_cell_binary(&path, &identity, "payload")
+            .expect("更新后二进制读取应成功");
+        assert_eq!(new_bytes, vec![0xca, 0xfe]);
+
+        // 删除新插入的行：仅提交删除，清空其后的插入/更新，避免重复执行。
+        changes.inserts.clear();
+        changes.updates.clear();
+        changes.deletes.push(RowIdentity {
+            values: [("id".to_string(), CellValue::I64(2))].into(),
+        });
+        connector.apply_changes(&changes).expect("删除应成功");
+        let page3 = connector.load_data(&path, 0, 50, &[], &[]).expect("删除后读取应成功");
+        assert!(
+            !page3.rows.iter().any(|r| r.values[index_of("id")] == CellValue::I64(2)),
+            "删除后的行不应存在"
+        );
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t09_typed CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理临时结构应成功");
+    }
+
+    /// T10 冒烟：分页 has_more、主键稳定 tie breaker、过滤（Between/Contains/等值）在真实 PG 生效。
+    #[test]
+    fn pg_live_smoke_pagination_sort_and_filter() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T10 冒烟");
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let path = ObjectPath {
+            connection_id: ConnectionId(1),
+            kind: ObjectKind::Table,
+            database: Some(db_name),
+            schema: Some("public".to_string()),
+            name: "t10_page".to_string(),
+        };
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t10_page CASCADE; \
+            CREATE TABLE t10_page( \
+                id integer PRIMARY KEY, \
+                score integer, \
+                name text \
+            ); \
+            INSERT INTO t10_page (id, score, name) VALUES \
+                (1, 10, 'alice'), (2, 10, 'bob'), (3, 30, 'carol'), (4, 40, 'dave'), (5, 50, 'erin'); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建表+数据应成功");
+
+        // 分页：limit=2，应 has_more 且只回两行。
+        let page1 = connector
+            .load_data(&path, 0, 2, &[], &[])
+            .expect("第一页读取应成功");
+        assert!(page1.has_more, "limit 小于总数应 has_more");
+        assert_eq!(page1.rows.len(), 2);
+
+        // 稳定排序：按 score DESC，同级(10) 由主键 id ASC 作 tie breaker → id 1 先于 id 2。
+        let sort = [SortSpec { field: "score".to_string(), direction: SortDirection::Desc }];
+        let sorted = connector
+            .load_data(&path, 0, 50, &sort, &[])
+            .expect("排序读取应成功");
+        let ids: Vec<i64> = sorted
+            .rows
+            .iter()
+            .map(|r| match r.values[0] {
+                CellValue::I64(v) => v,
+                _ => panic!("id 应为整数"),
+            })
+            .collect();
+        assert_eq!(ids, vec![5, 4, 3, 1, 2], "降序 + 主键 tie breaker 应稳定");
+
+        // 过滤：score BETWEEN 10 AND 40 且 name LIKE '%a%' → id 1,3。
+        let filters = vec![
+            FilterSpec {
+                field: "score".to_string(),
+                op: FilterOp::Between,
+                values: vec![CellValue::I64(10), CellValue::I64(40)],
+                enabled: true,
+            },
+            FilterSpec {
+                field: "name".to_string(),
+                op: FilterOp::Contains,
+                values: vec![CellValue::Text("a".to_string())],
+                enabled: true,
+            },
+        ];
+        let filtered = connector
+            .load_data(&path, 0, 50, &[], &filters)
+            .expect("过滤读取应成功");
+        let fids: Vec<i64> = filtered
+            .rows
+            .iter()
+            .map(|r| match r.values[0] {
+                CellValue::I64(v) => v,
+                _ => panic!("id 应为整数"),
+            })
+            .collect();
+        // score∈[10,40]: id 1/2/3/4；name 含 'a': alice/carol/dave → 交集 1/3/4。
+        assert_eq!(fids, vec![1, 3, 4], "BETWEEN + LIKE 过滤应命中 id 1、3、4");
+        assert!(!filtered.has_more);
+
+        // 非法过滤（引用不存在的列）→ 明确报错，不静默忽略。
+        let bad = vec![FilterSpec {
+            field: "missing_col".to_string(),
+            op: FilterOp::Eq,
+            values: vec![CellValue::I64(1)],
+            enabled: true,
+        }];
+        assert!(
+            connector.load_data(&path, 0, 50, &[], &bad).is_err(),
+            "引用不存在的过滤列应报错"
+        );
+
+        // 数据页会把整数投影为文本再解析回 CellValue；ORDER BY 必须引用源列，不能命中
+        // 同名文本输出别名，否则会出现 999 排在 5000 前面的字典序错误。
+        let mut append = pg_query_request(&config, None);
+        append.text = "INSERT INTO t10_page (id, score, name) VALUES (999, 60, 'x'), (5000, 70, 'y')"
+            .to_string();
+        connector.execute(&append).expect("追加排序边界数据应成功");
+        let id_desc = connector
+            .load_data(
+                &path,
+                0,
+                2,
+                &[SortSpec {
+                    field: "id".to_string(),
+                    direction: SortDirection::Desc,
+                }],
+                &[],
+            )
+            .expect("主键降序读取应成功");
+        let ids: Vec<i64> = id_desc
+            .rows
+            .iter()
+            .map(|row| match row.values[0] {
+                CellValue::I64(value) => value,
+                _ => panic!("id 应为整数"),
+            })
+            .collect();
+        assert_eq!(ids, vec![5000, 999]);
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t10_page CASCADE".to_string();
+        connector.execute(&cleanup).expect("清理临时结构应成功");
+    }
+
+    /// T11 冒烟：生成列保护 + 行数检查整批回滚（真实 PG）。
+    #[test]
+    fn pg_live_smoke_generated_column_protection_and_rowcount_rollback() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T11 冒烟");
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+        let path = ObjectPath {
+            connection_id: ConnectionId(1),
+            kind: ObjectKind::Table,
+            database: Some(db_name.clone()),
+            schema: Some("public".to_string()),
+            name: "t11_edit".to_string(),
+        };
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t11_edit CASCADE; \
+            CREATE TABLE t11_edit( \
+                id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, \
+                price integer, \
+                doubled integer GENERATED ALWAYS AS (price * 2) STORED \
+            ); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建表应成功");
+
+        // 1) 插入只写非生成列 price；id/doubled 由数据库生成，不触碰生成列。
+        let insert = DataChangeSet {
+            object: path.clone(),
+            inserts: vec![Row {
+                values: vec![CellValue::I64(1), CellValue::I64(5), CellValue::I64(0)],
+            }],
+            updates: vec![],
+            deletes: vec![],
+            insert_intents: None,
+        };
+        connector.apply_changes(&insert).expect("插入应成功且自动生成 id/doubled");
+        let page = connector.load_data(&path, 0, 50, &[], &[]).expect("读取应成功");
+        assert_eq!(page.rows.len(), 1, "应插入 1 行");
+        // doubled = price * 2 = 10（服务端生成列生效）。
+        assert_eq!(page.rows[0].values[2], CellValue::I64(10), "生成列应由服务端计算");
+
+        // 2) 更新生成列 → 拒绝，明确报错。
+        let bad_update = DataChangeSet {
+            object: path.clone(),
+            inserts: vec![],
+            updates: vec![RowUpdate {
+                identity: RowIdentity {
+                    values: [("id".to_string(), CellValue::I64(1))].into(),
+                },
+                cells: vec![CellUpdate {
+                    column: "doubled".to_string(),
+                    value: CellValue::I64(99),
+                }],
+            }],
+            deletes: vec![],
+            insert_intents: None,
+        };
+        let err = connector.apply_changes(&bad_update).expect_err("更新生成列应报错");
+        assert!(err.to_string().contains("生成列"), "应提示生成列不可改: {err}");
+
+        // 3) 批内一条更新命中不存在行 → 行数检查回滚整批，插入也不生效。
+        let rollback = DataChangeSet {
+            object: path.clone(),
+            inserts: vec![Row {
+                values: vec![CellValue::I64(2), CellValue::I64(7), CellValue::I64(0)],
+            }],
+            updates: vec![RowUpdate {
+                identity: RowIdentity {
+                    values: [("id".to_string(), CellValue::I64(999))].into(),
+                },
+                cells: vec![CellUpdate {
+                    column: "price".to_string(),
+                    value: CellValue::I64(1),
+                }],
+            }],
+            deletes: vec![],
+            insert_intents: None,
+        };
+        assert!(
+            connector.apply_changes(&rollback).is_err(),
+            "命中不存在行的更新应使整批回滚"
+        );
+        let page = connector.load_data(&path, 0, 50, &[], &[]).expect("回滚后读取应成功");
+        assert_eq!(page.rows.len(), 1, "回滚后新增行不应存在");
+
+        // 4) 三态写入意图：Default 不写列（DB 默认值填充）、Null 显式写 NULL、Value 写具体值。
+        let mut setup3 = pg_query_request(&config, None);
+        setup3.text = "\
+            DROP TABLE IF EXISTS t11_tristate CASCADE; \
+            CREATE TABLE t11_tristate( \
+                id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, \
+                note text DEFAULT 'n/a' \
+            ); \
+        "
+        .to_string();
+        connector.execute(&setup3).expect("建三态表应成功");
+        let path3 = ObjectPath {
+            connection_id: ConnectionId(1),
+            kind: ObjectKind::Table,
+            database: Some(db_name.clone()),
+            schema: Some("public".to_string()),
+            name: "t11_tristate".to_string(),
+        };
+        // 意图按表列序：id(Default 由 DB 生成), note(Default → 'n/a')。
+        let tri = DataChangeSet {
+            object: path3.clone(),
+            inserts: vec![
+                Row { values: vec![CellValue::Null, CellValue::Null] },
+                Row { values: vec![CellValue::Null, CellValue::Null] },
+                Row { values: vec![CellValue::Null, CellValue::Null] },
+            ],
+            updates: vec![],
+            deletes: vec![],
+            insert_intents: Some(vec![
+                vec![
+                    WriteValue::Default,                    // id：不写
+                    WriteValue::Default,                    // note：不写 → DB 默认 'n/a'
+                ],
+                vec![
+                    WriteValue::Default,                    // id：不写
+                    WriteValue::Null,                       // note：显式写 NULL
+                ],
+                vec![
+                    WriteValue::Default,                    // id：不写
+                    WriteValue::Value(CellValue::Text("x".to_string())), // note：写具体值
+                ],
+            ]),
+        };
+        connector.apply_changes(&tri).expect("三态插入应成功");
+        let page3 = connector.load_data(&path3, 0, 50, &[], &[]).expect("三态读取应成功");
+        assert_eq!(page3.rows.len(), 3, "应插入 3 行");
+        // 行序按 id 自增：Default→'n/a'，Null→NULL，Value→'x'。
+        assert_eq!(page3.rows[0].values[1], CellValue::Text("n/a".to_string()), "Default 应落 DB 默认值");
+        assert_eq!(page3.rows[1].values[1], CellValue::Null, "Null 应显式写 NULL");
+        assert_eq!(page3.rows[2].values[1], CellValue::Text("x".to_string()), "Value 应写具体值");
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t11_edit CASCADE; DROP TABLE IF EXISTS t11_tristate CASCADE;"
+            .to_string();
+        connector.execute(&cleanup).expect("清理临时结构应成功");
+    }
+
+    #[test]
+    fn pg_live_smoke_aborted_transaction_skips_remaining() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T13 冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "DROP TABLE IF EXISTS t13_abort CASCADE; CREATE TABLE t13_abort(id int PRIMARY KEY);"
+            .to_string();
+        connector.execute(&setup).expect("建表应成功");
+
+        // continue_on_error 下，显式事务内冲突使会话进入 aborted；
+        // 后续语句须逐条跳过（标注「需 ROLLBACK」，不得在 ROLLBACK 前继续）。
+        let mut batch = pg_query_request(&config, None);
+        batch.text = "\
+            BEGIN; \
+            INSERT INTO t13_abort VALUES (1); \
+            INSERT INTO t13_abort VALUES (1); \
+            INSERT INTO t13_abort VALUES (2); \
+            INSERT INTO t13_abort VALUES (3); \
+        "
+        .to_string();
+        batch.options.continue_on_error = true;
+        let result = connector.execute(&batch).expect("continue_on_error 批次应返回而非抛错");
+        // BEGIN 成功、首次插入成功、冲突失败、25P02 失败、随后语句被跳过。
+        assert!(result.summaries.len() >= 4, "summaries = {:#?}", result.summaries);
+        assert!(result.summaries[0].success, "BEGIN 应成功");
+        assert!(result.summaries[1].success, "首次插入应成功");
+        assert!(!result.summaries[2].success, "冲突插入应失败");
+        // 事务内冲突后，存在一条 25P02 与一条被跳过的记录。
+        assert!(
+            result.summaries[3..].iter().any(|s| s.message.contains("已跳过")),
+            "应存在跳过摘要：{:#?}",
+            result.summaries
+        );
+        // 25P02 那条本身要让用户知道怎么恢复（人工清单 D4 的「标注需 ROLLBACK」）。
+        assert!(
+            result.summaries[3].message.contains("25P02")
+                && result.summaries[3].message.contains("需 ROLLBACK"),
+            "25P02 摘要应带恢复指引：{:#?}",
+            result.summaries[3]
+        );
+        // 其后的语句应是本地跳过（不再发往服务端 → 不会又收到一条 25P02）。
+        assert_eq!(
+            result.summaries[4].message, "已跳过：需 ROLLBACK 后继续",
+            "中止态后续语句应本地跳过：{:#?}",
+            result.summaries
+        );
+
+        // 用户显式 ROLLBACK 恢复会话，随后仍可正常执行。
+        let mut recover = pg_query_request(&config, None);
+        recover.text = "ROLLBACK; SELECT count(*) AS cnt FROM t13_abort;".to_string();
+        let recovered = connector.execute(&recover).expect("ROLLBACK 后应恢复");
+        assert!(
+            recovered.summaries.iter().all(|s| s.success),
+            "ROLLBACK 后应全部成功：{:#?}",
+            recovered.summaries
+        );
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t13_abort CASCADE;".to_string();
+        connector.execute(&cleanup).expect("清理临时结构应成功");
+    }
+
+    /// T13 真实 CancelToken：`SELECT pg_sleep(120)` 长查询在用户取消时应立即停止
+    /// （无需等 30s 硬超时），回到 promptly 且标记「已取消/结果待核实」，不误报成功。
+    #[test]
+    fn pg_live_smoke_cancel_token_stops_long_query_promptly() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG 取消冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+
+        let mut req = pg_query_request(&config, None);
+        req.text = "SELECT pg_sleep(120);".to_string();
+        let start = std::time::Instant::now();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let mut result = QueryExecutionResult {
+            summaries: Vec::new(),
+            results: Vec::new(),
+            rollback_snapshots: Vec::new(),
+        };
+        // 语句跑起来约 1.2s 后触发取消（模拟用户在长查询期间点「停止」）。
+        let err = pg_execute_query_with_progress(
+            &config,
+            &req,
+            &mut |s| result.summaries.push(s),
+            &|| {
+                flag.store(start.elapsed() > std::time::Duration::from_millis(1200), std::sync::atomic::Ordering::Relaxed);
+                flag.load(std::sync::atomic::Ordering::Relaxed)
+            },
+        )
+        .err();
+        let _ = cancelled;
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "真实取消应 <10s 返回（远早于 30s 硬超时）：{elapsed:?}"
+        );
+        assert!(
+            err.is_none(),
+            "取消应作为语句级结果（Cancelled）返回而非整体抛错：{err:?}"
+        );
+        assert!(!result.summaries.is_empty(), "应有取消摘要");
+        assert!(
+            result
+                .summaries
+                .iter()
+                .any(|s| !s.success && s.message == "已取消：结果待核实"),
+            "应标记「已取消：结果待核实」：{:#?}",
+            result.summaries
+        );
+    }
+
+    #[test]
+    fn pg_live_smoke_empty_result_retains_columns() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T13 冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        // 空结果集仍有列头（§8.2），且同名列按 ordinal 读取不串位。
+        let mut request = pg_query_request(&config, None);
+        request.text = "SELECT 1 AS a, 'x' AS b WHERE false; SELECT a AS a, a AS a2 FROM (VALUES (1)) AS t(a);"
+            .to_string();
+        let result = connector.execute(&request).expect("执行应成功");
+        assert_eq!(result.summaries.len(), 2, "{:#?}", result.summaries);
+        // 第一条：0 行但保留列头 a、b。
+        let first = &result.results[0];
+        let names: Vec<_> = first.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"], "空结果应保留列头：{names:?}");
+        assert_eq!(first.rows.len(), 0);
+        // 第二条：同名列 a（alias a 与 a2）按 ordinal 读取。
+        let second = &result.results[1];
+        assert_eq!(second.rows.len(), 1, "应有 1 行");
+        assert_eq!(second.rows[0].values[1], CellValue::I64(1), "按 ordinal 取 a2 应得 1");
+    }
+
+    #[test]
+    fn pg_live_smoke_completion_metadata() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T14 冒烟");
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t14_completion CASCADE; \
+            DROP FUNCTION IF EXISTS t14_fn() CASCADE; \
+            CREATE TABLE t14_completion(id int PRIMARY KEY, note text); \
+            COMMENT ON TABLE t14_completion IS '补全冒烟表'; \
+            COMMENT ON COLUMN t14_completion.note IS '备注列'; \
+            CREATE FUNCTION t14_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql; \
+            CREATE TRIGGER t14_trg BEFORE INSERT ON t14_completion FOR EACH ROW EXECUTE FUNCTION t14_fn(); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建表/函数/触发器应成功");
+
+        // 表补全：按 filter 命中 t14_completion。
+        let tables = connector
+            .list_completion_tables(Some(&db_name), Some("public"), "t14_comp", 50)
+            .expect("表补全应成功");
+        assert!(
+            tables.iter().any(|t| t.name == "t14_completion"),
+            "表补全应含 t14_completion：{:#?}",
+            tables
+        );
+        // 表注释进补全元数据，供上层作为文档提示（§8.4）。
+        let commented = tables
+            .iter()
+            .find(|t| t.name == "t14_completion")
+            .and_then(|t| t.comment.as_deref());
+        assert_eq!(commented, Some("补全冒烟表"), "表注释应随补全返回：{tables:#?}");
+
+        // 列补全：含主键列与 comment。
+        let columns = connector
+            .list_completion_columns(Some(&db_name), Some("public"), "t14_completion")
+            .expect("列补全应成功");
+        let names: Vec<_> = columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["id", "note"], "列补全应按 attnum 排序：{names:?}");
+        let pk = columns.iter().find(|c| c.name == "id").unwrap();
+        assert!(pk.primary_key, "id 应为主键列");
+        // 列注释同样进补全元数据。
+        let note = columns.iter().find(|c| c.name == "note").unwrap();
+        assert_eq!(
+            note.comment.as_deref(),
+            Some("备注列"),
+            "列注释应随补全返回：{columns:#?}"
+        );
+
+        // 批量列：单次 catalog 查询取多表列，避免逐表 N+1。
+        let batch = connector
+            .list_completion_columns_for_tables(
+                Some(&db_name),
+                Some("public"),
+                &["t14_completion".to_string()],
+            )
+            .expect("批量列补全应成功");
+        assert!(batch.len() >= 2, "批量列应取到列：{:#?}", batch);
+
+        // 例程补全：t14_fn 为函数。
+        let routines = connector
+            .list_completion_routines(Some(&db_name), Some("public"), "t14_fn", 50)
+            .expect("例程补全应成功");
+        assert!(
+            routines.iter().any(|r| r.name == "t14_fn"),
+            "例程补全应含 t14_fn：{:#?}",
+            routines
+        );
+
+        // 大小写（§8.4）：带引号创建的对象名在 catalog 中按原样持有，不折叠、不合并；
+        // 未加引号的过滤词按 PG 语义折叠为小写，仍能命中（ILIKE）。
+        let mut camel = pg_query_request(&config, None);
+        camel.text = "DROP TABLE IF EXISTS \"T14_Camel\" CASCADE; \
+                      CREATE TABLE \"T14_Camel\"(\"Id\" int PRIMARY KEY, plain int);"
+            .to_string();
+        connector.execute(&camel).expect("建混合大小写表应成功");
+
+        let camel_tables = connector
+            .list_completion_tables(Some(&db_name), Some("public"), "t14_camel", 50)
+            .expect("混合大小写表补全应成功");
+        assert!(
+            camel_tables.iter().any(|t| t.name == "T14_Camel"),
+            "catalog 名称应按原样返回，不被折叠：{:#?}",
+            camel_tables
+        );
+        let camel_columns = connector
+            .list_completion_columns(Some(&db_name), Some("public"), "T14_Camel")
+            .expect("混合大小写列补全应成功");
+        let camel_names: Vec<&str> = camel_columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            camel_names,
+            vec!["Id", "plain"],
+            "列名应按原样返回并保持 attnum 顺序：{camel_names:?}"
+        );
+
+        let mut camel_cleanup = pg_query_request(&config, None);
+        camel_cleanup.text = "DROP TABLE IF EXISTS \"T14_Camel\" CASCADE;".to_string();
+        connector
+            .execute(&camel_cleanup)
+            .expect("清理混合大小写表应成功");
+
+        // 函数重载（§8.4）：同名不同 identity arguments 的两个函数都返回，且签名不同，
+        // 供上层按签名分条，不合并成一个候选。
+        let mut overload = pg_query_request(&config, None);
+        overload.text = "\
+            DROP FUNCTION IF EXISTS t14_ovl(int); \
+            DROP FUNCTION IF EXISTS t14_ovl(int, text); \
+            CREATE FUNCTION t14_ovl(a int) RETURNS int AS $$ SELECT a $$ LANGUAGE sql; \
+            CREATE FUNCTION t14_ovl(a int, b text) RETURNS int AS $$ SELECT a $$ LANGUAGE sql; \
+        "
+        .to_string();
+        connector.execute(&overload).expect("建重载函数应成功");
+
+        let overloads = connector
+            .list_completion_routines(Some(&db_name), Some("public"), "t14_ovl", 50)
+            .expect("重载例程补全应成功");
+        let signatures: Vec<&str> = overloads
+            .iter()
+            .filter(|routine| routine.name == "t14_ovl")
+            .filter_map(|routine| routine.signature.as_deref())
+            .collect();
+        // pg_get_function_identity_arguments 带参数名（"a integer"），原样保留即可区分重载。
+        assert_eq!(
+            signatures,
+            vec!["a integer", "a integer, b text"],
+            "两个重载都应按签名返回：{overloads:#?}"
+        );
+
+        let mut overload_cleanup = pg_query_request(&config, None);
+        overload_cleanup.text =
+            "DROP FUNCTION IF EXISTS t14_ovl(int); DROP FUNCTION IF EXISTS t14_ovl(int, text);"
+                .to_string();
+        connector
+            .execute(&overload_cleanup)
+            .expect("清理重载函数应成功");
+
+        // 触发器补全：t14_trg 关联表 t14_completion。
+        let triggers = connector
+            .list_completion_triggers(Some(&db_name), Some("public"), "t14_trg", 50)
+            .expect("触发器补全应成功");
+        assert!(
+            triggers
+                .iter()
+                .any(|t| t.name == "t14_trg" && t.table.as_deref() == Some("t14_completion")),
+            "触发器补全应含 t14_trg：{:#?}",
+            triggers
+        );
+
+        // 清理。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t14_completion CASCADE; DROP FUNCTION IF EXISTS t14_fn() CASCADE;"
+            .to_string();
+        connector.execute(&cleanup).expect("清理临时结构应成功");
+    }
+
+    /// T15 验收「INSERT 补偿身份正确」：自增主键由服务端生成，编辑器无从得知，
+    /// 提交后必须由 RETURNING 返回真实身份，补偿 SQL 才能定位到真正插入的行。
+    #[test]
+    fn pg_live_smoke_apply_changes_returns_generated_identity() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T15 冒烟");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t15_identity CASCADE; \
+            CREATE TABLE t15_identity(id serial PRIMARY KEY, note text); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建表应成功");
+
+        let path = ObjectPath {
+            connection_id: config.id,
+            database: config
+                .postgres_profile
+                .as_ref()
+                .unwrap()
+                .basic
+                .maintenance_database
+                .clone()
+                .into(),
+            schema: Some("public".to_string()),
+            name: "t15_identity".to_string(),
+            kind: ObjectKind::Table,
+        };
+        let changes = DataChangeSet {
+            object: path.clone(),
+            inserts: vec![Row {
+                values: vec![CellValue::Null, CellValue::Text("first".to_string())],
+            }],
+            updates: vec![],
+            deletes: vec![],
+            insert_intents: None,
+        };
+        let outcome = connector.apply_changes(&changes).expect("插入应成功");
+        assert_eq!(
+            outcome.inserted_identities.len(),
+            1,
+            "应返回 1 行插入身份：{outcome:#?}"
+        );
+        let identity = &outcome.inserted_identities[0];
+        assert_eq!(
+            identity.values.get("id"),
+            Some(&CellValue::I64(1)),
+            "自增主键应由 RETURNING 返回：{identity:#?}"
+        );
+
+        // 真实身份可直接用于回滚（DELETE WHERE id = 1）。
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t15_identity CASCADE;".to_string();
+        connector.execute(&cleanup).expect("清理应成功");
+    }
+
+    /// T14 验收「列表支持取消」：取消标记生效时补全各列表返回空结果且不报错，
+    /// 不阻塞编辑（不发起无意义往返）。
+    #[test]
+    fn pg_live_smoke_completion_cancel_returns_empty() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T14 冒烟");
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config);
+        let cancelled = || true;
+
+        assert!(
+            connector
+                .list_completion_tables_with_cancel(Some(&db_name), Some("public"), "", 50, &cancelled)
+                .expect("取消不应报错")
+                .is_empty(),
+            "取消后的表补全应为空"
+        );
+        assert!(
+            connector
+                .list_completion_columns_with_cancel(
+                    Some(&db_name),
+                    Some("public"),
+                    "t14_absent",
+                    &cancelled
+                )
+                .expect("取消不应报错")
+                .is_empty(),
+            "取消后的列补全应为空"
+        );
+        assert!(
+            connector
+                .list_completion_columns_for_tables_with_cancel(
+                    Some(&db_name),
+                    Some("public"),
+                    &["t14_absent".to_string()],
+                    &cancelled
+                )
+                .expect("取消不应报错")
+                .is_empty(),
+            "取消后的批量列补全应为空"
+        );
+        assert!(
+            connector
+                .list_completion_routines_with_cancel(Some(&db_name), Some("public"), "", 50, &cancelled)
+                .expect("取消不应报错")
+                .is_empty(),
+            "取消后的例程补全应为空"
+        );
+        assert!(
+            connector
+                .list_completion_triggers_with_cancel(Some(&db_name), Some("public"), "", 50, &cancelled)
+                .expect("取消不应报错")
+                .is_empty(),
+            "取消后的触发器补全应为空"
+        );
+    }
+
+    /// T14 验收「元数据会话不影响用户事务」：补全元数据走独立会话（pg_connect 新拨），
+    /// 用户会话里的未提交事务在补全期间保持原状，不被提交也不被回滚。
+    #[test]
+    fn pg_live_smoke_completion_does_not_disturb_user_transaction() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T14 冒烟");
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t14_tx CASCADE; \
+            CREATE TABLE t14_tx(id int); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建表应成功");
+
+        // 用户会话：显式 BEGIN 后插入未提交数据（同一 session_id ⇒ 复用同一连接）。
+        let user_session = Some(QuerySessionId(1401));
+        let mut begin = pg_query_request(&config, user_session);
+        begin.text = "BEGIN; INSERT INTO t14_tx VALUES (1);".to_string();
+        connector.execute(&begin).expect("用户事务写入应成功");
+
+        // 期间执行补全元数据查询（独立会话）。
+        let tables = connector
+            .list_completion_tables(Some(&db_name), Some("public"), "t14_tx", 50)
+            .expect("补全元数据查询应成功");
+        assert!(tables.iter().any(|t| t.name == "t14_tx"));
+        connector
+            .list_completion_columns(Some(&db_name), Some("public"), "t14_tx")
+            .expect("补全列查询应成功");
+
+        // 用户事务未提交数据仍在（补全没有偷偷 COMMIT/ROLLBACK），ROLLBACK 后消失。
+        let mut count = pg_query_request(&config, user_session);
+        count.text = "SELECT count(*) FROM t14_tx;".to_string();
+        let result = connector.execute(&count).expect("读取未提交数据应成功");
+        let visible = result
+            .results
+            .last()
+            .and_then(|page| page.rows.first())
+            .map(|row| row.values.clone())
+            .unwrap_or_default();
+        assert_eq!(
+            visible,
+            vec![CellValue::I64(1)],
+            "补全元数据不应提交或回滚用户事务：{visible:?}"
+        );
+
+        let mut rollback = pg_query_request(&config, user_session);
+        rollback.text = "ROLLBACK; DROP TABLE IF EXISTS t14_tx CASCADE;".to_string();
+        connector.execute(&rollback).expect("回滚与清理应成功");
+    }
+
+    /// T14 验收：search_path 跟随服务器有效顺序，不硬编码 public；显式 schema 可跨 schema；
+    /// 同表名跨 schema 时列按 search_path 首个可见 schema 解析，不串列。
+    #[test]
+    fn pg_live_smoke_completion_search_path_and_cross_schema() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过真实 PG T14 冒烟");
+            return;
+        };
+        let db_name = params.4.clone();
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP SCHEMA IF EXISTS t14_sa CASCADE; \
+            DROP SCHEMA IF EXISTS t14_sb CASCADE; \
+            CREATE SCHEMA t14_sa; \
+            CREATE SCHEMA t14_sb; \
+            CREATE TABLE t14_sa.t14_dup(a_id int); \
+            CREATE TABLE t14_sb.t14_dup(b_id int, b_note text); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建 schema/表应成功");
+
+        // 1) 无显式 schema：范围来自服务器 search_path。默认 search_path 不含 t14_sa/t14_sb，
+        //    故这两个 schema 的对象不应出现（证明未硬编码 public 之外的假设，也不扫全库）。
+        let default_scope = connector
+            .list_completion_tables(Some(&db_name), None, "t14_", 50)
+            .expect("默认 search_path 表补全应成功");
+        assert!(
+            !default_scope
+                .iter()
+                .any(|t| t.schema.as_deref() == Some("t14_sa")),
+            "默认 search_path 不含 t14_sa，不应返回其对象：{:#?}",
+            default_scope
+        );
+
+        // 2) 档案默认 schema = t14_sb：会话 search_path 生效后，该 schema 对象可见。
+        let mut sb_config = config.clone();
+        if let Some(profile) = sb_config.postgres_profile.as_mut() {
+            profile.scope.default_schema = "t14_sb".to_string();
+        }
+        let sb_connector = PostgresConnector::with_config(sb_config);
+        let sb_tables = sb_connector
+            .list_completion_tables(Some(&db_name), None, "t14_dup", 50)
+            .expect("按档案默认 schema 的表补全应成功");
+        assert!(
+            sb_tables
+                .iter()
+                .any(|t| t.name == "t14_dup" && t.schema.as_deref() == Some("t14_sb")),
+            "search_path=t14_sb 应命中 t14_sb.t14_dup：{:#?}",
+            sb_tables
+        );
+
+        // 3) 同表名跨 schema：列按 search_path 首个可见 schema 解析（t14_sb 的 b_* 列）。
+        let sb_columns = sb_connector
+            .list_completion_columns(Some(&db_name), None, "t14_dup")
+            .expect("按 search_path 的列补全应成功");
+        let sb_names: Vec<&str> = sb_columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            sb_names,
+            vec!["b_id", "b_note"],
+            "列应取 search_path 首个可见 schema：{sb_names:?}"
+        );
+        assert!(
+            sb_columns
+                .iter()
+                .all(|c| c.schema.as_deref() == Some("t14_sb")),
+            "列必须带真实 schema，不串列：{:#?}",
+            sb_columns
+        );
+
+        // 4) 显式跨 schema：显式指定 t14_sa 时返回该 schema 的对象与列。
+        let sa_tables = connector
+            .list_completion_tables(Some(&db_name), Some("t14_sa"), "t14_dup", 50)
+            .expect("显式 schema 的表补全应成功");
+        assert!(
+            sa_tables
+                .iter()
+                .any(|t| t.name == "t14_dup" && t.schema.as_deref() == Some("t14_sa")),
+            "显式 schema 应返回 t14_sa.t14_dup：{:#?}",
+            sa_tables
+        );
+        let sa_columns = connector
+            .list_completion_columns(Some(&db_name), Some("t14_sa"), "t14_dup")
+            .expect("显式 schema 的列补全应成功");
+        assert_eq!(
+            sa_columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a_id"],
+            "显式 schema 应返回该 schema 的列：{:#?}",
+            sa_columns
+        );
+
+        // 5) 多段 search_path 顺序：`t14_sa, t14_sb` 时同名表两 schema 都可见，
+        //    但顺序由 search_path 决定（sa 在前），列则只取首个可见 schema。
+        let mut ordered_config = config.clone();
+        if let Some(profile) = ordered_config.postgres_profile.as_mut() {
+            profile.scope.default_schema = "t14_sa, t14_sb".to_string();
+        }
+        let ordered_connector = PostgresConnector::with_config(ordered_config);
+        let ordered = ordered_connector
+            .list_completion_tables(Some(&db_name), None, "t14_dup", 50)
+            .expect("多段 search_path 表补全应成功");
+        let ordered_schemas: Vec<&str> = ordered
+            .iter()
+            .map(|t| t.schema.as_deref().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            ordered_schemas,
+            vec!["t14_sa", "t14_sb"],
+            "schema 顺序应跟随 search_path：{ordered_schemas:?}"
+        );
+        let ordered_columns = ordered_connector
+            .list_completion_columns(Some(&db_name), None, "t14_dup")
+            .expect("多段 search_path 列补全应成功");
+        assert!(
+            ordered_columns
+                .iter()
+                .all(|c| c.schema.as_deref() == Some("t14_sa")),
+            "同名表列应只取首个可见 schema(t14_sa)：{:#?}",
+            ordered_columns
+        );
+
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP SCHEMA IF EXISTS t14_sa CASCADE; DROP SCHEMA IF EXISTS t14_sb CASCADE;"
+            .to_string();
+        connector.execute(&cleanup).expect("清理临时 schema 应成功");
+    }
+
+    /// 网格把数值编辑为 F64 时写 numeric/money 列，须文本参数桥接（否则
+    /// `error serializing parameter 0`，修改不生效）。回归约束该路径稳定。
+    #[test]
+    fn pg_live_smoke_numeric_edit_with_f64_value() {
+        let Some(params) = pg_smoke_params() else {
+            tracing::warn!(target: "fluxdb_connectors", "未设置 FLUXDB_PG_SMOKE，跳过");
+            return;
+        };
+        let config = pg_smoke_config(params);
+        let connector = PostgresConnector::with_config(config.clone());
+
+        let mut setup = pg_query_request(&config, None);
+        setup.text = "\
+            DROP TABLE IF EXISTS t09_num_f64 CASCADE; \
+            CREATE TABLE t09_num_f64(id integer PRIMARY KEY, amount numeric(10,2)); \
+            INSERT INTO t09_num_f64(id, amount) VALUES (1, 10.5); \
+        "
+        .to_string();
+        connector.execute(&setup).expect("建临时结构应成功");
+
+        let path = ObjectPath {
+            connection_id: config.id,
+            database: config.postgres_profile.as_ref().unwrap().basic.maintenance_database.clone().into(),
+            schema: Some("public".to_string()),
+            name: "t09_num_f64".to_string(),
+            kind: ObjectKind::Table,
+        };
+        // 与网格一致：identity 全列原值（读回 Text 表示），新值按数值输入解析为 F64。
+        let page = connector.load_data(&path, 0, 50, &[], &[]).expect("读数据");
+        let cols = page.columns.clone();
+        let row = page.rows.iter().find(|r| r.values[0] == CellValue::I64(1)).cloned().expect("id=1 行");
+        let mut identity = std::collections::BTreeMap::new();
+        for (c, v) in cols.iter().zip(&row.values) {
+            if !matches!(v, CellValue::BinarySummary(_)) { identity.insert(c.name.clone(), v.clone()); }
+        }
+        let changes = DataChangeSet {
+            object: path.clone(),
+            inserts: vec![],
+            updates: vec![RowUpdate {
+                identity: RowIdentity { values: identity },
+                cells: vec![CellUpdate { column: "amount".to_string(), value: CellValue::F64(500.11) }],
+            }],
+            deletes: vec![],
+            insert_intents: None,
+        };
+        connector.apply_changes(&changes).expect("F64 写 numeric 应成功");
+
+        let page2 = connector.load_data(&path, 0, 50, &[], &[]).expect("重读");
+        let i_amount = cols.iter().position(|c| c.name == "amount").unwrap();
+        let value = page2.rows.iter().find(|r| r.values[0] == CellValue::I64(1))
+            .map(|r| r.values[i_amount].display_label()).unwrap_or_default();
+        assert_eq!(value, "500.11", "numeric 应更新为 500.11，实际 {value:?}");
+
+        let mut cleanup = pg_query_request(&config, None);
+        cleanup.text = "DROP TABLE IF EXISTS t09_num_f64 CASCADE;".to_string();
+        connector.execute(&cleanup).expect("清理临时表");
+    }
 }
+
+    /// SSH 隧道调用构造：-N -L local:target -p port [-i key] user@host；密码认证不落 argv。
+    #[test]
+    fn pg_ssh_tunnel_invocation_builds_forward_and_key_auth() {
+        let key = pg_ssh_tunnel_invocation(
+            "jump.example.com",
+            22,
+            "deploy",
+            &SshTunnelAuth::Key {
+                private_key_path: "/home/u/.ssh/id_ed25519".to_string(),
+            },
+            "db.internal",
+            5432,
+            41000,
+            30,
+        );
+        assert_eq!(key.program, "ssh");
+        assert!(key.args.contains(&"-N".to_string()));
+        // -L 映射 local:target:port；工具改用 127.0.0.1:local_port。
+        assert!(key.args.windows(2).any(|w| w[0] == "-L" && w[1] == "41000:db.internal:5432"));
+        assert!(key.args.windows(2).any(|w| w[0] == "-p" && w[1] == "22"));
+        assert!(key.args.windows(2).any(|w| w[0] == "-i" && w[1] == "/home/u/.ssh/id_ed25519"));
+        assert!(key.args.contains(&"deploy@jump.example.com".to_string()));
+        assert_eq!(key.local_port, 41000);
+        assert!(key.env.is_empty(), "私钥认证不应注入 env");
+
+        // 密码认证：BatchMode=no（由 sshpass 喂 SSHPASS），密码绝不进 argv。
+        let pw = pg_ssh_tunnel_invocation(
+            "j", 22, "u", &SshTunnelAuth::Password, "db", 5432, 41001, 0,
+        );
+        assert!(pw.args.contains(&"BatchMode=no".to_string()));
+        assert!(!pw.args.iter().any(|a| a.contains("passwor") || a.contains("secret")));
+        assert!(!pw.args.iter().any(|a| a.starts_with("ServerAliveInterval")), "keepalive=0 不注入");
+    }
+
+    /// SSH 隧道：libpq host/hostaddr 分离（PGHOSTADDR 拨号 + -h 保持 TLS 主机名）。
+    #[test]
+    fn pg_hostaddr_env_separates_dial_address_from_tls_name() {
+        let env = pg_hostaddr_env("127.0.0.1", 15432);
+        assert!(env.iter().any(|(k, v)| k == "PGHOSTADDR" && v == "127.0.0.1"));
+        assert!(env.iter().any(|(k, v)| k == "PGPORT" && v == "15432"));
+    }
+
+#[cfg(test)]
+mod pg_plan_apply_tests {
+    use super::*;
+    use crate::tests::{postgres_config as pg_cfg, pg_qtxt};
+
+// ===== PG 角色变更计划：单事务应用（需本机 fluxdb-t09-pg 容器；无环境时失败即如实报告）=====
+
+/// 集成：任一语句失败 → 整批回滚，不产生半完成状态（角色不应存在）。
+#[test]
+fn pg_apply_role_plan_rolls_back_as_a_whole() {
+    let config = pg_cfg();
+    let connector = PostgresConnector::with_config(config.clone());
+    // 前置清理同名遗留角色，保证断言可靠。
+    let _ = connector.execute(&pg_qtxt(
+        &config,
+        "DROP ROLE IF EXISTS \"fluxdb_t27_rollback\";",
+    ));
+
+    let plan = PgRoleSavePlan {
+        database: None,
+        role_name: "fluxdb_t27_rollback".into(),
+        changes: vec![
+            PgRoleChange::Create {
+                name: "fluxdb_t27_rollback".into(),
+                can_login: false,
+                password: PgPasswordOp::Keep,
+                attributes: PgRoleAttributes {
+                    inherit: Some(true),
+                    ..Default::default()
+                },
+            },
+            // 必然失败：对不存在的表授权。
+            PgRoleChange::GrantObject {
+                privilege: "SELECT".into(),
+                scope: PgObjectGrantScope::Relation {
+                    schema: "public".into(),
+                    name: "fluxdb_no_such_table_t27".into(),
+                    kind: PgRelationKind::Table,
+                },
+                grantee: "fluxdb_t27_rollback".into(),
+                grant_option: false,
+            },
+        ],
+    };
+    assert!(
+        connector.apply_role_plan(config.id, &plan).is_err(),
+        "对不存在对象授权应失败"
+    );
+    let roles = connector.list_roles(config.id).unwrap();
+    assert!(
+        !roles.iter().any(|r| r.name == "fluxdb_t27_rollback"),
+        "事务应整体回滚：角色不应存在（无半完成状态）"
+    );
+}
+
+
+    /// 集成：成功路径——创建（属性+密码）→ 成员授予 → 对象授权 → 改名，读模型逐一核实后清理。
+    #[test]
+    fn pg_apply_role_plan_end_to_end_and_rename() {
+        let config = pg_cfg();
+        let connector = PostgresConnector::with_config(config.clone());
+        let sql = |text: &str| {
+            let _ = connector.execute(&pg_qtxt(&config, text));
+        };
+        // 准备组角色与目标表；清理遗留。
+        sql("DROP ROLE IF EXISTS \"fluxdb_t27_user\";");
+        sql("DROP ROLE IF EXISTS \"fluxdb_t27_user2\";");
+        sql("DROP ROLE IF EXISTS \"fluxdb_t27_grp\";");
+        sql("DROP TABLE IF EXISTS \"public\".\"fluxdb_t27_tbl\";");
+        sql("CREATE ROLE \"fluxdb_t27_grp\" NOLOGIN;");
+        sql("CREATE TABLE \"public\".\"fluxdb_t27_tbl\" (id int);");
+
+        let plan = PgRoleSavePlan {
+            database: Some("postgres".into()),
+            role_name: "fluxdb_t27_user".into(),
+            changes: vec![
+                PgRoleChange::Create {
+                    name: "fluxdb_t27_user".into(),
+                    can_login: true,
+                    password: PgPasswordOp::Set("t27-secret".into()),
+                    attributes: PgRoleAttributes {
+                        can_login: Some(true),
+                        connection_limit: Some(5),
+                        ..Default::default()
+                    },
+                },
+                PgRoleChange::GrantMembership {
+                    role: "fluxdb_t27_grp".into(),
+                    // 授予以改名后的最终身份；渲染排序保证 Rename 先于成员/对象授权。
+                    member: "fluxdb_t27_user2".into(),
+                    admin: false,
+                    inherit: true,
+                    set: true,
+                },
+                PgRoleChange::GrantObject {
+                    privilege: "SELECT".into(),
+                    scope: PgObjectGrantScope::Relation {
+                        schema: "public".into(),
+                        name: "fluxdb_t27_tbl".into(),
+                        kind: PgRelationKind::Table,
+                    },
+                    grantee: "fluxdb_t27_user2".into(),
+                    grant_option: false,
+                },
+                PgRoleChange::Rename {
+                    from: "fluxdb_t27_user".into(),
+                    to: "fluxdb_t27_user2".into(),
+                },
+            ],
+        };
+        let masked = connector.apply_role_plan(config.id, &plan).unwrap();
+        // 审计输出脱敏：不含明文密码。
+        assert!(
+            !masked.join("\n").contains("t27-secret"),
+            "apply 返回的审计语句必须脱敏"
+        );
+
+        // 改名后读模型：新名存在且属性正确，旧名不存在。
+        let roles = connector.list_roles(config.id).unwrap();
+        let renamed = roles.iter().find(|r| r.name == "fluxdb_t27_user2");
+        assert!(renamed.is_some(), "改名后的角色应存在");
+        let renamed = renamed.unwrap();
+        assert!(renamed.can_login);
+        assert_eq!(renamed.connection_limit, 5);
+        assert!(!roles.iter().any(|r| r.name == "fluxdb_t27_user"), "旧名不应存在");
+
+        // 成员关系：改名后的用户是组成员（授权引用新身份）。
+        let memberships = connector.list_role_membership(config.id).unwrap();
+        assert!(memberships.iter().any(|m| m.grantee == "fluxdb_t27_grp"
+            && m.member == "fluxdb_t27_user2"));
+
+        // 对象权限：新身份对表有直接 SELECT。
+        let scope = PgObjectGrantScope::Relation {
+            schema: "public".into(),
+            name: "fluxdb_t27_tbl".into(),
+            kind: PgRelationKind::Table,
+        };
+        let effective = connector
+            .role_effective_grants(config.id, &scope, "fluxdb_t27_user2")
+            .unwrap();
+        let select = effective.iter().find(|p| p.privilege == "SELECT").unwrap();
+        assert!(select.effective && select.direct, "应有直接 SELECT 授权");
+
+        // 清理：撤销成员 → 删角色 → 删表（只清理本测试创建的对象）。
+        sql("REVOKE \"fluxdb_t27_grp\" FROM \"fluxdb_t27_user2\";");
+        sql("DROP ROLE \"fluxdb_t27_user2\";");
+        sql("DROP ROLE \"fluxdb_t27_grp\";");
+        sql("DROP TABLE IF EXISTS \"public\".\"fluxdb_t27_tbl\";");
+    }
+}
+
+    // ===== PG 角色变更计划渲染（T27 改版）=====
+
+    #[cfg(test)] // 仅测试构建使用；非 test 构建下避免 dead_code 警告
+    fn sample_plan() -> PgRoleSavePlan {
+        PgRoleSavePlan {
+            database: Some("appdb".into()),
+            role_name: "app_user".into(),
+            changes: vec![
+                PgRoleChange::SetPassword {
+                    name: "app_user".into(),
+                    password: Some("pw123".into()),
+                },
+                PgRoleChange::GrantMembership {
+                    role: "readonly".into(),
+                    member: "app_user".into(),
+                    admin: false,
+                    inherit: true,
+                    set: true,
+                },
+                PgRoleChange::GrantObject {
+                    privilege: "SELECT".into(),
+                    scope: PgObjectGrantScope::Relation {
+                        schema: "public".into(),
+                        name: "orders".into(),
+                        kind: PgRelationKind::Table,
+                    },
+                    grantee: "app_user".into(),
+                    grant_option: true,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn pg_render_role_plan_orders_and_masks() {
+        // 真实渲染：密码明文仅出现在执行路径。
+        let stmts = pg_render_role_plan(&sample_plan(), false, true).unwrap();
+        assert!(stmts[0].starts_with("ALTER ROLE \"app_user\" PASSWORD 'pw123';"));
+        assert!(stmts.iter().any(|s| s == "GRANT \"readonly\" TO \"app_user\";"));
+        assert!(stmts
+            .iter()
+            .any(|s| s == "GRANT SELECT ON TABLE \"public\".\"orders\" TO \"app_user\" WITH GRANT OPTION;"));
+        // 脱敏渲染：占位符替代明文。
+        let masked = pg_render_role_plan(&sample_plan(), true, true).unwrap();
+        assert!(masked[0].contains("PASSWORD '********'"));
+        assert!(!masked.join("\n").contains("pw123"));
+    }
+
+    #[test]
+    fn pg_render_role_plan_member_options_respect_version() {
+        let plan = PgRoleSavePlan {
+            database: None,
+            role_name: "app_user".into(),
+            changes: vec![PgRoleChange::GrantMembership {
+                role: "readonly".into(),
+                member: "app_user".into(),
+                admin: false,
+                inherit: false,
+                set: true,
+            }],
+        };
+        // PG16+：下发 INHERIT/SET/ADMIN FALSE 选项语句。
+        let modern = pg_render_role_plan(&plan, false, true).unwrap();
+        assert!(modern.iter().any(|s| s.contains("WITH INHERIT FALSE")));
+        assert!(modern.iter().any(|s| s.contains("WITH SET TRUE")));
+        assert!(modern.iter().any(|s| s.contains("WITH ADMIN FALSE")));
+        // PG≤14：仅基础 GRANT，不生成旧版不支持的语法。
+        let legacy = pg_render_role_plan(&plan, false, false).unwrap();
+        assert_eq!(legacy, vec!["GRANT \"readonly\" TO \"app_user\";"]);
+    }
+
+    #[test]
+    fn pg_render_role_plan_valid_until_clear_uses_infinity() {
+        let plan = PgRoleSavePlan {
+            database: None,
+            role_name: "app_user".into(),
+            changes: vec![PgRoleChange::AlterAttributes {
+                name: "app_user".into(),
+                attributes: PgRoleAttributes {
+                    valid_until: Some(PgValidUntilOp::Clear),
+                    ..Default::default()
+                },
+            }],
+        };
+        let stmts = pg_render_role_plan(&plan, false, true).unwrap();
+        assert_eq!(stmts, vec!["ALTER ROLE \"app_user\" VALID UNTIL 'infinity';"]);
+    }
+
+    #[test]
+    fn pg_render_role_plan_create_includes_password_and_rejects_bad_name() {
+        let plan = PgRoleSavePlan {
+            database: None,
+            role_name: "new_role".into(),
+            changes: vec![PgRoleChange::Create {
+                name: "new_role".into(),
+                can_login: true,
+                password: PgPasswordOp::Set("p@ss'word".into()),
+                attributes: PgRoleAttributes {
+                    can_login: Some(true),
+                    ..Default::default()
+                },
+            }],
+        };
+        let stmts = pg_render_role_plan(&plan, false, true).unwrap();
+        // 密码中的单引号被安全转义。
+        assert_eq!(stmts, vec!["CREATE ROLE \"new_role\" LOGIN PASSWORD 'p@ss''word';"]);
+        let bad = PgRoleSavePlan {
+            changes: vec![PgRoleChange::Create {
+                name: "bad;name".into(),
+                can_login: true,
+                password: PgPasswordOp::Keep,
+                attributes: PgRoleAttributes::default(),
+            }],
+            ..plan
+        };
+        assert!(pg_render_role_plan(&bad, false, true).is_err());
+    }

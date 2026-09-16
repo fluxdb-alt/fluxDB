@@ -1,3 +1,7 @@
+/// 数据页投影会把部分类型 CAST 成 CHAR 并沿用原列名作为输出别名；MySQL 的 ORDER BY
+/// 会优先按 SELECT 输出别名排序，整数会退化为字典序。排序必须通过源表别名引用真实列。
+const MYSQL_DATA_SOURCE_ALIAS: &str = "__fluxdb_source";
+
 fn mysql_load_data(
     config: &ConnectionConfig,
     path: &ObjectPath,
@@ -40,9 +44,10 @@ fn mysql_load_data(
             .collect::<Vec<_>>()
             .join(", ");
         let mut builder = QueryBuilder::<MySql>::new(format!(
-            "SELECT {select_list} FROM {}.{}",
+            "SELECT {select_list} FROM {}.{} AS {}",
             mysql_quote_identifier(database),
-            mysql_quote_identifier(&path.name)
+            mysql_quote_identifier(&path.name),
+            mysql_quote_identifier(MYSQL_DATA_SOURCE_ALIAS)
         ));
         push_data_where_clause(
             &mut builder,
@@ -51,7 +56,7 @@ fn mysql_load_data(
             mysql_quote_identifier,
             push_mysql_bind,
         );
-        builder.push(data_order_by_clause(sort, &columns, mysql_quote_identifier));
+        builder.push(mysql_order_by_clause(sort, &columns));
         builder.push(" LIMIT ");
         builder.push_bind(pagination.limit + 1);
         builder.push(" OFFSET ");
@@ -66,6 +71,35 @@ fn mysql_load_data(
 
         Ok(mysql_rows_to_page(columns, rows, pagination))
     })
+}
+
+/// 用户排序后面追加主键作为稳定 tie breaker（设计 7.2），避免同值行分页随并发漂移。
+/// 主键列若已在用户排序中出现则跳过；无主键时保持共享排序原样。
+/// 排序列统一用源表别名限定，确保按真实列而非 SELECT 输出别名排序。
+fn mysql_order_by_clause(sort: &[SortSpec], columns: &[Column]) -> String {
+    let user_clause = data_order_by_clause(sort, columns, mysql_data_source_column);
+    let sorted: Vec<&str> = sort.iter().map(|spec| spec.field.as_str()).collect();
+    let tie: Vec<String> = columns
+        .iter()
+        .filter(|column| column.primary_key && !sorted.contains(&column.name.as_str()))
+        .map(|column| mysql_data_source_column(&column.name))
+        .collect();
+    if tie.is_empty() {
+        return user_clause;
+    }
+    if user_clause.is_empty() {
+        format!(" ORDER BY {}", tie.join(", "))
+    } else {
+        format!("{user_clause}, {}", tie.join(", "))
+    }
+}
+
+fn mysql_data_source_column(column: &str) -> String {
+    format!(
+        "{}.{}",
+        mysql_quote_identifier(MYSQL_DATA_SOURCE_ALIAS),
+        mysql_quote_identifier(column)
+    )
 }
 
 fn mysql_preview_data_export(

@@ -26,7 +26,9 @@ fn main() {
             let saved_settings = saved_settings.clone();
             register_shortcuts(cx, &saved_settings);
             set_app_menus(cx);
-            let mut controller = AppController::with_mock_data();
+            // 从空连接启动：首启不注入 demo 假连接，侧边栏真实连接完全来自持久化存储，
+            // 无持久连接时保持为空（空连接不造假数据显示）。
+            let mut controller = AppController::new();
             controller.set_completion_index_storage(storage.clone());
             let theme_mode = theme_mode_from_app_theme(saved_settings.theme);
             let _ = controller.dispatch(AppCommand::SaveSettings(saved_settings));
@@ -142,6 +144,57 @@ fn main() {
                                 cx,
                             )
                         });
+                        let create_schema_name_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("schema 名称"));
+                        let create_schema_name_subscription = cx.subscribe_in(
+                            &create_schema_name_input,
+                            window,
+                            |this: &mut NavicatMain, input, event: &InputEvent, window, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(pending) = &mut this.pending_create_schema
+                                {
+                                    pending.2 = input.read(cx).value().to_string();
+                                    cx.notify();
+                                }
+                                if matches!(event, InputEvent::PressEnter { .. }) {
+                                    this.confirm_create_schema(window, cx);
+                                }
+                            },
+                        );
+                        let create_database_owner_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("Owner，如 report_reader"));
+                        let create_database_owner_subscription = cx.subscribe_in(
+                            &create_database_owner_input,
+                            window,
+                            |this: &mut NavicatMain, input, event: &InputEvent, window, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(form) = &mut this.pending_create_database
+                                {
+                                    form.owner = input.read(cx).value().to_string();
+                                    cx.notify();
+                                }
+                                if matches!(event, InputEvent::PressEnter { .. }) {
+                                    this.confirm_create_database(window, cx);
+                                }
+                            },
+                        );
+                        let create_database_template_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("模板库，如 template0"));
+                        let create_database_template_subscription = cx.subscribe_in(
+                            &create_database_template_input,
+                            window,
+                            |this: &mut NavicatMain, input, event: &InputEvent, window, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(form) = &mut this.pending_create_database
+                                {
+                                    form.template = input.read(cx).value().to_string();
+                                    cx.notify();
+                                }
+                                if matches!(event, InputEvent::PressEnter { .. }) {
+                                    this.confirm_create_database(window, cx);
+                                }
+                            },
+                        );
                         let danger_table_foreign_key_check_select = cx.new(|cx| {
                             SelectState::new(
                                 SearchableVec::new(danger_table_foreign_key_check_options()),
@@ -238,6 +291,16 @@ fn main() {
                             cx.new(|cx| InputState::new(window, cx).placeholder("14"));
                         let settings_radius_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("6"));
+                        // 留空即使用内置官方源，占位符直接展示默认模板，便于用户改成内网镜像。
+                        let settings_pg_client_source_input = cx.new(|cx| {
+                            InputState::new(window, cx)
+                                .placeholder(fluxdb_app::PG_CLIENT_DEFAULT_SOURCE)
+                        });
+                        // 留空即使用内置官方源，占位符直接展示默认模板，便于用户改成内网镜像。
+                        let settings_mysql_client_source_input = cx.new(|cx| {
+                            InputState::new(window, cx)
+                                .placeholder(fluxdb_app::MYSQL_CLIENT_DEFAULT_SOURCE)
+                        });
                         let data_cell_edit_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("输入值"));
                         let temporal_part_input = cx.new(|cx| InputState::new(window, cx));
@@ -903,6 +966,73 @@ fn main() {
                         });
                         let user_admin_new_password_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("密码").masked(true));
+                        // PG 用户与角色工作台（改版）：常规/高级/权限页输入与选择器。
+                        let pg_role_name_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("角色名"));
+                        let pg_password_input = cx
+                            .new(|cx| InputState::new(window, cx).placeholder("新密码").masked(true));
+                        let pg_password_confirm_input = cx.new(|cx| {
+                            InputState::new(window, cx)
+                                .placeholder("确认新密码")
+                                .masked(true)
+                        });
+                        let pg_connection_limit_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("-1"));
+                        let pg_valid_until_input = cx.new(|cx| {
+                            InputState::new(window, cx).placeholder("如 2026-12-31 23:59:59+08")
+                        });
+                        let pg_valid_until_mode_select = cx.new(|cx| {
+                            SelectState::new(
+                                SearchableVec::new(pg_valid_until_mode_options()),
+                                Some(IndexPath::new(0)),
+                                window,
+                                cx,
+                            )
+                        });
+                        let pg_password_op_select = cx.new(|cx| {
+                            SelectState::new(
+                                SearchableVec::new(pg_password_op_options(true)),
+                                Some(IndexPath::new(0)),
+                                window,
+                                cx,
+                            )
+                        });
+                        let pg_grant_db_select = cx.new(|cx| {
+                            SelectState::new(
+                                SearchableVec::new(Vec::new()),
+                                None,
+                                window,
+                                cx,
+                            )
+                            .searchable(true)
+                        });
+                        let pg_grant_schema_select = cx.new(|cx| {
+                            SelectState::new(
+                                SearchableVec::new(Vec::new()),
+                                None,
+                                window,
+                                cx,
+                            )
+                            .searchable(true)
+                        });
+                        let pg_grant_object_select = cx.new(|cx| {
+                            SelectState::new(
+                                SearchableVec::new(Vec::new()),
+                                None,
+                                window,
+                                cx,
+                            )
+                            .searchable(true)
+                        });
+                        let pg_member_of_role_select = cx.new(|cx| {
+                            SelectState::new(
+                                SearchableVec::new(Vec::new()),
+                                None,
+                                window,
+                                cx,
+                            )
+                            .searchable(true)
+                        });
                         let user_admin_max_queries_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("0"));
                         let user_admin_max_updates_input =
@@ -1019,6 +1149,32 @@ fn main() {
                                     value.saturating_add(2).min(32)
                                 };
                                 this.preview_settings(cx);
+                            },
+                        );
+                        // 下载源是纯文本设置，随输入写入草稿，由「保存」统一落盘。
+                        let settings_pg_client_source_subscription = cx.subscribe_in(
+                            &settings_pg_client_source_input,
+                            window,
+                            |this: &mut NavicatMain, input, event: &InputEvent, _window, cx| {
+                                if !matches!(event, InputEvent::Change | InputEvent::PressEnter { .. }) {
+                                    return;
+                                }
+                                this.settings_editor_draft.pg_client_download_source =
+                                    input.read(cx).value().trim().to_string();
+                                cx.notify();
+                            },
+                        );
+                        // 下载源是纯文本设置，随输入写入草稿，由「保存」统一落盘。
+                        let settings_mysql_client_source_subscription = cx.subscribe_in(
+                            &settings_mysql_client_source_input,
+                            window,
+                            |this: &mut NavicatMain, input, event: &InputEvent, _window, cx| {
+                                if !matches!(event, InputEvent::Change | InputEvent::PressEnter { .. }) {
+                                    return;
+                                }
+                                this.settings_editor_draft.mysql_client_download_source =
+                                    input.read(cx).value().trim().to_string();
+                                cx.notify();
                             },
                         );
                         let data_cell_edit_subscription = cx.subscribe_in(
@@ -1541,6 +1697,203 @@ fn main() {
                                 }
                             },
                         );
+                        // ===== PG 用户与角色工作台（改版）订阅 =====
+                        let pg_role_name_subscription = cx.subscribe(
+                            &pg_role_name_input,
+                            |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(tab_id) = this.active_user_admin_tab_id()
+                                {
+                                    this.dispatch(
+                                        AppCommand::SetPgDraftName {
+                                            tab_id,
+                                            name: input.read(cx).value().to_string(),
+                                        },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        // 密码明文仅进入内存中的草稿（Set 操作），不写日志/历史。
+                        let pg_password_subscription = cx.subscribe(
+                            &pg_password_input,
+                            |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(tab_id) = this.active_user_admin_tab_id()
+                                {
+                                    this.dispatch(
+                                        AppCommand::SetPgDraftPassword {
+                                            tab_id,
+                                            password: input.read(cx).value().to_string(),
+                                        },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        // 确认密码只留在桌面层做一致性校验，不进入 App 状态。
+                        let pg_password_confirm_subscription = cx.subscribe(
+                            &pg_password_confirm_input,
+                            |this: &mut NavicatMain, _, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change) {
+                                    this.sync_pg_save_enabled(cx);
+                                }
+                            },
+                        );
+                        let pg_connection_limit_subscription = cx.subscribe(
+                            &pg_connection_limit_input,
+                            |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(tab_id) = this.active_user_admin_tab_id()
+                                {
+                                    this.dispatch(
+                                        AppCommand::SetPgDraftConnectionLimit {
+                                            tab_id,
+                                            value: input.read(cx).value().to_string(),
+                                        },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        let pg_valid_until_subscription = cx.subscribe(
+                            &pg_valid_until_input,
+                            |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(tab_id) = this.active_user_admin_tab_id()
+                                {
+                                    this.dispatch(
+                                        AppCommand::SetPgDraftValidUntil {
+                                            tab_id,
+                                            op: PgValidUntilOp::At(
+                                                input.read(cx).value().to_string(),
+                                            ),
+                                        },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        let valid_until_input_ref = pg_valid_until_input.clone();
+                        let pg_valid_until_mode_select_subscription = cx.subscribe_in(
+                            &pg_valid_until_mode_select,
+                            window,
+                            move |this: &mut NavicatMain,
+                             _select,
+                             event: &SelectEvent<SearchableVec<String>>,
+                             _window,
+                             cx| {
+                                let SelectEvent::Confirm(value) = event;
+                                if let (Some(tab_id), Some(value)) =
+                                    (this.active_user_admin_tab_id(), value)
+                                {
+                                    let op = match value.as_str() {
+                                        "清除截止时间（永不过期）" => PgValidUntilOp::Clear,
+                                        // 切到自定义模式时以输入框当前文本作为截止时间。
+                                        "自定义截止时间…" => PgValidUntilOp::At(
+                                            valid_until_input_ref
+                                                .read(cx)
+                                                .value()
+                                                .to_string(),
+                                        ),
+                                        _ => PgValidUntilOp::Keep,
+                                    };
+                                    this.dispatch(
+                                        AppCommand::SetPgDraftValidUntil { tab_id, op },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        let pg_password_op_select_subscription = cx.subscribe_in(
+                            &pg_password_op_select,
+                            window,
+                            |this: &mut NavicatMain,
+                             _select,
+                             event: &SelectEvent<SearchableVec<String>>,
+                             _window,
+                             cx| {
+                                let SelectEvent::Confirm(value) = event;
+                                if let (Some(tab_id), Some(value)) =
+                                    (this.active_user_admin_tab_id(), value)
+                                {
+                                    // 「不设置密码」（新建）= 不下发 PASSWORD 子句（Keep）。
+                                    let op = match value.as_str() {
+                                        "设置新密码" => PgPasswordOp::Set(String::new()),
+                                        "清除密码" => PgPasswordOp::Clear,
+                                        _ => PgPasswordOp::Keep,
+                                    };
+                                    this.dispatch(
+                                        AppCommand::SetPgDraftPasswordOp { tab_id, op },
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        let pg_grant_db_select_subscription = cx.subscribe_in(
+                            &pg_grant_db_select,
+                            window,
+                            |this: &mut NavicatMain,
+                             _select,
+                             event: &SelectEvent<SearchableVec<String>>,
+                             _window,
+                             cx| {
+                                let SelectEvent::Confirm(value) = event;
+                                if let (Some(tab_id), Some(db)) =
+                                    (this.active_user_admin_tab_id(), value)
+                                {
+                                    this.set_pg_grant_database(
+                                        tab_id,
+                                        db.clone(),
+                                        cx,
+                                    );
+                                }
+                            },
+                        );
+                        let pg_grant_schema_select_subscription = cx.subscribe_in(
+                            &pg_grant_schema_select,
+                            window,
+                            |this: &mut NavicatMain,
+                             _select,
+                             event: &SelectEvent<SearchableVec<String>>,
+                             _window,
+                             cx| {
+                                let SelectEvent::Confirm(value) = event;
+                                if let (Some(tab_id), Some(schema)) =
+                                    (this.active_user_admin_tab_id(), value)
+                                {
+                                    this.set_pg_grant_schema(tab_id, schema.clone(), cx);
+                                }
+                            },
+                        );
+                        let pg_grant_object_select_subscription = cx.subscribe_in(
+                            &pg_grant_object_select,
+                            window,
+                            |this: &mut NavicatMain,
+                             _select,
+                             event: &SelectEvent<SearchableVec<String>>,
+                             _window,
+                             cx| {
+                                let SelectEvent::Confirm(value) = event;
+                                if let (Some(tab_id), Some(object)) =
+                                    (this.active_user_admin_tab_id(), value)
+                                {
+                                    this.set_pg_grant_object(tab_id, object.clone(), cx);
+                                }
+                            },
+                        );
+                        let pg_member_of_role_select_subscription = cx.subscribe_in(
+                            &pg_member_of_role_select,
+                            window,
+                            |_this: &mut NavicatMain,
+                             _select,
+                             event: &SelectEvent<SearchableVec<String>>,
+                             _window,
+                             cx| {
+                                let SelectEvent::Confirm(_) = event;
+                                cx.notify();
+                            },
+                        );
                         let user_admin_new_password_subscription = cx.subscribe(
                             &user_admin_new_password_input,
                             |this: &mut NavicatMain, input, event: &InputEvent, cx| {
@@ -1819,6 +2172,20 @@ fn main() {
                         settings_radius_input.update(cx, |input, cx| {
                             input.set_value(
                                 settings_editor_draft.button_radius.to_string(),
+                                window,
+                                cx,
+                            )
+                        });
+                        settings_pg_client_source_input.update(cx, |input, cx| {
+                            input.set_value(
+                                settings_editor_draft.pg_client_download_source.clone(),
+                                window,
+                                cx,
+                            )
+                        });
+                        settings_mysql_client_source_input.update(cx, |input, cx| {
+                            input.set_value(
+                                settings_editor_draft.mysql_client_download_source.clone(),
                                 window,
                                 cx,
                             )
@@ -2163,6 +2530,32 @@ fn main() {
                             user_admin_new_password_input,
                             _user_admin_new_password_subscription:
                                 user_admin_new_password_subscription,
+                            pg_role_name_input,
+                            _pg_role_name_subscription: pg_role_name_subscription,
+                            pg_password_input,
+                            _pg_password_subscription: pg_password_subscription,
+                            pg_password_confirm_input,
+                            _pg_password_confirm_subscription: pg_password_confirm_subscription,
+                            pg_connection_limit_input,
+                            _pg_connection_limit_subscription: pg_connection_limit_subscription,
+                            pg_valid_until_input,
+                            _pg_valid_until_subscription: pg_valid_until_subscription,
+                            pg_valid_until_mode_select,
+                            _pg_valid_until_mode_select_subscription:
+                                pg_valid_until_mode_select_subscription,
+                            pg_password_op_select,
+                            _pg_password_op_select_subscription: pg_password_op_select_subscription,
+                            pg_grant_db_select,
+                            _pg_grant_db_select_subscription: pg_grant_db_select_subscription,
+                            pg_grant_schema_select,
+                            _pg_grant_schema_select_subscription: pg_grant_schema_select_subscription,
+                            pg_grant_object_select,
+                            _pg_grant_object_select_subscription: pg_grant_object_select_subscription,
+                            pg_member_of_role_select,
+                            _pg_member_of_role_select_subscription:
+                                pg_member_of_role_select_subscription,
+                            pg_member_new_admin: false,
+                            pg_select_items_fingerprint: String::new(),
                             user_admin_max_queries_input,
                             _user_admin_max_queries_subscription:
                                 user_admin_max_queries_subscription,
@@ -2210,6 +2603,11 @@ fn main() {
                             create_database_collation_select,
                             _create_database_collation_select_subscription:
                                 create_database_collation_select_subscription,
+                            create_database_owner_input,
+                            _create_database_owner_subscription: create_database_owner_subscription,
+                            create_database_template_input,
+                            _create_database_template_subscription:
+                                create_database_template_subscription,
                             danger_table_foreign_key_check_select,
                             _danger_table_foreign_key_check_select_subscription:
                                 danger_table_foreign_key_check_select_subscription,
@@ -2233,9 +2631,13 @@ fn main() {
                             _completion_index_tasks: BTreeMap::new(),
                             _table_info_tasks: BTreeMap::new(),
                             _user_admin_users_tasks: BTreeMap::new(),
+                            _user_admin_pg_membership_tasks: BTreeMap::new(),
+                            _user_admin_pg_target_tasks: BTreeMap::new(),
+                            _user_admin_pg_object_grant_tasks: BTreeMap::new(),
                             _user_admin_grants_tasks: BTreeMap::new(),
                             _user_admin_member_grants_tasks: BTreeMap::new(),
                             _user_admin_apply_tasks: BTreeMap::new(),
+                            _user_admin_preview_tasks: BTreeMap::new(),
                             _create_table_apply_tasks: BTreeMap::new(),
                             _create_table_reference_columns_tasks: BTreeMap::new(),
                             _cell_binary_download_tasks: BTreeMap::new(),
@@ -2252,10 +2654,13 @@ fn main() {
                             _danger_table_task: None,
                             data_export_task_seq: 0,
                             _test_connection_task: None,
+                            _create_schema_task: None,
+                            saving_connection: false,
                             _redis_discover_task: None,
                             redis_discovery_pending_sync: false,
                             connection_context_menu: None,
                             database_context_menu: None,
+                            schema_context_menu: None,
                             table_context_menu: None,
                             table_group_context_menu: None,
                             table_folder_context_menu: None,
@@ -2306,6 +2711,10 @@ fn main() {
                             display_database_show_system: false,
                             pending_create_database: None,
                             create_database_running: BTreeSet::new(),
+                            pending_create_schema: None,
+                            create_schema_running: false,
+                            create_schema_name_input,
+                            _create_schema_name_subscription: create_schema_name_subscription,
                             new_connection_target_group: None,
                             connecting_connections: BTreeSet::new(),
                             loading_databases: BTreeSet::new(),
@@ -2364,6 +2773,12 @@ fn main() {
                             settings_panel_section: SettingsPanelSection::Editor,
                             settings_editor_draft,
                             settings_dangerous_actions_collapsed: false,
+                            // 备份默认展开（常用），客户端默认折叠（标题右侧有状态摘要）。
+                            settings_data_groups_collapsed: SettingsDataGroupsCollapsed {
+                                backup: false,
+                                pg_client: true,
+                                mysql_client: true,
+                            },
                             settings_font_size_slider,
                             _settings_font_size_slider_subscription:
                                 settings_font_size_slider_subscription,
@@ -2371,6 +2786,20 @@ fn main() {
                             _settings_line_height_subscription: settings_line_height_subscription,
                             settings_radius_input,
                             _settings_radius_subscription: settings_radius_subscription,
+                            pg_client: NativeClientState {
+                                source_input: settings_pg_client_source_input,
+                                _source_subscription: settings_pg_client_source_subscription,
+                                status: None, download: None, detect_task: None,
+                                download_task: None, progress_task: None,
+                            },
+                            mysql_client: NativeClientState {
+                                source_input: settings_mysql_client_source_input,
+                                _source_subscription: settings_mysql_client_source_subscription,
+                                status: None, download: None, detect_task: None,
+                                download_task: None, progress_task: None,
+                            },
+                            backup_pg_client_missing: false,
+                            backup_mysql_client_missing: false,
                             query_output_heights: BTreeMap::new(),
                             query_output_widths: BTreeMap::new(),
                             query_output_resize_start: None,
@@ -2432,214 +2861,4 @@ fn main() {
             .unwrap();
             cx.activate(true);
         });
-}
-
-fn set_app_menus(cx: &mut App) {
-    cx.set_menus(vec![Menu {
-        name: "FluxDB".into(),
-        disabled: true,
-        items: vec![],
-    }]);
-}
-
-/// List 删除元素 - 位置下拉选项（对齐 RedisInsight）。
-/// 第一个「从尾部移除」为默认选中项（head=false → RPOP）。
-const REDIS_LIST_REMOVE_FROM_TAIL: &str = "从尾部移除";
-const REDIS_LIST_REMOVE_FROM_HEAD: &str = "从头部移除";
-
-/// 删除位置选项列表；下标 0 对应从尾删除（默认）。
-fn redis_list_remove_position_options() -> Vec<String> {
-    [REDIS_LIST_REMOVE_FROM_TAIL, REDIS_LIST_REMOVE_FROM_HEAD]
-        .into_iter()
-        .map(str::to_string)
-        .collect()
-}
-
-fn query_history_record_to_entry(record: QueryHistoryRecord) -> QueryHistoryEntry {
-    let kind = query_history_kind_from_storage(&record.kind);
-    let success = record.success;
-    let text = record.text;
-    QueryHistoryEntry {
-        connection_id: record.connection_id,
-        database: record.database,
-        text: text.clone(),
-        tables: record.tables,
-        kind,
-        success,
-        summary: QueryExecutionSummary {
-            sql: text.clone(),
-            kind: query_statement_kind_from_history(kind),
-            success,
-            message: record
-                .message
-                .unwrap_or_else(|| if success { "OK" } else { "执行失败" }.to_string()),
-            returned_rows: record.returned_rows,
-            affected_rows: record.affected_rows,
-            elapsed_ms: record.elapsed_ms,
-        },
-        executed_at_unix_secs: record.executed_at_unix_secs,
-        object: record.object,
-        rollback_snapshot: record.rollback_snapshot,
-    }
-}
-
-fn query_history_entry_to_record(entry: &QueryHistoryEntry) -> QueryHistoryRecord {
-    QueryHistoryRecord {
-        connection_id: entry.connection_id,
-        database: entry.database.clone(),
-        text: entry.text.clone(),
-        tables: entry.tables.clone(),
-        kind: query_history_kind_to_storage(entry.kind).to_string(),
-        success: entry.success,
-        executed_at_unix_secs: entry.executed_at_unix_secs,
-        object: entry.object.clone(),
-        rollback_sql: None,
-        rollback_snapshot: entry.rollback_snapshot.clone(),
-        message: Some(entry.summary.message.clone()),
-        returned_rows: entry.summary.returned_rows,
-        affected_rows: entry.summary.affected_rows,
-        elapsed_ms: entry.summary.elapsed_ms,
-    }
-}
-
-/// 把 App 层 Redis 历史记录转成持久化记录（source 序列化为枚举名）。
-fn redis_workbench_entry_to_record(
-    entry: &fluxdb_app::RedisWorkbenchHistoryEntry,
-) -> RedisWorkbenchHistoryRecord {
-    RedisWorkbenchHistoryRecord {
-        id: entry.id,
-        connection_id: entry.connection_id,
-        database: entry.database,
-        text: entry.text.clone(),
-        success: entry.success,
-        executed_at_unix_secs: entry.executed_at_unix_secs,
-        summary: entry.summary.clone(),
-        source: format!("{:?}", entry.source),
-    }
-}
-
-/// 把 source 字符串还原成 `CommandExecutionSource`（枚举名匹配，未知回退 KeyShortcut）。
-fn redis_workbench_source_from_str(source: &str) -> fluxdb_core::CommandExecutionSource {
-    match source {
-        "Workbench" => fluxdb_core::CommandExecutionSource::Workbench,
-        "HistoryRerun" => fluxdb_core::CommandExecutionSource::HistoryRerun,
-        _ => fluxdb_core::CommandExecutionSource::KeyShortcut,
-    }
-}
-
-fn query_statement_kind_from_history(kind: QueryHistoryKind) -> fluxdb_core::QueryStatementKind {
-    match kind {
-        QueryHistoryKind::Query => fluxdb_core::QueryStatementKind::ResultSet,
-        QueryHistoryKind::DataChange | QueryHistoryKind::SchemaChange => {
-            fluxdb_core::QueryStatementKind::Command
-        }
-    }
-}
-
-fn query_history_kind_from_storage(kind: &str) -> QueryHistoryKind {
-    match kind {
-        "data_change" => QueryHistoryKind::DataChange,
-        "schema_change" => QueryHistoryKind::SchemaChange,
-        _ => QueryHistoryKind::Query,
-    }
-}
-
-fn query_history_kind_to_storage(kind: QueryHistoryKind) -> &'static str {
-    match kind {
-        QueryHistoryKind::Query => "query",
-        QueryHistoryKind::DataChange => "data_change",
-        QueryHistoryKind::SchemaChange => "schema_change",
-    }
-}
-
-fn app_assets_base_path() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(contents_dir) = exe_path.parent().and_then(|macos_dir| macos_dir.parent()) {
-                let bundled_assets = contents_dir.join("Resources").join("assets");
-                if bundled_assets.exists() {
-                    return bundled_assets;
-                }
-            }
-        }
-    }
-
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
-}
-
-fn register_shortcuts(cx: &mut App, settings: &Settings) {
-    // 新的通用编辑器与 SQL 连接层：注册通用编辑器快捷键 + SQL 执行快捷键。
-    editor_component::register_editor_shortcuts(cx);
-    sql_editor_adapter::register_sql_execute_shortcuts(cx);
-    // 旧 SQL 编辑器快捷键已随旧 sql_editor 模块移除，不再注册，避免与新的
-    // EditorComponent 快捷键绑定冲突。
-    register_terminal_shortcuts(cx);
-
-    // 应用级退出快捷键绑定在无上下文层级，确保编辑器或表格聚焦时也能退出。
-    cx.on_action(|_: &Quit, cx| {
-        tracing::info!(target: "fluxdb_desktop", "收到退出快捷键，退出应用");
-        cx.quit();
-    });
-    cx.bind_keys([KeyBinding::new(
-        if cfg!(target_os = "macos") {
-            "cmd-q"
-        } else {
-            "ctrl-q"
-        },
-        Quit,
-        None,
-    )]);
-
-    for definition in SHORTCUT_DEFINITIONS {
-        bind_shortcut(
-            cx,
-            &current_shortcut(settings, definition),
-            definition.action,
-            definition.context,
-        );
-    }
-    cx.bind_keys([
-        KeyBinding::new(
-            "up",
-            QueryHistoryQuickSearchPrevious,
-            Some("QueryHistoryQuickSearch"),
-        ),
-        KeyBinding::new(
-            "down",
-            QueryHistoryQuickSearchNext,
-            Some("QueryHistoryQuickSearch"),
-        ),
-        KeyBinding::new(
-            "enter",
-            QueryHistoryQuickSearchConfirm,
-            Some("QueryHistoryQuickSearch"),
-        ),
-        KeyBinding::new("escape", CancelDialog, None),
-        KeyBinding::new(
-            "delete",
-            DeleteConnectionShortcut,
-            Some("ConnectionContextMenu"),
-        ),
-        KeyBinding::new(
-            "backspace",
-            DeleteConnectionShortcut,
-            Some("ConnectionContextMenu"),
-        ),
-        KeyBinding::new(
-            "delete",
-            DeleteConnectionShortcut,
-            Some("DeleteConnectionModal"),
-        ),
-        KeyBinding::new(
-            "backspace",
-            DeleteConnectionShortcut,
-            Some("DeleteConnectionModal"),
-        ),
-        KeyBinding::new(
-            "enter",
-            DeleteConnectionShortcut,
-            Some("DeleteConnectionModal"),
-        ),
-    ]);
 }
