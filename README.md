@@ -20,12 +20,16 @@
 
 > 当前阶段仅发布 macOS 目标；Windows / Linux 支持规划中。
 
+详细使用说明请参阅：[FluxDB 操作手册](./docs/user-guide.md)。
+
 ### 从源码运行
 
 前置：安装 [Rust 工具链](https://rustup.rs)（edition 2024，建议使用较新 nightly 或 stable Rust）。
 
+项目地址：[https://github.com/fluxdb-alt/fluxDB](https://github.com/fluxdb-alt/fluxDB)
+
 ```bash
-git clone https://github.com/你的账号/fluxDB.git
+git clone https://github.com/fluxdb-alt/fluxDB.git
 cd fluxDB
 
 # 运行桌面端
