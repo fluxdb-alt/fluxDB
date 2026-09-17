@@ -166,37 +166,69 @@ fn reap_terminal_child(
 /// `std::process::Command` 在 PATH 缺失时不会自动知道 Homebrew 等包管理器目录；
 /// 这里仅对不带目录的程序名做解析，显式路径仍完全按调用方指定的值使用。
 fn resolve_program_path(program: &str) -> String {
-    let path = std::path::Path::new(program);
-    if path.is_absolute() || program.contains('/') || program.contains('\\') {
-        return program.to_string();
-    }
-
-    let mut search_paths: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+    let search_paths: Vec<std::path::PathBuf> = std::env::var_os("PATH")
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_default();
 
     #[cfg(target_os = "macos")]
-    {
+    let search_paths = {
         // Finder 启动时常见的 PATH 不包含这些目录；按稳定顺序去重，避免重复 stat。
+        let mut paths = search_paths;
         for directory in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"] {
             let directory = std::path::PathBuf::from(directory);
-            if !search_paths.contains(&directory) {
-                search_paths.push(directory);
+            if !paths.contains(&directory) {
+                paths.push(directory);
             }
         }
+        paths
+    };
+
+    resolve_program_from_paths(program, search_paths, cfg!(target_os = "windows"))
+}
+
+/// 按调用方注入的 PATH 解析 PTY 可执行文件；`windows` 参数模拟目标平台语义。
+///
+/// Windows 下裸名会尝试 `.exe/.com`；`.bat/.cmd` 不作为普通可执行文件传给 PTY，
+/// 避免绕过 shell 解释和参数引用规则。
+fn resolve_program_from_paths(
+    program: &str,
+    search_paths: Vec<std::path::PathBuf>,
+    windows: bool,
+) -> String {
+    let path = std::path::Path::new(program);
+    if path.is_absolute() || program.contains('/') || program.contains('\\') {
+        return program.to_string();
+    }
+    if windows && has_windows_shell_extension(program) {
+        tracing::warn!(program, "终端不通过 shell 解释器执行 .bat/.cmd");
+        return program.to_string();
     }
 
     for directory in search_paths {
-        let candidate = directory.join(program);
-        if candidate.is_file() {
-            let resolved = candidate.to_string_lossy().into_owned();
-            tracing::debug!(program, resolved = %resolved, "终端已解析可执行文件路径");
-            return resolved;
+        let mut candidates = vec![directory.join(program)];
+        if windows && path.extension().is_none() {
+            candidates.push(directory.join(format!("{program}.exe")));
+            candidates.push(directory.join(format!("{program}.com")));
+        }
+        for candidate in candidates {
+            if candidate.is_file() {
+                let resolved = candidate.to_string_lossy().into_owned();
+                tracing::debug!(program, resolved = %resolved, "终端已解析可执行文件路径");
+                return resolved;
+            }
         }
     }
 
     tracing::warn!(program, "终端未找到可执行文件，将交由 PTY 返回启动错误");
     program.to_string()
+}
+
+fn has_windows_shell_extension(program: &str) -> bool {
+    std::path::Path::new(program)
+        .extension()
+        .is_some_and(|extension| {
+            matches!(extension.to_string_lossy().to_ascii_lowercase().as_str(), "bat" | "cmd")
+        })
 }
 
 
@@ -219,5 +251,39 @@ mod terminal_reap_tests {
         }
         assert!(worker.is_finished(), "终端子进程未及时回收");
         worker.join().unwrap();
+    }
+}
+
+
+#[cfg(test)]
+mod terminal_program_path_tests {
+    use super::resolve_program_from_paths;
+
+    #[test]
+    fn windows_resolves_native_executables_and_rejects_scripts() {
+        let root = std::env::temp_dir().join(format!("fluxdb-pty-path-{}", std::process::id()));
+        let native_dir = root.join("native");
+        let script_dir = root.join("scripts");
+        let unix_dir = root.join("unix");
+        for dir in [&native_dir, &script_dir, &unix_dir] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(native_dir.join("redis-cli.exe"), b"MZ").unwrap();
+        std::fs::write(script_dir.join("redis-cli.bat"), b"@echo off").unwrap();
+        std::fs::write(script_dir.join("run.cmd"), b"@echo off").unwrap();
+        std::fs::write(unix_dir.join("redis-cli"), b"#!/bin/sh").unwrap();
+
+        let native = resolve_program_from_paths("redis-cli", vec![native_dir.clone()], true);
+        let bat = resolve_program_from_paths("redis-cli", vec![script_dir.clone()], true);
+        let cmd = resolve_program_from_paths("run.cmd", vec![script_dir.clone()], true);
+        let unix = resolve_program_from_paths("redis-cli", vec![unix_dir.clone()], false);
+        let missing = resolve_program_from_paths("missing", vec![unix_dir.clone()], false);
+
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(native, native_dir.join("redis-cli.exe").to_string_lossy());
+        assert_eq!(bat, "redis-cli");
+        assert_eq!(cmd, "run.cmd");
+        assert_eq!(unix, unix_dir.join("redis-cli").to_string_lossy());
+        assert_eq!(missing, "missing");
     }
 }
