@@ -296,25 +296,26 @@ fn pg_client_archive_target_narrows_to_runtime_libraries_by_default() {
         pg_client_archive_target("pgsql/bin/libssl-3-x64.dll", false),
         Some(std::path::PathBuf::from("bin/libssl-3-x64.dll"))
     );
-    // 有匹配的库都不是客户端依赖：跳过。
-    for skipped in [
+    // 有匹配的库都不是客户端依赖：精简轮跳过；补齐轮按平台动态库布局保留。
+    #[cfg(not(target_os = "windows"))]
+    let libraries = [
         "pgsql/lib/libxml2.16.dylib",
         "pgsql/lib/libhuge.dylib",
         "pgsql/lib/libicudata.68.2.dylib",
         "pgsql/lib/libwx_base.dylib",
-    ] {
-        assert_eq!(pg_client_archive_target(skipped, false), None, "{skipped}");
-    }
-    // 补齐轮放开限制：任何动态库都取，保证不会因过度精简装出跑不起来的工具。
-    for kept in [
-        "pgsql/lib/libxml2.16.dylib",
-        "pgsql/lib/libhuge.dylib",
-        "pgsql/lib/libicudata.68.2.dylib",
-        "pgsql/lib/libwx_base.dylib",
-    ] {
+    ];
+    #[cfg(target_os = "windows")]
+    let libraries = [
+        "pgsql/bin/libxml2.dll",
+        "pgsql/bin/libhuge.dll",
+        "pgsql/bin/icudt.dll",
+        "pgsql/bin/libwx_base.dll",
+    ];
+    for library in libraries {
+        assert_eq!(pg_client_archive_target(library, false), None, "{library}");
         assert!(
-            pg_client_archive_target(kept, true).is_some(),
-            "补齐轮应保留 {kept}"
+            pg_client_archive_target(library, true).is_some(),
+            "补齐轮应保留 {library}"
         );
     }
     // pgAdmin 内嵌 Python framework 的库与客户端工具无关，且与真依赖同名
