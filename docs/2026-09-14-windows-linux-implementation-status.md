@@ -373,3 +373,15 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - `fluxdb-app` 再导出 `NativeTlsPaths` / `pg_native_tls_paths`。
 - 新增单测 `pg_native_tool_inherits_tls_paths_via_env_not_argv`：断言三条证书 env 下发、路径/sslmode 不进 argv、空字段不写 env。
 - 验证：connectors `190 passed / 0 failed / 16 ignored`（含新测试）；app `459 passed`；desktop `402 passed / 3 ignored`；`cargo check --workspace --locked` / fmt / `git diff --check` 通过。三平台 CI 待推送确认。
+
+
+## AI-05（内部安装包流水线，2026-09-17）
+
+**状态**：Windows Inno Setup 安装器 + Linux .deb 已在 `ci.yml` 增加内部候选构建步骤；推送后由 CI 验证。仅上传内部 artifact，不创建 tag、不发布 Release，不改 macOS release.yml。
+
+**改动（`.github/workflows/ci.yml`，在 build job 的产物上传之后按平台门控新增）**：
+- Windows：`choco install innosetup` → ISCC 编译 `scripts/windows-installer.iss`（内部版本号 `0.1.0-<sha7>`，AppVersion 由 `/D...` 传入）→ 校验安装包存在 + 计算 SHA256 → 上传 `fluxdb-windows-installer-internal`。安装布局与 `.iss` 一致：EXE + `{app}\assets`（EXE 同级 assets，方案 §4.3/§12.9）。
+- Linux：`dpkg-deb --build --root-owner-group` 构建 `.deb`（`fluxdb_0.1.0-<sha7>_amd64`），布局为 `<prefix>/usr/bin/fluxdb` + `<prefix>/usr/share/fluxdb/assets`（与 `app_assets_base_path` Linux 分支一致）→ `dpkg-deb -c` 内容检查（须含 exe + assets）、`-x` 解压校验可执行位与关键资源、SHA256、`ldd` 生成运行依赖报告 → 上传 `fluxdb-linux-deb-internal`。
+- 无图形会话：不做 GUI 启动冒烟，仅内容/校验和/依赖报告；运行依赖（含 X11/Wayland、OpenSSL、fontconfig 等）落 `ldd-report.txt` 供正式发布映射 Depends（内部候选 Depends 暂为 `libc6`）。Windows VC Runtime 依赖待真机/正式发布处理。
+
+**未验证**：Windows 安装器实际安装/卸载/运行（需 Windows VM/真机）；Linux .deb 在干净环境安装后能启动 GUI（需图形会话）；SmartScreen/杀软行为（方案 §12.9 已知限制）。这些均非内部改包 CI 能验证，已在本次声明。
