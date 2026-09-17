@@ -307,6 +307,7 @@ const BRIDGE_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_mill
 /// `ssh2::Channel` 是 `Arc` 包装的共享句柄，可直接 clone 给两个线程。
 struct SshBridgeConnection {
     socket: TcpStream,
+    stopped: std::sync::Arc<std::sync::atomic::AtomicBool>,
     workers: Vec<std::thread::JoinHandle<()>>,
 }
 
@@ -318,6 +319,7 @@ impl SshBridgeConnection {
 
 impl Drop for SshBridgeConnection {
     fn drop(&mut self) {
+        self.stopped.store(true, std::sync::atomic::Ordering::Release);
         let _ = self.socket.shutdown(std::net::Shutdown::Both);
         for worker in self.workers.drain(..) {
             let _ = worker.join();
@@ -330,6 +332,11 @@ fn bridge_one(
     channel: ssh2::Channel,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> std::io::Result<SshBridgeConnection> {
+    // Windows shutdown 不唤醒已阻塞的 recv；两个方向均用非阻塞 I/O 观察取消。
+    local_sock.set_nonblocking(true)?;
+    let stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stopped_a = stopped.clone();
+    let stopped_b = stopped.clone();
     let mut sock_a = local_sock.try_clone()?;
     let mut sock_b = local_sock.try_clone()?;
     let mut chan_a = channel.clone();
@@ -337,12 +344,16 @@ fn bridge_one(
     let stop_a = shutdown.clone();
     // 本地 EOF 只发送半关闭，让远端仍可返回最后一段结果。
     let upstream = std::thread::spawn(move || {
-        if let Err(error) = pump_local_to_remote(&mut sock_a, &mut chan_a, &stop_a) {
+        let canceled = || stop_a.load(std::sync::atomic::Ordering::Acquire)
+            || stopped_a.load(std::sync::atomic::Ordering::Acquire);
+        if let Err(error) = pump_ssh_bytes(&mut sock_a, &mut chan_a, canceled) {
             tracing::debug!(%error, "SSH 上行转发结束");
+            stopped_a.store(true, std::sync::atomic::Ordering::Release);
+            return;
         }
         // 非阻塞 send_eof 也可能返回 EAGAIN，不能丢失本地半关闭信号。
         for _ in 0..BRIDGE_RETRY_LIMIT {
-            if stop_a.load(std::sync::atomic::Ordering::Acquire) {
+            if canceled() {
                 break;
             }
             match chan_a.send_eof() {
@@ -358,55 +369,28 @@ fn bridge_one(
         }
     });
     let downstream = std::thread::spawn(move || {
-        let _ = pump_remote_to_local(&mut chan_b, &mut sock_b, &shutdown);
+        let canceled = || shutdown.load(std::sync::atomic::Ordering::Acquire)
+            || stopped_b.load(std::sync::atomic::Ordering::Acquire);
+        if let Err(error) = pump_ssh_bytes(&mut chan_b, &mut sock_b, canceled) {
+            tracing::debug!(%error, "SSH 下行转发结束");
+        }
+        stopped_b.store(true, std::sync::atomic::Ordering::Release);
         let _ = sock_b.shutdown(std::net::Shutdown::Both);
     });
-    Ok(SshBridgeConnection { socket: local_sock, workers: vec![upstream, downstream] })
+    Ok(SshBridgeConnection { socket: local_sock, stopped, workers: vec![upstream, downstream] })
 }
 
-/// 本地 → 远端：读本地 socket（阻塞），写通道（非阻塞，满窗口时退避重试）。
-fn pump_local_to_remote(
-    sock: &mut TcpStream,
-    channel: &mut ssh2::Channel,
-    shutdown: &std::sync::atomic::AtomicBool,
+/// 双向共用非阻塞字节搬运：保留部分写入偏移，背压时重试，并在每次 I/O 前检查取消。
+/// Read/Write 使用标准 trait，测试可隔离注入背压、短写和中途取消。
+fn pump_ssh_bytes(
+    source: &mut impl std::io::Read,
+    destination: &mut impl std::io::Write,
+    canceled: impl Fn() -> bool,
 ) -> std::io::Result<()> {
     let mut buffer = [0u8; 32 * 1024];
     loop {
-        let read = match std::io::Read::read(sock, &mut buffer) {
-            Ok(0) => return Ok(()),
-            Ok(read) => read,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
-        };
-        let mut offset = 0;
-        while offset < read {
-            if shutdown.load(std::sync::atomic::Ordering::Acquire) {
-                return Ok(());
-            }
-            match std::io::Write::write(channel, &buffer[offset..read]) {
-                Ok(0) => return Ok(()),
-                Ok(written) => offset += written,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(BRIDGE_RETRY_BACKOFF);
-                }
-                Err(error) => return Err(error),
-            }
-        }
-    }
-}
-
-/// 远端 → 本地：读通道（非阻塞，无数据即退避），写本地 socket（阻塞）。
-fn pump_remote_to_local(
-    channel: &mut ssh2::Channel,
-    sock: &mut TcpStream,
-    shutdown: &std::sync::atomic::AtomicBool,
-) -> std::io::Result<()> {
-    let mut buffer = [0u8; 32 * 1024];
-    loop {
-        if shutdown.load(std::sync::atomic::Ordering::Acquire) {
-            return Ok(());
-        }
-        let read = match std::io::Read::read(channel, &mut buffer) {
+        if canceled() { return Ok(()); }
+        let read = match source.read(&mut buffer) {
             Ok(0) => return Ok(()),
             Ok(read) => read,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -416,7 +400,19 @@ fn pump_remote_to_local(
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error),
         };
-        std::io::Write::write_all(sock, &buffer[..read])?;
+        let mut offset = 0;
+        while offset < read {
+            if canceled() { return Ok(()); }
+            match destination.write(&buffer[offset..read]) {
+                Ok(0) => return Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "SSH 转发写入未推进")),
+                Ok(written) => offset += written,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(BRIDGE_RETRY_BACKOFF);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
     }
 }
 
@@ -571,26 +567,29 @@ mod ssh_tunnel_tests {
     }
 
     #[test]
-    fn dropping_bridge_connection_wakes_blocked_socket_reader() {
+    fn dropping_bridge_connection_stops_idle_nonblocking_reader() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (socket, _) = listener.accept().unwrap();
+        socket.set_nonblocking(true).unwrap();
         let mut reader = socket.try_clone().unwrap();
-        let (read_tx, read_rx) = std::sync::mpsc::channel();
+        let stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_stop = stopped.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let connection = SshBridgeConnection {
             socket,
+            stopped,
             workers: vec![std::thread::spawn(move || {
-                let mut buffer = [0u8; 1];
-                let _ = std::io::Read::read(&mut reader, &mut buffer);
-                read_tx.send(()).unwrap();
+                ready_tx.send(()).unwrap();
+                pump_ssh_bytes(&mut reader, &mut std::io::sink(), || worker_stop.load(std::sync::atomic::Ordering::Acquire)).unwrap();
             })],
         };
+        ready_rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
         let (drop_tx, drop_rx) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
             drop(connection);
-            drop_tx.send(()).unwrap();
+            let _ = drop_tx.send(());
         });
-        read_rx.recv_timeout(std::time::Duration::from_secs(3)).expect("读线程未被唤醒");
         drop_rx.recv_timeout(std::time::Duration::from_secs(3)).expect("连接 Drop 未退出");
         worker.join().unwrap();
     }
@@ -839,3 +838,6 @@ mod ssh_tunnel_tests {
         );
     }
 }
+
+#[cfg(test)]
+include!("ssh_pump_tests.rs");

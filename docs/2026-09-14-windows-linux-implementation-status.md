@@ -330,3 +330,12 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - 获取 PTY 读写端移到 spawn 前，避免读写端初始化失败时留下子进程；终止和回收失败记录日志。
 - macOS 真实 PTY 子进程回归测试通过（1 passed，约 0.06 秒），workspace check 与 fmt 通过。CI 增加 Unix PTY 定向测试；Windows ConPTY 运行测试仍待验证。
 - 本次仅处理直接子进程的回收，未实现跨平台进程树管理；操作系统拒绝终止时 wait 仍可能等待，不能宣称所有退出路径均有界。
+
+
+### AI-04 Windows 运行期回归修复（2026-09-17）
+
+- `84cbca4` 的 CI `35203621299`：macOS、Ubuntu 通过；Windows 在新加的 socket 关闭测试失败。不是 connector 旧基线问题，也不是编译失败。
+- 独立标准库诊断 commit `8665419`，Windows job `105167338633`（run `35210727361`）实测：阻塞 read 下 `shutdown=Ok(())` 后 1 秒内没有退出；非阻塞 read + 停止信号在 1 秒内退出。macOS 对照两种模式均退出。
+- 据此将本地转发 socket 设为非阻塞；连接句柄持有独立停止信号，Drop 先通知取消再 join。双向使用同一个标准 Read/Write 搬运函数，重试 WouldBlock/Interrupted 并保留部分写入偏移；零字节写入报 WriteZero，避免假成功。
+- 原 Windows 失败测试改为真实本地 socket + 生产搬运函数 + 实际连接句柄 Drop，验证线程退出；另加短写/背压数据完整性、中途读写取消、零写错误三个测试。
+- macOS 本地完整 connectors：189 passed / 0 failed / 16 ignored；workspace check、fmt 通过。新补丁仍须以对应 SHA 的三平台 CI 为准，独立诊断通过不能冒充生产修复验收。
