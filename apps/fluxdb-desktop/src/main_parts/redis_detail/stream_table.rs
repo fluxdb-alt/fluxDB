@@ -285,7 +285,7 @@ fn redis_stream_table_entry_cell(
         .child(
             div()
                 .w_full()
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_size(px(11.))
                 .line_height(px(14.))
                 .text_color(colors.muted)
@@ -396,7 +396,7 @@ fn redis_stream_table_delete_confirm_overlay(
         )
         .child(
             div()
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_size(px(11.))
                 .text_color(colors.muted)
                 .overflow_hidden()

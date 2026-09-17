@@ -89,11 +89,10 @@ fn activate_main_window(cx: &mut App) {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn install_close_to_tray(window: &Window, cx: &mut App) {
     window.on_window_should_close(cx, |_, cx| {
-        #[cfg(target_os = "macos")]
         cx.hide();
-
         false
     });
 }

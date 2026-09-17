@@ -9,7 +9,7 @@
 | AI-00 复查基线、依赖、原生环境，建立最小 CI 构建任务 | 通过（三平台 fmt/check/release 构建/产物/core 测试全绿，仅剩既有 connector 失败） |
 | AI-01 目录/日志/资源定位 | 实现与三平台编译验证通过（目录语义/单实例/权限，Windows MSVC/macOS/Ubuntu release 构建 ✓）；运行时验收（Windows ACL、不可写目录、GUI）待验证 |
 | AI-02 凭据后端与错误传播 | 实现 + 三平台编译/release 通过；运行期系统凭据集成待验证（无目标实体机） |
-| AI-03 窗口/托盘/字体/快捷键/IME | 未开始 |
+| AI-03 窗口/托盘/字体/快捷键/IME | 实现中：本地编译/定向测试通过，三平台 CI 与图形运行验收待完成 |
 | AI-04 工具执行/SSH 隧道/PTY | 未开始 |
 | AI-05 原生 release 打包 | 未开始 |
 | AI-06 验收与发布材料 | 未开始 |
@@ -272,3 +272,26 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - connector 原 4 个失败已修正：2 个真实 PG 角色计划测试统一由 `FLUXDB_PG_SMOKE` 显式启用；建库断言同步既有 `TEMPLATE template0` 行为；生成列表测试补全表达式数据，并按 `pg_get_constraintdef` 原文断言唯一约束。connectors：`182 passed; 0 failed; 16 ignored`。
 - app：`459 passed; 0 failed; 1 ignored`。首次沙箱运行因禁止 loopback socket 出现 5 个环境失败，允许 loopback 后全量通过。
 - 本地 `cargo fmt --all -- --check`、`cargo check --workspace --locked`、`git diff --check` 通过；三平台 CI 待本提交推送后确认。
+
+## AI-03（窗口/托盘/字体/快捷键/IME，2026-09-17）
+
+**状态**：第一批代码完成；macOS 本地编译与定向测试通过，三平台原生 CI 待本提交推送后确认。Windows/Linux 图形会话、IME、DPI、托盘运行期行为仍待 VM/真机验收。
+
+**本批改动**：
+- 窗口装饰：macOS 红绿灯坐标仅在 macOS 设置；Windows/Linux 不再携带 macOS 专属窗口参数。
+- 关闭与托盘：Linux 继续按首版范围排除托盘；Windows 不再安装“始终拒绝关闭”的回调，关闭窗口走 GPUI 默认正常关闭/退出。macOS 保留已存在的关闭隐藏与托盘恢复。Windows 托盘图标仍保留，但关闭到托盘只有在目标环境验证隐藏/恢复后才可启用。
+- 字体：清理 desktop 中写死的 Menlo，统一为平台等宽字体首选项：macOS Menlo、Windows Consolas、Linux fontconfig 通用族 `monospace`；CJK/emoji 继续由系统字体栈回退。未打包 Apple 字体。
+- 快捷键：编辑器查找、折叠/全部折叠/全部展开补齐 Windows/Linux Ctrl 映射；终端继续保留 Ctrl-C 发送 SIGINT，复制/粘贴使用 Ctrl-Shift-C/V。设置页快捷键文案在 Windows/Linux 使用 `Ctrl+Shift+…`，不再显示 macOS 符号。
+- IME：复核自定义编辑器已实现 `EntityInputHandler`、UTF-16/字节边界换算、marked text 与候选窗边界矩形，并已有中文多字节范围测试；本批不以无图形 CI 冒充中文输入法运行验收。
+
+**本地验证**：
+- `cargo check -p fluxdb-desktop --locked`：通过。
+- `cargo test -p fluxdb-desktop shortcut_tests --locked`：3 passed（含跨平台快捷键解析）。
+- `cargo fmt --all -- --check`、`git diff --check`：通过。
+- `cargo test -p fluxdb-app --locked`：允许 loopback 环境复跑通过，459 passed / 0 failed / 1 ignored；沙箱内曾有 5 个测试因禁止绑定 loopback 报 `Operation not permitted`。
+- `cargo run -p fluxdb-desktop --locked`：macOS 主进程成功启动并进入 GPUI 事件循环，验证后手动退出。
+
+**待验证**：
+- Windows 11：窗口关闭/退出、托盘打开、150%/200% DPI、多屏、中文 IME 候选窗与焦点切换、Consolas/CJK fallback。
+- Ubuntu 22.04/24.04：X11 与 Wayland 启动/关闭、100%/150%/200% 缩放、中文 IME、`monospace` 实际解析、GNOME 无托盘扩展时正常退出。
+- macOS：关闭隐藏、托盘恢复与既有 Menlo 排版回归。

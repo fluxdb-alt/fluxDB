@@ -458,7 +458,7 @@ impl TableDelegate for TableInfoTableDelegate {
                                 gpui::FontWeight::NORMAL
                             })
                             .text_color(cx.theme().foreground)
-                            .when(cell.mono, |this| this.font_family("Menlo"))
+                            .when(cell.mono, |this| this.font_family(crate::PLATFORM_MONOSPACE_FONT))
                             .child(cell.title),
                     )
                     .when_some(cell.badge, |this, badge| {

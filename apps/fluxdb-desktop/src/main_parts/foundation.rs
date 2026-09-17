@@ -14,7 +14,7 @@ use gpui::{
 use sql_editor_adapter::{SqlStatementId, SqlStatementRun, SqlStatementStatus};
 
 /// 查询编辑器等复用的等宽字体名（原定义于旧 sql_editor/layout.rs）。
-const EDITOR_FONT: &str = "Menlo";
+const EDITOR_FONT: &str = crate::PLATFORM_MONOSPACE_FONT;
 
 /// 给 RGBA 颜色覆写 alpha 通道（原定义于旧 sql_editor/layout.rs，被菜单/弹窗等复用）。
 fn rgba_with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {

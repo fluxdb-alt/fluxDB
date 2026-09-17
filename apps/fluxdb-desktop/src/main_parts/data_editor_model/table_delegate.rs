@@ -726,7 +726,7 @@ impl TableDelegate for DataPageTableDelegate {
                                     .w_full()
                                     .overflow_hidden()
                                     .text_ellipsis()
-                                    .font_family("Menlo")
+                                    .font_family(crate::PLATFORM_MONOSPACE_FONT)
                                     .child(editing_input_value),
                             )
                         }),

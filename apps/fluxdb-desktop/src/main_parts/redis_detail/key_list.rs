@@ -842,7 +842,7 @@ fn redis_key_list_text(text: String, mono: bool) -> Div {
         .whitespace_nowrap()
         .text_ellipsis()
         .text_size(px(13.))
-        .when(mono, |this| this.font_family("Menlo"))
+        .when(mono, |this| this.font_family(crate::PLATFORM_MONOSPACE_FONT))
         .child(text)
 }
 
@@ -966,7 +966,7 @@ fn redis_key_delete_confirm_popover(
                                 .gap_1()
                                 .child(
                                     div()
-                                        .font_family("Menlo")
+                                        .font_family(crate::PLATFORM_MONOSPACE_FONT)
                                         .text_size(px(14.))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .text_color(colors.text)

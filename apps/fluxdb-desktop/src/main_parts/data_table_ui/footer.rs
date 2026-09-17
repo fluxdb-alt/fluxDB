@@ -356,7 +356,7 @@ fn data_change_sql_preview_drawer(
         .flex()
         .flex_col()
         .gap_1()
-        .font_family("Menlo")
+        .font_family(crate::PLATFORM_MONOSPACE_FONT)
         .text_size(px(11.))
         .line_height(px(17.))
         .text_color(colors.text);
@@ -634,7 +634,7 @@ fn data_editor_sql_input(
                 .w_full()
                 .h_full()
                 .text_size(px(12.))
-                .font_family("Menlo"),
+                .font_family(crate::PLATFORM_MONOSPACE_FONT),
         )
 }
 
@@ -687,7 +687,7 @@ fn data_editor_sql_strip(
                 .flex_1()
                 .min_w(px(0.))
                 .overflow_hidden()
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .child(
                     div()
                         .absolute()

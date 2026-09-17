@@ -1,3 +1,11 @@
+fn platform_titlebar_options() -> TitlebarOptions {
+    TitlebarOptions {
+        appears_transparent: true,
+        #[cfg(target_os = "macos")]
+        traffic_light_position: Some(point(px(17.), px(12.))),
+        ..Default::default()
+    }
+}
 fn set_app_menus(cx: &mut App) {
     cx.set_menus(vec![Menu {
         name: "FluxDB".into(),

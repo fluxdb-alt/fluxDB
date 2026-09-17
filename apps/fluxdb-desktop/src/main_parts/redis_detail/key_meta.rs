@@ -34,7 +34,7 @@ fn redis_key_detail_header(
                             .items_center()
                             .rounded(colors.radius * 0.5)
                             .bg(colors.panel_alt)
-                            .font_family("Menlo")
+                            .font_family(crate::PLATFORM_MONOSPACE_FONT)
                             .text_size(px(11.))
                             .text_color(colors.muted)
                             .child(detail.size.clone()),
@@ -47,7 +47,7 @@ fn redis_key_detail_header(
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .font_family("Menlo")
+                        .font_family(crate::PLATFORM_MONOSPACE_FONT)
                         .text_size(px(12.))
                         .text_color(colors.muted)
                         .child(redis_ellipsis_text(&key_name, 64)),

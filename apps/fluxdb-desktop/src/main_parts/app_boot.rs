@@ -67,17 +67,13 @@ fn main() {
                 WindowOptions {
                     focus: true,
                     is_resizable: true,
-                    titlebar: Some(TitlebarOptions {
-                        appears_transparent: true,
-                        traffic_light_position: Some(point(px(17.), px(12.))),
-                        ..Default::default()
-                    }),
+                    titlebar: Some(platform_titlebar_options()),
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
                 |window, cx| {
-                    // Linux 首版无托盘：不注册“关闭到托盘”拦截，走默认正常关闭/退出流程。
-                    #[cfg(not(target_os = "linux"))]
+                    // Windows/Linux 默认正常关闭。当前只有 macOS 的隐藏/恢复行为经过验证。
+                    #[cfg(target_os = "macos")]
                     install_close_to_tray(window, cx);
                     let view = cx.new(|cx| {
                         let rename_group_input =

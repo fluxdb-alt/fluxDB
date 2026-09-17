@@ -125,6 +125,14 @@ impl LegacyInputStateExt for InputState {
     }
 }
 
+// 平台等宽字体仅指定通用首选项；具体 CJK/emoji 回退仍由系统字体栈处理。
+#[cfg(target_os = "macos")]
+pub(crate) const PLATFORM_MONOSPACE_FONT: &str = "Menlo";
+#[cfg(target_os = "windows")]
+pub(crate) const PLATFORM_MONOSPACE_FONT: &str = "Consolas";
+#[cfg(target_os = "linux")]
+pub(crate) const PLATFORM_MONOSPACE_FONT: &str = "monospace";
+
 // First-pass source split: these files are included at crate-root scope to keep behavior unchanged.
 include!("main_parts/foundation.rs");
 include!("main_parts/theme_registry.rs");

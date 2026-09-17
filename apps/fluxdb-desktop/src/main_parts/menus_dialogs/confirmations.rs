@@ -933,7 +933,7 @@ fn apply_data_changes_modal(
         .flex()
         .flex_col()
         .gap_1()
-        .font_family("Menlo")
+        .font_family(crate::PLATFORM_MONOSPACE_FONT)
         .text_size(px(12.))
         .line_height(px(18.))
         .text_color(colors.text);
