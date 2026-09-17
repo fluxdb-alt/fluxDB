@@ -193,3 +193,21 @@
 **下一步**：AI-01 收尾（Windows ACL 实测、不可写目录 UI 诊断）或进入 AI-02（凭据后端）。
 
 ---
+
+## 分支迁移（2026-09-17）
+
+原工作分支 `codex/ai-00-win-linux-ci`（基 2e299c8）发现与远端 `origin/main`
+（db5a54a = 40f223c + "add PostgreSQL support" + merge PR#6）是平行历史：
+origin/main 缺少本地 main 相对它的 158 个提交，且原分支 CI workflow 之 run
+已被删除、workflows 列表只剩 Release macOS。
+
+按授权迁移到新独立分支 `adapt/win-linux`（基 = 最新 origin/main db5a54a），
+仅 cherry-pick 经核实的 6 个适配提交（无代码冲突；状态文档合并冲突已消解）：
+a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
+14e81fa(xkbcommon) → bc6ac52(AI-01 目录语义) → 183bd84(AI-01 单实例+权限)。
+不迁移其他业务提交，不推送本地 main，不强推/改写已有远端分支。
+原分支 `codex/ai-00-win-linux-ci` 保留作备份。
+
+新基线验证：`cargo check --workspace --locked` 通过；`cargo test
+-p fluxdb-storage` 26 passed；`cargo fmt --all -- --check`、`git diff --check`
+通过。Windows/Linux 行为由新 CI 原生验证。

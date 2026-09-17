@@ -4,10 +4,14 @@ name: CI
 # 本工作流只生成内部候选产物，不创建 tag、不公开发布 Release。
 # 各平台使用原生 runner；macOS 上的交叉 cargo check 不作为 Windows/Linux 验证通过依据。
 on:
+  # 适配分支自身 push + 面向 main 的 PR 触发；另提供 workflow_dispatch 手动复跑。
+  # 不修改 main 版本 workflow（不动 release.yml），仅在当前适配分支配置。
   push:
     branches:
       - main
+      - adapt/win-linux
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -85,12 +89,22 @@ jobs:
       - name: Build fluxdb-desktop (release, locked)
         run: cargo build --locked --release --target ${{ matrix.target }} -p fluxdb-desktop
 
+      - name: Generate release artifact checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd "target/${{ matrix.target }}/release"
+          sha256sum fluxdb-desktop* > fluxdb-desktop.sha256
+          cat fluxdb-desktop.sha256
+
       - name: Upload internal candidate artifact
         uses: actions/upload-artifact@v4
         with:
           name: fluxdb-desktop-${{ matrix.os }}-${{ matrix.target }}
           path: |
             target/${{ matrix.target }}/release/fluxdb-desktop*
+            target/${{ matrix.target }}/release/fluxdb-desktop.sha256
           if-no-files-found: error
           retention-days: 14
 
