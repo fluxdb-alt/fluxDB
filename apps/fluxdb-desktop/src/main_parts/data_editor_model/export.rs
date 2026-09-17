@@ -153,6 +153,7 @@ impl TableDataExportWriter {
                 )
             }
             TableDataExportFormat::Csv => {
+                write_csv_bom(&mut self.writer)?;
                 writeln!(
                     self.writer,
                     "{}",
@@ -310,6 +311,7 @@ fn write_data_row_csv_export<W: Write>(
     let Some(fields) = rows.first() else {
         return Ok(());
     };
+    write_csv_bom(writer)?;
     writeln!(
         writer,
         "{}",
@@ -409,6 +411,15 @@ fn csv_cell(value: &str) -> String {
     } else {
         value.to_string()
     }
+}
+
+/// 写 CSV 的 UTF-8 BOM（EF BB BF）。
+///
+/// 跨平台适配 §12.3.1：无 BOM 的 UTF-8 CSV 在 Windows 简体中文环境的 Excel 按 ANSI(CP936)
+/// 打开，中文全部乱码；带 BOM 后 Excel 能识别为 UTF-8。默认统一带 BOM，标签/文档已说明；
+/// 若有工具不接受 BOM 再作为独立选项决策。
+fn write_csv_bom<W: Write>(writer: &mut W) -> io::Result<()> {
+    writer.write_all(b"\xEF\xBB\xBF")
 }
 
 fn markdown_cell(value: &str) -> String {

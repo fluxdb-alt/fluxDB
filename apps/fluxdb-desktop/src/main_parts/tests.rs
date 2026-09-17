@@ -1833,7 +1833,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "id,name,note\n7,\"Alice, \"\"A\"\"\",\"line\nbreak\"\n"
+            "\u{FEFF}id,name,note\n7,\"Alice, \"\"A\"\"\",\"line\nbreak\"\n"
         );
     }
 
@@ -1857,7 +1857,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             DatabaseKind::MySql,
         )
         .unwrap();
-        assert_eq!(String::from_utf8(output).unwrap(), "id\n7\n");
+        assert_eq!(String::from_utf8(output).unwrap(), "\u{FEFF}id\n7\n");
 
         let mut output = Vec::new();
         assert!(write_data_row_export(
@@ -2020,7 +2020,10 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         assert_eq!(xml.write_page(&page).unwrap(), 1);
         xml.finish().unwrap();
 
-        assert_eq!(fs::read_to_string(&csv_path).unwrap(), "name\nAlice & Bob\n");
+        assert_eq!(
+            fs::read_to_string(&csv_path).unwrap(),
+            "\u{FEFF}name\nAlice & Bob\n"
+        );
         assert!(fs::read_to_string(&xml_path)
             .unwrap()
             .contains("<field name=\"name\">Alice &amp; Bob</field>"));
@@ -2116,9 +2119,12 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         assert!(sql.contains("O''Brien"), "文本单引号应转义：{sql}");
         assert!(sql.contains("::jsonb"), "jsonb 应显式转换：{sql}");
 
-        // CSV：表头 + 值（含引号转义）。
+        // CSV：UTF-8 BOM + 表头 + 值（含引号转义）。
         let csv = write("csv", TableDataExportFormat::Csv);
-        assert!(csv.starts_with("id,price,tags,note\n"), "CSV 表头：{csv}");
+        assert!(
+            csv.starts_with("\u{FEFF}id,price,tags,note\n"),
+            "CSV 表头应以 BOM + 表头开头：{csv}"
+        );
         assert!(csv.contains("12.50"), "numeric 值：{csv}");
 
         // JSON：值以 JSON 呈现。

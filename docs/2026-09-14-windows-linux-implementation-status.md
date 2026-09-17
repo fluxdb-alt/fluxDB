@@ -351,3 +351,10 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - `Cargo.toml`：desktop 的 `nix` 增加 `signal` feature（已锁内存在，无版本/锁文件变更）。
 - 新增 unix 端到端测试 `kills_the_whole_process_tree`：spawn 出一个带孙进程的 shell，kill 后轮询断言孙进程被回收（处理僵尸由 init 异步回收的时序）。CI 「Test PTY child cleanup (Unix)」步骤并入该测试（`-- terminal_reap_tests kill_child_tree_tests`），macOS/Ubuntu 原生运行。本机测试通过：desktop 全量 `402 passed / 0 failed / 3 ignored`。
 - version-probe（`--version` 短命令、无取消路径）不套用该配置。
+
+
+### AI-04 补充：CSV 导出带 UTF-8 BOM（§12.3.1）
+
+- `data_editor_model/export.rs` 两条 CSV 导出路径（行导出 `write_data_row_csv_export`、表导出 `TableDataExportWriter::write_header`）统一写 UTF-8 BOM（`EF BB BF`）。
+- 背景：无 BOM 的 UTF-8 CSV 在 Windows 简体中文 Excel 按 ANSI(CP936) 打开全乱码；带 BOM 后 Excel 识别为 UTF-8。默认统一带 BOM（文档已说明）；若要给不接受 BOM 的工具做开关，再作为独立设置项。
+- 更新 4 处导出测试断言为以 `\u{FEFF}` 开头；`cargo test -p fluxdb-desktop export` → 7 passed。三平台 CI 编译验证。
