@@ -511,6 +511,12 @@ impl NavicatMain {
             .as_ref()
             .map(|profile| profile.tls.ssl_mode)
             .unwrap_or(PostgresSslMode::Prefer);
+        // CA/客户端证书/私钥路径同样沿连接档案下发给 psql（经 libpq env，不入 argv）。
+        let tls_paths = config
+            .postgres_profile
+            .as_ref()
+            .map(|profile| fluxdb_app::pg_native_tls_paths(&profile.tls))
+            .unwrap_or_default();
         let native_settings = self.controller.state().settings.clone();
         let native_path = path.to_path_buf();
         let continue_on_error = form.continue_on_error;
@@ -559,6 +565,7 @@ impl NavicatMain {
                         Some(&password),
                         !continue_on_error,
                         ssl_mode,
+                        &tls_paths,
                     );
                     if let Some(addr) = &hostaddr {
                         invocation.env.extend(fluxdb_app::pg_hostaddr_env(addr, connect_port));

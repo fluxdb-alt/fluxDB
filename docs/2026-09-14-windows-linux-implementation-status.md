@@ -6,12 +6,12 @@
 
 | 任务 | 状态 |
 | --- | --- |
-| AI-00 复查基线、依赖、原生环境，建立最小 CI 构建任务 | 通过（三平台 fmt/check/release 构建/产物/core 测试全绿，仅剩既有 connector 失败） |
+| AI-00 复查基线、依赖、原生环境，建立最小 CI 构建任务 | 通过（三平台 fmt/check/release 构建/候选产物/core 测试全绿；connector 4 个既有失败已在 AI-02 收尾修正） |
 | AI-01 目录/日志/资源定位 | 实现与三平台编译验证通过（目录语义/单实例/权限，Windows MSVC/macOS/Ubuntu release 构建 ✓）；运行时验收（Windows ACL、不可写目录、GUI）待验证 |
-| AI-02 凭据后端与错误传播 | 实现 + 三平台编译/release 通过；运行期系统凭据集成待验证（无目标实体机） |
+| AI-02 凭据后端与错误传播 | 实现 + 三平台编译/release 通过；connector 既有 4 失败已修正（FLUXDB_PG_SMOKE 门控/建库断言对齐/DDL 断言补全）；运行期系统凭据集成待验证（无目标实体机） |
 | AI-03 窗口/托盘/字体/快捷键/IME | 第一批实现与三平台编译/链接/测试通过；图形运行、IME、DPI 待 VM/真机验收 |
-| AI-04 工具执行/SSH 隧道/PTY | SSH 超时/取消/Windows 回归与 PTY 回收、Windows 路径解析已实现并验证；真实 SSH/PTY、进程树、CLI 下移仍待做 |
-| AI-05 原生 release 打包 | 未开始 |
+| AI-04 工具执行/SSH 隧道/PTY | SSH 复用/超时/取消/Windows socket 回归、PTY 回收、进程树整树回收（Unix）、CSV UTF-8 BOM 已实现并验证；CLI 下移 app 层、真实 SSH/PTY/Windows Job Object 仍待做 |
+| AI-05 原生 release 打包 | 部分开始（Windows Inno Setup 安装器脚本已存在；CI 内部安装包流水线与 Linux .deb 构建进行中） |
 | AI-06 验收与发布材料 | 未开始 |
 
 ---
@@ -358,3 +358,18 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - `data_editor_model/export.rs` 两条 CSV 导出路径（行导出 `write_data_row_csv_export`、表导出 `TableDataExportWriter::write_header`）统一写 UTF-8 BOM（`EF BB BF`）。
 - 背景：无 BOM 的 UTF-8 CSV 在 Windows 简体中文 Excel 按 ANSI(CP936) 打开全乱码；带 BOM 后 Excel 识别为 UTF-8。默认统一带 BOM（文档已说明）；若要给不接受 BOM 的工具做开关，再作为独立设置项。
 - 更新 4 处导出测试断言为以 `\u{FEFF}` 开头；`cargo test -p fluxdb-desktop export` → 7 passed。三平台 CI 编译验证。
+
+
+### AI-04 补充：原生工具继承连接档案 TLS 证书路径（§4.4 / §11.2）
+
+- 审计发现：psql/pg_dump 的调用构造只继承 `sslmode`（PGSSLMODE），**没有**把连接档案的 CA / 客户端证书 / 客户端私钥路径下发给原生工具。
+- 修复 `crates/fluxdb-connectors/src/parts/postgres/native_tools.rs`：
+  - 新增 `NativeTlsPaths { ca, client_cert, client_key }`。
+  - 新增 `pg_native_tls_paths(&PostgresTlsOptions) -> NativeTlsPaths`（把 SecretRef 路径取出来，空段置 None）。
+  - 新增 `pg_push_native_tls_env`：把 sslmode + 证书路径注入 `PGSSLMODE`/`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`，全部只经 libpq env、不进 argv（与密码 PGPASSWORD 一致，避免密钥/证书路径或内容出现在命令行/日志）。
+  - `pg_psql_invocation` / `pg_dump_invocation` 新增 `tls_paths: &NativeTlsPaths` 参数。
+  - 服务端身份语义不变：SSH 场景 `-h` 保持真实远端主机（TLS 校验用）、`PGHOSTADDR` 指向隧道本地；直连即用真实 host。无新增泄漏面。
+- 桌面调用点（psql 原生脚本、pg_dump 直连/SSH 两条备份路径）从 `config.postgres_profile.tls` 构建 `NativeTlsPaths` 传入。
+- `fluxdb-app` 再导出 `NativeTlsPaths` / `pg_native_tls_paths`。
+- 新增单测 `pg_native_tool_inherits_tls_paths_via_env_not_argv`：断言三条证书 env 下发、路径/sslmode 不进 argv、空字段不写 env。
+- 验证：connectors `190 passed / 0 failed / 16 ignored`（含新测试）；app `459 passed`；desktop `402 passed / 3 ignored`；`cargo check --workspace --locked` / fmt / `git diff --check` 通过。三平台 CI 待推送确认。

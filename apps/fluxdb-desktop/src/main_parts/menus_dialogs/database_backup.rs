@@ -600,6 +600,12 @@ fn run_backup(
                     .as_ref()
                     .map(|profile| profile.tls.ssl_mode)
                     .unwrap_or(PostgresSslMode::Prefer);
+                // CA/客户端证书/私钥路径沿连接档案下发给 pg_dump（经 libpq env，不入 argv）。
+                let tls_paths = config
+                    .postgres_profile
+                    .as_ref()
+                    .map(|profile| fluxdb_app::pg_native_tls_paths(&profile.tls))
+                    .unwrap_or_default();
                 // 工具解析：设置目录 → 应用下载目录 → 系统安装路径 → PATH（见 pg_client_tools）。
                 // 解析不到时直接给带安装引导的错误，而不是等 spawn 失败后抛裸 OS 错误。
                 let server_major = fluxdb_app::pg_server_major_version(&config).ok().flatten();
@@ -638,6 +644,7 @@ fn run_backup(
                         &user,
                         &password,
                         ssl_mode,
+                        &tls_paths,
                         form.database.as_deref().unwrap_or_default(),
                         &output_path,
                         &cancel_flag,
@@ -652,6 +659,7 @@ fn run_backup(
                     &user,
                     &password,
                     ssl_mode,
+                    &tls_paths,
                     form.database.as_deref().unwrap_or_default(),
                     &output_path,
                     &cancel_flag,
@@ -1021,6 +1029,7 @@ fn run_native_pg_dump(
     user: &str,
     password: &str,
     ssl_mode: PostgresSslMode,
+    tls_paths: &fluxdb_app::NativeTlsPaths,
     database: &str,
     output_path: &Path,
     cancel_flag: &Arc<AtomicBool>,
@@ -1053,6 +1062,7 @@ fn run_native_pg_dump(
         database,
         Some(password),
         ssl_mode,
+        tls_paths,
         scope,
         form.pg_include_owner,
         form.pg_include_acl,
@@ -1433,6 +1443,7 @@ fn run_native_pg_dump_via_ssh(
     user: &str,
     password: &str,
     ssl_mode: PostgresSslMode,
+    tls_paths: &fluxdb_app::NativeTlsPaths,
     database: &str,
     output_path: &Path,
     cancel_flag: &Arc<AtomicBool>,
@@ -1462,6 +1473,7 @@ fn run_native_pg_dump_via_ssh(
         user,
         password,
         ssl_mode,
+        tls_paths,
         database,
         output_path,
         cancel_flag,

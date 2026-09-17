@@ -4,7 +4,7 @@
 // 拆分执行；本模块只做「检测」与「参数构造」两件纯逻辑（可单测），实际子进程执行在 app 层，
 // 且 psql 不存在/版本不符需给清晰错误（见集中人工验收）。密码绝不出现在 argv，只经环境变量。
 
-use fluxdb_core::PostgresSslMode;
+use fluxdb_core::{PostgresSslMode, PostgresTlsOptions};
 
 /// 脚本是否需要 psql 原生模式：存在 `COPY ... FROM STDIN`（数据块以 `\.` 结束）或 psql 元命令。
 ///
@@ -160,6 +160,7 @@ pub fn pg_psql_invocation(
     password: Option<&str>,
     stop_on_error: bool,
     ssl_mode: PostgresSslMode,
+    tls_paths: &NativeTlsPaths,
 ) -> PgPsqlInvocation {
     let args = vec![
         "--no-psqlrc".to_string(),
@@ -181,12 +182,11 @@ pub fn pg_psql_invocation(
         "-f".to_string(),
         script_path.to_string(),
     ];
-    // 密码只走 env；TLS 模式同样只走 env（PGSSLMODE，psql/pg_dump 都认），不进 argv——
-    // psql/pg_dump 无 `--sslmode` CLI 开关，`-c sslmode=..` 会被当作用户 SQL 而非连接参数。
+    // 凭据/TLS 全程走 env（PGSSLMODE/PGSSLROOTCERT/PGSSLCERT/PGSSLKEY/PGPASSWORD），不进 argv——
+    // psql/pg_dump 无 `--sslmode` CLI 开关，`-c sslmode=..` 会被当作用户 SQL 而非连接参数，
+    // 且证书/密钥路径与密码都不应出现在进程命令行或日志。
     let mut env = Vec::new();
-    if let Some(mode) = pg_sslmode_value(ssl_mode) {
-        env.push(("PGSSLMODE".to_string(), mode.to_string()));
-    }
+    pg_push_native_tls_env(&mut env, ssl_mode, tls_paths);
     if let Some(password) = password.filter(|password| !password.is_empty()) {
         env.push(("PGPASSWORD".to_string(), password.to_string()));
     }
@@ -206,6 +206,46 @@ pub fn pg_sslmode_value(ssl_mode: PostgresSslMode) -> Option<&'static str> {
         PostgresSslMode::VerifyFull => Some("verify-full"),
         // Prefer 是服务端默认，显式传属冗余；省略等价。
         PostgresSslMode::Prefer => None,
+    }
+}
+
+/// 原生工具（psql/pg_dump）要继承的 TLS 证书路径（来自连接档案 `PostgresTlsOptions`）。
+///
+/// 路径只经 libpq 环境变量（`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`）下发，不进 argv；
+/// 与密码一样，避免凭据/密钥路径出现在进程命令行或日志。空字段不写对应变量。
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NativeTlsPaths {
+    /// CA 根证书（`PGSSLROOTCERT`）。
+    pub ca: Option<String>,
+    /// 客户端证书（`PGSSLCERT`）。
+    pub client_cert: Option<String>,
+    /// 客户端私钥（`PGSSLKEY`）。
+    pub client_key: Option<String>,
+}
+
+/// 从连接档案的 TLS 选项取出要下发给原生工具的证书路径（空字段置 None，不写 env）。
+pub fn pg_native_tls_paths(tls: &PostgresTlsOptions) -> NativeTlsPaths {
+    let none_if_empty = |v: &str| (!v.trim().is_empty()).then(|| v.to_string());
+    NativeTlsPaths {
+        ca: tls.ca.value().and_then(none_if_empty),
+        client_cert: tls.client_cert.value().and_then(none_if_empty),
+        client_key: tls.client_key.value().and_then(none_if_empty),
+    }
+}
+
+/// 追加原生工具的 TLS 环境变量：sslmode + 证书路径。密码由调用方单独注入 `PGPASSWORD`。
+pub fn pg_push_native_tls_env(env: &mut Vec<(String, String)>, ssl_mode: PostgresSslMode, paths: &NativeTlsPaths) {
+    if let Some(mode) = pg_sslmode_value(ssl_mode) {
+        env.push(("PGSSLMODE".to_string(), mode.to_string()));
+    }
+    for (name, path) in [
+        ("PGSSLROOTCERT", &paths.ca),
+        ("PGSSLCERT", &paths.client_cert),
+        ("PGSSLKEY", &paths.client_key),
+    ] {
+        if let Some(path) = path.as_ref().filter(|p| !p.is_empty()) {
+            env.push((name.to_string(), path.clone()));
+        }
     }
 }
 
@@ -247,6 +287,7 @@ pub fn pg_dump_invocation(
     database: &str,
     password: Option<&str>,
     ssl_mode: PostgresSslMode,
+    tls_paths: &NativeTlsPaths,
     scope: PgDumpScope,
     owner: bool,
     acl: bool,
@@ -281,9 +322,7 @@ pub fn pg_dump_invocation(
         args.push(table.clone());
     }
     let mut env = Vec::new();
-    if let Some(mode) = pg_sslmode_value(ssl_mode) {
-        env.push(("PGSSLMODE".to_string(), mode.to_string()));
-    }
+    pg_push_native_tls_env(&mut env, ssl_mode, tls_paths);
     if let Some(password) = password.filter(|password| !password.is_empty()) {
         env.push(("PGPASSWORD".to_string(), password.to_string()));
     }
