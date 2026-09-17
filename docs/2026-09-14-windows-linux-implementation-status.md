@@ -211,3 +211,20 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 新基线验证：`cargo check --workspace --locked` 通过；`cargo test
 -p fluxdb-storage` 26 passed；`cargo fmt --all -- --check`、`git diff --check`
 通过。Windows/Linux 行为由新 CI 原生验证。
+
+## AI-01（adapt/win-linux 分支 CI 确认，2026-09-17）
+
+在独立分支 `adapt/win-linux`（基 = origin/main db5a54a，cherry-pick 6 个适配提交）
+用新 CI（push+PR+workflow_dispatch 触发）验证，run 35171802656：
+
+| 平台 | fmt | workspace check | release 构建 | 校验和 | 产物上传 | core tests | connector tests |
+|---|---|---|---|---|---|---|---|
+| Windows MSVC | ✓ | ✓(含单实例命名互斥量编译) | ✓(含 fxc/HLSL) | ✓ | ✓ | ✓ | ✗ 基线 |
+| macOS | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ 基线 |
+| Ubuntu 22.04 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ 基线 |
+
+- connector 失败为既有基线：`178 passed; 4 failed`（2 需真实 PG、2 断言失配），三平台一致、与跨平台无关，未跳过伪装通过。
+- 本轮修复：Windows `CreateMutexW` 需 `Win32_System_Threading`(模块)+`Win32_Security`(函数门控)两个 feature（实读 windows 0.57 源码确认）；macOS 校验和改用 python3（sha256sum 不存在）。
+- PR #7 为 Draft，仅查看 diff 与 CI，不合并。
+
+**未验证项（明确标注）**：Windows/Linux GUI、IME、DPI、真实 GPU、安装包(EXE/DEB)、Windows ACL 实测、不可写目录 UI 诊断、真实 PG 的 connector 集成 —— 均待后续 AI-03/AI-05 与目标平台 VM/真机。
