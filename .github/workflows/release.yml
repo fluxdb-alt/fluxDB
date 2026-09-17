@@ -23,7 +23,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -55,7 +55,7 @@ jobs:
   # build-windows:
   #   runs-on: windows-2022
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v5
   #     - uses: dtolnay/rust-toolchain@stable
   #       with:
   #         targets: x86_64-pc-windows-msvc

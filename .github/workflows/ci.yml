@@ -25,7 +25,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Diagnose socket cancellation on Windows
         shell: pwsh
@@ -60,7 +60,7 @@ jobs:
       TARGET: ${{ matrix.target }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Linux system build dependencies
         if: runner.os == 'Linux'
@@ -118,7 +118,7 @@ jobs:
           cat fluxdb-desktop.sha256
 
       - name: Upload internal candidate artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: fluxdb-desktop-${{ matrix.os }}-${{ matrix.target }}
           path: |
@@ -152,7 +152,7 @@ jobs:
           Write-Output "Installer SHA256: $($hash.Hash)"
       - name: Upload internal Windows installer artifact
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: fluxdb-windows-installer-internal
           path: target/windows-package/FluxDB-*-windows-x64-setup.exe*
@@ -206,7 +206,7 @@ jobs:
           cat target/linux-package/ldd-report.txt
       - name: Upload internal Linux .deb artifact
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: fluxdb-linux-deb-internal
           path: |

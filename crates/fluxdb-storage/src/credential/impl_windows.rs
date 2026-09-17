@@ -35,19 +35,23 @@ fn last_error_code() -> u32 {
 unsafe fn cred_read(account: &str) -> Result<Option<String>, CredentialError> {
     let target = wide(account);
     let mut cred_ptr: *mut CREDENTIALW = std::ptr::null_mut();
-    let result = CredReadW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, 0, &mut cred_ptr);
+    // 显式 unsafe 块：读取系统凭据（unsafe_op_in_unsafe_fn，edition 2024）。
+    let result = unsafe { CredReadW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, 0, &mut cred_ptr) };
     if result.is_ok() {
         let out = if cred_ptr.is_null() {
             Ok(None)
         } else {
-            let cred = &*cred_ptr;
-            let blob =
-                std::slice::from_raw_parts(cred.CredentialBlob, cred.CredentialBlobSize as usize);
+            // 解引用凭据结构体并从其原始字节切片解码（都在显式块内）。
+            let (blob, blob_len) = unsafe {
+                let cred = &*cred_ptr;
+                (cred.CredentialBlob, cred.CredentialBlobSize as usize)
+            };
+            let blob_bytes = unsafe { std::slice::from_raw_parts(blob, blob_len) };
             // Credential Manager 保存调用方写入的原始字节（本项目写 UTF-8），按 UTF-8 解码。
-            Ok(Some(String::from_utf8_lossy(blob).into_owned()))
+            Ok(Some(String::from_utf8_lossy(blob_bytes).into_owned()))
         };
         if !cred_ptr.is_null() {
-            CredFree(cred_ptr as *const core::ffi::c_void);
+            unsafe { CredFree(cred_ptr as *const core::ffi::c_void) };
         }
         return out;
     }
@@ -61,24 +65,27 @@ unsafe fn cred_read(account: &str) -> Result<Option<String>, CredentialError> {
 
 unsafe fn cred_write(account: &str, secret: &str) -> Result<(), CredentialError> {
     let mut target = wide(account);
-    let blob = secret.as_bytes().to_vec();
-    let mut blob_owned = blob;
+    let mut blob_owned = secret.as_bytes().to_vec();
     let mut cred: CREDENTIALW = CREDENTIALW::default();
-    cred.Type = CRED_TYPE_GENERIC;
-    cred.TargetName = windows::core::PWSTR(target.as_mut_ptr());
-    cred.CredentialBlobSize = blob_owned.len() as u32;
-    cred.CredentialBlob = blob_owned.as_mut_ptr();
-    cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
-    if CredWriteW(&cred, 0).is_ok() {
-        Ok(())
-    } else {
-        Err(classify(last_error_code()))
+    // 以下写入凭据结构体的指针字段并调用 CredWriteW，均需显式 unsafe 块。
+    unsafe {
+        cred.Type = CRED_TYPE_GENERIC;
+        cred.TargetName = windows::core::PWSTR(target.as_mut_ptr());
+        cred.CredentialBlobSize = blob_owned.len() as u32;
+        cred.CredentialBlob = blob_owned.as_mut_ptr();
+        cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
+        if CredWriteW(&cred, 0).is_ok() {
+            Ok(())
+        } else {
+            Err(classify(last_error_code()))
+        }
     }
 }
 
 unsafe fn cred_delete(account: &str) -> Result<(), CredentialError> {
     let target = wide(account);
-    let result = CredDeleteW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, 0);
+    // 显式 unsafe 块：调用系统凭据删除 API。
+    let result = unsafe { CredDeleteW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, 0) };
     if result.is_ok() {
         return Ok(());
     }

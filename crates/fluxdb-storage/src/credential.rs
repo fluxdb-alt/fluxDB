@@ -18,7 +18,10 @@ std::thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+// 错误变体是按平台条件构造的（如 NotFound 仅 Linux 产生、Locked 仅 macOS、Denied 仅 macOS/Windows），
+// 其余目标平台编译时会触发"未构造"的 dead_code 警告；该枚举是对外错误 API，保留全部变体。
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum CredentialError {
     /// 目标条目不存在（读）。
     NotFound,
@@ -89,7 +92,10 @@ pub fn test_override_active() -> bool {
     TEST_OVERRIDE.with(|cell| cell.borrow().is_some())
 }
 
+// 生产（无 test-util）构建下该快捷函数不被本仓库调用，但对外保持同签名 API 对称：
+// 启用 test-util 时返回"是否有注入"，否则恒为 false。保留以避免破坏依赖方双构建契约。
 #[cfg(not(any(test, feature = "test-util")))]
+#[allow(dead_code)]
 pub fn test_override_active() -> bool {
     false
 }
@@ -188,6 +194,8 @@ impl CredentialBackend for UnavailableBackend {
 // ---- 内存后端（测试用）----
 
 /// 内存后端：测试用隔离凭据库，不访问任何真实用户密码；可按账号前缀注入写失败。
+/// 仅测试 / test-util 下编译，生产包不携带，避免"未构造"死代码警告。
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Debug, Default)]
 pub struct InMemoryBackend {
     store: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
@@ -195,6 +203,7 @@ pub struct InMemoryBackend {
     fail_next_write_accounts: std::sync::Mutex<Vec<String>>,
 }
 
+#[cfg(any(test, feature = "test-util"))]
 impl InMemoryBackend {
     pub fn new() -> Self {
         Self::default()
@@ -236,6 +245,7 @@ impl InMemoryBackend {
     }
 }
 
+#[cfg(any(test, feature = "test-util"))]
 impl CredentialBackend for InMemoryBackend {
     fn read(&self, account: &str) -> std::result::Result<Option<String>, CredentialError> {
         Ok(self.store.lock().unwrap().get(account).cloned())

@@ -3491,13 +3491,6 @@ mod syntax_tests {
     }
 
     #[test]
-    #[test]
-
-
-    #[test]
-
-
-    #[test]
     fn cached_highlight_covers_all_comment_styles() {
         // 整篇由注释构成（无任何可见 SQL / `;`）时，statement 切分会得到空区间，
         // 旧逻辑因此让注释完全失去高亮；此处回归保证 4 种注释都被标注为 comment。
@@ -3539,6 +3532,7 @@ mod syntax_tests {
         assert!(highlights.iter().any(|h| h.kind == "comment"));
     }
 
+    #[test]
     fn mysql_diagnostic_normalization_handles_chinese_ddl() {
         let ddl = "CREATE TABLE `test` (`id` VARCHAR(64) COMMENT '主键id') COLLATE=utf8mb4_general_ci;";
         let normalized = normalize_mysql_collate_equals(ddl);

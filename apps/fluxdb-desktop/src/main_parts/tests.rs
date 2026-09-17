@@ -853,26 +853,6 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         assert_eq!(sql_editor_adapter::explain_sql_text("UPDATE Product SET name = 'x'"), None);
     }
 
-    fn completion_item(label: &str) -> fluxdb_core::QueryCompletionItem {
-        fluxdb_core::QueryCompletionItem {
-            label: label.into(),
-            insert_text: label.into(),
-            kind: fluxdb_core::QueryCompletionKind::Table,
-            detail: None,
-            documentation: None,
-            filter_text: None,
-            sort_text: None,
-                    ..Default::default()
-}
-    }
-
-    fn highlighted_text(text: &str, ranges: &[Range<usize>]) -> String {
-        ranges
-            .iter()
-            .filter_map(|range| text.get(range.clone()))
-            .collect()
-    }
-
     #[test]
     fn query_editor_text_sync_replaces_buffer_and_resets_selection() {
         // 查询页面把模型 query.text 静默同步进编辑器（sync_text_silent）时，底层 buffer
@@ -3514,7 +3494,6 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
     }
 
     #[test]
-    #[test]
     fn redis_glob_matches_follows_scan_match_wildcards() {
         // `*` 匹配零或多个任意字符，`?` 匹配单个字符，其余按字面匹配（对齐 Redis SCAN MATCH）。
         assert!(redis_glob_matches("user:test:1", "user:*"));
@@ -3529,6 +3508,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         assert!(!redis_glob_matches("abcd", "a?d"));
     }
 
+    #[test]
     fn redis_key_detail_uses_named_columns() {
         let page = DataPage {
             columns: vec![
