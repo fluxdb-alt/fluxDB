@@ -21,6 +21,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  socket-probe:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Diagnose socket cancellation on Windows
+        shell: pwsh
+        run: |
+          rustc --edition 2024 scripts/ci/socket-shutdown.rs -o socket-shutdown.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./socket-shutdown.exe
+
   build:
     strategy:
       fail-fast: false
