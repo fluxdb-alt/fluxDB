@@ -9,11 +9,12 @@ use fluxdb_connectors::{PostgresConnector, SqliteConnector};
 use fluxdb_connectors::{RedisConnector, RedisStreamRange, connector_for};
 // 对外再导出建 Key 相关的连接器类型，供桌面端（fluxdb-desktop）匹配/构造 AppCommand 使用。
 pub use fluxdb_connectors::{
-    PgDumpInvocation, PgDumpScope, PgPsqlInvocation, PubSubMessage, PubSubPollOutcome,
-    PubSubPublishResult, PubSubSubscriptionEvent, RedisAddKeyKind, RedisAddKeyRequest,
-    RedisListDirection, RedisPubSubSession, SshTunnelAuth, SshTunnelInvocation, pg_dump_invocation,
-    pg_dump_version_compatible, pg_hostaddr_env, pg_psql_invocation, pg_script_needs_native_mode,
-    pg_server_major_version, pg_ssh_tunnel_invocation, pg_sslmode_value, pg_tool_major_version,
+    PgDumpInvocation, PgDumpScope, PgNativeSshTunnel, PgPsqlInvocation, PubSubMessage,
+    PubSubPollOutcome, PubSubPublishResult, PubSubSubscriptionEvent, RedisAddKeyKind,
+    RedisAddKeyRequest, RedisListDirection, RedisPubSubSession, SshTunnelAuth, SshTunnelInvocation,
+    pg_dump_invocation, pg_dump_version_compatible, pg_hostaddr_env, pg_open_native_ssh_tunnel,
+    pg_psql_invocation, pg_script_needs_native_mode, pg_server_major_version,
+    pg_ssh_tunnel_invocation, pg_sslmode_value, pg_tool_major_version,
 };
 use fluxdb_core::{
     AppliedChangeOutcome, BinaryCellSummary, BinaryPreviewResponse, BinaryUpdatePayload,

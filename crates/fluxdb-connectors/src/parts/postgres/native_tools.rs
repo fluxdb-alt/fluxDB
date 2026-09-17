@@ -330,6 +330,47 @@ pub fn pg_server_major_version(config: &ConnectionConfig) -> fluxdb_core::Result
     })
 }
 
+
+/// 供 pg_dump/psql 等原生客户端持有的 SSH 隧道句柄。
+///
+/// 句柄存活期间本地端口可用；Drop 会停止监听并等待桥线程退出。具体 SSH 实现保持在
+/// connectors 内部，应用层不需要安装 `ssh`/`sshpass`，也不会接触连接器内部会话类型。
+pub struct PgNativeSshTunnel {
+    tunnel: SshTunnel,
+}
+
+impl PgNativeSshTunnel {
+    pub fn local_port(&self) -> u16 {
+        self.tunnel.local_port
+    }
+}
+
+/// 使用与 PostgreSQL 驱动相同的 libssh2、认证、known_hosts、超时和心跳规则建立隧道。
+pub fn pg_open_native_ssh_tunnel(
+    ssh: &fluxdb_core::PostgresSshOptions,
+    target_host: &str,
+    target_port: u16,
+    inherited_connect_timeout_secs: u32,
+) -> fluxdb_core::Result<PgNativeSshTunnel> {
+    let auth = pg_ssh_auth(ssh);
+    let options = SshTunnelOptions {
+        connect_timeout_secs: if ssh.connect_timeout_secs > 0 {
+            ssh.connect_timeout_secs
+        } else {
+            inherited_connect_timeout_secs
+        },
+        keepalive_interval_secs: ssh.keepalive_interval_secs,
+        verify_host_key: true,
+    };
+    let tunnel = open_tunnel_with(
+        (&ssh.host, ssh.port),
+        &auth,
+        (target_host, target_port),
+        options,
+    )?;
+    Ok(PgNativeSshTunnel { tunnel })
+}
+
 /// SSH 隧道子进程调用参数：把远端 `host:port` 经 `ssh -L local:host:port` 映射到本地端口，
 /// 供 psql/pg_dump 等原生工具在 SSH 下连接（工具看到的是 `127.0.0.1:local_port`）。
 #[derive(Clone, Debug, Eq, PartialEq)]

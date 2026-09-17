@@ -49,14 +49,23 @@ impl Default for SshTunnelOptions {
 
 /// 一座把数据库拨号桥接到远端目标端口的 SSH 隧道。
 ///
-/// 字段保持存活即让隧道常开；实例被丢弃时监听器关闭、桥线程因 accept 失败收敛并释放会话。
+/// 实例被丢弃时通知桥线程停止监听、关闭转发 socket，并等待线程释放会话。
 pub(crate) struct SshTunnel {
     /// 本地转发端口，上层连接 `127.0.0.1:<local_port>`。
     pub(crate) local_port: u16,
-    /// 保持监听器存活；Drop 时关闭使桥线程退出。
+    /// 保持监听器存活；桥线程通过非阻塞轮询观察 shutdown。
     _listener: TcpListener,
-    /// 桥线程句柄；Drop 时无需显式 join（线程自行因监听器关闭退出）。
-    _bridge: std::thread::JoinHandle<()>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    bridge: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for SshTunnel {
+    fn drop(&mut self) {
+        self.shutdown.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(bridge) = self.bridge.take() {
+            let _ = bridge.join();
+        }
+    }
 }
 
 impl SshTunnel {
@@ -81,7 +90,11 @@ pub(crate) fn open_tunnel_with(
     let (target_host, target_port) = target;
 
     // 1. 连跳板机：遵循建连超时口径。
-    let connect_timeout = std::time::Duration::from_secs(options.connect_timeout_secs.max(1) as u64);
+    let connect_timeout = std::time::Duration::from_secs(if options.connect_timeout_secs == 0 {
+        5
+    } else {
+        u64::from(options.connect_timeout_secs)
+    });
     let session_sock = {
         let mut addrs = (jump_host, jump_port)
             .to_socket_addrs()
@@ -106,6 +119,7 @@ pub(crate) fn open_tunnel_with(
     let mut session = ssh2::Session::new().map_err(|e| {
         fluxdb_core::Error::new(fluxdb_core::ErrorKind::Connection, format!("创建 SSH 会话失败: {e}"))
     })?;
+    session.set_timeout(connect_timeout.as_millis().min(u32::MAX as u128) as u32);
     session.set_tcp_stream(session_sock);
     session.handshake().map_err(|e| {
         fluxdb_core::Error::new(
@@ -149,7 +163,17 @@ pub(crate) fn open_tunnel_with(
         ));
     }
 
-    // 3. 本地监听 + 桥线程循环 accept（每次开一条 direct-tcpip channel）。
+    start_ssh_bridge(session, target_host, target_port, options.keepalive_interval_secs)
+}
+
+/// 已认证会话的监听与线程生命周期集中管理，调用方只持有 RAII 句柄。
+fn start_ssh_bridge(
+    session: ssh2::Session,
+    target_host: &str,
+    target_port: u16,
+    keepalive_interval_secs: u32,
+) -> fluxdb_core::Result<SshTunnel> {
+    // 本地监听 + 桥线程循环 accept（每次开一条 direct-tcpip channel）。
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| {
         fluxdb_core::Error::new(
             fluxdb_core::ErrorKind::Connection,
@@ -166,8 +190,13 @@ pub(crate) fn open_tunnel_with(
     let handle = listener.try_clone().map_err(|e| {
         fluxdb_core::Error::new(fluxdb_core::ErrorKind::Connection, e.to_string())
     })?;
+    handle.set_nonblocking(true).map_err(|e| {
+        fluxdb_core::Error::new(fluxdb_core::ErrorKind::Connection, e.to_string())
+    })?;
+    let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let shutdown_for_bridge = shutdown.clone();
     let keepalive_interval = std::time::Duration::from_secs(
-        options.keepalive_interval_secs.max(0) as u64,
+        u64::from(keepalive_interval_secs),
     );
     // 桥线程需跨线程存活的目标地址（owned）。
     let target_host_owned = target_host.to_string();
@@ -176,10 +205,15 @@ pub(crate) fn open_tunnel_with(
     // 桥线程接管 session/listener；session 在握手/鉴权后不再被主线程引用。
     let bridge = std::thread::spawn(move || {
         // 整个会话切非阻塞：搬运阶段两个方向要并行、各自短持会话锁，阻塞模式会互相饿死
-        // （见 bridge_one 注释）。liSSH 的阻塞标志是会话级的，故在此统一设置一次。
+        // （见 bridge_one 注释）。libssh2 的阻塞标志是会话级的，故在此统一设置一次。
         session.set_blocking(false);
         let mut since_keepalive = std::time::Instant::now();
+        let mut connections: Vec<SshBridgeConnection> = Vec::new();
         loop {
+            if shutdown_for_bridge.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
+            connections.retain(|connection| !connection.finished());
             // 心跳：长连接期间桥线程空闲于 accept，可周期发送。
             if !keepalive_interval.is_zero() && since_keepalive.elapsed() >= keepalive_interval {
                 let _ = session.keepalive_send();
@@ -188,27 +222,43 @@ pub(crate) fn open_tunnel_with(
             match handle.accept() {
                 Ok((local_sock, _)) => {
                     // 每条入站连接独立 channel，各自双向搬运；互不影响。
-                    match open_direct_tcpip(&session, &target_host_owned, target_port_owned) {
+                    match open_direct_tcpip(&session, &target_host_owned, target_port_owned, &shutdown_for_bridge) {
                         Ok(channel) => {
-                            bridge_one(local_sock, channel);
+                            if shutdown_for_bridge.load(std::sync::atomic::Ordering::Acquire) {
+                                break;
+                            }
+                            match bridge_one(local_sock, channel, shutdown_for_bridge.clone()) {
+                                Ok(connection) => connections.push(connection),
+                                Err(error) => tracing::warn!(%error, "SSH 转发连接初始化失败"),
+                            }
                         }
-                        Err(_) => {
-                            // 目标不可达：丢弃该入站连接，继续服务后续连接。
+                        Err(error) => {
+                            tracing::warn!(%error, "SSH 转发通道建立失败");
                         }
                     }
                 }
-                Err(_) => {
-                    // 本地监听关闭（隧道 Drop / 连接断开）：收敛退出。
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "SSH 隧道监听退出");
                     break;
                 }
             }
         }
+        shutdown_for_bridge.store(true, std::sync::atomic::Ordering::Release);
+        // 先关闭所有本地 socket 唤醒阻塞读写，再 join 搬运线程，确保会话随句柄释放。
+        for connection in &connections {
+            let _ = connection.socket.shutdown(std::net::Shutdown::Both);
+        }
+        drop(connections);
     });
 
     Ok(SshTunnel {
         local_port,
         _listener: listener,
-        _bridge: bridge,
+        shutdown,
+        bridge: Some(bridge),
     })
 }
 
@@ -228,8 +278,12 @@ fn open_direct_tcpip(
     session: &ssh2::Session,
     target_host: &str,
     target_port: u16,
+    shutdown: &std::sync::atomic::AtomicBool,
 ) -> Result<ssh2::Channel, ssh2::Error> {
     for _ in 0..BRIDGE_RETRY_LIMIT {
+        if shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
         match session.channel_direct_tcpip(target_host, target_port, None) {
             Ok(channel) => return Ok(channel),
             Err(error) if ssh_error_is_again(&error) => {
@@ -251,25 +305,70 @@ const BRIDGE_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_mill
 /// 一直持锁到连接结束，另一方向永远拿不到锁（半双工死锁，PG 握手就会卡到建连超时）。
 /// 非阻塞后每次调用立刻返回（无数据即 EAGAIN），两个方向各自按调用粒度取锁、交替推进。
 /// `ssh2::Channel` 是 `Arc` 包装的共享句柄，可直接 clone 给两个线程。
-fn bridge_one(local_sock: TcpStream, channel: ssh2::Channel) {
-    let (sock_a, sock_b) = (local_sock.try_clone(), local_sock);
-    let (chan_a, chan_b) = (channel.clone(), channel);
-    // 方向1：本地 → 远端。
-    let _ = std::thread::spawn(move || {
-        let Ok(mut sock) = sock_a else { return };
-        let _ = pump_local_to_remote(&mut sock, &mut chan_a.clone());
+struct SshBridgeConnection {
+    socket: TcpStream,
+    workers: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl SshBridgeConnection {
+    fn finished(&self) -> bool {
+        self.workers.iter().all(|worker| worker.is_finished())
+    }
+}
+
+impl Drop for SshBridgeConnection {
+    fn drop(&mut self) {
+        let _ = self.socket.shutdown(std::net::Shutdown::Both);
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn bridge_one(
+    local_sock: TcpStream,
+    channel: ssh2::Channel,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::io::Result<SshBridgeConnection> {
+    let mut sock_a = local_sock.try_clone()?;
+    let mut sock_b = local_sock.try_clone()?;
+    let mut chan_a = channel.clone();
+    let mut chan_b = channel;
+    let stop_a = shutdown.clone();
+    // 本地 EOF 只发送半关闭，让远端仍可返回最后一段结果。
+    let upstream = std::thread::spawn(move || {
+        if let Err(error) = pump_local_to_remote(&mut sock_a, &mut chan_a, &stop_a) {
+            tracing::debug!(%error, "SSH 上行转发结束");
+        }
+        // 非阻塞 send_eof 也可能返回 EAGAIN，不能丢失本地半关闭信号。
+        for _ in 0..BRIDGE_RETRY_LIMIT {
+            if stop_a.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
+            match chan_a.send_eof() {
+                Ok(()) => break,
+                Err(error) if ssh_error_is_again(&error) => {
+                    std::thread::sleep(BRIDGE_RETRY_BACKOFF);
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "SSH 发送 EOF 失败");
+                    break;
+                }
+            }
+        }
     });
-    // 方向2：远端 → 本地。任一方向 EOF 后，另一方向会因通道/本地关闭而退出。
-    let _ = std::thread::spawn(move || {
-        let mut sock = sock_b;
-        let _ = pump_remote_to_local(&mut chan_b.clone(), &mut sock);
+    let downstream = std::thread::spawn(move || {
+        let _ = pump_remote_to_local(&mut chan_b, &mut sock_b, &shutdown);
+        let _ = sock_b.shutdown(std::net::Shutdown::Both);
     });
+    Ok(SshBridgeConnection { socket: local_sock, workers: vec![upstream, downstream] })
 }
 
 /// 本地 → 远端：读本地 socket（阻塞），写通道（非阻塞，满窗口时退避重试）。
 fn pump_local_to_remote(
     sock: &mut TcpStream,
     channel: &mut ssh2::Channel,
+    shutdown: &std::sync::atomic::AtomicBool,
 ) -> std::io::Result<()> {
     let mut buffer = [0u8; 32 * 1024];
     loop {
@@ -281,6 +380,9 @@ fn pump_local_to_remote(
         };
         let mut offset = 0;
         while offset < read {
+            if shutdown.load(std::sync::atomic::Ordering::Acquire) {
+                return Ok(());
+            }
             match std::io::Write::write(channel, &buffer[offset..read]) {
                 Ok(0) => return Ok(()),
                 Ok(written) => offset += written,
@@ -297,9 +399,13 @@ fn pump_local_to_remote(
 fn pump_remote_to_local(
     channel: &mut ssh2::Channel,
     sock: &mut TcpStream,
+    shutdown: &std::sync::atomic::AtomicBool,
 ) -> std::io::Result<()> {
     let mut buffer = [0u8; 32 * 1024];
     loop {
+        if shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(());
+        }
         let read = match std::io::Read::read(channel, &mut buffer) {
             Ok(0) => return Ok(()),
             Ok(read) => read,
@@ -312,6 +418,22 @@ fn pump_remote_to_local(
         };
         std::io::Write::write_all(sock, &buffer[..read])?;
     }
+}
+
+/// 不回退到当前工作目录，避免找不到用户目录时读取项目内不可信的 known_hosts。
+fn ssh_known_hosts_path(
+    override_path: Option<std::ffi::OsString>,
+    home: Option<std::path::PathBuf>,
+) -> fluxdb_core::Result<std::path::PathBuf> {
+    if let Some(path) = override_path.filter(|path| !path.is_empty()) {
+        return Ok(path.into());
+    }
+    home.filter(|path| path.is_absolute())
+        .map(|path| path.join(".ssh").join("known_hosts"))
+        .ok_or_else(|| fluxdb_core::Error::new(
+            fluxdb_core::ErrorKind::Connection,
+            "无法定位用户目录，请设置 SSH_KNOWN_HOSTS 指向已知主机文件",
+        ))
 }
 
 /// 校验远端主机密钥：读取 `~/.ssh/known_hosts`；未知或变更即拒绝。
@@ -332,11 +454,7 @@ fn verify_host_key(
     let fingerprint = host_key_fingerprint(session);
 
     // known_hosts 路径：优先 $SSH_KNOWN_HOSTS（测试可注入），否则 ~/.ssh/known_hosts。
-    let file = std::env::var("SSH_KNOWN_HOSTS")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".ssh/known_hosts")
-        });
+    let file = ssh_known_hosts_path(std::env::var_os("SSH_KNOWN_HOSTS"), dirs::home_dir())?;
     // 仅当存在 known_hosts 文件时校验；无文件按「未知主机」拒绝，避免静默放行。
     if !file.exists() {
         return Err(fluxdb_core::Error::new(
@@ -351,8 +469,12 @@ fn verify_host_key(
             format!("SSH known_hosts 初始化失败: {e}"),
         )
     })?;
-    // 读取已知主机表；读取失败按未收录处理。
-    let _ = kh.read_file(&file, ssh2::KnownHostFileKind::OpenSSH);
+    kh.read_file(&file, ssh2::KnownHostFileKind::OpenSSH).map_err(|error| {
+        fluxdb_core::Error::new(
+            fluxdb_core::ErrorKind::Connection,
+            format!("读取 SSH known_hosts 失败（{}）：{error}", file.display()),
+        )
+    })?;
 
     match kh.check_port(host, port, &key) {
         ssh2::CheckResult::Match => Ok(()),
@@ -421,6 +543,82 @@ pub(crate) fn ssh_enabled(options: &std::collections::BTreeMap<String, String>) 
 #[cfg(test)]
 mod ssh_tunnel_tests {
     use super::*;
+
+    #[test]
+    fn known_hosts_uses_platform_home_without_cwd_fallback() {
+        let home = std::env::temp_dir().join("用户 home");
+        assert_eq!(ssh_known_hosts_path(None, Some(home.clone())).unwrap(),
+            home.join(".ssh").join("known_hosts"));
+        assert!(ssh_known_hosts_path(None, None).is_err());
+        assert!(ssh_known_hosts_path(None, Some("relative".into())).is_err());
+        let explicit = home.join("custom known_hosts");
+        assert_eq!(ssh_known_hosts_path(Some(explicit.clone().into_os_string()), None).unwrap(), explicit);
+    }
+
+    #[test]
+    fn dropping_idle_tunnel_releases_listener_and_bridge_thread() {
+        // 不发起 SSH 通道；直接验证生产监听循环的退出，不依赖外部 sshd。
+        let tunnel = start_ssh_bridge(ssh2::Session::new().unwrap(), "127.0.0.1", 1, 0).unwrap();
+        let port = tunnel.local_port;
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            drop(tunnel);
+            done_tx.send(()).unwrap();
+        });
+        done_rx.recv_timeout(std::time::Duration::from_secs(3)).expect("隧道 Drop 未退出");
+        worker.join().unwrap();
+        let _rebound = TcpListener::bind(("127.0.0.1", port)).expect("监听器未释放");
+    }
+
+    #[test]
+    fn dropping_bridge_connection_wakes_blocked_socket_reader() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (socket, _) = listener.accept().unwrap();
+        let mut reader = socket.try_clone().unwrap();
+        let (read_tx, read_rx) = std::sync::mpsc::channel();
+        let connection = SshBridgeConnection {
+            socket,
+            workers: vec![std::thread::spawn(move || {
+                let mut buffer = [0u8; 1];
+                let _ = std::io::Read::read(&mut reader, &mut buffer);
+                read_tx.send(()).unwrap();
+            })],
+        };
+        let (drop_tx, drop_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            drop(connection);
+            drop_tx.send(()).unwrap();
+        });
+        read_rx.recv_timeout(std::time::Duration::from_secs(3)).expect("读线程未被唤醒");
+        drop_rx.recv_timeout(std::time::Duration::from_secs(3)).expect("连接 Drop 未退出");
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn ssh_handshake_obeys_configured_timeout() {
+        // TCP 接受连接但永不回复 SSH banner，隔离验证握手超时（不访问真实服务）。
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (_socket, _) = listener.accept().unwrap();
+            let _ = release_rx.recv_timeout(std::time::Duration::from_secs(5));
+        });
+        let start = std::time::Instant::now();
+        let result = open_tunnel_with(
+            ("127.0.0.1", port),
+            &SshAuthParams { username: "fixture".into(), password: None, private_key_path: String::new(), passphrase: None },
+            ("127.0.0.1", 1),
+            SshTunnelOptions { connect_timeout_secs: 1, ..Default::default() },
+        );
+        let elapsed = start.elapsed();
+        let _ = release_tx.send(());
+        server.join().unwrap();
+        let error = match result { Ok(_) => panic!("无 SSH 响应不应成功"), Err(error) => error };
+        assert!(error.to_string().contains("SSH 握手失败"), "{error}");
+        assert!(elapsed < std::time::Duration::from_secs(4), "握手超时未生效: {elapsed:?}");
+    }
 
     fn options(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
         pairs

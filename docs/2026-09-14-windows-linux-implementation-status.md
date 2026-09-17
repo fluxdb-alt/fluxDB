@@ -10,7 +10,7 @@
 | AI-01 目录/日志/资源定位 | 实现与三平台编译验证通过（目录语义/单实例/权限，Windows MSVC/macOS/Ubuntu release 构建 ✓）；运行时验收（Windows ACL、不可写目录、GUI）待验证 |
 | AI-02 凭据后端与错误传播 | 实现 + 三平台编译/release 通过；运行期系统凭据集成待验证（无目标实体机） |
 | AI-03 窗口/托盘/字体/快捷键/IME | 第一批实现与三平台编译/链接/测试通过；图形运行、IME、DPI 待 VM/真机验收 |
-| AI-04 工具执行/SSH 隧道/PTY | 未开始 |
+| AI-04 工具执行/SSH 隧道/PTY | 第一批 SSH 复用、超时与资源回收已实现，本地验证通过；三平台 CI 待跑，PTY 等仍待做 |
 | AI-05 原生 release 打包 | 未开始 |
 | AI-06 验收与发布材料 | 未开始 |
 
@@ -296,3 +296,28 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - Windows 11：窗口关闭/退出、托盘打开、150%/200% DPI、多屏、中文 IME 候选窗与焦点切换、Consolas/CJK fallback。
 - Ubuntu 22.04/24.04：X11 与 Wayland 启动/关闭、100%/150%/200% 缩放、中文 IME、`monospace` 实际解析、GNOME 无托盘扩展时正常退出。
 - macOS：关闭隐藏、托盘恢复与既有 Menlo 排版回归。
+
+
+## AI-04 第一批（原生 PG 工具的 SSH 复用，2026-09-17）
+
+**状态**：本地实现与回归验证通过；尚未完成 AI-04 全部范围。
+
+**本批改动**：
+- pg_dump/psql 复用 connectors 中的 libssh2 隧道，移除桌面端对 ssh/sshpass 子进程和抢占空闲端口的依赖；密码、私钥与口令沿用 PG 连接器认证逻辑，强制验证 known_hosts。PGHOSTADDR 保持本地拨号地址，远端 host 继续用于 TLS 身份。
+- SQL 原生模式的 SSH 建连与客户端工具解析移到已有后台任务；建连前及启动工具前检查取消，建连期间仍需等待当前同步调用返回或超时。
+- SSH 超时覆盖 TCP 建连及 libssh2 握手/鉴权；SSH 配置为 0 时继承连接超时，全为 0 时使用 5 秒。DNS 解析仍使用系统同步解析，不宣称整个建连过程具有总时限。
+- 隧道 Drop 通知非阻塞监听循环退出，关闭已有本地转发 socket 并等待线程回收，修复 listener clone 导致旧监听线程持续存活；非阻塞 EOF 发送增加有限重试。
+- known_hosts 使用已有 dirs 6 的跨平台用户目录能力（connectors 增加直接依赖，锁文件无版本升级），找不到用户目录时明确报错；文件读取失败不再吞掉。
+
+**本地验证（macOS）**：
+- 新增 4 个隔离回归测试：用户目录/known_hosts 路径、空闲隧道释放监听器、Drop 唤醒阻塞 socket 读线程、无 SSH banner 时的 1 秒握手超时。
+- SSH 定向测试：11 passed；其中 2 项旧外部环境门控测试未配置服务、提前返回，不能作为真实 SSH 验收证据。
+- connectors：186 passed / 0 failed / 16 ignored；app：459 passed / 0 failed / 1 ignored。
+- `cargo fmt --all -- --check`、`git diff --check`、`cargo check --workspace --locked` 通过。保留既有 storage dead_code 与 block future-incompatibility 警告。
+- 桌面启动与三平台 CI：本批收尾验证中，结果随后补记。
+
+**未完成/未验证**：
+- 已认证 SSH 会话的真实双向转发、半关闭、活跃多通道取消、私钥口令与主机密钥拒绝的目标平台集成；本地 socket 测试不能替代真实 libssh2 通道验证。
+- 现有 PG 档案仅提供密码/私钥认证；此路径不再依赖系统 ssh-agent 的隐式回退，agent 支持需要单独设计验证。
+- Windows PTY/工具发现、含空格中文路径、子进程树回收；原生 CLI 完整下移 app 编排层；TLS CA/客户端证书/server_name 的原生工具参数继承审查。
+- Windows/Linux 图形会话与安装包仍未验收；本批不是 AI-04 或整体跨平台适配完成声明。

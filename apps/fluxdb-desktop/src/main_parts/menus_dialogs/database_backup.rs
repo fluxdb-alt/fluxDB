@@ -622,7 +622,7 @@ fn run_backup(
                         server_major.unwrap_or(0)
                     );
                 }
-                // SSH 隧道（若启用）：起 ssh -N -L 子进程把远端映射到本地端口，工具经
+                // SSH 隧道（若启用）：复用连接器的 libssh2 把远端映射到本地端口，工具经
                 // 127.0.0.1:local 拨号（PGHOSTADDR），-h 保持真实远端供 TLS 校验；保持通道至工具结束。
                 let ssh = config
                     .postgres_profile
@@ -632,6 +632,7 @@ fn run_backup(
                     return run_native_pg_dump_via_ssh(
                         &resolved.program,
                         ssh,
+                        config.postgres_profile.as_ref().map(|profile| profile.connect_timeout_secs()).unwrap_or(5),
                         &host,
                         port,
                         &user,
@@ -1424,12 +1425,13 @@ fn backup_statusbar_area(
         )
 }
 
-/// 经 SSH 隧道做 PG 原生备份：起 `ssh -N -L` 子进程 → 等隧道就绪 → pg_dump 经 127.0.0.1:local
-/// （PGHOSTADDR）拨号、`-h` 保持真实远端供 TLS 校验 → 结束/失败/取消时终止并回收隧道进程。
+/// 经连接器的 libssh2 隧道做 PG 原生备份：PGHOSTADDR 指向本地端口，
+/// `-h` 保留远端 TLS 身份；pg_dump 结束、失败或取消后释放隧道。
 #[allow(clippy::too_many_arguments)]
 fn run_native_pg_dump_via_ssh(
     tool: &str,
     ssh: &fluxdb_core::PostgresSshOptions,
+    inherited_connect_timeout_secs: u32,
     remote_host: &str,
     remote_port: u16,
     user: &str,
@@ -1442,8 +1444,20 @@ fn run_native_pg_dump_via_ssh(
     form: &BackupForm,
 ) -> anyhow::Result<()> {
     emit_native_log(sender, "隧道", format!("正在经 SSH {} 建立隧道", ssh.host))?;
-    let (mut tunnel_child, local_port) =
-        pg_start_ssh_tunnel(ssh, remote_host, remote_port, cancel_flag)?;
+    if cancel_flag.load(Ordering::Relaxed) {
+        anyhow::bail!("备份已取消");
+    }
+    let tunnel = fluxdb_app::pg_open_native_ssh_tunnel(
+        ssh,
+        remote_host,
+        remote_port,
+        inherited_connect_timeout_secs,
+    )
+    .map_err(|error| anyhow::anyhow!("SSH 隧道建立失败：{error}"))?;
+    let local_port = tunnel.local_port();
+    if cancel_flag.load(Ordering::Relaxed) {
+        anyhow::bail!("备份已取消");
+    }
 
     let result = run_native_pg_dump(
         tool,
@@ -1460,112 +1474,7 @@ fn run_native_pg_dump_via_ssh(
         Some("127.0.0.1"),
     );
 
-    // 无论成败都终止并回收隧道进程（子进程生命周期与工具一致：工具结束即关闭隧道）。
-    let _ = tunnel_child.kill();
-    let _ = tunnel_child.wait();
+    // 句柄离开作用域时连接器会关闭监听并等待桥线程退出。
+    drop(tunnel);
     result
-}
-
-/// 由 SSH 档案选项映射连接器隧道认证方式（私钥优先，其次密码，再次 agent）。
-fn pg_ssh_auth_from_options(ssh: &fluxdb_core::PostgresSshOptions) -> fluxdb_app::SshTunnelAuth {
-    let key_path = ssh.private_key.value().unwrap_or_default();
-    if !key_path.trim().is_empty() {
-        fluxdb_app::SshTunnelAuth::Key {
-            private_key_path: key_path.to_string(),
-        }
-    } else if !ssh.password.value().unwrap_or_default().is_empty() {
-        fluxdb_app::SshTunnelAuth::Password
-    } else {
-        fluxdb_app::SshTunnelAuth::Agent
-    }
-}
-
-/// 选一个本地空闲端口（绑定 127.0.0.1:0 取系统分配端口后释放，供 ssh -L 使用）。
-fn pg_pick_free_local_port() -> anyhow::Result<u16> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|error| anyhow::anyhow!("无法分配本地端口：{error}"))?;
-    let port = listener
-        .local_addr()
-        .map_err(|error| anyhow::anyhow!("读取本地端口失败：{error}"))?
-        .port();
-    drop(listener);
-    Ok(port)
-}
-
-/// 等 SSH 隧道就绪：轮询连接 127.0.0.1:local_port，直到成功或超时/取消/隧道进程退出。
-fn pg_wait_tunnel_ready(
-    local_port: u16,
-    tunnel_child: &mut std::process::Child,
-    cancel_flag: &Arc<AtomicBool>,
-    timeout_ms: u64,
-) -> bool {
-    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
-    while std::time::Instant::now() < deadline {
-        if cancel_flag.load(Ordering::Relaxed) {
-            return false;
-        }
-        if let Ok(Some(_)) = tunnel_child.try_wait() {
-            return false; // 隧道进程已退出（建连失败）
-        }
-        if std::net::TcpStream::connect_timeout(
-            &std::net::SocketAddr::from(([127, 0, 0, 1], local_port)),
-            Duration::from_millis(300),
-        )
-        .is_ok()
-        {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(150));
-    }
-    false
-}
-
-/// 建立 SSH 隧道子进程（供 pg_dump/psql 复用）：选空闲端口 → `ssh -N -L`（密码认证经 sshpass -e）
-/// → 等就绪。返回 (隧道子进程, 本地端口)；调用方负责在工具结束后 kill+wait 回收。
-pub fn pg_start_ssh_tunnel(
-    ssh: &fluxdb_core::PostgresSshOptions,
-    remote_host: &str,
-    remote_port: u16,
-    cancel_flag: &Arc<AtomicBool>,
-) -> anyhow::Result<(std::process::Child, u16)> {
-    let local_port = pg_pick_free_local_port()?;
-    let auth = pg_ssh_auth_from_options(ssh);
-    let tunnel = fluxdb_app::pg_ssh_tunnel_invocation(
-        &ssh.host,
-        ssh.port,
-        &ssh.username,
-        &auth,
-        remote_host,
-        remote_port,
-        local_port,
-        ssh.keepalive_interval_secs,
-    );
-    let password_auth = matches!(auth, fluxdb_app::SshTunnelAuth::Password);
-    let mut tunnel_cmd = if password_auth {
-        Command::new("sshpass")
-    } else {
-        Command::new(&tunnel.program)
-    };
-    if password_auth {
-        tunnel_cmd.arg("-e").arg(&tunnel.program);
-    }
-    tunnel_cmd.args(&tunnel.args);
-    if password_auth {
-        let pass = ssh.password.value().unwrap_or_default();
-        if !pass.is_empty() {
-            tunnel_cmd.env("SSHPASS", pass);
-        }
-    }
-    let mut child = tunnel_cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| anyhow::anyhow!("启动 ssh 隧道失败：{error}"))?;
-    if !pg_wait_tunnel_ready(local_port, &mut child, cancel_flag, 8000) {
-        let _ = child.kill();
-        let _ = child.wait();
-        anyhow::bail!("SSH 隧道建立失败或超时");
-    }
-    Ok((child, local_port))
 }
