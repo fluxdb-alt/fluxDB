@@ -407,6 +407,8 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 
 **Windows/Linux 自绘窗口控制**（修复右上角无关闭按钮）：
 - 根因：GPUI Windows 端普通窗口创建不设 `WS_CAPTION`（`gpui-pre-windows` window.rs 创建分支），且 `TitlebarOptions.appears_transparent: true` 映射为 `hide_title_bar`；原生标题栏连同关闭/最小化/最大化按钮整体不存在。GPUI 约定由应用自绘控制按钮（Zed 模式），应用此前从未实现。
-- 修复（`connection_dialog.rs`）：topbar 新增 `window_control_buttons`（非 macOS 渲染）：最小化 `window.minimize_window()`、最大化/还原 `window.zoom_window()`（`is_maximized()` 切换图标 Square/Maximize）、关闭 `cx.quit()`；关闭按钮 hover 红（Windows 惯例 `#E81123`）；全部带 tooltip。macOS 继续走原生红绿灯（topbar `pl(84.)` 预留区不变）。
+- 修复（`connection_dialog.rs`）：topbar 新增 `window_control_buttons`（非 macOS 渲染）：最小化 `window.minimize_window()`、最大化/还原 `window.zoom_window()`（`is_maximized()` 切换图标 Square/Maximize）、关闭按钮 hover 红（Windows 惯例 `#E81123`）；全部带 tooltip。macOS 继续走原生红绿灯。
+- **左侧预留平台化**：topbar `pl` 改为 cfg 区分——macOS 保留 `84px` 红绿灯预留区，Windows/Linux 改 `12px`（自绘按钮在右侧，无需预留）。
+- **Windows 关闭二次确认**：点击自绘关闭按钮不再直接退出，置 `pending_exit_confirm` 弹出 `exit_confirm_modal`（遮罩点击 / Esc / 「取消」关闭弹框，「退出」danger 按钮执行 `cx.quit()`），防误触。
 - 本机验证：desktop 400 passed / 0 failed；窗口控制仅条件渲染于非 macOS，本机仅验证编译与测试，**Windows/Linux 实际点击行为待 CI 构建产物真机确认**。
 

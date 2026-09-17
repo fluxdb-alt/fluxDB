@@ -850,6 +850,8 @@ struct NavicatMain {
     backup_pending_metas: BTreeMap<u64, BackupFileMeta>,
     /// 备份 tab：删除确认弹框对应的备份文件路径（None = 未打开）。
     pending_delete_backup: Option<PathBuf>,
+    /// Windows 关闭确认弹框：点击自绘关闭按钮后先确认再退出（true = 弹框打开）。
+    pending_exit_confirm: bool,
     user_admin_search_input: Entity<InputState>,
     _user_admin_search_subscription: Subscription,
     user_admin_create_user_input: Entity<InputState>,

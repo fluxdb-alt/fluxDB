@@ -74,8 +74,8 @@ fn topbar(
         .flex()
         .items_center()
         .gap_1()
-        // 保留 macOS 原生红绿灯（关闭/最小化/全屏）预留区。
-        .pl(px(84.))
+        // macOS 保留原生红绿灯（关闭/最小化/全屏）预留区；Windows/Linux 自绘按钮在右侧，无需预留。
+        .pl(if cfg!(target_os = "macos") { px(84.) } else { px(12.) })
         .pr_3()
         // 侧边栏展开/收起切换按钮（图标随状态变化）+ 首页按钮，两态都保留在顶部栏。
         .child(
@@ -170,7 +170,7 @@ fn topbar(
         // 最小化/最大化(还原)/关闭，否则 Windows/Linux 右上角无法关闭窗口。
         // macOS 走原生红绿灯（topbar 顶部 `pl(84.)` 预留区），不渲染。
         .when(!cfg!(target_os = "macos"), |this| {
-            this.child(window_control_buttons(window, colors))
+            this.child(window_control_buttons(window, colors, cx))
         })
 }
 
@@ -178,7 +178,7 @@ fn topbar(
 /// 因为隐藏原生标题栏后 GPUI 不提供窗口按钮，需应用自绘；macOS 走原生红绿灯不加此处。
 /// 关闭按钮按 Windows 惯例 hover 变红；最大化按钮按当前最大化态切换图标。
 /// 仅 `#[cfg(not(target_os = "macos"))]` 下被 topbar 引用。
-fn window_control_buttons(window: &mut Window, colors: UiColors) -> impl IntoElement {
+fn window_control_buttons(window: &mut Window, colors: UiColors, cx: &mut Context<NavicatMain>) -> impl IntoElement {
     // UiColors 非 Copy，闭包前先取出需要的 Rgba 值。
     let hover_bg = colors.hover;
     let muted = colors.muted;
@@ -226,7 +226,7 @@ fn window_control_buttons(window: &mut Window, colors: UiColors) -> impl IntoEle
                 }),
         )
         .child(
-            // 关闭
+            // 关闭：先弹确认框（Windows 用户要求二次确认），确认后才退出。
             div()
                 .id("win-btn-close")
                 .size(px(34.))
@@ -239,9 +239,109 @@ fn window_control_buttons(window: &mut Window, colors: UiColors) -> impl IntoEle
                 .hover(move |style| style.bg(WINDOW_CLOSE_HOVER))
                 .tooltip(move |window, cx| Tooltip::new("关闭").build(window, cx))
                 .child(app_icon_box(AppIcon::Close, 34., 16., muted))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.quit();
-                }),
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    this.pending_exit_confirm = true;
+                    cx.stop_propagation();
+                    cx.notify();
+                })),
+        )
+}
+
+/// Windows 退出确认弹框：点击自绘关闭按钮后二次确认（取消 / 退出）。
+/// 遮罩点击与 Esc（CancelDialog）均视为取消，仅「退出」按钮执行 cx.quit()。
+fn exit_confirm_modal(colors: UiColors, cx: &mut Context<NavicatMain>) -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .occlude()
+        .bg(if colors.is_dark {
+            opaque_grey(0.08, 0.62)
+        } else {
+            opaque_grey(0.6, 0.36)
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+            this.pending_exit_confirm = false;
+            cx.stop_propagation();
+            cx.notify();
+        }))
+        .child(
+            div()
+                .w(px(420.))
+                .rounded(colors.radius_lg)
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.panel_bg)
+                .shadow(vec![box_shadow(
+                    px(0.),
+                    px(18.),
+                    px(42.),
+                    px(0.),
+                    hsla(0., 0., 0., if colors.is_dark { 0.42 } else { 0.18 }),
+                )])
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .text_size(px(13.))
+                .text_color(colors.text)
+                .key_context("ExitConfirmModal")
+                .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
+                    this.pending_exit_confirm = false;
+                    cx.stop_propagation();
+                    cx.notify();
+                }))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .h(px(48.))
+                        .flex_none()
+                        .px_4()
+                        .flex()
+                        .items_center()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child("退出 FluxDB"),
+                )
+                .child(
+                    div()
+                        .px_4()
+                        .pb_4()
+                        .child("确定要退出吗？未保存的修改可能会丢失。"),
+                )
+                .child(
+                    div()
+                        .h(px(52.))
+                        .flex_none()
+                        .px_4()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .border_t_1()
+                        .border_color(colors.border_soft)
+                        .child(
+                            Button::new("exit-confirm-cancel")
+                                .label("取消")
+                                .small()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.pending_exit_confirm = false;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("exit-confirm-quit")
+                                .label("退出")
+                                .danger()
+                                .small()
+                                .on_click(cx.listener(|_, _, _, cx| {
+                                    tracing::info!(target: "fluxdb_desktop", "用户确认退出，退出应用");
+                                    cx.quit();
+                                })),
+                        ),
+                ),
         )
 }
 

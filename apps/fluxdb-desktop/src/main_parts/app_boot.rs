@@ -2525,6 +2525,7 @@ fn main() {
                             backup_note_edit_input,
                             backup_pending_metas: BTreeMap::new(),
                             pending_delete_backup: None,
+                            pending_exit_confirm: false,
                             user_admin_search_input,
                             _user_admin_search_subscription: user_admin_search_subscription,
                             user_admin_create_user_input,
