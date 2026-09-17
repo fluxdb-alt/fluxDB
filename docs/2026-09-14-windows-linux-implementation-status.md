@@ -7,7 +7,7 @@
 | 任务 | 状态 |
 | --- | --- |
 | AI-00 复查基线、依赖、原生环境，建立最小 CI 构建任务 | 通过（三平台 fmt/check/release 构建/产物/core 测试全绿，仅剩既有 connector 失败） |
-| AI-01 目录/日志/资源定位 | 进行中（目录语义 + §12.1 单实例守卫 + §12.2 Unix 权限收敛完成；Windows ACL 实测、不可写 UI 诊断待做） |
+| AI-01 目录/日志/资源定位 | 实现与三平台编译验证通过（目录语义/单实例/权限，Windows MSVC/macOS/Ubuntu release 构建 ✓）；运行时验收（Windows ACL、不可写目录、GUI）待验证 |
 | AI-02 凭据后端与错误传播 | 未开始 |
 | AI-03 窗口/托盘/字体/快捷键/IME | 未开始 |
 | AI-04 工具执行/SSH 隧道/PTY | 未开始 |
@@ -196,10 +196,9 @@
 
 ## 分支迁移（2026-09-17）
 
-原工作分支 `codex/ai-00-win-linux-ci`（基 2e299c8）发现与远端 `origin/main`
-（db5a54a = 40f223c + "add PostgreSQL support" + merge PR#6）是平行历史：
+原工作分支 `codex/ai-00-win-linux-ci`（基 2e299c8）（db5a54a = 40f223c + "add PostgreSQL support" + merge PR#6）是平行历史：
 origin/main 缺少本地 main 相对它的 158 个提交，且原分支 CI workflow 之 run
-已被删除、workflows 列表只剩 Release macOS。
+已被删除、workflows 列表只剩 Release macOS（CI 触发原因待确认，见下）。
 
 按授权迁移到新独立分支 `adapt/win-linux`（基 = 最新 origin/main db5a54a），
 仅 cherry-pick 经核实的 6 个适配提交（无代码冲突；状态文档合并冲突已消解）：
@@ -228,3 +227,15 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - PR #7 为 Draft，仅查看 diff 与 CI，不合并。
 
 **未验证项（明确标注）**：Windows/Linux GUI、IME、DPI、真实 GPU、安装包(EXE/DEB)、Windows ACL 实测、不可写目录 UI 诊断、真实 PG 的 connector 集成 —— 均待后续 AI-03/AI-05 与目标平台 VM/真机。
+
+## 记录修正（2026-09-17，按用户要求）
+
+1. **AI-01 状态**：标注为"实现与三平台编译验证通过，运行时验收部分待验证"（见总览）。未完成验收项保留：Windows/Linux GUI、IME、DPI、真实 GPU、安装包(EXE/DEB)、Windows ACL 实测、不可写目录 UI 诊断、真实 PG 集成。
+2. **artifacts 措辞**：当前 artifacts 是**候选可执行文件**（非安装包），CI 只产出 candidate 二进制 + sha256；安装包(EXE/DEB)属 AI-05，未产出。全文相关表述已对齐。
+3. **connector 4 个失败 = 已证实的基线缺陷**：在 /tmp worktree 用**相同测试条件**对 origin/main（db5a54a，无 AI 改动）复现，结果 `178 passed; 4 failed; 16 ignored`，测试名与 adapt/win-linux 完全一致：
+   - `pg_plan_apply_tests::pg_apply_role_plan_end_to_end_and_rename`（tests.rs:6702）：`Connection refused (os error 61)`，需真实 PG 服务
+   - `pg_plan_apply_tests::pg_apply_role_plan_rolls_back_as_a_whole`（tests.rs:6640）：同上，需真实 PG 服务
+   - `tests::pg_create_database_sql_builds_options_and_quotes`（tests.rs:3939）：断言失配，实际 SQL 含 `TEMPLATE template0`、期望不含
+   - `tests::pg_build_table_ddl_round_trips_clauses`（tests.rs:4913）：断言失配，`GENERATED ALWAYS AS (expr) STORED` 未出现在生成 ddl
+   基线既有的失败不阻塞 AI-02 独立开发；新引入的失败必须修复；不随意改断言/跳过测试。这 4 个失败在 AI-02 后仍需保持原样并如实呈现。
+4. **旧分支 CI 未触发原因改为待确认**：push/PR workflow 通常不要求文件预先存在于默认分支（仅 workflow_dispatch 有默认分支要求）。无充分证据前，不把"workflow 缺失"当成本质原因；CI 触发验证以 adapt/win-linux 实际 run 为准（已确认可触发）。
