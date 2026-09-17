@@ -95,7 +95,16 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           cd "target/${{ matrix.target }}/release"
-          sha256sum fluxdb-desktop* > fluxdb-desktop.sha256
+          # sha256sum 在 macOS 默认不存在，用 python3 做跨平台校验和。
+          python3 - <<'PY'
+          import hashlib, pathlib, os
+          files = [p for p in pathlib.Path('.').iterdir()
+                   if p.name.startswith('fluxdb-desktop') and not p.name.endswith('.sha256') and p.is_file()]
+          with open('fluxdb-desktop.sha256', 'w') as out:
+              for p in sorted(files):
+                  h = hashlib.sha256(p.read_bytes()).hexdigest()
+                  print(f"{h}  {p.name}", file=out)
+          PY
           cat fluxdb-desktop.sha256
 
       - name: Upload internal candidate artifact
