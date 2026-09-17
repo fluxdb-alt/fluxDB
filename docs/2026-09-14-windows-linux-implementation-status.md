@@ -344,10 +344,10 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 
 ### AI-04 补充：备份/工具子进程整棵进程树回收（§12.5 / §12.11）
 
-- 新增 `apps/fluxdb-desktop/src/main_parts/menus_dialogs/subprocess.rs`（`prepare_tree_kill_command` / `kill_child_tree`）：
-  - Windows：`CommandExt::create_job_object(true)`，`Child::kill` 终止整个 Job（含 pg_dump/mysqldump 派生的归档等子进程），避免取消后残留孤儿进程。
-  - Unix：`CommandExt::process_group(0)` + 对进程组发 SIGKILL（负 pid），整棵树一并终止（直接 kill 只杀到子进程、留孙进程）。
-- 挂接点：mysqldump / pg_dump / sqlite3 备份三条路径 + psql 原生脚本执行，共 4 个 spawn 与 4 个取消站点改用整树终止。
+- 新增 `apps/fluxdb-desktop/src/main_parts/menus_dialogs/subprocess.rs`（`prepare_tree_kill_command` / `kill_child_tree`）。
+- Unix：`CommandExt::process_group(0)` + 对进程组发 SIGKILL（负 pid），整棵树一并终止（直接 kill 只杀到子进程、留孙进程），覆盖 `pg_dump --jobs` 及多进程工具的取消回收。
+- Windows：std 的 `CommandExt::create_job_object` 是 **nightly-only**（CI 稳定版 E0599 无法编译，已弃用）；当前备份/工具均为**单进程调用**（pg_dump 未用 `--jobs`、mysqldump/psql/sqlite3 单进程），直接 `Child::kill()` 已足够，暂无残留树。已在 source 以 `ponytail:` 注释标注：一旦启用并行 dump 或派生子进程的工具，需用 `windows` crate 引入 Job Object（`CreateJobObjectW` + `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）再整树终止。
+- 挂接点：mysqldump / pg_dump / sqlite3 备份三条路径 + psql 原生脚本执行，共 4 个 spawn 与 4 个取消站点改用该工具函数。
 - `Cargo.toml`：desktop 的 `nix` 增加 `signal` feature（已锁内存在，无版本/锁文件变更）。
-- 新增 unix 端到端测试 `kills_the_whole_process_tree`：spawn 出一个带孙进程的 shell，kill 后轮询断言孙进程被回收（处理僵尸由 init 异步回收的时序）。测试通过：desktop `402 passed / 0 failed / 3 ignored`。
-- Windows 侧 `create_job_object` 由 CI 原生编译/链接验证；整树终止行为待目标平台真机复核。version-probe（`--version` 短命令、无取消路径）不套用该配置。
+- 新增 unix 端到端测试 `kills_the_whole_process_tree`：spawn 出一个带孙进程的 shell，kill 后轮询断言孙进程被回收（处理僵尸由 init 异步回收的时序）。CI 「Test PTY child cleanup (Unix)」步骤并入该测试（`-- terminal_reap_tests kill_child_tree_tests`），macOS/Ubuntu 原生运行。本机测试通过：desktop 全量 `402 passed / 0 failed / 3 ignored`。
+- version-probe（`--version` 短命令、无取消路径）不套用该配置。

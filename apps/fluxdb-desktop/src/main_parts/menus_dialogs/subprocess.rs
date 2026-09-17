@@ -1,23 +1,20 @@
 // 子进程整棵进程树的取消回收（跨平台适配 §12.5 / §12.11）。
 //
 // 原生 dump / psql 执行的后台子进程在取消时必须连同其派生的子进程一起终止，
-// 否则 Windows 上会残留孤儿进程。直接 `Child::kill()` 只作用于当前子进程：
-// - Unix：子进程派生的孙进程（如 pg_dump 的按表 worker）不在同一组就不会被杀到。
-// - Windows：默认 kill 只终止当前进程，pg_dump/mysqldump 的子进程仍会存活。
+// 否则残留的 worker 会继续占用连接或写入半成品。直接 `Child::kill()` 只作用于
+// 当前子进程：进程组外/作业外的孙进程不会被杀到。
 //
 // 处理方式（与方案 §12.5 一致）：
-// - Windows：`create_job_object(true)` 把子进程放进 Job Object，`Child::kill()` 会终止
-//   整个 Job（子进程树随之一并终止）。
-// - Unix：`process_group(0)` 让子进程成为新进程组组长，取消时对整组发 SIGKILL。
+// - Unix：`process_group(0)` 让子进程成为新进程组组长，取消时对整组发 SIGKILL，
+//   覆盖 pg_dump 将来按表派生的 worker（`--jobs`）。
+// - Windows：当前备份/工具均为单进程调用（pg_dump 未用 `--jobs`、mysqldump/psql/
+//   sqlite3 单进程），`Child::kill()` 已足够。
+//   ponytail: Windows 若启用并行 dump（`--jobs`）或会出现派生子进程的工具，需引入
+//   Job Object（`CreateJobObjectW` + `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）再整树终止；
+//   std 的 `create_job_object` 是 nightly-only，届时用 windows crate 实现。
 
-/// spawn 前调用，让目标命令可按整棵进程树取消。
+/// spawn 前调用，让目标命令可按整棵进程树取消（Unix 侧配置进程组）。
 fn prepare_tree_kill_command(cmd: &mut std::process::Command) {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        // Job Object 下 `Child::kill` 终止整个 Job（子进程树一并结束）。
-        cmd.create_job_object(true);
-    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -31,7 +28,6 @@ fn prepare_tree_kill_command(cmd: &mut std::process::Command) {
 fn kill_child_tree(child: &mut std::process::Child) {
     #[cfg(target_os = "windows")]
     {
-        // create_job_object 下 kill 终止整个 Job 树。
         let _ = child.kill();
     }
     #[cfg(unix)]
@@ -51,11 +47,9 @@ fn kill_child_tree(child: &mut std::process::Child) {
 
 #[cfg(all(test, unix))]
 mod kill_child_tree_tests {
-    /// 取消时必须连孙进程一起终止，否则 Windows 上会残留孤儿进程（方案 §12.5/12.11）。
+    /// 取消时必须连孙进程一起终止，否则会残留孤儿进程（方案 §12.5/12.11）。
     #[test]
     fn kills_the_whole_process_tree() {
-        use std::os::unix::process::CommandExt;
-
         // 一个随父进程退出的孙进程：写 PID 到文件，供断言其已被终止。
         let pid_file = std::env::temp_dir().join(format!("fluxdb-tree-{}", std::process::id()));
         let _ = std::fs::remove_file(&pid_file);

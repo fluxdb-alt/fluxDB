@@ -137,4 +137,4 @@ jobs:
 
       - name: Test PTY child cleanup (Unix)
         if: runner.os != 'Windows'
-        run: cargo test --locked --target ${{ matrix.target }} -p fluxdb-desktop terminal_reap_tests
+        run: cargo test --locked --target ${{ matrix.target }} -p fluxdb-desktop -- terminal_reap_tests kill_child_tree_tests
