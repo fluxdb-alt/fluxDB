@@ -9,7 +9,7 @@
 | AI-00 复查基线、依赖、原生环境，建立最小 CI 构建任务 | 通过（三平台 fmt/check/release 构建/产物/core 测试全绿，仅剩既有 connector 失败） |
 | AI-01 目录/日志/资源定位 | 实现与三平台编译验证通过（目录语义/单实例/权限，Windows MSVC/macOS/Ubuntu release 构建 ✓）；运行时验收（Windows ACL、不可写目录、GUI）待验证 |
 | AI-02 凭据后端与错误传播 | 实现 + 三平台编译/release 通过；运行期系统凭据集成待验证（无目标实体机） |
-| AI-03 窗口/托盘/字体/快捷键/IME | 实现中：本地编译/定向测试通过，三平台 CI 与图形运行验收待完成 |
+| AI-03 窗口/托盘/字体/快捷键/IME | 第一批实现与三平台编译/链接/测试通过；图形运行、IME、DPI 待 VM/真机验收 |
 | AI-04 工具执行/SSH 隧道/PTY | 未开始 |
 | AI-05 原生 release 打包 | 未开始 |
 | AI-06 验收与发布材料 | 未开始 |
@@ -275,7 +275,7 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 
 ## AI-03（窗口/托盘/字体/快捷键/IME，2026-09-17）
 
-**状态**：第一批代码完成；macOS 本地编译与定向测试通过，三平台原生 CI 待本提交推送后确认。Windows/Linux 图形会话、IME、DPI、托盘运行期行为仍待 VM/真机验收。
+**状态**：第一批代码完成；macOS 本地启动验证与三平台原生 CI 编译/链接/测试通过。Windows/Linux 图形会话、IME、DPI、托盘运行期行为仍待 VM/真机验收。
 
 **本批改动**：
 - 窗口装饰：macOS 红绿灯坐标仅在 macOS 设置；Windows/Linux 不再携带 macOS 专属窗口参数。
@@ -290,6 +290,7 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - `cargo fmt --all -- --check`、`git diff --check`：通过。
 - `cargo test -p fluxdb-app --locked`：允许 loopback 环境复跑通过，459 passed / 0 failed / 1 ignored；沙箱内曾有 5 个测试因禁止绑定 loopback 报 `Operation not permitted`。
 - `cargo run -p fluxdb-desktop --locked`：macOS 主进程成功启动并进入 GPUI 事件循环，验证后手动退出。
+- GitHub Actions PR run `35199252000`（commit `9ebb681`）：Windows 2022 / Ubuntu 22.04 / macOS 14 的 fmt、workspace check、release 构建、候选产物、core/storage/app/connectors 测试全部通过。
 
 **待验证**：
 - Windows 11：窗口关闭/退出、托盘打开、150%/200% DPI、多屏、中文 IME 候选窗与焦点切换、Consolas/CJK fallback。
