@@ -1030,6 +1030,8 @@ struct NavicatMain {
     // 此时主视图处于 lease 状态，builder 内不能 view.read(cx)，实时数据统一放 Rc<RefCell<..>>
     // （先例：redis_hash_full_value_viewer）。
     sql_file_modal: Rc<std::cell::RefCell<SqlFileModalData>>,
+    // 恢复弹框挂载状态:UI 实体 + 配置快照,运行时数据在 RestoreModal::runtime(Rc 共享)。
+    restore_modal: Option<RestoreModal>,
     pending_data_export: Option<TableDataExportForm>,
     data_export_custom_conditions_open: bool,
     data_export_preview: Option<TableDataExportPreviewState>,
@@ -1350,10 +1352,6 @@ impl Default for SqlFileModalData {
 /// 数据库备份方式。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BackupMode {
-    /// 原生工具（mysqldump / sqlite3）
-    Native,
-    /// 逻辑备份（SQL dump，复用现有导出能力）
-    Logic,
     /// 自动探测：原生工具可用则原生，否则逻辑。
     Auto,
 }
@@ -1361,8 +1359,6 @@ enum BackupMode {
 impl BackupMode {
     fn label(self) -> &'static str {
         match self {
-            Self::Native => "原生备份（推荐）",
-            Self::Logic => "逻辑备份（SQL）",
             Self::Auto => "自动选择",
         }
     }
@@ -1392,6 +1388,7 @@ impl BackupTab {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BackupForm {
+    database_kind: DatabaseKind,
     connection_id: ConnectionId,
     database: Option<String>,
     mode: BackupMode,

@@ -48,3 +48,5 @@ include!("parts/tests.rs");
 #[path = "parts/mysql/native_tools.rs"]
 mod mysql_native_tools;
 pub use mysql_native_tools::*;
+
+include!("parts/backup_restore.rs");

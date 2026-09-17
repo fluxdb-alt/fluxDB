@@ -775,6 +775,11 @@ impl NavicatMain {
             self.request_close_sql_file_dialog(window, cx);
             return;
         }
+        // 恢复弹框面板已自挂 CancelDialog(Esc) 处理,这里兜底防遗漏。
+        if self.restore_modal.is_some() {
+            self.close_restore_dialog(cx);
+            return;
+        }
         if self.query_history_quick_open {
             self.query_history_quick_open = false;
             cx.notify();

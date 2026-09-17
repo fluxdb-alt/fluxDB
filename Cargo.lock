@@ -2111,6 +2111,7 @@ dependencies = [
  "rustls",
  "rustls-pemfile",
  "rustls-pki-types",
+ "sqlparser",
  "sqlx",
  "ssh2",
  "tokio",

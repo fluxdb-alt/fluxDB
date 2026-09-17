@@ -88,3 +88,5 @@ pub use fluxdb_connectors::{
     MySqlClientVersion, MySqlDumpInvocation, MySqlDumpOptions, mysql_client_version,
     mysql_dump_invocation,
 };
+
+include!("parts/backup_restore.rs");

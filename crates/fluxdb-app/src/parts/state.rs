@@ -1182,6 +1182,10 @@ pub struct TaskState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppCommand {
+    PrepareBackup { request: BackupRequest, method: BackupMethod },
+    RunBackup(BackupRequest),
+    PrepareRestore(RestoreRequest),
+    RunRestore { request: RestoreRequest, plan: RestorePlan },
     LoadConnections,
     ReplaceConnections(Vec<ConnectionConfig>),
     ReplaceSidebarLayout(SidebarLayout),
@@ -2296,6 +2300,10 @@ pub enum AppCommand {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppEvent {
+    BackupPrepared(BackupRequest),
+    BackupCompleted(BackupManifest),
+    RestorePrepared { request: RestoreRequest, plan: RestorePlan },
+    RestoreCompleted(RestoreOutcome),
     ConnectionsLoaded(Vec<ConnectionConfig>),
     SidebarLayoutChanged(SidebarLayout),
     ConnectionCreated(ConnectionConfig),

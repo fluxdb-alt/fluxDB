@@ -116,7 +116,7 @@ fn database_backup_modal(
     cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
     // 至少勾选一个对象（任一表或包含视图）才允许「开始备份」；备份目录统一取自设置。
-    let can_start = !form.selected_tables.is_empty() || form.include_views;
+    let can_start = form.database_kind == DatabaseKind::Sqlite || !form.selected_tables.is_empty() || form.include_views;
     let panel = database_backup_modal_panel(colors, cx)
         .child(database_backup_modal_header(colors, cx))
         .child(database_backup_tabs(form.tab, colors, cx))
@@ -371,6 +371,7 @@ fn database_backup_general_body(
         .child(database_backup_dir_row(target_dir_input, colors, cx))
         .child(database_backup_mode_info(colors))
         .child(database_backup_file_name_row(file_name_input, colors))
+        .child(div().text_size(px(12.)).text_color(colors.muted).child(format!("输出文件：{}{}", resolve_backup_file_name(form), if form.database_kind == DatabaseKind::Sqlite { "（完整数据库快照，包含全部对象）" } else { "" })))
         .child(database_backup_note_row(note_input, colors))
         .child(div().flex_1())
 }

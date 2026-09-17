@@ -273,6 +273,7 @@ fn backup_list_content(
     let rows = load_backup_records_for(&this.storage, list.connection_id, &list.database);
     let dir_configured = !state.settings.backup_dir.trim().is_empty();
     let database_for_new = list.database.clone();
+    let restore_connection = list.connection_id;
     let connection_for_new = list.connection_id;
 
     div()
@@ -315,6 +316,13 @@ fn backup_list_content(
                                     cx,
                                 );
                                 cx.stop_propagation();
+                            }),
+                        ))
+                        .child(backup_text_button(
+                            "从文件恢复",
+                            colors,
+                            cx.listener(move |this, _, window, cx| {
+                                this.open_restore_dialog(restore_connection, None, None, window, cx);
                             }),
                         ))
                         .child(backup_text_button(
@@ -406,7 +414,7 @@ fn backup_list_header_row(colors: UiColors) -> Div {
         .child(div().w(px(BACKUP_COL_SIZE)).child("文件大小"))
         .child(div().w(px(BACKUP_COL_PATH)).child("路径"))
         .child(div().flex_1().min_w_0().child("备注"))
-        .child(div().w(px(BACKUP_COL_ACTION * 2. + 6.)).child("操作"))
+        .child(div().w(px(BACKUP_COL_ACTION * 3. + 12.)).child("操作"))
 }
 
 /// 运行中任务行：名称 / 阶段 / — / — / — / 日志+取消。
@@ -453,7 +461,7 @@ fn backup_running_row(
         .child(div().flex_1().min_w_0().child(""))
         .child(
             div()
-                .w(px(BACKUP_COL_ACTION * 2. + 6.))
+                .w(px(BACKUP_COL_ACTION * 3. + 12.))
                 .flex()
                 .items_center()
                 .gap_2()
@@ -484,6 +492,8 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
     let meta_for_tables = row.meta.clone();
     let path_for_note = row.path.clone();
     let path_for_delete = row.path.clone();
+    let restore_path = row.path.clone();
+    let restore_meta = row.meta.clone();
     let note_for_edit = row
         .meta
         .as_ref()
@@ -544,7 +554,7 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
                 .overflow_hidden()
                 .text_ellipsis()
                 .text_color(colors.muted)
-                .child(path_display),
+                .child(path_display.clone()),
         )
         .child(
             div()
@@ -557,10 +567,19 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
         // 操作列宽度与表头/运行中任务行保持一致（两个按钮 + 间距），否则列错位。
         .child(
             div()
-                .w(px(BACKUP_COL_ACTION * 2. + 6.))
+                .w(px(BACKUP_COL_ACTION * 3. + 12.))
                 .flex()
                 .items_center()
                 .gap_2()
+                .child(backup_text_button(
+                    "恢复",
+                    colors,
+                    cx.listener(move |this, _, window, cx| {
+                        if let Some(meta) = restore_meta.clone() {
+                            this.open_restore_dialog(meta.connection_id, Some(restore_path.clone()), Some(meta), window, cx);
+                        }
+                    }),
+                ))
                 .child(backup_text_button(
                     "编辑",
                     colors,

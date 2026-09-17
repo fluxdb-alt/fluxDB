@@ -275,11 +275,10 @@ impl FileStorage {
     /// 加载全部备份记录（全量扁平，由上层按连接/库过滤）。不存在时返回空列表。
     pub fn load_backup_records(&self) -> Result<Vec<BackupRecord>> {
         let conn = self.open_sqlite()?;
-        Ok(sqlite::get_json::<Vec<BackupRecord>>(
-            &conn,
-            sqlite::KEY_BACKUP_RECORDS,
-        )?
-        .unwrap_or_default())
+        Ok(
+            sqlite::get_json::<Vec<BackupRecord>>(&conn, sqlite::KEY_BACKUP_RECORDS)?
+                .unwrap_or_default(),
+        )
     }
 
     /// 全量保存备份记录（单条 key，整个数组一个 JSON blob，与其它 kv 数据一致）。
@@ -612,32 +611,7 @@ fn default_redis_workbench_history_success() -> bool {
     true
 }
 
-/// 备份记录：备份真实数据在磁盘，这里只存备份的元数据记录。
-/// 一条记录对应一个 `{输出目录}/{库安全名}/{文件名}.sql` 备份文件。
-///
-/// - `connection_id` / `database`：归属的连接与库，备份列表按此筛选。
-/// - `output_path`：备份真实文件的完整磁盘路径，用于删除定位与路径列展示。
-/// - `created_unix` / `size`：备份时间与文件大小（原读文件系统，现存记录，避免依赖磁盘）。
-/// - `tables` / `include_views` / `note`：备份表清单、视图开关、备注。
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct BackupRecord {
-    pub connection_id: ConnectionId,
-    #[serde(default)]
-    pub database: String,
-    #[serde(default)]
-    pub output_path: String,
-    #[serde(default)]
-    pub created_unix: i64,
-    #[serde(default)]
-    pub size: u64,
-    /// Some(空数组) = 整库备份；None = 无表清单记录。
-    #[serde(default)]
-    pub tables: Option<Vec<String>>,
-    #[serde(default)]
-    pub include_views: bool,
-    #[serde(default)]
-    pub note: String,
-}
+include!("parts/backup_restore.rs");
 
 fn default_query_history_kind() -> String {
     "query".to_string()
@@ -1151,6 +1125,7 @@ mod tests {
         let storage = FileStorage::new(unique_temp_dir());
         let records = vec![
             BackupRecord {
+                manifest: None,
                 connection_id: ConnectionId(4),
                 database: "shop".to_string(),
                 output_path: "/tmp/fluxdb/shop/shop_20260917.sql".to_string(),
@@ -1161,6 +1136,7 @@ mod tests {
                 note: "周备份".to_string(),
             },
             BackupRecord {
+                manifest: None,
                 connection_id: ConnectionId(4),
                 database: "shop".to_string(),
                 output_path: "/tmp/fluxdb/shop/shop_20260910.sql".to_string(),

@@ -2704,6 +2704,7 @@ fn main() {
                             sql_file_modal: Rc::new(std::cell::RefCell::new(
                                 SqlFileModalData::default(),
                             )),
+                            restore_modal: None,
                             pending_data_export: None,
                             data_export_custom_conditions_open: false,
                             data_export_preview: None,

@@ -27,3 +27,5 @@ include!("parts/workbench_history.rs");
 include!("parts/terminal.rs");
 include!("parts/sql_dialect.rs");
 include!("parts/tests.rs");
+
+include!("parts/backup_restore.rs");

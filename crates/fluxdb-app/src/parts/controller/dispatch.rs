@@ -20,6 +20,9 @@ impl AppController {
         }
 
         match command {
+            command @ (AppCommand::PrepareBackup { .. } | AppCommand::RunBackup(_) | AppCommand::PrepareRestore(_) | AppCommand::RunRestore { .. }) => {
+                self.dispatch_database_task(command, &AtomicBool::new(false), &mut |_| {})
+            }
             AppCommand::LoadConnections => {
                 let connections = mock_connections();
                 self.next_connection_id = connections
