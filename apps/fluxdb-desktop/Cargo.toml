@@ -43,7 +43,7 @@ tray-icon = { version = "0.23.1", default-features = false }
 # 单实例守卫（方案 §12.1 方案 A）：Unix 用 flock（nix），Windows 用命名互斥量。
 # 两库均已在 Cargo.lock（nix 0.28 经 portable-pty、windows 0.57 经 gpui 栈），无版本升级。
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.28", default-features = false, features = ["fs"] }
+nix = { version = "0.28", default-features = false, features = ["fs", "signal"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.57", features = [

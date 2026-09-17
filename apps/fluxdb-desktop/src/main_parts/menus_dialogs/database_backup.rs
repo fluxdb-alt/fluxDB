@@ -883,6 +883,7 @@ fn mysqldump_once(
     for (key, value) in &invocation.env {
         cmd.env(key, value);
     }
+    prepare_tree_kill_command(&mut cmd);
 
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -936,8 +937,7 @@ fn mysqldump_once(
     let mut stdout_io = std::io::BufReader::new(output);
     loop {
         if cancel_flag.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_child_tree(&mut child);
             anyhow::bail!("已取消");
         }
         let n = std::io::Read::read(&mut stdout_io, &mut buffer)?;
@@ -981,19 +981,15 @@ fn run_native_sqlite(
 
     // sqlite3 的 .backup 命令以文件路径为参数，使用临时 DB 路径；此处直接把输出路径传给 .backup。
     let backup_cmd = format!(".backup '{}'", output_path.to_string_lossy());
-    let status = match Command::new("sqlite3")
-        .arg(source)
-        .arg(backup_cmd)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+    let mut sqlite3_cmd = Command::new("sqlite3");
+    sqlite3_cmd.arg(source).arg(backup_cmd).stdout(Stdio::null()).stderr(Stdio::null());
+    prepare_tree_kill_command(&mut sqlite3_cmd);
+    let status = match sqlite3_cmd.spawn() {
         Ok(mut child) => {
             // 在线等待期间定期检测取消。
             loop {
                 if cancel_flag.load(Ordering::Relaxed) {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_child_tree(&mut child);
                     anyhow::bail!("已取消");
                 }
                 match child.try_wait()? {
@@ -1073,6 +1069,7 @@ fn run_native_pg_dump(
             cmd.env(key, value);
         }
     }
+    prepare_tree_kill_command(&mut cmd);
 
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -1116,8 +1113,7 @@ fn run_native_pg_dump(
     let mut stdout_io = std::io::BufReader::new(output);
     loop {
         if cancel_flag.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_child_tree(&mut child);
             // 清理取消产生的半成品备份，避免残留部分 dump 被误当成功备份。
             let _ = fs::remove_file(output_path);
             anyhow::bail!("已取消");

@@ -340,3 +340,14 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - 原 Windows 失败测试改为真实本地 socket + 生产搬运函数 + 实际连接句柄 Drop，验证线程退出；另加短写/背压数据完整性、中途读写取消、零写错误三个测试。
 - macOS 本地完整 connectors：189 passed / 0 failed / 16 ignored；workspace check、fmt 通过。
 - Windows PR CI `35211667014` 已核验：connectors `189 passed / 0 failed / 16 ignored`，4 个 SSH pump 回归与 socket Drop 回收测试均执行并通过；任务 `105170380161` 无失败标记。
+
+
+### AI-04 补充：备份/工具子进程整棵进程树回收（§12.5 / §12.11）
+
+- 新增 `apps/fluxdb-desktop/src/main_parts/menus_dialogs/subprocess.rs`（`prepare_tree_kill_command` / `kill_child_tree`）：
+  - Windows：`CommandExt::create_job_object(true)`，`Child::kill` 终止整个 Job（含 pg_dump/mysqldump 派生的归档等子进程），避免取消后残留孤儿进程。
+  - Unix：`CommandExt::process_group(0)` + 对进程组发 SIGKILL（负 pid），整棵树一并终止（直接 kill 只杀到子进程、留孙进程）。
+- 挂接点：mysqldump / pg_dump / sqlite3 备份三条路径 + psql 原生脚本执行，共 4 个 spawn 与 4 个取消站点改用整树终止。
+- `Cargo.toml`：desktop 的 `nix` 增加 `signal` feature（已锁内存在，无版本/锁文件变更）。
+- 新增 unix 端到端测试 `kills_the_whole_process_tree`：spawn 出一个带孙进程的 shell，kill 后轮询断言孙进程被回收（处理僵尸由 init 异步回收的时序）。测试通过：desktop `402 passed / 0 failed / 3 ignored`。
+- Windows 侧 `create_job_object` 由 CI 原生编译/链接验证；整树终止行为待目标平台真机复核。version-probe（`--version` 短命令、无取消路径）不套用该配置。
