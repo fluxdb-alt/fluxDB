@@ -835,6 +835,9 @@ struct NavicatMain {
     _sql_file_path_subscription: Subscription,
     backup_file_name_input: Entity<InputState>,
     _backup_file_name_subscription: Subscription,
+    /// 新建备份弹框：备份目录输入（默认填充设置 backup_dir，可更换）。
+    backup_target_dir_input: Entity<InputState>,
+    _backup_target_dir_subscription: Subscription,
     backup_object_search_input: Entity<InputState>,
     _backup_object_search_subscription: Subscription,
     /// 新建备份弹框：备注输入（保存到 .meta.json）。
@@ -1435,20 +1438,10 @@ struct PgClientDownloadState {
     cancel: Arc<AtomicBool>,
 }
 
-/// 备份文件的旁挂元数据（{备份文件}.meta.json）：记录表清单与备注。
-/// 仅新备份写入；历史备份无此文件时对应列显示「无记录」。
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-struct BackupFileMeta {
-    /// 本次备份勾选的表名（有序数组；Some(空数组) = 整库备份；None = 未记录，如仅编辑备注的老备份）。
-    #[serde(default)]
-    tables: Option<Vec<String>>,
-    /// 是否包含视图。
-    #[serde(default)]
-    include_views: bool,
-    /// 用户备注。
-    #[serde(default)]
-    note: String,
-}
+/// 备份记录（存 sqlite，真实数据在磁盘）：复用 fluxdb-storage 的 `BackupRecord`。
+/// 字段含 connection_id/database（按库筛选）、output_path（真实文件路径）、
+/// created_unix/size（备份时间与大小）、tables/include_views/note（表清单与备注）。
+use fluxdb_storage::BackupRecord as BackupFileMeta;
 
 /// 备份 tab「查看备份表」弹框状态。
 #[derive(Clone, Debug, Eq, PartialEq)]

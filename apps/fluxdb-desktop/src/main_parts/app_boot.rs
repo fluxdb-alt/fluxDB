@@ -928,6 +928,9 @@ fn main() {
                             cx.new(|cx| InputState::new(window, cx).placeholder("选择 SQL 文件"));
                         let backup_file_name_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("默认：库名_时间戳.sql"));
+                        // 备份目录输入：打开弹框时填入设置 backup_dir，可手动更换。
+                        let backup_target_dir_input =
+                            cx.new(|cx| InputState::new(window, cx).placeholder("默认使用设置中的备份目录"));
                         let backup_object_search_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("搜索表"));
                         // 新建备份弹框：备注输入（成功后写入 .meta.json）。
@@ -1563,6 +1566,18 @@ fn main() {
                                     && let Some(form) = &mut this.pending_backup_modal
                                 {
                                     form.file_name = input.read(cx).value().to_string();
+                                    cx.notify();
+                                }
+                            },
+                        );
+                        // 备份目录输入 → form.target_dir（最终用于备份输出路径）。
+                        let backup_target_dir_subscription = cx.subscribe(
+                            &backup_target_dir_input,
+                            |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change)
+                                    && let Some(form) = &mut this.pending_backup_modal
+                                {
+                                    form.target_dir = input.read(cx).value().to_string();
                                     cx.notify();
                                 }
                             },
@@ -2501,6 +2516,8 @@ fn main() {
                             _sql_file_path_subscription: sql_file_path_subscription,
                             backup_file_name_input,
                             _backup_file_name_subscription: backup_file_name_subscription,
+                            backup_target_dir_input,
+                            _backup_target_dir_subscription: backup_target_dir_subscription,
                             backup_object_search_input,
                             _backup_object_search_subscription: backup_object_search_subscription,
                             backup_note_input,

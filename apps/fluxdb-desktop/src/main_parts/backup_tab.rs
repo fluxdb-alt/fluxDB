@@ -1,23 +1,28 @@
 // ============================================================
 // 备份列表 tab（TabKind::BackupList）
 // 侧边栏「备份」节点单击打开（按库一个 tab）：
-//   列 = 名称 / 修改时间 / 备份表（查看弹框）/ 文件大小 / 备注（编辑弹框）/ 操作（编辑、删除确认弹框）。
+//   列 = 名称 / 备份时间 / 备份表（查看弹框）/ 文件大小 / 路径 / 备注（编辑弹框）/ 操作（编辑、删除确认弹框）。
 // 数据来源：
-//   - 历史备份：扫描 {backup_dir}/{库安全名}/*.sql，修改时间与大小实时读文件系统；
-//   - 备份表清单与备注：读旁挂元数据 {文件}.sql.meta.json（仅新备份写入，缺失显示「无记录」）；
+//   - 备份记录：存 sqlite（真实数据在磁盘），按 connection_id + database 筛选，备份时间/大小存记录；
 //   - 运行中任务：内存 backup_tasks，展示阶段并提供日志/取消入口。
-// 渲染期做小目录磁盘扫描（备份数量有限，可接受）；刷新按钮/右键菜单通过 cx.notify 触发重扫。
+// 刷新按钮/右键菜单通过 cx.notify 触发重读。
 // ============================================================
 
-use std::time::UNIX_EPOCH;
 
-/// 备份文件在 tab 中的一行（磁盘文件视角）。
+/// 备份记录在 tab 中的一行（存 sqlite，真实文件在磁盘）。
 struct BackupFileRow {
     path: PathBuf,
     file_name: String,
     modified: String,
     size: u64,
     meta: Option<BackupFileMeta>,
+}
+
+impl BackupFileRow {
+    /// 备份时间（unix 秒），用于新→旧排序。
+    fn created_unix(&self) -> i64 {
+        self.meta.as_ref().map(|m| m.created_unix).unwrap_or(0)
+    }
 }
 
 impl NavicatMain {
@@ -60,15 +65,30 @@ impl NavicatMain {
         cx.notify();
     }
 
-    /// 保存备注：与已有 meta 合并后写 {文件}.sql.meta.json（不影响表清单字段）。
+    /// 保存备注：按输出路径更新 sqlite 中该备份记录的注记（不影响表清单等其它字段）。
     fn save_backup_note_modal(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.backup_note_modal_path.clone() else {
             return;
         };
         let note = self.backup_note_edit_input.read(cx).value().trim().to_string();
-        let mut meta = read_backup_meta(&path).unwrap_or_default();
-        meta.note = note;
-        match write_backup_meta(&path, &meta) {
+        let output_path = path.to_string_lossy().to_string();
+        let result = self
+            .storage
+            .load_backup_records()
+            .map_err(|error| error.to_string())
+            .and_then(|mut records| {
+                let Some(record) = records
+                    .iter_mut()
+                    .find(|record| record.output_path == output_path)
+                else {
+                    return Err("未找到对应备份记录".to_string());
+                };
+                record.note = note;
+                self.storage
+                    .save_backup_records(&records)
+                    .map_err(|error| error.to_string())
+            });
+        match result {
             Ok(()) => {
                 self.backup_note_modal_path = None;
                 self.show_message("备注已保存".to_string(), AppMessageKind::Success, cx);
@@ -92,7 +112,8 @@ impl NavicatMain {
         cx.notify();
     }
 
-    /// 确认删除：删除备份 .sql 文件及旁挂 .meta.json（残留元数据一并清理）。
+    /// 确认删除：先删磁盘真实 .sql 文件（文件已不存在则忽略），再删 sqlite 备份记录。
+    /// 磁盘文件缺失时仅删记录，符合「已删数据则只删记录」的语义。
     fn confirm_backup_delete(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.pending_delete_backup.take() else {
             return;
@@ -101,96 +122,96 @@ impl NavicatMain {
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_default();
-        // 主文件删除失败则终止；元数据删除失败仅记日志（主文件已移除即视为删除成功）。
+        // 主文件删除失败（除 NotFound）才终止；否则继续删记录。
         if let Err(error) = fs::remove_file(&path) {
-            tracing::warn!(path = %path.display(), %error, "备份文件删除失败");
-            self.show_message(format!("删除失败：{error}"), AppMessageKind::Error, cx);
-            cx.notify();
-            return;
-        }
-        let meta_path = backup_meta_path(&path);
-        if let Err(error) = fs::remove_file(&meta_path) {
             if error.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(path = %meta_path.display(), %error, "备份元数据删除失败");
+                tracing::warn!(path = %path.display(), %error, "备份文件删除失败");
+                self.show_message(format!("删除失败：{error}"), AppMessageKind::Error, cx);
+                cx.notify();
+                return;
             }
         }
-        tracing::info!(path = %path.display(), "备份文件已删除");
-        self.show_message(
-            format!("已删除备份：{file_name}"),
-            AppMessageKind::Success,
-            cx,
-        );
+        // 按完整路径从 sqlite 记录中移除该备份，真实数据是否已删都不影响记录清理。
+        let output_path = path.to_string_lossy().to_string();
+        match self.remove_backup_record(&output_path) {
+            Ok(()) => {
+                tracing::info!(path = %path.display(), "已删除备份及其记录");
+                self.show_message(
+                    format!("已删除备份：{file_name}"),
+                    AppMessageKind::Success,
+                    cx,
+                );
+            }
+            Err(error) => {
+                tracing::warn!(path = %path.display(), error = %error, "备份记录删除失败");
+                self.show_message(format!("记录删除失败：{error}"), AppMessageKind::Error, cx);
+            }
+        }
         cx.notify();
     }
-}
 
-/// 备份文件旁挂元数据路径：{文件}.sql → {文件}.sql.meta.json。
-fn backup_meta_path(sql_path: &Path) -> PathBuf {
-    sql_path.with_extension("sql.meta.json")
-}
-
-/// 读取旁挂元数据；不存在或解析失败返回 None（视为无记录）。
-fn read_backup_meta(sql_path: &Path) -> Option<BackupFileMeta> {
-    let raw = fs::read_to_string(backup_meta_path(sql_path)).ok()?;
-    serde_json::from_str::<BackupFileMeta>(&raw).ok()
-}
-
-/// 写入旁挂元数据（pretty JSON），返回可读错误信息供日志与提示。
-fn write_backup_meta(sql_path: &Path, meta: &BackupFileMeta) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(meta).map_err(|error| error.to_string())?;
-    fs::write(backup_meta_path(sql_path), json).map_err(|error| error.to_string())
-}
-
-/// 该库的备份目录：{backup_dir}/{库安全名}；未配置备份目录时 None。
-fn backup_tab_dir(state: &AppState, database: &str) -> Option<PathBuf> {
-    let dir = state.settings.backup_dir.trim();
-    if dir.is_empty() {
-        return None;
+    /// 追加或按 `output_path` 更新一条备份记录并写回 sqlite。
+    fn persist_backup_record(&mut self, record: BackupFileMeta) -> Result<(), String> {
+        let mut records = self
+            .storage
+            .load_backup_records()
+            .map_err(|error| error.to_string())?;
+        if let Some(existing) = records
+            .iter_mut()
+            .find(|r| r.output_path == record.output_path)
+        {
+            *existing = record;
+        } else {
+            records.push(record);
+        }
+        self.storage
+            .save_backup_records(&records)
+            .map_err(|error| error.to_string())
     }
-    Some(PathBuf::from(dir).join(safe_data_export_filename_segment(database)))
+
+    /// 按完整路径从 sqlite 记录中移除一条备份并写回。
+    fn remove_backup_record(&mut self, output_path: &str) -> Result<(), String> {
+        let mut records = self
+            .storage
+            .load_backup_records()
+            .map_err(|error| error.to_string())?;
+        records.retain(|record| record.output_path != output_path);
+        self.storage
+            .save_backup_records(&records)
+            .map_err(|error| error.to_string())
+    }
 }
 
-fn file_mtime_unix(path: &Path) -> i64 {
-    fs::metadata(path)
-        .ok()
-        .and_then(|metadata| metadata.modified().ok())
-        .and_then(|mtime| mtime.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0)
-}
-
-/// 扫描备份目录下的 .sql 文件，按修改时间新→旧排序，并合并旁挂元数据。
-fn scan_backup_rows(dir: &Path) -> Vec<BackupFileRow> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut rows: Vec<BackupFileRow> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("sql") {
-                return None;
-            }
-            let file_name = path.file_name()?.to_string_lossy().to_string();
-            let metadata = fs::metadata(&path).ok()?;
-            let size = metadata.len();
-            let modified_unix = metadata
-                .modified()
-                .ok()
-                .and_then(|mtime| mtime.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_secs() as i64)
-                .unwrap_or(0);
-            Some(BackupFileRow {
-                modified: format_backup_mtime(modified_unix),
-                path,
-                file_name,
-                size,
-                meta: read_backup_meta(&entry.path()),
+/// 加载某连接 + 库的备份记录，按备份时间新→旧排序。备份历史纯存 sqlite，不再扫磁盘。
+fn load_backup_records_for(storage: &FileStorage, connection_id: ConnectionId, database: &str) -> Vec<BackupFileRow> {
+    let mut rows = match storage.load_backup_records() {
+        Ok(records) => records
+            .into_iter()
+            .filter_map(|record| {
+                if record.connection_id != connection_id || record.database != database {
+                    return None;
+                }
+                let path = PathBuf::from(&record.output_path);
+                let file_name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                Some(BackupFileRow {
+                    modified: format_backup_mtime(record.created_unix),
+                    path: path.clone(),
+                    file_name,
+                    size: record.size,
+                    meta: Some(record),
+                })
             })
-        })
-        .collect();
-    // 新→旧排序（重读 mtime 作排序键，避免格式化字符串参与比较）。
-    rows.sort_by(|a, b| file_mtime_unix(&b.path).cmp(&file_mtime_unix(&a.path)));
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, "加载备份记录失败");
+            Vec::new()
+        }
+    };
+    // 新→旧排序。
+    rows.sort_by(|a, b| b.created_unix().cmp(&a.created_unix()));
     rows
 }
 
@@ -249,10 +270,7 @@ fn backup_list_content(
         })
         .cloned()
         .collect();
-    let rows = match backup_tab_dir(state, &list.database) {
-        Some(dir) => scan_backup_rows(&dir),
-        None => Vec::new(),
-    };
+    let rows = load_backup_records_for(&this.storage, list.connection_id, &list.database);
     let dir_configured = !state.settings.backup_dir.trim().is_empty();
     let database_for_new = list.database.clone();
     let connection_for_new = list.connection_id;
@@ -317,7 +335,7 @@ fn backup_list_content(
                 .overflow_y_scrollbar()
                 .flex()
                 .flex_col()
-                .when(!dir_configured, |this| {
+                .when(!dir_configured && rows.is_empty(), |this| {
                     this.child(backup_list_hint("请先在设置中配置备份目录", colors))
                 })
                 .when(dir_configured && rows.is_empty() && running_tasks.is_empty(), |this| {
@@ -365,9 +383,10 @@ fn backup_text_button(
 }
 
 /// 列宽：名称与备注弹性；其余固定。
-const BACKUP_COL_MODIFIED: f32 = 150.;
+const BACKUP_COL_MODIFIED: f32 = 140.;
 const BACKUP_COL_TABLES: f32 = 118.;
-const BACKUP_COL_SIZE: f32 = 90.;
+const BACKUP_COL_SIZE: f32 = 84.;
+const BACKUP_COL_PATH: f32 = 220.;
 const BACKUP_COL_ACTION: f32 = 56.;
 
 fn backup_list_header_row(colors: UiColors) -> Div {
@@ -382,9 +401,10 @@ fn backup_list_header_row(colors: UiColors) -> Div {
         .text_size(px(12.))
         .text_color(colors.muted)
         .child(div().flex_1().min_w_0().child("名称"))
-        .child(div().w(px(BACKUP_COL_MODIFIED)).child("修改时间"))
+        .child(div().w(px(BACKUP_COL_MODIFIED)).child("备份时间"))
         .child(div().w(px(BACKUP_COL_TABLES)).child("备份表"))
         .child(div().w(px(BACKUP_COL_SIZE)).child("文件大小"))
+        .child(div().w(px(BACKUP_COL_PATH)).child("路径"))
         .child(div().flex_1().min_w_0().child("备注"))
         .child(div().w(px(BACKUP_COL_ACTION * 2. + 6.)).child("操作"))
 }
@@ -429,6 +449,7 @@ fn backup_running_row(
         )
         .child(div().w(px(BACKUP_COL_TABLES)).child("—"))
         .child(div().w(px(BACKUP_COL_SIZE)).child("—"))
+        .child(div().w(px(BACKUP_COL_PATH)).child("—"))
         .child(div().flex_1().min_w_0().child(""))
         .child(
             div()
@@ -458,11 +479,16 @@ fn backup_running_row(
 
 /// 磁盘备份文件行。
 fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<NavicatMain>) -> Div {
-    let path_for_tables = row.path.clone();
+    let path_display = row.path.to_string_lossy().to_string();
     let file_name_for_tables = row.file_name.clone();
     let meta_for_tables = row.meta.clone();
     let path_for_note = row.path.clone();
     let path_for_delete = row.path.clone();
+    let note_for_edit = row
+        .meta
+        .as_ref()
+        .map(|meta| meta.note.clone())
+        .unwrap_or_default();
     let note = row
         .meta
         .as_ref()
@@ -506,14 +532,20 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
                     "查看",
                     colors,
                     cx.listener(move |this, _, _, cx| {
-                        // 点击时重读 meta，保证编辑备注后清单展示最新。
-                        let meta = read_backup_meta(&path_for_tables).or_else(|| meta_for_tables.clone());
-                        this.open_backup_tables_modal(file_name_for_tables.clone(), meta, cx);
+                        this.open_backup_tables_modal(file_name_for_tables.clone(), meta_for_tables.clone(), cx);
                         cx.stop_propagation();
                     }),
                 )),
         )
         .child(div().w(px(BACKUP_COL_SIZE)).child(format_backup_size(row.size)))
+        .child(
+            div()
+                .w(px(BACKUP_COL_PATH))
+                .overflow_hidden()
+                .text_ellipsis()
+                .text_color(colors.muted)
+                .child(path_display),
+        )
         .child(
             div()
                 .flex_1()
@@ -533,10 +565,7 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
                     "编辑",
                     colors,
                     cx.listener(move |this, _, window, cx| {
-                        let note = read_backup_meta(&path_for_note)
-                            .map(|meta| meta.note)
-                            .unwrap_or_default();
-                        this.open_backup_note_modal(path_for_note.clone(), note, window, cx);
+                        this.open_backup_note_modal(path_for_note.clone(), note_for_edit.clone(), window, cx);
                         cx.stop_propagation();
                     }),
                 ))
@@ -780,7 +809,7 @@ fn backup_delete_confirm_modal(
                             div()
                                 .text_size(px(11.))
                                 .text_color(colors.muted)
-                                .child("将同时删除备份文件与其元数据，删除后不可恢复。"),
+                                .child("将同时删除备份文件与备份记录，删除后不可恢复。"),
                         ),
                 )
                 .child(

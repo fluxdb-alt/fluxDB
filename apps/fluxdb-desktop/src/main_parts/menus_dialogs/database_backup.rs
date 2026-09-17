@@ -69,6 +69,9 @@ impl NavicatMain {
                 set
             })
             .unwrap_or_default();
+        // 打开弹框时把设置里的备份目录填入输入框（默认值，用户可更换）。
+        self.backup_target_dir_input
+            .update(cx, |input, cx| input.set_value(target_dir.clone(), window, cx));
         self.pending_backup_modal = Some(BackupForm {
             connection_id,
             selected_tables: all_tables.intersection(&preselected).cloned().collect(),
@@ -190,10 +193,58 @@ impl NavicatMain {
         cx.notify();
     }
 
+    /// 选择本次备份的输出目录，并将结果同时回填输入框和表单状态。
+    fn choose_backup_target_dir(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("选择备份目录".into()),
+        });
+        let input = self.backup_target_dir_input.clone();
+        self._file_picker_task = Some(cx.spawn_in(window, async move |view, cx| {
+            let result = receiver.await;
+            let _ = cx.update(|window, cx| {
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| match result {
+                    Ok(Ok(Some(paths))) => {
+                        if let Some(path) = paths.into_iter().next() {
+                            let value = path.display().to_string();
+                            input.update(cx, |input, cx| {
+                                input.set_value(value.clone(), window, cx);
+                            });
+                            if let Some(form) = &mut this.pending_backup_modal {
+                                form.target_dir = value;
+                            }
+                            cx.notify();
+                        }
+                    }
+                    Ok(Ok(None)) => {}
+                    Ok(Err(error)) => this.show_message(
+                        format!("选择备份目录失败：{error}"),
+                        AppMessageKind::Error,
+                        cx,
+                    ),
+                    Err(error) => this.show_message(
+                        format!("选择备份目录失败：{error}"),
+                        AppMessageKind::Error,
+                        cx,
+                    ),
+                });
+            });
+        }));
+    }
+
     fn confirm_backup(&mut self, cx: &mut Context<Self>) {
-        let Some(form) = self.pending_backup_modal.clone() else {
+        let Some(mut form) = self.pending_backup_modal.clone() else {
             return;
         };
+        // 备份目录输入留空则回退到设置中的 backup_dir（两者都空才拦截提示）。
+        if form.target_dir.trim().is_empty() {
+            form.target_dir = self.controller.state().settings.backup_dir.trim().to_string();
+        }
         if form.target_dir.trim().is_empty() {
             self.show_message("请先在设置中配置备份目录", AppMessageKind::Warning, cx);
             return;
@@ -260,10 +311,16 @@ impl NavicatMain {
         }
         let output_path_finish = output_path.clone();
 
-        // 暂存本次备份元数据（表清单/视图开关/备注）；成功后由 backup_finish_on_ui 写入 .meta.json。
+        // 暂存本次备份记录（归属连接/库 + 表清单/视图开关/备注）；
+        // 成功后由 backup_finish_on_ui 补齐全路径/时间/大小并写入 sqlite。
         self.backup_pending_metas.insert(
             task_id,
             BackupFileMeta {
+                connection_id: form.connection_id,
+                database: database.clone(),
+                output_path: String::new(),
+                created_unix: 0,
+                size: 0,
                 tables: Some(form.selected_tables.iter().cloned().collect()),
                 include_views: form.include_views,
                 note: form.note.clone(),
@@ -406,15 +463,16 @@ impl NavicatMain {
                 }
             }
         }
-        if let Some(meta) = self.backup_pending_metas.remove(&task_id) {
+        if let Some(mut meta) = self.backup_pending_metas.remove(&task_id) {
             if meta_ok {
-                if let Err(write_error) = write_backup_meta(&output_path, &meta) {
-                    tracing::warn!(
-                        path = %output_path.display(),
-                        error = %write_error,
-                        "备份元数据写入失败"
-                    );
-                }
+                // 补全真实文件信息后写入 sqlite 备份记录（真实数据仍在磁盘，这里只存记录）。
+                meta.output_path = output_path.to_string_lossy().to_string();
+                meta.created_unix = chrono::Local::now().timestamp();
+                meta.size = fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
+                self.persist_backup_record(meta)
+                    .unwrap_or_else(|fail| {
+                        tracing::warn!(path = %output_path.display(), error = %fail, "备份记录写入失败");
+                    });
             }
         }
         let kind = if canceled {

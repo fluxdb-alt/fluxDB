@@ -360,6 +360,7 @@ impl Render for NavicatMain {
                 this.child(database_backup_modal(
                     form,
                     self.backup_file_name_input.clone(),
+                    self.backup_target_dir_input.clone(),
                     self.backup_note_input.clone(),
                     self.backup_object_search_input.clone(),
                     &self.backup_objects_scroll,
