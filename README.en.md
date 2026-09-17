@@ -19,12 +19,16 @@
 
 > Currently only the macOS target is released; Windows / Linux support is planned.
 
+For detailed instructions, see the [FluxDB User Guide](./docs/user-guide.md).
+
 ### Run from Source
 
 Prerequisites: install the [Rust toolchain](https://rustup.rs) (edition 2024; a recent nightly or stable Rust is recommended).
 
+Repository: [https://github.com/fluxdb-alt/fluxDB](https://github.com/fluxdb-alt/fluxDB)
+
 ```bash
-git clone https://github.com/your-account/fluxDB.git
+git clone https://github.com/fluxdb-alt/fluxDB.git
 cd fluxDB
 
 # Run the desktop app
