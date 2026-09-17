@@ -54,12 +54,11 @@ impl TerminalPty {
             cmd.cwd(cwd);
         }
 
-        // 子进程在属主 slave 上运行；drop slave 释放资源。
-        let child = pair.slave.spawn_command(cmd)?;
-        drop(pair.slave);
-
+        // 先获取读写端，再启动子进程，避免初始化失败时遗留无人回收的子进程。
         let mut reader = pair.master.try_clone_reader()?;
         let master_writer = pair.master.take_writer()?;
+        let child = pair.slave.spawn_command(cmd)?;
+        drop(pair.slave);
         let (tx, rx): (Sender<TerminalTransportEvent>, Receiver<TerminalTransportEvent>) = channel();
 
         // 后台读线程：阻塞读 PTY，读到增量即回传；EOF 表示进程退出。
@@ -129,13 +128,37 @@ impl TerminalPty {
         }
     }
 
-    /// 关闭：杀掉子进程并丢弃 writer；读线程随之 EOF 退出。
+    /// 关闭：在后台终止并回收进程，避免 kill/wait 阻塞 UI。
     fn close(&mut self) {
         self.writer.take();
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
+        if let Some(child) = self.child.take() {
+            reap_terminal_child(child);
         }
     }
+}
+
+impl Drop for TerminalPty {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+fn reap_terminal_child(
+    mut child: Box<dyn portable_pty::Child + Send + Sync>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => {},
+            Err(error) => tracing::warn!(%error, "查询终端子进程状态失败"),
+        }
+        if let Err(error) = child.kill() {
+            tracing::warn!(%error, "终止终端子进程失败");
+        }
+        if let Err(error) = child.wait() {
+            tracing::warn!(%error, "回收终端子进程失败");
+        }
+    })
 }
 
 /// 为 PTY 子进程解析可执行文件路径。
@@ -174,4 +197,27 @@ fn resolve_program_path(program: &str) -> String {
 
     tracing::warn!(program, "终端未找到可执行文件，将交由 PTY 返回启动错误");
     program.to_string()
+}
+
+
+#[cfg(all(test, unix))]
+mod terminal_reap_tests {
+    #[test]
+    fn reaps_a_running_pty_child() {
+        use portable_pty::PtySystem as _;
+        let pair = portable_pty::NativePtySystem::default()
+            .openpty(portable_pty::PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut command = portable_pty::CommandBuilder::new("/bin/sh");
+        command.args(["-c", "exec sleep 30"]);
+        let child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let worker = super::reap_terminal_child(child);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !worker.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(worker.is_finished(), "终端子进程未及时回收");
+        worker.join().unwrap();
+    }
 }

@@ -314,10 +314,19 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - SSH 定向测试：11 passed；其中 2 项旧外部环境门控测试未配置服务、提前返回，不能作为真实 SSH 验收证据。
 - connectors：186 passed / 0 failed / 16 ignored；app：459 passed / 0 failed / 1 ignored。
 - `cargo fmt --all -- --check`、`git diff --check`、`cargo check --workspace --locked` 通过。保留既有 storage dead_code 与 block future-incompatibility 警告。
-- 桌面启动与三平台 CI：本批收尾验证中，结果随后补记。
+- `cargo run -p fluxdb-desktop --locked`：macOS 进程启动并进入 GPUI 初始化；窗口观察工具服务启动失败，未确认窗口视觉状态，不视为 GUI 验收。
+- SSH 第一批 commit `22406be` 的 PR CI：<https://github.com/fluxdb-alt/fluxDB/actions/runs/35202780197>。记录时 Ubuntu 已全部通过，Windows/macOS 仍在运行；后续提交需以对应 SHA 的 CI 为准。
 
 **未完成/未验证**：
 - 已认证 SSH 会话的真实双向转发、半关闭、活跃多通道取消、私钥口令与主机密钥拒绝的目标平台集成；本地 socket 测试不能替代真实 libssh2 通道验证。
 - 现有 PG 档案仅提供密码/私钥认证；此路径不再依赖系统 ssh-agent 的隐式回退，agent 支持需要单独设计验证。
 - Windows PTY/工具发现、含空格中文路径、子进程树回收；原生 CLI 完整下移 app 编排层；TLS CA/客户端证书/server_name 的原生工具参数继承审查。
 - Windows/Linux 图形会话与安装包仍未验收；本批不是 AI-04 或整体跨平台适配完成声明。
+
+
+### AI-04 补充：PTY 子进程回收
+
+- `TerminalPty::close` 把子进程转移到后台线程执行状态检查、kill 与 wait，避免阻塞 UI；Drop 复用 close，异常离开作用域也能进入回收流程。
+- 获取 PTY 读写端移到 spawn 前，避免读写端初始化失败时留下子进程；终止和回收失败记录日志。
+- macOS 真实 PTY 子进程回归测试通过（1 passed，约 0.06 秒），workspace check 与 fmt 通过。CI 增加 Unix PTY 定向测试；Windows ConPTY 运行测试仍待验证。
+- 本次仅处理直接子进程的回收，未实现跨平台进程树管理；操作系统拒绝终止时 wait 仍可能等待，不能宣称所有退出路径均有界。
