@@ -154,16 +154,19 @@ impl FileStorage {
     }
 
     fn secret_backend_delete(&self, account: &str) {
+        if let Err(e) = self.secret_backend_delete_checked(account) {
+            tracing::warn!(target: "fluxdb_storage", error = %e, account, "删除系统凭据失败");
+        }
+    }
+
+    fn secret_backend_delete_checked(&self, account: &str) -> Result<()> {
         if !self.should_use_credential_backend() {
-            return;
+            return Ok(());
         }
         use crate::credential::{backend, to_storage_error};
-        if let Err(e) = backend().delete(account) {
-            // 删除幂等：NotFound 仍视为已删；其他错误记录日志（删除失败不阻断主流程）。
-            let storage_err = to_storage_error(&e);
-            if !matches!(e, crate::credential::CredentialError::NotFound) {
-                tracing::warn!(target: "fluxdb_storage", error = %storage_err, account, "删除系统凭据失败");
-            }
+        match backend().delete(account) {
+            Ok(()) | Err(crate::credential::CredentialError::NotFound) => Ok(()),
+            Err(e) => Err(to_storage_error(&e)),
         }
     }
 
@@ -419,9 +422,9 @@ impl Storage for FileStorage {
     fn save_connections(&self, connections: &[ConnectionConfig]) -> Result<()> {
         // 方案 §4.2 / §10.4-1：系统凭据与 SQLite 配置不是同一事务，采用"暂存-提交-切换"：
         // 1) 把整套新凭据写入临时 staging 键（验证可写，失败只删 staging，正式旧值不动）；
-        // 2) 提交 SQLite 配置（失败→删 staging 并报错，正式旧值+旧配置均完好）；
-        // 3) 配置提交成功后，才把新值写入正式键（覆盖旧值），最后删 staging。
-        // 由此保证：任意阶段失败都不误删其它连接引用的正式凭据；补偿只作用于 staging 前缀。
+        // 2) 读取正式键旧值后切换正式凭据；任一写入失败则恢复全部旧值；
+        // 3) 原子提交 SQLite 配置；提交失败同样恢复正式凭据，最后清理 staging。
+        // 由此保证进程内任一阶段失败都不会留下“新配置 + 部分新密码”的状态。
         let mut staged: Vec<String> = Vec::new(); // 已写入的 staging 键
         let mut pending: Vec<(String, String)> = Vec::new(); // (正式键, 新值)
         for connection in connections {
@@ -434,27 +437,48 @@ impl Storage for FileStorage {
             }
         }
 
-        // 提交配置前先检查配置写入路径是否被注入失败（测试用）。配置提交失败不动正式凭据。
-        let conn = self.open_sqlite()?;
-        let mut layout = sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)?
-            .unwrap_or_else(|| SidebarLayout::for_connections(connections));
+        let conn = match self.open_sqlite() {
+            Ok(conn) => conn,
+            Err(error) => {
+                self.cleanup_staged_credentials(&staged);
+                return Err(error);
+            }
+        };
+        let mut layout = match sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)
+        {
+            Ok(layout) => layout.unwrap_or_else(|| SidebarLayout::for_connections(connections)),
+            Err(error) => {
+                self.cleanup_staged_credentials(&staged);
+                return Err(error);
+            }
+        };
         layout.repair(connections);
-        if let Err(e) = self.write_connections_and_layout(&conn, connections, &layout) {
-            self.cleanup_staged_credentials(&staged);
-            return Err(e);
-        }
-
-        // 配置提交成功：把新值写入正式键。
-        let mut commit_err: Option<String> = None;
-        for (real, value) in &pending {
-            if let Err(e) = self.secret_backend_write(real, value) {
-                commit_err = Some(e.to_string());
+        let mut old_credentials = Vec::with_capacity(pending.len());
+        for (account, _) in &pending {
+            match self.secret_backend_read(account) {
+                Ok(value) => old_credentials.push((account.clone(), value)),
+                Err(error) => {
+                    self.cleanup_staged_credentials(&staged);
+                    return Err(error);
+                }
             }
         }
-        self.cleanup_staged_credentials(&staged);
-        if let Some(msg) = commit_err {
-            return Err(Error::new(ErrorKind::Internal, msg));
+
+        for (account, value) in &pending {
+            if let Err(write_error) = self.secret_backend_write(account, value) {
+                let rollback_errors = self.restore_credentials(&old_credentials);
+                self.cleanup_staged_credentials(&staged);
+                return Err(credential_switch_error(write_error, rollback_errors));
+            }
         }
+
+        // connections 与 layout 在同一 SQLite 事务中提交；失败时恢复正式凭据。
+        if let Err(e) = self.write_connections_and_layout(&conn, connections, &layout) {
+            let rollback_errors = self.restore_credentials(&old_credentials);
+            self.cleanup_staged_credentials(&staged);
+            return Err(credential_switch_error(e, rollback_errors));
+        }
+        self.cleanup_staged_credentials(&staged);
         Ok(())
     }
 
@@ -585,6 +609,22 @@ impl FileStorage {
         }
     }
 
+    /// 把本轮可能触及的正式凭据完整恢复到保存前状态。
+    fn restore_credentials(&self, old_credentials: &[(String, Option<String>)]) -> Vec<String> {
+        let mut errors = Vec::new();
+        for (account, old_value) in old_credentials {
+            let result = match old_value {
+                Some(value) => self.secret_backend_write(account, value),
+                None => self.secret_backend_delete_checked(account),
+            };
+            if let Err(error) = result {
+                tracing::error!(target: "fluxdb_storage", %error, account, "恢复系统凭据失败");
+                errors.push(format!("{account}: {error}"));
+            }
+        }
+        errors
+    }
+
     fn delete_owned_keychain_secrets(&self, connection: &ConnectionConfig) {
         let Some(credential_ref) = self.credential_ref_for_keychain(connection) else {
             return;
@@ -650,8 +690,10 @@ impl FileStorage {
         }
         let stripped: Vec<ConnectionConfig> =
             connections.iter().map(strip_plaintext_secrets).collect();
-        sqlite::put_json(conn, sqlite::KEY_CONNECTIONS, &stripped)?;
-        sqlite::put_json(conn, sqlite::KEY_SIDEBAR_LAYOUT, layout)?;
+        let tx = conn.unchecked_transaction().map_err(storage_error)?;
+        sqlite::put_json(&tx, sqlite::KEY_CONNECTIONS, &stripped)?;
+        sqlite::put_json(&tx, sqlite::KEY_SIDEBAR_LAYOUT, layout)?;
+        tx.commit().map_err(storage_error)?;
         Ok(())
     }
 }
@@ -924,6 +966,19 @@ fn staging_key(real_account: &str) -> String {
     format!("__fluxdb_staging__/{real_account}")
 }
 
+fn credential_switch_error(error: Error, rollback_errors: Vec<String>) -> Error {
+    if rollback_errors.is_empty() {
+        return error;
+    }
+    Error::new(
+        ErrorKind::Internal,
+        format!(
+            "{error}；恢复旧凭据时仍有失败：{}",
+            rollback_errors.join("；")
+        ),
+    )
+}
+
 fn profile_secret_slots(profile: &RedisConnectionProfile) -> Vec<(&'static str, &SecretRef)> {
     let mut slots: Vec<(&'static str, &SecretRef)> = vec![("", &profile.basic.password)];
     if profile.ssh.enabled {
@@ -1095,8 +1150,6 @@ mod tests {
         assert!(!err.to_string().is_empty(), "写失败应返回非空错误");
         // 正式键不应被写入（失败发生在暂存阶段）。
         assert!(backend.peek("gdb.connection.1").is_none());
-        // 正式键不应被写入（失败发生在暂存阶段）。
-        assert!(backend.peek("gdb.connection.1").is_none());
         clear_test_backend();
     }
 
@@ -1154,7 +1207,50 @@ mod tests {
         clear_test_backend();
     }
 
-    // ④ 读失败降级：凭据服务不可用（Unavailable）时，连接资料保留、不等于"没有连接"，
+    // ④ 正式键切换中途失败：已覆盖的键恢复旧值，配置保持旧版本，staging 无残留。
+    #[test]
+    fn save_connections_restores_formal_credentials_when_switch_fails() {
+        let backend = Arc::new(InMemoryBackend::new());
+        set_test_backend(backend.clone());
+        let storage = FileStorage::new(unique_temp_dir());
+
+        let old1 = conn_with_password(1, "gdb.connection.1", "old-1");
+        let old2 = conn_with_password(2, "gdb.connection.2", "old-2");
+        storage
+            .save_connections(&[old1.clone(), old2.clone()])
+            .unwrap();
+
+        // 第一项先写成新值，第二项失败一次；恢复阶段不再失败。
+        backend.fail_next_write("gdb.connection.2");
+        let new1 = conn_with_password(1, "gdb.connection.1", "new-1");
+        let new2 = conn_with_password(2, "gdb.connection.2", "new-2");
+        assert!(storage.save_connections(&[new1, new2]).is_err());
+
+        assert_eq!(backend.peek("gdb.connection.1").as_deref(), Some("old-1"));
+        assert_eq!(backend.peek("gdb.connection.2").as_deref(), Some("old-2"));
+        assert!(
+            backend
+                .peek("__fluxdb_staging__/gdb.connection.1")
+                .is_none()
+        );
+        assert!(
+            backend
+                .peek("__fluxdb_staging__/gdb.connection.2")
+                .is_none()
+        );
+        let loaded = storage.load_connections().unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(
+            loaded[0]
+                .options
+                .get(PLAINTEXT_PASSWORD_OPTION)
+                .map(String::as_str),
+            Some("old-1")
+        );
+        clear_test_backend();
+    }
+
+    // ⑤ 读失败降级：凭据服务不可用（Unavailable）时，连接资料保留、不等于"没有连接"，
     //    密码不回填（可重输）；失败不被吞成假成功，也不覆盖原配置。
     #[test]
     fn load_connections_preserves_connections_when_credential_unavailable() {

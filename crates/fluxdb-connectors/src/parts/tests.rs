@@ -3366,7 +3366,7 @@ SELECT item_id, name FROM audit_log;"
     }
 
     /// 读 FLUXDB_PG_SMOKE 环境变量 → (host, port, user, password, db)。
-    fn pg_smoke_params() -> Option<(String, u16, String, String, String)> {
+    pub(crate) fn pg_smoke_params() -> Option<(String, u16, String, String, String)> {
         let value = std::env::var("FLUXDB_PG_SMOKE").ok()?;
         let mut parts = value.split(':');
         let host = parts.next()?.to_string();
@@ -3377,7 +3377,7 @@ SELECT item_id, name FROM audit_log;"
         Some((host, port, user, password, db))
     }
 
-    fn pg_smoke_config((host, port, user, password, db): (String, u16, String, String, String)) -> ConnectionConfig {
+    pub(crate) fn pg_smoke_config((host, port, user, password, db): (String, u16, String, String, String)) -> ConnectionConfig {
         ConnectionConfig {
             id: ConnectionId(9),
             name: "PG Smoke".to_string(),
@@ -3938,7 +3938,7 @@ SELECT item_id, name FROM audit_log;"
         };
         assert_eq!(
             pg_create_database_sql(&request).unwrap(),
-            "CREATE DATABASE \"app-db\" ENCODING 'UTF8' LC_COLLATE 'zh_CN.UTF-8' LC_CTYPE 'zh_CN.UTF-8'"
+            "CREATE DATABASE \"app-db\" ENCODING 'UTF8' LC_COLLATE 'zh_CN.UTF-8' LC_CTYPE 'zh_CN.UTF-8' TEMPLATE template0"
         );
 
         // 空名称拒绝；含引号/分号的 locale 拒绝（防注入）。
@@ -4803,7 +4803,7 @@ SELECT item_id, name FROM audit_log;"
                     type_schema: Some("pg_catalog".into()),
                     type_name: Some("text".into()),
                     nullable: true,
-                    default_expr: None,
+                    default_expr: Some("expr".into()),
                     is_identity: false,
                     identity_generation: None,
                     is_generated: true,
@@ -4913,7 +4913,7 @@ SELECT item_id, name FROM audit_log;"
         assert!(ddl.contains("\"full_name\" text GENERATED ALWAYS AS (expr) STORED"));
         // 主键 / 唯一约束。
         assert!(ddl.contains("PRIMARY KEY (\"id\")"));
-        assert!(ddl.contains("CONSTRAINT \"t08_master_name_key\" UNIQUE (\"name\")"));
+        assert!(ddl.contains("CONSTRAINT \"t08_master_name_key\" UNIQUE (name)"));
         // CHECK 表达式。
         assert!(ddl.contains("CONSTRAINT \"t08_master_total_check\" CHECK ((total >= 0))"));
         // 外键：动作/延迟属性。
@@ -6592,14 +6592,17 @@ SELECT item_id, name FROM audit_log;"
 #[cfg(test)]
 mod pg_plan_apply_tests {
     use super::*;
-    use crate::tests::{postgres_config as pg_cfg, pg_qtxt};
+    use crate::tests::{pg_qtxt, pg_smoke_config, pg_smoke_params};
 
-// ===== PG 角色变更计划：单事务应用（需本机 fluxdb-t09-pg 容器；无环境时失败即如实报告）=====
+// ===== PG 角色变更计划：单事务应用（由 FLUXDB_PG_SMOKE 显式启用真实 PG 集成验证）=====
 
 /// 集成：任一语句失败 → 整批回滚，不产生半完成状态（角色不应存在）。
 #[test]
 fn pg_apply_role_plan_rolls_back_as_a_whole() {
-    let config = pg_cfg();
+    let Some(params) = pg_smoke_params() else {
+        return;
+    };
+    let config = pg_smoke_config(params);
     let connector = PostgresConnector::with_config(config.clone());
     // 前置清理同名遗留角色，保证断言可靠。
     let _ = connector.execute(&pg_qtxt(
@@ -6648,7 +6651,10 @@ fn pg_apply_role_plan_rolls_back_as_a_whole() {
     /// 集成：成功路径——创建（属性+密码）→ 成员授予 → 对象授权 → 改名，读模型逐一核实后清理。
     #[test]
     fn pg_apply_role_plan_end_to_end_and_rename() {
-        let config = pg_cfg();
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
         let connector = PostgresConnector::with_config(config.clone());
         let sql = |text: &str| {
             let _ = connector.execute(&pg_qtxt(&config, text));

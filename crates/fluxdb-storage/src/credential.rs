@@ -192,6 +192,7 @@ impl CredentialBackend for UnavailableBackend {
 pub struct InMemoryBackend {
     store: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
     fail_write_prefix: std::sync::Mutex<Vec<String>>,
+    fail_next_write_accounts: std::sync::Mutex<Vec<String>>,
 }
 
 impl InMemoryBackend {
@@ -205,12 +206,29 @@ impl InMemoryBackend {
             .unwrap()
             .push(prefix.to_string());
     }
+    /// 注入：指定账号的下一次写入失败一次，随后自动恢复（用于验证正式键写入失败后的回滚）。
+    pub fn fail_next_write(&self, account: &str) {
+        self.fail_next_write_accounts
+            .lock()
+            .unwrap()
+            .push(account.to_string());
+    }
     fn write_fails(&self, account: &str) -> bool {
-        self.fail_write_prefix
+        if self
+            .fail_write_prefix
             .lock()
             .unwrap()
             .iter()
             .any(|p| account.starts_with(p))
+        {
+            return true;
+        }
+        let mut accounts = self.fail_next_write_accounts.lock().unwrap();
+        if let Some(index) = accounts.iter().position(|item| item == account) {
+            accounts.remove(index);
+            return true;
+        }
+        false
     }
     /// 测试断言辅助：直接读取存储内容。
     pub fn peek(&self, account: &str) -> Option<String> {

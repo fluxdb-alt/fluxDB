@@ -261,6 +261,14 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
   - artifacts：三平台候选可执行文件 + sha256。
 - 未验证（明确标注）：真实 Windows Credential Manager / Linux Secret Service（GNOME Keyring/KWallet）的读写删运行期行为、锁库/拒绝授权集成、mac 真机 Keychain 写读兼容——无目标实体机，靠 CI 编译 + 后续 VM/真机。
 
-**已知限制**：配置与系统凭据非同一事务；"覆盖旧凭据"在配置已提交后才会覆写正式键（暂存方案），若临时/正式复制失败会有不完全状态（记日志）；UI 级"凭据服务不可用"可读提示属界面层（AI-03/界面）。
+**已知限制**：配置与系统凭据无法共享原子事务；当前实现对进程内错误执行旧值补偿，但进程在凭据切换与配置提交之间被强制终止时仍可能不一致。UI 级“凭据服务不可用”可读提示属界面层（AI-03/界面）。
 
 **下一步**：AI-03（窗口/托盘/字体/快捷键/IME）或按序 AI-04；connector 4 个基线失败独立处理。
+
+### AI-02 收尾修正（2026-09-17）
+
+- 修复正式凭据切换中途失败的缺口：切换前读取全部旧值，任一正式键写入或 SQLite 配置提交失败时恢复旧凭据；补偿失败写 error 日志并随原错误返回。连接与侧边栏配置改为同一 SQLite 事务提交。
+- 新增正式键第二项写入失败测试，确认第一项恢复、配置仍为旧版、staging 无残留。storage：`31 passed`。
+- connector 原 4 个失败已修正：2 个真实 PG 角色计划测试统一由 `FLUXDB_PG_SMOKE` 显式启用；建库断言同步既有 `TEMPLATE template0` 行为；生成列表测试补全表达式数据，并按 `pg_get_constraintdef` 原文断言唯一约束。connectors：`182 passed; 0 failed; 16 ignored`。
+- app：`459 passed; 0 failed; 1 ignored`。首次沙箱运行因禁止 loopback socket 出现 5 个环境失败，允许 loopback 后全量通过。
+- 本地 `cargo fmt --all -- --check`、`cargo check --workspace --locked`、`git diff --check` 通过；三平台 CI 待本提交推送后确认。

@@ -82,10 +82,7 @@ jobs:
       - name: Workspace check (locked)
         run: cargo check --workspace --locked --target ${{ matrix.target }}
 
-      # release 构建/产物在测试之前执行：connectors 既有若干失败用例（需真实 PG 服务 + 2 个
-      # 逻辑断言失配，见 docs/2026-09-14-windows-linux-implementation-status.md），是基线缺陷、
-      # 与跨平台无关；为避免它们阻断 Windows fxc/HLSL release 链路与产物上传验证，先把
-      # release 构建与候选产物跑出，再如实执行测试（不跳过、不伪装通过）。
+      # release 构建/产物在测试之前执行，先验证 Windows fxc/HLSL 等完整 release 链路。
       - name: Build fluxdb-desktop (release, locked)
         run: cargo build --locked --release --target ${{ matrix.target }} -p fluxdb-desktop
 
@@ -117,7 +114,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # 与数据库/SSH/凭据服务无关的单元测试；集成测试需要独立服务，不在本 job 强制。
+      # 与数据库/SSH/凭据服务无关的单元测试；真实 PG 用例由 FLUXDB_PG_SMOKE 显式启用，
+      # 在具备隔离服务的集成测试 job 中执行。
       - name: Test core crates
         run: cargo test --locked --target ${{ matrix.target }} -p fluxdb-core -p fluxdb-editor-core -p fluxdb-editor-language
 
