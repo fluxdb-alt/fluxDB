@@ -8,7 +8,7 @@
 | --- | --- |
 | AI-00 复查基线、依赖、原生环境，建立最小 CI 构建任务 | 通过（三平台 fmt/check/release 构建/产物/core 测试全绿，仅剩既有 connector 失败） |
 | AI-01 目录/日志/资源定位 | 实现与三平台编译验证通过（目录语义/单实例/权限，Windows MSVC/macOS/Ubuntu release 构建 ✓）；运行时验收（Windows ACL、不可写目录、GUI）待验证 |
-| AI-02 凭据后端与错误传播 | 未开始 |
+| AI-02 凭据后端与错误传播 | 实现 + 三平台编译/release 通过；运行期系统凭据集成待验证（无目标实体机） |
 | AI-03 窗口/托盘/字体/快捷键/IME | 未开始 |
 | AI-04 工具执行/SSH 隧道/PTY | 未开始 |
 | AI-05 原生 release 打包 | 未开始 |
@@ -239,3 +239,28 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
    - `tests::pg_build_table_ddl_round_trips_clauses`（tests.rs:4913）：断言失配，`GENERATED ALWAYS AS (expr) STORED` 未出现在生成 ddl
    基线既有的失败不阻塞 AI-02 独立开发；新引入的失败必须修复；不随意改断言/跳过测试。这 4 个失败在 AI-02 后仍需保持原样并如实呈现。
 4. **旧分支 CI 未触发原因改为待确认**：push/PR workflow 通常不要求文件预先存在于默认分支（仅 workflow_dispatch 有默认分支要求）。无充分证据前，不把"workflow 缺失"当成本质原因；CI 触发验证以 adapt/win-linux 实际 run 为准（已确认可触发）。
+
+## AI-02（跨平台系统凭据后端，2026-09-17）
+
+**状态**：实现 + 三平台原生编译/release 链接/localtests 通过；运行期系统凭据集成（真实 Secret Service / Credential Manager / Keychain 写入读删）无目标环境，标记待验证。
+
+**改动**（分支 adapt/win-linux，PR #7 draft）：
+- 新增 `crates/fluxdb-storage/src/credential.rs` + `credential/impl_{macos,windows,linux}.rs`：
+  - `CredentialBackend` trait（read/write/delete）+ `CredentialError`（NotFound/Locked/Unavailable/Denied/Failure）。
+  - macOS 保留 security CLI（历史条目兼容，credential_ref 所有权语义不变）；Windows 用 Credential Manager（CredWriteW/CredReadW/CredDeleteW/CredFree，错误码分类 1168->NotFound、5/1300/1314/1326->Denied）；Linux 用 keyring 4 的 zbus-secret-service（纯 Rust D-Bus，无 C 原生依赖）。
+  - **移除非 macOS 写入假成功**：write 失败必须返回 Err。
+- `FileStorage`：save/load/delete 走 `credential::backend()`；写失败传播 Err；读失败 `best_effort_secret_read` 降级（锁库/服务不可用保留连接信息、不回填密码、记日志，不误处理成无连接、不覆盖原配置）。
+- `save_connections` 采用**暂存-提交-切换**：新凭据先写 staging 键（`__fluxdb_staging__/<real>`），SQLite 配置提交成功后才写正式键；槽位中途失败 / 配置提交失败均只清理 staging 前缀，**不误删其它连接正式凭据**；补偿失败不吞不掉报假成功。满足：多槽位部分失败、凭据成功但配置失败（原配置+原凭据仍可用）。
+- 测试注入：thread_local 隔离的 `set_test_backend`/`InMemoryBackend`（**不用 gomonkey、无全局函数替换、并行不污染**）+ `fail_next_commit`（配置提交失败注入）。`Cargo.toml` 加 `[features] test-util`（生产不含 override 生效分支）。
+- 新增 4 个 AI-02 测试：写失败传播、配置提交失败回滚、多槽位跨连接部分失败、读失败保留连接资料。
+
+**验证**：
+- 本地 mac：`cargo test -p fluxdb-storage` 30 passed（含 4 新）；`cargo test -p fluxdb-app` 459 passed；fmt / check workspace / diff --check 通过。
+- CI 三平台（run 35185559447）：fmt/check/**release 构建**/产物/core tests 全绿；仅 connector 基线失败（178/4）。
+  - Windows Credential Manager + 单实例互斥量编译/链接通过；Linux keyring zbus-secret-service 编译/链接通过（首次 NoSystemAccess 变体不存在，实读 keyring-core 1.0 源码修正）。
+  - artifacts：三平台候选可执行文件 + sha256。
+- 未验证（明确标注）：真实 Windows Credential Manager / Linux Secret Service（GNOME Keyring/KWallet）的读写删运行期行为、锁库/拒绝授权集成、mac 真机 Keychain 写读兼容——无目标实体机，靠 CI 编译 + 后续 VM/真机。
+
+**已知限制**：配置与系统凭据非同一事务；"覆盖旧凭据"在配置已提交后才会覆写正式键（暂存方案），若临时/正式复制失败会有不完全状态（记日志）；UI 级"凭据服务不可用"可读提示属界面层（AI-03/界面）。
+
+**下一步**：AI-03（窗口/托盘/字体/快捷键/IME）或按序 AI-04；connector 4 个基线失败独立处理。
