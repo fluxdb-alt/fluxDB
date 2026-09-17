@@ -77,7 +77,9 @@ fn acquire_single_instance_windows() -> bool {
             if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
                 false
             } else {
-                std::mem::forget(handle);
+                // HANDLE 是裸句柄包装（Copy，无 Drop）：无需也无法显式持有，
+                // 命名互斥量随进程退出由 OS 统一释放。
+                let _ = handle;
                 true
             }
         }

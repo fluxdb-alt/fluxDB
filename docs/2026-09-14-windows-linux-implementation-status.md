@@ -410,5 +410,6 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - 修复（`connection_dialog.rs`）：topbar 新增 `window_control_buttons`（非 macOS 渲染）：最小化 `window.minimize_window()`、最大化/还原 `window.zoom_window()`（`is_maximized()` 切换图标 Square/Maximize）、关闭按钮 hover 红（Windows 惯例 `#E81123`）；全部带 tooltip。macOS 继续走原生红绿灯。
 - **左侧预留平台化**：topbar `pl` 改为 cfg 区分——macOS 保留 `84px` 红绿灯预留区，Windows/Linux 改 `12px`（自绘按钮在右侧，无需预留）。
 - **Windows 关闭二次确认**：点击自绘关闭按钮不再直接退出，置 `pending_exit_confirm` 弹出 `exit_confirm_modal`（遮罩点击 / Esc / 「取消」关闭弹框，「退出」danger 按钮执行 `cx.quit()`），防误触。
+- Windows-only 尾巴：tray `builder` 的 `mut` 仅 macOS 分支需要（`#[allow(unused_mut)]` 注明）；单实例 `mem::forget(HANDLE)` 改 `let _ = handle`（`HANDLE` 为裸包装无 Drop，原调用即无操作，语义不变）。
 - 本机验证：desktop 400 passed / 0 failed；窗口控制仅条件渲染于非 macOS，本机仅验证编译与测试，**Windows/Linux 实际点击行为待 CI 构建产物真机确认**。
 
