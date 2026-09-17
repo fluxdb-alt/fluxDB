@@ -47,8 +47,8 @@ fn map_err(e: keyring::Error) -> CredentialError {
     use keyring::Error;
     match e {
         Error::NoEntry => CredentialError::NotFound,
-        Error::NoStorageAccess(_) => CredentialError::Unavailable,
-        Error::NoSystemAccess(_) => CredentialError::Unavailable,
+        // 锁库 / Secret Service 不可访问（未解锁 / 无提供方 / 无默认 store）。
+        Error::NoStorageAccess(_) | Error::NoDefaultStore => CredentialError::Unavailable,
         _ => CredentialError::Failure(e.to_string()),
     }
 }
