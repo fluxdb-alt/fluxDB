@@ -338,4 +338,5 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - 独立标准库诊断 commit `8665419`，Windows job `105167338633`（run `35210727361`）实测：阻塞 read 下 `shutdown=Ok(())` 后 1 秒内没有退出；非阻塞 read + 停止信号在 1 秒内退出。macOS 对照两种模式均退出。
 - 据此将本地转发 socket 设为非阻塞；连接句柄持有独立停止信号，Drop 先通知取消再 join。双向使用同一个标准 Read/Write 搬运函数，重试 WouldBlock/Interrupted 并保留部分写入偏移；零字节写入报 WriteZero，避免假成功。
 - 原 Windows 失败测试改为真实本地 socket + 生产搬运函数 + 实际连接句柄 Drop，验证线程退出；另加短写/背压数据完整性、中途读写取消、零写错误三个测试。
-- macOS 本地完整 connectors：189 passed / 0 failed / 16 ignored；workspace check、fmt 通过。新补丁仍须以对应 SHA 的三平台 CI 为准，独立诊断通过不能冒充生产修复验收。
+- macOS 本地完整 connectors：189 passed / 0 failed / 16 ignored；workspace check、fmt 通过。
+- Windows PR CI `35211667014` 已核验：connectors `189 passed / 0 failed / 16 ignored`，4 个 SSH pump 回归与 socket Drop 回收测试均执行并通过；任务 `105170380161` 无失败标记。
