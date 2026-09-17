@@ -1,3 +1,12 @@
+/// Windows/Linux 自绘窗口控制。关闭按钮 hover 变红（Windows 惯例）用的常量色：
+/// 浅/深主题通用的红，接近 Windows 标准关闭按钮（#E81123）。
+const WINDOW_CLOSE_HOVER: gpui::Rgba = gpui::Rgba {
+    r: 0.91,
+    g: 0.07,
+    b: 0.13,
+    a: 1.0,
+};
+
 /// 顶部栏图标按钮：统一尺寸/圆角/手形光标/hover/tooltip，直接以 AppIcon 渲染。
 /// 「仅图标」按钮的通用封装，用于顶部栏收起侧边栏 / 首页等无标签按钮。
 ///
@@ -48,6 +57,7 @@ fn connection_info_label(name: String, colors: UiColors) -> Stateful<Div> {
 fn topbar(
     state: &AppState,
     show_connection_browser: bool,
+    window: &mut Window,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
@@ -156,6 +166,83 @@ fn topbar(
                 cx.stop_propagation();
             }),
         ))
+        // 非 macOS：GPUI 隐藏原生标题栏后不绘制窗口控制按钮，需由应用自绘
+        // 最小化/最大化(还原)/关闭，否则 Windows/Linux 右上角无法关闭窗口。
+        // macOS 走原生红绿灯（topbar 顶部 `pl(84.)` 预留区），不渲染。
+        .when(!cfg!(target_os = "macos"), |this| {
+            this.child(window_control_buttons(window, colors))
+        })
+}
+
+/// Windows/Linux 自绘窗口控制按钮（最小化 / 最大化-还原 / 关闭），
+/// 因为隐藏原生标题栏后 GPUI 不提供窗口按钮，需应用自绘；macOS 走原生红绿灯不加此处。
+/// 关闭按钮按 Windows 惯例 hover 变红；最大化按钮按当前最大化态切换图标。
+/// 仅 `#[cfg(not(target_os = "macos"))]` 下被 topbar 引用。
+fn window_control_buttons(window: &mut Window, colors: UiColors) -> impl IntoElement {
+    // UiColors 非 Copy，闭包前先取出需要的 Rgba 值。
+    let hover_bg = colors.hover;
+    let muted = colors.muted;
+    // 最大化/还原：Windows 上 zoom 即切换，is_maximized 决定按钮图标。
+    let maximized = window.is_maximized();
+    let maximize_icon = if maximized { AppIcon::Square } else { AppIcon::Maximize };
+    let maximize_label = if maximized { "还原" } else { "最大化" };
+    let maximize_id = if maximized { "win-btn-restore" } else { "win-btn-maximize" };
+
+    div()
+        .flex()
+        .items_center()
+        .ml(px(4.))
+        .child(
+            // 最小化
+            div()
+                .id("win-btn-minimize")
+                .size(px(34.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover_bg))
+                .tooltip(move |window, cx| Tooltip::new("最小化").build(window, cx))
+                .child(app_icon_box(AppIcon::Minus, 34., 16., muted))
+                .on_mouse_down(MouseButton::Left, |_, window, _| {
+                    window.minimize_window();
+                }),
+        )
+        .child(
+            // 最大化 / 还原
+            div()
+                .id(maximize_id)
+                .size(px(34.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover_bg))
+                .tooltip(move |window, cx| Tooltip::new(maximize_label).build(window, cx))
+                .child(app_icon_box(maximize_icon, 34., 16., muted))
+                // zoom 切换最大化/还原会触发窗口 resize 重绘，is_maximized 图标随之刷新。
+                .on_mouse_down(MouseButton::Left, |_, window, _| {
+                    window.zoom_window();
+                }),
+        )
+        .child(
+            // 关闭
+            div()
+                .id("win-btn-close")
+                .size(px(34.))
+                .ml(px(2.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                // hover 变红：Windows 关闭按钮惯例。
+                .hover(move |style| style.bg(WINDOW_CLOSE_HOVER))
+                .tooltip(move |window, cx| Tooltip::new("关闭").build(window, cx))
+                .child(app_icon_box(AppIcon::Close, 34., 16., muted))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.quit();
+                }),
+        )
 }
 
 fn new_connection_modal(

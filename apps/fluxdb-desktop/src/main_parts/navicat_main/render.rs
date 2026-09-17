@@ -137,7 +137,7 @@ impl Render for NavicatMain {
                     }
                 }),
             )
-            .child(topbar(&state, self.show_connection_browser, colors, cx))
+            .child(topbar(&state, self.show_connection_browser, window, colors, cx))
             .child(
                 div()
                     .flex()

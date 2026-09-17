@@ -313,7 +313,7 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - 新增 4 个隔离回归测试：用户目录/known_hosts 路径、空闲隧道释放监听器、Drop 唤醒阻塞 socket 读线程、无 SSH banner 时的 1 秒握手超时。
 - SSH 定向测试：11 passed；其中 2 项旧外部环境门控测试未配置服务、提前返回，不能作为真实 SSH 验收证据。
 - connectors：186 passed / 0 failed / 16 ignored；app：459 passed / 0 failed / 1 ignored。
-- `cargo fmt --all -- --check`、`git diff --check`、`cargo check --workspace --locked` 通过。保留既有 storage dead_code 与 block future-incompatibility 警告。
+- `cargo fmt --all -- --check`、`git diff --check`、`cargo check --workspace --locked` 通过。已清理 storage 侧 dead_code 与 Windows 隐藏 `unsafe` 块警告（原保留项）：`CredentialError` 平台差异变体按 `#[allow(dead_code)]` 保留，`InMemoryBackend` 及测试工具归入 `#[cfg(any(test, feature="test-util"))]`，Windows `CredReadW/CredWriteW/CredFree/CredDeleteW` 显式 `unsafe {}`（edition 2024 `unsafe_op_in_unsafe_fn`）；`cargo fix` 修掉 app/core test 的冗余 `mut`，恢复/删除 desktop 测试中丢失 `#[test]` 或死代码的用例。仅剩第三方 `block v0.1.6` future-incompat 与 GH runner Node 弃用警告（非本仓库代码，保留）。
 - `cargo run -p fluxdb-desktop --locked`：macOS 进程启动并进入 GPUI 初始化；窗口观察工具服务启动失败，未确认窗口视觉状态，不视为 GUI 验收。
 - SSH 第一批 commit `22406be` 的 PR CI：<https://github.com/fluxdb-alt/fluxDB/actions/runs/35202780197>。记录时 Ubuntu 已全部通过，Windows/macOS 仍在运行；后续提交需以对应 SHA 的 CI 为准。
 
@@ -392,3 +392,21 @@ a782fb4(AI-00 ci+托盘) → fbf90a8(RefCell 修复) → c634419(ci 顺序) →
 - 整体 run conclusion = **success**（三平台）。
 
 **未验证**：Windows 安装器实际安装/卸载/运行（需 Windows VM/真机）；Linux .deb 在干净环境安装后能启动 GUI（需图形会话）；SmartScreen/杀软行为（方案 §12.9 已知限制）。这些均非内部改包 CI 能验证，已在本次声明。
+
+## AI-06（编译警告清理 + Windows/Linux 自绘窗口控制，2026-09-17）
+
+**状态**：代码完成，本机（macOS）验证通过；Windows 自绘按钮的运行期观感待真机确认。
+
+**编译警告清理**（目标：本仓库代码零警告）：
+- Windows 凭据后端（`credential/impl_windows.rs`）：edition 2024 `unsafe_op_in_unsafe_fn` 强制显式块，`CredReadW/CredWriteW/CredFree/CredDeleteW`、裸指针解引用、`from_raw_parts` 全部包 `unsafe {}`。
+- `credential.rs`：`CredentialError` 各错误变体按平台条件构造（NotFound 仅 Linux、Locked 仅 macOS、Denied 仅 macOS/Windows），枚举级 `#[allow(dead_code)]` 保留完整 API；`InMemoryBackend` 及方法归入 `#[cfg(any(test, feature="test-util"))]`；生产桩 `test_override_active` 加 `#[allow(dead_code)]` 注明双构建契约。
+- `cargo fix` 清 app/core 测试冗余 `mut`；core 状态机测试逐转移补断言；desktop 测试修重复 `#[test]`、恢复 2 个丢失 `#[test]` 的用例（`redis_key_detail_uses_named_columns`、`mysql_diagnostic_normalization_handles_chinese_ddl`）、删 2 个无引用死 helper。
+- CI workflow：`actions/checkout@v4→v5`、`actions/upload-artifact@v4→v5`（消除 runner Node 弃用与 `url.parse`/`punycode` DeprecationWarning）。
+- **保留**：第三方 `block v0.1.6` future-incompat（Apple 框架链路 transitive 依赖，上游未迁 block2，不可 patch）。
+- 本机验证：`cargo test --workspace --all-targets --no-run` 零警告；desktop 400 / app 459 / core 89 / storage 31 全通过。
+
+**Windows/Linux 自绘窗口控制**（修复右上角无关闭按钮）：
+- 根因：GPUI Windows 端普通窗口创建不设 `WS_CAPTION`（`gpui-pre-windows` window.rs 创建分支），且 `TitlebarOptions.appears_transparent: true` 映射为 `hide_title_bar`；原生标题栏连同关闭/最小化/最大化按钮整体不存在。GPUI 约定由应用自绘控制按钮（Zed 模式），应用此前从未实现。
+- 修复（`connection_dialog.rs`）：topbar 新增 `window_control_buttons`（非 macOS 渲染）：最小化 `window.minimize_window()`、最大化/还原 `window.zoom_window()`（`is_maximized()` 切换图标 Square/Maximize）、关闭 `cx.quit()`；关闭按钮 hover 红（Windows 惯例 `#E81123`）；全部带 tooltip。macOS 继续走原生红绿灯（topbar `pl(84.)` 预留区不变）。
+- 本机验证：desktop 400 passed / 0 failed；窗口控制仅条件渲染于非 macOS，本机仅验证编译与测试，**Windows/Linux 实际点击行为待 CI 构建产物真机确认**。
+
