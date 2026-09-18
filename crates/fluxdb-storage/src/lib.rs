@@ -1126,6 +1126,7 @@ mod tests {
         let records = vec![
             BackupRecord {
                 manifest: None,
+                id: "bk-1".to_string(),
                 connection_id: ConnectionId(4),
                 database: "shop".to_string(),
                 output_path: "/tmp/fluxdb/shop/shop_20260917.sql".to_string(),
@@ -1137,6 +1138,7 @@ mod tests {
             },
             BackupRecord {
                 manifest: None,
+                id: "bk-2".to_string(),
                 connection_id: ConnectionId(4),
                 database: "shop".to_string(),
                 output_path: "/tmp/fluxdb/shop/shop_20260910.sql".to_string(),

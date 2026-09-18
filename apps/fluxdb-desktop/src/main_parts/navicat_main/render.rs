@@ -25,6 +25,10 @@ impl Render for NavicatMain {
                 m.target_db_loaded_for = Some(cid);
             }
         }
+        // 对象选择页「进入即探测」：现有库模式下后台检查目标存在性/备份内容，回填动作候选。
+        if self.restore_modal.is_some() {
+            self.sync_restore_probe(window, cx);
+        }
         let show_status_bar = if self
             .controller
             .state()
@@ -398,6 +402,10 @@ impl Render for NavicatMain {
             // 备份 tab：「备份表」查看弹框。
             .when_some(self.backup_tables_modal.clone(), |this, modal| {
                 this.child(backup_tables_modal(modal, colors, cx))
+            })
+            // 备份 tab：「恢复记录」查看弹框。
+            .when_some(self.restore_records_modal.clone(), |this, modal| {
+                this.child(restore_records_modal(modal, colors, cx))
             })
             // 备份 tab：备注编辑弹框（仅当弹框打开时挂载）。
             .when_some(self.backup_note_modal_path.clone(), |this, _| {

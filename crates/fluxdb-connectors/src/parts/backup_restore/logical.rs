@@ -3,6 +3,8 @@ fn logical_backup(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(DatabaseTaskProgress),
 ) -> fluxdb_core::Result<BackupManifest> {
+    // 执行前解析成固定快照；空选择已被 resolve_backup_scope 拒绝。
+    let resolved = resolve_backup_scope(request)?;
     let connector = connector_for(&request.config)?;
     let root = ObjectPath {
         connection_id: request.config.id,
@@ -12,18 +14,33 @@ fn logical_backup(
         kind: ObjectKind::Schema,
     };
     let objects = connector.list_objects(Some(&root))?;
+    let selected: std::collections::BTreeSet<&str> =
+        resolved.keys.iter().map(String::as_str).collect();
     let objects: Vec<_> = objects
         .into_iter()
-        .filter(|o| match o.path.kind {
-            ObjectKind::Table => request.tables.is_empty() || request.tables.contains(&o.path.name),
-            ObjectKind::View => request.include_views,
-            _ => false,
+        .filter(|o| {
+            matches!(o.path.kind, ObjectKind::Table | ObjectKind::View)
+                && selected.contains(o.path.name.as_str())
         })
         .collect();
+    // 用户要求的对象在执行前被删除：报错列出缺失项，不静默缩小范围后宣称完整成功。
+    if objects.len() != resolved.keys.len() {
+        let found: std::collections::BTreeSet<&str> =
+            objects.iter().map(|o| o.path.name.as_str()).collect();
+        let missing: Vec<&str> = resolved
+            .keys
+            .iter()
+            .map(String::as_str)
+            .filter(|key| !found.contains(key))
+            .collect();
+        return Err(task_error(format!(
+            "所选对象在数据库中不存在：{}",
+            missing.join("、")
+        )));
+    }
     let mut writer = std::io::BufWriter::new(new_output(&request.output)?);
     writeln!(writer, "-- fluxDB MySQL logical backup\nSET FOREIGN_KEY_CHECKS=0;\nSET SQL_MODE='NO_BACKSLASH_ESCAPES';").map_err(io_error)?;
-    let mut meta = manifest(request);
-    meta.objects.clear();
+    let mut meta = manifest(request, Vec::new());
     for object in objects {
         canceled(cancel)?;
         report(progress, "对象", format!("正在导出 {}", object.path.name));

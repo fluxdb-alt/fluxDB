@@ -46,6 +46,38 @@ impl NavicatMain {
         cx.notify();
     }
 
+    /// 打开「恢复记录」弹框：按备份 id 过滤关联的恢复记录，新→旧排序。
+    /// 老备份记录没有 id（空串），一律按无记录展示。
+    fn open_restore_records_modal(
+        &mut self,
+        file_name: String,
+        backup_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let mut records = if backup_id.is_empty() {
+            Vec::new()
+        } else {
+            match self.storage.load_restore_records() {
+                Ok(records) => records
+                    .into_iter()
+                    .filter(|record| record.backup_id == backup_id)
+                    .collect(),
+                Err(error) => {
+                    tracing::warn!(%error, "加载恢复记录失败");
+                    Vec::new()
+                }
+            }
+        };
+        records.sort_by(|a, b| b.finished_unix.cmp(&a.finished_unix));
+        self.restore_records_modal = Some(RestoreRecordsModal { file_name, records });
+        cx.notify();
+    }
+
+    fn close_restore_records_modal(&mut self, cx: &mut Context<Self>) {
+        self.restore_records_modal = None;
+        cx.notify();
+    }
+
     /// 打开备注编辑弹框，回填当前备注。
     fn open_backup_note_modal(
         &mut self,
@@ -396,6 +428,8 @@ const BACKUP_COL_TABLES: f32 = 118.;
 const BACKUP_COL_SIZE: f32 = 84.;
 const BACKUP_COL_PATH: f32 = 220.;
 const BACKUP_COL_ACTION: f32 = 56.;
+/// 操作列总宽：四个按钮位 + 间距，表头/运行中行/文件行共用保证对齐。
+const BACKUP_COL_ACTION_TOTAL: f32 = BACKUP_COL_ACTION * 4. + 40.;
 
 fn backup_list_header_row(colors: UiColors) -> Div {
     div()
@@ -414,7 +448,7 @@ fn backup_list_header_row(colors: UiColors) -> Div {
         .child(div().w(px(BACKUP_COL_SIZE)).child("文件大小"))
         .child(div().w(px(BACKUP_COL_PATH)).child("路径"))
         .child(div().flex_1().min_w_0().child("备注"))
-        .child(div().w(px(BACKUP_COL_ACTION * 3. + 12.)).child("操作"))
+        .child(div().w(px(BACKUP_COL_ACTION_TOTAL)).child("操作"))
 }
 
 /// 运行中任务行：名称 / 阶段 / — / — / — / 日志+取消。
@@ -461,7 +495,7 @@ fn backup_running_row(
         .child(div().flex_1().min_w_0().child(""))
         .child(
             div()
-                .w(px(BACKUP_COL_ACTION * 3. + 12.))
+                .w(px(BACKUP_COL_ACTION_TOTAL))
                 .flex()
                 .items_center()
                 .gap_2()
@@ -494,6 +528,12 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
     let path_for_delete = row.path.clone();
     let restore_path = row.path.clone();
     let restore_meta = row.meta.clone();
+    let file_name_for_records = row.file_name.clone();
+    let backup_id_for_records = row
+        .meta
+        .as_ref()
+        .map(|meta| meta.id.clone())
+        .unwrap_or_default();
     let note_for_edit = row
         .meta
         .as_ref()
@@ -564,10 +604,10 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
                 .text_ellipsis()
                 .child(note_display),
         )
-        // 操作列宽度与表头/运行中任务行保持一致（两个按钮 + 间距），否则列错位。
+        // 操作列宽度与表头/运行中任务行保持一致（BACKUP_COL_ACTION_TOTAL），否则列错位。
         .child(
             div()
-                .w(px(BACKUP_COL_ACTION * 3. + 12.))
+                .w(px(BACKUP_COL_ACTION_TOTAL))
                 .flex()
                 .items_center()
                 .gap_2()
@@ -578,6 +618,18 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
                         if let Some(meta) = restore_meta.clone() {
                             this.open_restore_dialog(meta.connection_id, Some(restore_path.clone()), Some(meta), window, cx);
                         }
+                    }),
+                ))
+                .child(backup_text_button(
+                    "记录",
+                    colors,
+                    cx.listener(move |this, _, _, cx| {
+                        this.open_restore_records_modal(
+                            file_name_for_records.clone(),
+                            backup_id_for_records.clone(),
+                            cx,
+                        );
+                        cx.stop_propagation();
                     }),
                 ))
                 .child(backup_text_button(
@@ -747,6 +799,177 @@ fn backup_tables_modal(
                         .overflow_y_scrollbar()
                         .child(body),
                 ),
+        )
+}
+
+/// 「恢复记录」查看弹框：该备份关联的恢复记录（新→旧），无记录时居中提示。
+fn restore_records_modal(
+    modal: RestoreRecordsModal,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let body = if modal.records.is_empty() {
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(colors.muted)
+            .child("该备份暂无恢复记录")
+    } else {
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .children(modal
+                .records
+                .iter()
+                .map(|record| restore_record_row(record, colors)))
+    };
+    let file_label = modal.file_name.clone();
+    div()
+        .absolute()
+        .inset_0()
+        .occlude()
+        .bg(if colors.is_dark {
+            opaque_grey(0.02, 0.58)
+        } else {
+            opaque_grey(0.75, 0.28)
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+            this.close_restore_records_modal(cx);
+            cx.stop_propagation();
+        }))
+        .child(
+            div()
+                .w(px(560.))
+                .h(px(420.))
+                .rounded(colors.radius_lg)
+                .border_1()
+                .border_color(colors.border)
+                .bg(menu_surface_bg(colors))
+                .shadow(vec![box_shadow(
+                    px(0.),
+                    px(18.),
+                    px(42.),
+                    px(0.),
+                    hsla(0., 0., 0., if colors.is_dark { 0.42 } else { 0.18 }),
+                )])
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .text_size(px(13.))
+                .text_color(colors.text)
+                .key_context("RestoreRecordsModal")
+                .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
+                    this.close_restore_records_modal(cx);
+                    cx.stop_propagation();
+                }))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .h(px(48.))
+                        .flex_none()
+                        .px_4()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .border_b_1()
+                        .border_color(colors.border_soft)
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .child("恢复记录")
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .font_weight(gpui::FontWeight::NORMAL)
+                                        .text_color(colors.muted)
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(file_label),
+                                ),
+                        )
+                        .child(backup_text_button(
+                            "关闭",
+                            colors,
+                            cx.listener(|this, _, _, cx| {
+                                this.close_restore_records_modal(cx);
+                                cx.stop_propagation();
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .px_4()
+                        .flex()
+                        .flex_col()
+                        .overflow_y_scrollbar()
+                        .child(body),
+                ),
+        )
+}
+
+/// 单条恢复记录：时间 / 状态 / 目标（第一行）+ 恢复结果（第二行，可换行）。
+fn restore_record_row(record: &fluxdb_storage::RestoreRecord, colors: UiColors) -> Div {
+    let time = if record.finished_unix > 0 {
+        Local
+            .timestamp_opt(record.finished_unix as i64, 0)
+            .single()
+            .map(|time| time.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| "—".to_string())
+    } else {
+        "—".to_string()
+    };
+    let (status, status_color) = if record.canceled {
+        ("已取消", colors.muted)
+    } else if record.success {
+        ("成功", colors.text)
+    } else {
+        ("失败", rgb(0xe5484d))
+    };
+    let object_count = record
+        .outcome
+        .as_ref()
+        .filter(|outcome| outcome.total_objects > 0)
+        .map(|outcome| format!("　共 {} 个对象", outcome.total_objects))
+        .unwrap_or_default();
+    div()
+        .flex_none()
+        .py_2()
+        .border_b_1()
+        .border_color(colors.border_soft)
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(px(12.))
+                .child(div().text_color(colors.muted).child(time))
+                .child(div().font_weight(gpui::FontWeight::BOLD).text_color(status_color).child(status))
+                .child(div().overflow_hidden().text_ellipsis().child(format!(
+                    "恢复到 {}{object_count}",
+                    record.target
+                ))),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(colors.muted)
+                .child(record.result.clone()),
         )
 }
 

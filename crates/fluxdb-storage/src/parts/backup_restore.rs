@@ -7,6 +7,10 @@
 /// - `tables` / `include_views` / `note`：备份表清单、视图开关、备注。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BackupRecord {
+    /// 备份记录稳定标识：恢复记录按 `RestoreRecord::backup_id` 关联到此 id。
+    /// 创建备份记录时生成；旧记录无此字段（serde default 为空串）。
+    #[serde(default)]
+    pub id: String,
     pub connection_id: ConnectionId,
     #[serde(default)]
     pub database: String,
@@ -36,6 +40,13 @@ pub struct RestoreRecord {
     pub success: bool,
     pub canceled: bool,
     pub result: String,
+    /// 逐对象恢复结果（设计文档 §15.3）；旧记录无此字段，serde default 兼容。
+    #[serde(default)]
+    pub outcome: Option<fluxdb_core::RestoreOutcome>,
+    /// 关联的备份记录 id（BackupRecord::id）；空串 = 恢复的是外部/无关联文件。
+    /// 存储为 JSON blob kv 而非关系表，记录与备份的关联用该字段表达。
+    #[serde(default)]
+    pub backup_id: String,
 }
 
 impl FileStorage {

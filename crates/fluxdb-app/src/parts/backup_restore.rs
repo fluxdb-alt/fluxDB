@@ -1,7 +1,9 @@
 pub use fluxdb_connectors::normalize_backup_file_name;
 pub use fluxdb_core::{
-    BackupExecution, BackupFormat, BackupManifest, BackupMethod, BackupRequest,
-    DatabaseTaskProgress, RestoreOutcome, RestorePlan, RestoreRequest,
+    BackupExecution, BackupFormat, BackupManifest, BackupMethod, BackupObjectKind, BackupObjectRef,
+    BackupRequest, BackupScope, DatabaseTaskProgress, RestoreObjectProbe, RestoreObjectResult,
+    RestoreObjectStatus, RestoreOptions, RestoreOutcome, RestorePlan, RestoreRequest,
+    RestoreTableAction, RestoreTransactionMode, RestoreValidation,
 };
 
 impl AppController {
@@ -22,6 +24,9 @@ impl AppController {
             AppCommand::PrepareRestore(request) => self
                 .prepare_restore(request, cancel)
                 .map(|(request, plan)| AppEvent::RestorePrepared { request, plan }),
+            AppCommand::ProbeRestore(request) => self
+                .probe_restore(request, cancel)
+                .map(AppEvent::RestoreObjectsProbed),
             AppCommand::RunRestore { request, plan } => self
                 .execute_restore(&request, &plan, cancel, progress)
                 .map(AppEvent::RestoreCompleted),
@@ -36,6 +41,14 @@ impl AppController {
         mut request: BackupRequest,
         method: BackupMethod,
     ) -> fluxdb_core::Result<BackupRequest> {
+        // SQLite 只有完整快照一种能力；范围在准备阶段收敛，避免 UI 传入无效选择。
+        if request.config.kind == DatabaseKind::Sqlite {
+            request.scope = BackupScope::SqliteSnapshot;
+        } else if let BackupScope::Objects(objects) = &request.scope {
+            if objects.is_empty() {
+                return Err(Error::new(ErrorKind::Unsupported, "请至少选择一个备份对象"));
+            }
+        }
         let provider = fluxdb_connectors::database_backup(request.config.kind)?;
         let settings = &self.state.settings;
         let mysql = if matches!(
@@ -131,6 +144,16 @@ impl AppController {
             .inspect_restore(&request, cancel)?;
         Ok((request, plan))
     }
+    /// 对象页进入时的只读探测：解析备份内容 + 查询目标存在性，供 UI 预渲染默认动作与合法候选。
+    /// 不解析客户端工具、不创建库、不执行 SQL；探测失败不影响用户手动改为整库/新建恢复。
+    pub fn probe_restore(
+        &self,
+        request: RestoreRequest,
+        cancel: &AtomicBool,
+    ) -> fluxdb_core::Result<Vec<RestoreObjectProbe>> {
+        fluxdb_connectors::database_backup(request.config.kind)?
+            .probe_restore(&request, cancel)
+    }
     pub fn execute_restore(
         &self,
         request: &RestoreRequest,
@@ -217,8 +240,7 @@ mod backup_restore_app_tests {
                     execution: BackupExecution::SqlDump,
                     tool: PathBuf::new(),
                     tool_version: None,
-                    tables: vec![],
-                    include_views: true,
+                    scope: BackupScope::All { include_views: true },
                     include_schema: true,
                     include_data: true,
                     include_routines: false,
@@ -249,6 +271,7 @@ mod backup_restore_app_tests {
                 tool: PathBuf::new(),
                 manifest: Some(meta),
                 table_decisions: Vec::new(),
+                options: RestoreOptions::default(),
             }),
             &cancel,
             &mut |_| {},

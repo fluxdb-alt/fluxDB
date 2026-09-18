@@ -1,9 +1,11 @@
 mod backup_restore {
     use super::*;
     use fluxdb_core::{
-        BackupExecution, BackupFormat, BackupManifest, BackupMethod, BackupRequest, Connector,
-        DatabaseBackup, DatabaseTaskProgress, PerTableDecision, RestoreOutcome, RestorePlan,
-        RestoreRequest, RestoreTableAction, RestoreTableInfo,
+        BackupExecution, BackupFormat, BackupManifest, BackupMethod, BackupObjectKind,
+        BackupObjectRef, BackupRequest, BackupScope, Connector, DatabaseBackup,
+        DatabaseTaskProgress, PerTableDecision, RestoreObjectProbe, RestoreObjectResult,
+        RestoreObjectStatus, RestoreOutcome, RestorePlan, RestoreRequest, RestoreTableAction,
+        RestoreTableInfo, RestoreTransactionMode, RestoreValidation,
     };
     use std::{
         fs,
@@ -13,6 +15,7 @@ mod backup_restore {
     };
     include!("backup_restore/format.rs");
     include!("backup_restore/process.rs");
+    include!("backup_restore/scope.rs");
     include!("backup_restore/providers.rs");
     include!("backup_restore/restore.rs");
     include!("backup_restore/tests.rs");

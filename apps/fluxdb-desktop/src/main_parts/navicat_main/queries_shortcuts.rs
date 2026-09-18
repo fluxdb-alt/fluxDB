@@ -756,8 +756,12 @@ impl NavicatMain {
     }
 
     fn cancel_dialog(&mut self, _: &CancelDialog, window: &mut Window, cx: &mut Context<Self>) {
-        // 备份 tab 的三个弹框（表清单/备注/删除确认）优先响应 Esc。
+        // 备份 tab 的弹框（表清单/恢复记录/备注/删除确认）优先响应 Esc。
         if self.backup_tables_modal.take().is_some() {
+            cx.notify();
+            return;
+        }
+        if self.restore_records_modal.take().is_some() {
             cx.notify();
             return;
         }
@@ -1127,7 +1131,8 @@ impl NavicatMain {
     fn refresh_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.controller.state().active_tab().cloned() else {
             if let Some(connection_id) = self.first_connection_id() {
-                self.dispatch(AppCommand::OpenConnection(connection_id), cx);
+                // 建连走后台路径，避免刷新快捷键在主线程等握手。
+                self.open_connection_from_sidebar(connection_id, cx);
             }
             return;
         };

@@ -41,14 +41,14 @@ fn mysql_server_major(config: &ConnectionConfig) -> fluxdb_core::Result<u32> {
         _ => return Err(task_error("无法识别 MySQL 服务端版本")),
     })
 }
-fn manifest(request: &BackupRequest) -> BackupManifest {
+fn manifest(request: &BackupRequest, objects: Vec<String>) -> BackupManifest {
     BackupManifest {
         kind: Some(request.config.kind),
         execution: Some(request.execution),
         complete: true,
         include_schema: request.include_schema,
         include_data: request.include_data,
-        objects: request.tables.clone(),
+        objects,
         tool_version: request.tool_version.clone(),
     }
 }
@@ -60,6 +60,13 @@ macro_rules! restore_methods {
             cancel: &AtomicBool,
         ) -> fluxdb_core::Result<RestorePlan> {
             inspect_restore(self.kind(), request, cancel)
+        }
+        fn probe_restore(
+            &self,
+            request: &RestoreRequest,
+            cancel: &AtomicBool,
+        ) -> fluxdb_core::Result<Vec<RestoreObjectProbe>> {
+            probe_restore(self.kind(), request, cancel)
         }
         fn restore(
             &self,
@@ -114,6 +121,8 @@ impl DatabaseBackup for MySqlBackup {
                 "mysqldump 客户端版本高于 MySQL 服务端，为避开客户端例程查询不兼容，本次不导出存储过程/函数",
             );
         }
+        // 执行前把动态范围解析成固定快照；工具参数与 manifest 使用同一份结果。
+        let resolved = resolve_backup_scope(&request)?;
         let (host, port, user, password, tunnel) = native_connection(&request.config)?;
         let invocation = mysql_dump_invocation(
             &request.tool.to_string_lossy(),
@@ -123,7 +132,7 @@ impl DatabaseBackup for MySqlBackup {
             &user,
             &password,
             &request.database,
-            &request.tables,
+            &resolved.keys,
             MySqlDumpOptions {
                 include_schema: request.include_schema,
                 include_data: request.include_data,
@@ -147,7 +156,7 @@ impl DatabaseBackup for MySqlBackup {
             .stdout(new_output(&request.output)?);
         report(progress, "备份", "正在执行 MySQL SQL 转储");
         run_client(command, cancel, progress)?;
-        Ok(manifest(&request))
+        Ok(manifest(&request, resolved.keys))
     }
     restore_methods!();
 }
@@ -195,6 +204,8 @@ impl DatabaseBackup for PostgresBackup {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(DatabaseTaskProgress),
     ) -> fluxdb_core::Result<BackupManifest> {
+        // 执行前把动态范围解析成固定快照；-t 参数使用 schema 限定键，避免跨 schema 误配。
+        let snapshot = resolve_backup_scope(request)?;
         let (host, port, user, password, tunnel) = native_connection(&request.config)?;
         let config = resolved(&request.config);
         let profile = config.postgres_profile.clone().unwrap_or_else(|| {
@@ -216,7 +227,7 @@ impl DatabaseBackup for PostgresBackup {
             scope,
             request.include_owner,
             request.include_acl,
-            &request.tables,
+            &snapshot.keys,
         );
         let mut command = Command::new(&request.tool);
         command.args(invocation.args).envs(invocation.env);
@@ -226,7 +237,7 @@ impl DatabaseBackup for PostgresBackup {
             .stdout(new_output(&request.output)?);
         report(progress, "备份", "正在执行 PostgreSQL plain SQL 转储");
         run_client(command, cancel, progress)?;
-        Ok(manifest(request))
+        Ok(manifest(request, snapshot.keys))
     }
     restore_methods!();
 }
@@ -243,6 +254,9 @@ impl DatabaseBackup for SqliteBackup {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(DatabaseTaskProgress),
     ) -> fluxdb_core::Result<BackupManifest> {
+        if !matches!(request.scope, BackupScope::SqliteSnapshot) {
+            return Err(task_error("SQLite 只支持完整快照备份，不能按对象选择"));
+        }
         if !request.include_data || !request.include_schema {
             return Err(task_error("SQLite 二进制快照必须同时包含结构和数据"));
         }
@@ -272,8 +286,7 @@ impl DatabaseBackup for SqliteBackup {
         })?;
         canceled(cancel)?;
         validate_sqlite(&request.output)?;
-        let mut meta = manifest(request);
-        meta.objects.clear();
+        let meta = manifest(request, Vec::new());
         Ok(meta)
     }
     restore_methods!();

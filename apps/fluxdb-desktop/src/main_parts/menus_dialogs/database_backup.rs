@@ -60,8 +60,8 @@ impl NavicatMain {
         // 重新打开时重置对象列表滚动位置，避免残留上次滚动偏移。
         self.backup_objects_scroll
             .scroll_to_item(0, ScrollStrategy::Top);
-        // 对象选择默认：表右键预选该表，其它入口全不选（用户手动勾选）。
-        // include_views 默认关，确保「全不选」真正为空，开始按钮需先手动勾选才可用。
+        // 对象选择默认：表右键预选该表并按对象清单导出；其它入口默认整库备份（全部对象）。
+        let scope_all = preselect_table.is_none();
         let preselected: BTreeSet<String> = preselect_table
             .map(|name| {
                 let mut set = BTreeSet::new();
@@ -76,6 +76,7 @@ impl NavicatMain {
             connection_id,
             database_kind: self.controller.connection_configs().iter().find(|c| c.id == connection_id).map(|c| c.kind).unwrap_or(DatabaseKind::MySql),
             selected_tables: all_tables.intersection(&preselected).cloned().collect(),
+            scope_all,
             all_table_names: all_tables,
             all_view_names: all_views,
             database,
@@ -84,7 +85,7 @@ impl NavicatMain {
             tab: BackupTab::General,
             file_name: String::new(),
             object_search: String::new(),
-            include_views: false,
+            include_views: scope_all,
             lock_tables: false,
             single_transaction: true,
             include_routines: true,
@@ -294,6 +295,15 @@ impl NavicatMain {
         task_id
     }
 
+    /// 备份记录唯一标识：unix 纳秒时间戳的十六进制串，单机本机生成足够唯一。
+    fn new_backup_record_id() -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        format!("{nanos:016x}")
+    }
+
     fn start_backup(
         &mut self,
         task_id: u64,
@@ -317,12 +327,18 @@ impl NavicatMain {
         self.backup_pending_metas.insert(
             task_id,
             BackupFileMeta {
+                id: Self::new_backup_record_id(),
                 connection_id: form.connection_id,
                 database: database.clone(),
                 output_path: String::new(),
                 created_unix: 0,
                 size: 0,
-                tables: Some(form.selected_tables.iter().cloned().collect()),
+                // 整库备份记录为空表清单（Some([]) = 整库）；否则记录勾选的表。
+                tables: Some(if form.scope_all {
+                    Vec::new()
+                } else {
+                    form.selected_tables.iter().cloned().collect()
+                }),
                 include_views: form.include_views,
                 note: form.note.clone(),
                 manifest: None,

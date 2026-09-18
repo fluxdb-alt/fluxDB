@@ -14,6 +14,31 @@ fn run_backup_task(
     let method = match form.mode {
         BackupMode::Auto => fluxdb_app::BackupMethod::Auto,
     };
+    // 备份范围（设计文档 §5）：SQLite 只能整库快照；scope_all 走 All（执行时重新枚举）；
+    // 否则按勾选的表 + （可选）全部视图组成固定对象清单。
+    let scope = if form.database_kind == DatabaseKind::Sqlite {
+        fluxdb_app::BackupScope::SqliteSnapshot
+    } else if form.scope_all {
+        fluxdb_app::BackupScope::All {
+            include_views: form.include_views,
+        }
+    } else {
+        let mut objects: Vec<fluxdb_app::BackupObjectRef> = form
+            .selected_tables
+            .iter()
+            .map(|name| fluxdb_app::BackupObjectRef::table(name.clone()))
+            .collect();
+        if form.include_views {
+            objects.extend(form.all_view_names.iter().map(|name| {
+                fluxdb_app::BackupObjectRef {
+                    schema: None,
+                    kind: fluxdb_app::BackupObjectKind::View,
+                    name: name.clone(),
+                }
+            }));
+        }
+        fluxdb_app::BackupScope::Objects(objects)
+    };
     let request = controller
         .prepare_backup(
             fluxdb_app::BackupRequest {
@@ -23,8 +48,7 @@ fn run_backup_task(
                 execution: fluxdb_app::BackupExecution::SqlDump,
                 tool: PathBuf::new(),
                 tool_version: None,
-                tables: form.selected_tables.into_iter().collect(),
-                include_views: form.include_views,
+                scope,
                 include_schema: form.include_schema,
                 include_data: form.include_data,
                 include_routines: form.include_routines,

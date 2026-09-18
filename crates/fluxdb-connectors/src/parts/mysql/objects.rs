@@ -16,13 +16,19 @@ fn mysql_list_objects(
         }
         _ => None,
     };
+    let connect_timeout = Duration::from_secs(5);
+    ensure_mysql_classic_greeting(
+        options.get_host(),
+        options.get_port(),
+        mysql_greeting_probe_timeout(connect_timeout),
+    )?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let connect = tokio::time::timeout(Duration::from_secs(5), options.connect()).await;
+        let connect = tokio::time::timeout(connect_timeout, options.connect()).await;
         let mut connection = match connect {
             Ok(Ok(connection)) => connection,
             Ok(Err(error)) => return Err(mysql_error(error)),

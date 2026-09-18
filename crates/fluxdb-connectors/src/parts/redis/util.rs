@@ -178,9 +178,31 @@ fn redis_parse_pairs_array(
     Ok(pairs)
 }
 
+/// —— 服务端可控尺寸的上限 ——
+///
+/// 对端可能是用户填错的端口、被中间人改写、或本身就是恶意服务：声明长度、元素个数和嵌套深度
+/// 都不能直接用来决定本地分配或递归深度，否则一条 `$9223372036854775807` 就能把整个进程打挂
+/// （分配失败与栈溢出都是 abort，`catch_unwind` 拦不住；UI 主线程上 panic 同样会 abort）。
+/// bulk 上限对齐 Redis 自身的 `proto-max-bulk-len` 默认值（512MB），不会拒掉合法大 value。
+const REDIS_MAX_BULK_LEN: u64 = 512 * 1024 * 1024;
+/// 单行（前缀行 / 简单字符串 / 错误消息）上限：真实回包都是短行，留足余量即可。
+const REDIS_MAX_LINE_LEN: usize = 1024 * 1024;
+/// 数组嵌套深度上限：RESP2 只在 MULTI/EXEC 下嵌套，真实深度个位数。
+const REDIS_MAX_DEPTH: usize = 64;
+
 fn redis_read_value(
     reader: &mut std::io::BufReader<RedisStream>,
 ) -> fluxdb_core::Result<RedisValue> {
+    redis_read_value_at(reader, 0)
+}
+
+fn redis_read_value_at(
+    reader: &mut std::io::BufReader<RedisStream>,
+    depth: usize,
+) -> fluxdb_core::Result<RedisValue> {
+    if depth >= REDIS_MAX_DEPTH {
+        return Err(protocol_error("Redis 回包嵌套层级异常"));
+    }
     let mut prefix = [0_u8; 1];
     use std::io::Read;
     reader.read_exact(&mut prefix).map_err(redis_io_error)?;
@@ -198,8 +220,22 @@ fn redis_read_value(
             if len < 0 {
                 return Ok(RedisValue::Bulk(None));
             }
-            let mut bytes = vec![0_u8; len as usize];
-            reader.read_exact(&mut bytes).map_err(redis_io_error)?;
+            let len = u64::try_from(len).map_err(|_| protocol_error("Redis Bulk 返回长度异常"))?;
+            if len > REDIS_MAX_BULK_LEN {
+                return Err(protocol_error(&format!(
+                    "Redis Bulk 返回长度 {len} 超出上限 {REDIS_MAX_BULK_LEN}"
+                )));
+            }
+            // 只按实际到达的字节增长缓冲，不信任对端声明的长度：上限内的荒谬值最多多读到超时。
+            let mut bytes = Vec::new();
+            reader
+                .by_ref()
+                .take(len)
+                .read_to_end(&mut bytes)
+                .map_err(redis_io_error)?;
+            if bytes.len() as u64 != len {
+                return Err(protocol_error("Redis Bulk 返回长度与声明不一致"));
+            }
             let mut crlf = [0_u8; 2];
             reader.read_exact(&mut crlf).map_err(redis_io_error)?;
             Ok(RedisValue::Bulk(Some(bytes)))
@@ -211,26 +247,148 @@ fn redis_read_value(
             if len < 0 {
                 return Ok(RedisValue::Array(Vec::new()));
             }
-            let mut values = Vec::with_capacity(len as usize);
+            // 不 with_capacity(对端声明值)：元素随实际读到的数量增长，谎报大数只会在读到下一个
+            // 元素时报错。真实大集合（数百万 member）仍按需要自然增长。
+            let mut values = Vec::with_capacity(std::cmp::min(len as usize, 64));
             for _ in 0..len {
-                values.push(redis_read_value(reader)?);
+                values.push(redis_read_value_at(reader, depth + 1)?);
             }
             Ok(RedisValue::Array(values))
         }
-        _ => Err(Error::new(ErrorKind::Query, "Redis 返回格式异常")),
+        // 首字节不是任何 RESP 前缀：真实场景几乎都是端口填错（连到了 MySQL/HTTP 等），
+        // 也可能是流已错位；两种都不能再复用这条连接。
+        other => Err(Error::new(
+            ErrorKind::Connection,
+            format!(
+                "未收到 Redis 协议响应（首字节 0x{other:02x}），请确认填写的是 Redis 服务端口（默认 6379）"
+            ),
+        )),
     }
 }
 
 fn redis_read_line(reader: &mut std::io::BufReader<RedisStream>) -> fluxdb_core::Result<String> {
     let mut bytes = Vec::new();
-    use std::io::BufRead;
-    reader.read_until(b'\n', &mut bytes).map_err(redis_io_error)?;
+    use std::io::{BufRead, Read};
+    // 对端不发 \n 时 read_until 会一直累积，必须带上限，否则内存随字节流无界增长。
+    reader
+        .by_ref()
+        .take(REDIS_MAX_LINE_LEN as u64 + 1)
+        .read_until(b'\n', &mut bytes)
+        .map_err(redis_io_error)?;
+    if bytes.len() > REDIS_MAX_LINE_LEN {
+        return Err(protocol_error("Redis 回包单行超出上限"));
+    }
     if bytes.ends_with(b"\r\n") {
         bytes.truncate(bytes.len() - 2);
     }
     Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
+/// 协议层异常统一按连接错误返回：调用方据此作废整条连接，不能当普通查询错误继续复用，
+/// 否则半条响应还留在缓冲里，后续每条命令都会读到错位数据。
+fn protocol_error(message: &str) -> Error {
+    Error::new(ErrorKind::Connection, message.to_string())
+}
+
 fn redis_io_error(error: std::io::Error) -> Error {
     Error::new(ErrorKind::Connection, error.to_string())
+}
+
+#[cfg(test)]
+mod resp_size_guard_tests {
+    use super::*;
+
+    /// 用回环 socket 造一个「按原样吐字节然后等一会儿再关」的假 Redis 端点，返回客户端读端。
+    fn reader_for(payload: &[u8]) -> std::io::BufReader<RedisStream> {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("假 Redis 端点应可监听");
+        let port = listener.local_addr().expect("假端点地址").port();
+        let payload = payload.to_vec();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            use std::io::Write;
+            let _ = stream.write_all(&payload);
+            let _ = stream.flush();
+            // 留出时间让客户端读完，避免 EOF 抢在解析完成之前。
+            std::thread::sleep(Duration::from_millis(300));
+        });
+        let stream = TcpStream::connect(("127.0.0.1", port)).expect("连接假 Redis 端点");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("设置读超时");
+        std::io::BufReader::new(RedisStream::Plain(stream))
+    }
+
+    fn is_connection_error(result: fluxdb_core::Result<RedisValue>) {
+        let error = result.err().expect("畸形回包必须报错");
+        assert_eq!(error.kind, ErrorKind::Connection, "协议异常要作废连接: {error}");
+    }
+
+    #[test]
+    fn legit_replies_still_parse() {
+        assert_eq!(
+            redis_read_value(&mut reader_for(b"$5\r\nhello\r\n")).expect("合法 bulk"),
+            RedisValue::Bulk(Some(b"hello".to_vec()))
+        );
+        assert_eq!(
+            redis_read_value(&mut reader_for(b"$-1\r\n")).expect("合法 nil"),
+            RedisValue::Bulk(None)
+        );
+        // 真实嵌套（MULTI/EXEC）只有一两层，必须照常解析。
+        let nested = redis_read_value(&mut reader_for(b"*2\r\n$1\r\na\r\n*1\r\n:5\r\n"))
+            .expect("合法嵌套数组");
+        assert_eq!(
+            nested,
+            RedisValue::Array(vec![
+                RedisValue::Bulk(Some(b"a".to_vec())),
+                RedisValue::Array(vec![RedisValue::Int(5)]),
+            ])
+        );
+    }
+
+    #[test]
+    fn large_array_from_real_server_still_reads() {
+        // 大集合（数千 member）不能被尺寸守卫误伤：元素个数按实际到达增长。
+        let mut payload = b"*1000\r\n".to_vec();
+        for _ in 0..1000 {
+            payload.extend_from_slice(b":7\r\n");
+        }
+        let value = redis_read_value(&mut reader_for(&payload)).expect("合法大数组");
+        let RedisValue::Array(items) = value else {
+            panic!("应返回数组，实际 {value:?}");
+        };
+        assert_eq!(items.len(), 1000);
+    }
+
+    #[test]
+    fn absurd_bulk_length_is_rejected_without_allocating() {
+        is_connection_error(redis_read_value(&mut reader_for(
+            b"$9223372036854775807\r\nhello",
+        )));
+    }
+
+    #[test]
+    fn short_bulk_is_rejected_instead_of_blocking_on_preallocated_buffer() {
+        is_connection_error(redis_read_value(&mut reader_for(b"$100\r\nabc")));
+    }
+
+    #[test]
+    fn absurd_array_count_is_rejected_without_preallocating() {
+        is_connection_error(redis_read_value(&mut reader_for(
+            b"*9223372036854775807\r\n+OK\r\n",
+        )));
+    }
+
+    #[test]
+    fn deep_nesting_is_rejected_before_stack_overflow() {
+        let payload = format!("{}+OK\r\n", "*1\r\n".repeat(REDIS_MAX_DEPTH + 50));
+        is_connection_error(redis_read_value(&mut reader_for(payload.as_bytes())));
+    }
+
+    #[test]
+    fn endless_line_is_rejected_at_the_cap() {
+        let payload = format!("+{}", "a".repeat(REDIS_MAX_LINE_LEN + 1));
+        is_connection_error(redis_read_value(&mut reader_for(payload.as_bytes())));
+    }
 }

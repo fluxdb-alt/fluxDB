@@ -16,6 +16,14 @@ impl NavicatMain {
         }
     }
 
+    /// 对象选择：切换「整库备份（全部对象）」与「按对象清单备份」。
+    fn set_backup_scope_all(&mut self, value: bool, cx: &mut Context<Self>) {
+        if let Some(form) = &mut self.pending_backup_modal {
+            form.scope_all = value;
+            cx.notify();
+        }
+    }
+
     fn set_backup_lock_tables(&mut self, value: bool, cx: &mut Context<Self>) {
         if let Some(form) = &mut self.pending_backup_modal {
             form.lock_tables = value;
@@ -115,8 +123,11 @@ fn database_backup_modal(
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
-    // 至少勾选一个对象（任一表或包含视图）才允许「开始备份」；备份目录统一取自设置。
-    let can_start = form.database_kind == DatabaseKind::Sqlite || !form.selected_tables.is_empty() || form.include_views;
+    // 「开始备份」可用条件：SQLite 整库快照、整库备份、或已选任一对象（表或包含视图）。
+    let can_start = form.database_kind == DatabaseKind::Sqlite
+        || form.scope_all
+        || !form.selected_tables.is_empty()
+        || form.include_views;
     let panel = database_backup_modal_panel(colors, cx)
         .child(database_backup_modal_header(colors, cx))
         .child(database_backup_tabs(form.tab, colors, cx))

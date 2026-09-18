@@ -8,16 +8,18 @@ struct RestoreRuntime {
     prepared: Option<(fluxdb_app::RestoreRequest, fluxdb_app::RestorePlan)>,
     logs: Vec<String>,
     cancel: Arc<AtomicBool>,
+    /// 从备份列表打开时带入的备份记录 id；执行完成后写入恢复记录做关联。
+    backup_id: Option<String>,
 }
 
 /// 恢复弹框挂载状态：UI 实体 + 打开时的配置快照（渲染期间不读 controller）。
 #[derive(Clone)]
 struct RestoreModal {
     kind: DatabaseKind,
-    /// 与 kind 同类型、可选为目标连接的配置快照。
+    /// 当前页签（常规/对象选择/高级/消息日志）。
+    tab: RestoreTab,
+    /// 与 kind 同类型、可选为目标连接的配置快照；下拉按此顺序展示，选中行索引即候选索引。
     candidates: Vec<ConnectionConfig>,
-    /// 与 candidates 一一对应的下拉展示文本「名称」。
-    labels: Vec<String>,
     /// 从备份 tab 带入的文件元信息，路径匹配时可附带 manifest 免去重复识别。
     meta: Option<BackupFileMeta>,
     connection: Entity<SelectState<SearchableVec<String>>>,
@@ -28,17 +30,45 @@ struct RestoreModal {
     /// 已为目标连接加载过库列表的连接 id，用于渲染时判断是否需要重载（连接切换）。
     target_db_loaded_for: Option<ConnectionId>,
     mode: Entity<SelectState<SearchableVec<String>>>,
-    /// 逐表模式：每个源表一个「覆盖/追加/跳过」下拉。
+    /// 高级页：事务范围下拉（引擎默认/单事务）；SQLite 隐藏。
+    transaction: Entity<SelectState<SearchableVec<String>>>,
+    /// 高级页：完成验证下拉（基础/逐表行数）；SQLite 隐藏。
+    validation: Entity<SelectState<SearchableVec<String>>>,
+    /// 逐表模式：每个源表一个动作下拉；候选按探测到的存在性/备份内容过滤。
     table_grid: Vec<TableGridRow>,
+    /// 当前 table_grid 的来源指纹（连接id|源路径|目标库）；变化时需重新探测。
+    probe_key: Option<String>,
+    /// 探测进行中：进入对象页后台检查目标，展示 loading。
+    probe_running: bool,
+    /// 最近一次探测失败信息；改动表单前不自动重试。
+    probe_error: Option<String>,
+    /// 破坏性动作二次确认：是否展开确认层。
+    confirm_open: bool,
+    /// 确认层要求用户原样输入的目标名称（库名或文件名）。
+    confirm_target: String,
+    /// 确认层展示：会删除目标数据/定义的表清单。
+    confirm_destructive: Vec<String>,
+    /// 确认层输入框（打开弹框时即创建，避免在监听器里重建实体）。
+    confirm_input: Entity<InputState>,
     runtime: std::rc::Rc<std::cell::RefCell<RestoreRuntime>>,
 }
 
-/// 逐表恢复的一行：源表名 + 该表的动作下拉。
+/// 已存在对象默认的动作占位：强制用户显式选择，绝不静默退化为破坏性动作。
+const PLACEHOLDER_ACTION: &str = "待选择策略";
+
+/// 逐表恢复的一行：探测得到的对象事实 + 该表的动作下拉（候选已按事实过滤）。
 #[derive(Clone)]
 struct TableGridRow {
+    /// 决策匹配键（PG 非 public 为 schema.name），提交给后端的表标识。
+    key: String,
+    /// 展示名（PG 含 schema 前缀）。
     name: String,
-    /// 目标库是否已有同名表（预检后回填，用于提示）。
+    /// 目标库是否已有同名对象（探测回填，决定默认动作与候选）。
     exists: bool,
+    /// 备份是否含可执行结构（决定能否新建/重建）。
+    has_ddl: bool,
+    /// 备份是否含数据（决定能否清空/追加）。
+    has_data: bool,
     select: Entity<SelectState<SearchableVec<String>>>,
 }
 
@@ -121,10 +151,49 @@ impl NavicatMain {
         let target_db = cx.new(|cx| {
             SelectState::new(SearchableVec::new(Vec::<String>::new()), None, window, cx)
         });
+        // 高级页事务/验证下拉：选项取自枚举 label，默认选中第一项（引擎默认 / 基础）。
+        let transaction = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    [
+                        fluxdb_app::RestoreTransactionMode::EngineDefault,
+                        fluxdb_app::RestoreTransactionMode::SingleTransaction,
+                    ]
+                    .into_iter()
+                    .map(|m| m.label().to_string())
+                    .collect::<Vec<String>>(),
+                ),
+                Some(IndexPath::default().row(0)),
+                window,
+                cx,
+            )
+        });
+        let validation = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    [
+                        fluxdb_app::RestoreValidation::Basic,
+                        fluxdb_app::RestoreValidation::RowCount,
+                    ]
+                    .into_iter()
+                    .map(|v| v.label().to_string())
+                    .collect::<Vec<String>>(),
+                ),
+                Some(IndexPath::default().row(0)),
+                window,
+                cx,
+            )
+        });
+        let confirm_input = cx.new(|cx| InputState::new(window, cx));
+        // 老备份记录可能没有 id（空串），视为无关联，不写恢复记录。
+        let backup_record_id = meta
+            .as_ref()
+            .map(|m| m.id.clone())
+            .filter(|id| !id.is_empty());
         self.restore_modal = Some(RestoreModal {
             kind,
+            tab: RestoreTab::General,
             candidates,
-            labels,
             meta,
             connection,
             source_input,
@@ -132,12 +201,22 @@ impl NavicatMain {
             target_db,
             target_db_loaded_for: Some(connection_id),
             mode,
+            transaction,
+            validation,
             table_grid: Vec::new(),
+            probe_key: None,
+            probe_running: false,
+            probe_error: None,
+            confirm_open: false,
+            confirm_target: String::new(),
+            confirm_destructive: Vec::new(),
+            confirm_input,
             runtime: std::rc::Rc::new(std::cell::RefCell::new(RestoreRuntime {
                 running: false,
                 prepared: None,
                 logs: vec!["先检查备份和目标，确认计划后才能恢复。非空目标禁止覆盖。".into()],
                 cancel: Arc::new(AtomicBool::new(false)),
+                backup_id: backup_record_id,
             })),
         });
         // 打开即拉取默认目标连接的库列表。
@@ -146,8 +225,6 @@ impl NavicatMain {
             window,
             cx,
         );
-        // 有备份记录的表清单时预填逐表网格（默认覆盖）。
-        self.populate_restore_table_grid(window, cx);
         cx.notify();
     }
 
@@ -195,56 +272,177 @@ impl NavicatMain {
         }));
     }
 
-    /// 从备份记录里的表清单预填逐表网格（每表默认「覆盖」）。
-    /// 备份记录缺失/整库（tables 为空或 None）时不预填，走整库恢复。
-    fn populate_restore_table_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// 渲染期消费：现有库模式下，源文件与目标库就绪且指纹变化时后台探测目标对象。
+    /// 非现有库模式（新建/SQLite）网格无意义，清空并复位探测状态。
+    fn sync_restore_probe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(modal) = &self.restore_modal else {
             return;
         };
-        if modal.kind == DatabaseKind::Sqlite || !modal.table_grid.is_empty() {
+        let existing_mode = modal.kind != DatabaseKind::Sqlite
+            && modal.mode.read(cx).selected_value().is_some_and(|v| v == "现有库");
+        if !existing_mode {
+            if modal.probe_key.is_some() || modal.probe_running || !modal.table_grid.is_empty() {
+                if let Some(m) = &mut self.restore_modal {
+                    m.probe_key = None;
+                    m.probe_running = false;
+                    m.probe_error = None;
+                    m.table_grid.clear();
+                }
+                cx.notify();
+            }
             return;
         }
-        // 源表清单：备份记录 tables 或 manifest.objects（都需非空才逐表）。
-        let mut names: Vec<String> = Vec::new();
-        if let Some(meta) = &modal.meta {
-            if let Some(tables) = &meta.tables {
-                if !tables.is_empty() {
-                    names = tables.clone();
-                }
-            }
-            if names.is_empty() {
-                if let Some(m) = &meta.manifest {
-                    if !m.objects.is_empty() {
-                        names = m.objects.clone();
+        let Some(connection_id) = restore_selected_connection_id(modal, cx) else {
+            return;
+        };
+        let source = modal.source_input.read(cx).value().trim().to_string();
+        let target = modal
+            .target_db
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default();
+        // 文件/目标未就绪：等待，不清已有网格以免闪烁。
+        if source.is_empty() || target.is_empty() {
+            return;
+        }
+        let key = format!("{connection_id:?}|{source}|{target}");
+        if modal.probe_running || modal.probe_key.as_deref() == Some(key.as_str()) {
+            return;
+        }
+        self.start_restore_probe(connection_id, source, target, key, window, cx);
+    }
+
+    /// 后台探测目标：只读解析备份内容 + 枚举目标对象存在性，回填逐表网格。
+    /// 进入时把 probe_key 置为本次指纹，完成时再比对以丢弃陈旧结果（切连接/文件/目标）。
+    fn start_restore_probe(
+        &mut self,
+        connection_id: ConnectionId,
+        source: String,
+        target: String,
+        key: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(config) = self
+            .restore_modal
+            .as_ref()
+            .and_then(|m| m.candidates.iter().find(|c| c.id == connection_id).cloned())
+        else {
+            return;
+        };
+        let request = fluxdb_app::RestoreRequest {
+            config,
+            source: PathBuf::from(source),
+            target,
+            create_target: false,
+            tool: PathBuf::new(),
+            manifest: None,
+            table_decisions: Vec::new(),
+            options: Default::default(),
+        };
+        if let Some(m) = &mut self.restore_modal {
+            m.probe_key = Some(key.clone());
+            m.probe_running = true;
+            m.probe_error = None;
+        }
+        cx.notify();
+        let controller = self.controller.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self._file_picker_task = Some(cx.spawn_in(window, async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    match controller.dispatch_database_task(
+                        AppCommand::ProbeRestore(request),
+                        &cancel,
+                        &mut |_| {},
+                    ) {
+                        AppEvent::RestoreObjectsProbed(objects) => Ok(objects),
+                        AppEvent::Failed(error) => Err(error.message),
+                        _ => Err("探测返回了错误事件".to_string()),
                     }
-                }
-            }
-        }
-        if names.is_empty() {
-            return;
-        }
-        let actions = vec!["覆盖(重建)".to_string(), "追加数据".to_string(), "跳过".to_string()];
-        let grid = names
+                })
+                .await;
+            let _ = cx.update(|window, cx| {
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| {
+                    // 陈旧结果：指纹已变，交给下一次探测覆盖，这里不动状态。
+                    if this
+                        .restore_modal
+                        .as_ref()
+                        .and_then(|m| m.probe_key.as_deref())
+                        != Some(key.as_str())
+                    {
+                        return;
+                    }
+                    if let Some(m) = &mut this.restore_modal {
+                        m.probe_running = false;
+                    }
+                    match result {
+                        Ok(objects) => {
+                            this.rebuild_restore_grid(objects, window, cx);
+                            if let Some(m) = &mut this.restore_modal {
+                                m.probe_error = None;
+                            }
+                        }
+                        Err(message) => {
+                            if let Some(m) = &mut this.restore_modal {
+                                m.table_grid.clear();
+                                m.probe_error = Some(message.clone());
+                            }
+                            this.show_message(
+                                format!("目标检查失败：{message}"),
+                                AppMessageKind::Warning,
+                                cx,
+                            );
+                        }
+                    }
+                    cx.notify();
+                    cx.refresh_windows();
+                });
+            });
+        }));
+    }
+
+    /// 用探测结果重建逐表网格：每行按存在性/备份内容生成合法动作候选与默认选择。
+    fn rebuild_restore_grid(
+        &mut self,
+        objects: Vec<fluxdb_app::RestoreObjectProbe>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let grid = objects
             .into_iter()
-            .map(|name| {
+            .map(|o| {
+                let (labels, default_idx) =
+                    restore_row_action_plan(o.exists_in_target, o.has_ddl, o.has_data);
                 let select = cx.new(|cx| {
                     SelectState::new(
-                        SearchableVec::new(actions.clone()),
-                        Some(IndexPath::default().row(0)),
+                        SearchableVec::new(labels),
+                        Some(IndexPath::default().row(default_idx)),
                         window,
                         cx,
                     )
                 });
-                TableGridRow { name, exists: false, select }
+                TableGridRow {
+                    key: o.key,
+                    name: o.name,
+                    exists: o.exists_in_target,
+                    has_ddl: o.has_ddl,
+                    has_data: o.has_data,
+                    select,
+                }
             })
             .collect();
         if let Some(m) = &mut self.restore_modal {
             m.table_grid = grid;
         }
-        cx.notify();
     }
 
     /// 读取逐表网格的决策，供 preflight 组装 RestoreRequest.table_decisions。
+    /// 用 key（PG=schema.name）匹配；占位「待选择策略」不提交（预检查按钮此时已禁用，双保险）。
     fn restore_table_choices(&self, cx: &App) -> Vec<fluxdb_core::PerTableDecision> {
         let Some(modal) = &self.restore_modal else {
             return Vec::new();
@@ -256,17 +454,40 @@ impl NavicatMain {
             .table_grid
             .iter()
             .filter_map(|row| {
-                let act = match row.select.read(cx).selected_value()?.as_str() {
-                    "覆盖(重建)" => fluxdb_core::RestoreTableAction::Overwrite,
+                let label = row.select.read(cx).selected_value()?;
+                if label == PLACEHOLDER_ACTION {
+                    return None;
+                }
+                let act = match label.as_str() {
+                    "新建表" => fluxdb_core::RestoreTableAction::Create,
+                    "重建表" => fluxdb_core::RestoreTableAction::Recreate,
+                    "清空后导入" => fluxdb_core::RestoreTableAction::TruncateAndLoad,
                     "追加数据" => fluxdb_core::RestoreTableAction::Append,
                     _ => fluxdb_core::RestoreTableAction::Skip,
                 };
                 Some(fluxdb_core::PerTableDecision {
-                    table: row.name.clone(),
+                    table: row.key.clone(),
                     action: act,
                 })
             })
             .collect()
+    }
+
+    /// 仍处于「待选择策略」占位的已存在对象数：>0 时禁止预检查与确认恢复（设计文档 §6.3/§14.7）。
+    fn restore_pending_count(&self, cx: &App) -> usize {
+        let Some(modal) = &self.restore_modal else {
+            return 0;
+        };
+        modal
+            .table_grid
+            .iter()
+            .filter(|row| {
+                row.select
+                    .read(cx)
+                    .selected_value()
+                    .is_some_and(|v| v == PLACEHOLDER_ACTION)
+            })
+            .count()
     }
 
     fn start_restore_preflight(
@@ -307,6 +528,23 @@ impl NavicatMain {
                     Ok((request, plan)) => {
                         data.logs = vec![plan.summary.clone()];
                         data.logs.extend(plan.warnings.clone());
+                        // 逐表回显：解析后的动作 + 预检查风险；破坏性动作显式告警。
+                        for info in &plan.tables {
+                            let action = info.default_action;
+                            let mut line = format!(
+                                "· {} → {}{}",
+                                info.name,
+                                action.label(),
+                                if info.exists_in_target { "（目标已存在）" } else { "（目标新建）" }
+                            );
+                            if action.destroys_target_data() {
+                                line.push_str("　⚠ 将删除目标现有数据/定义");
+                            }
+                            data.logs.push(line);
+                            for risk in &info.risks {
+                                data.logs.push(format!("    风险：{risk}"));
+                            }
+                        }
                         data.prepared = Some((request, plan));
                     }
                     Err(e) => data.logs = vec![e.message.clone()],
@@ -339,6 +577,7 @@ impl NavicatMain {
         let controller = self.controller.clone();
         let storage = self.storage.clone();
         let cancel = state.borrow().cancel.clone();
+        let backup_id = state.borrow().backup_id.clone();
         cx.spawn(async move |view, cx| {
             let (sender, receiver) = mpsc::channel();
             let result = cx
@@ -372,6 +611,8 @@ impl NavicatMain {
                         success: result.is_ok(),
                         canceled: cancel.load(Ordering::Relaxed),
                         result: message,
+                        outcome: result.as_ref().ok().cloned(),
+                        backup_id: backup_id.unwrap_or_default(),
                     };
                     let persisted = controller.record_restore(&storage, record);
                     (result, persisted)
@@ -393,11 +634,37 @@ impl NavicatMain {
                         data.running = false;
                         data.prepared = None;
                         let success = result.is_ok();
-                        let message = match result {
+                        let message = match &result {
                             Ok(outcome) => format!("恢复完成：{}", outcome.verification),
                             Err(e) => format!("恢复失败：{}", e.message),
                         };
                         data.logs.push(message.clone());
+                        // 逐对象结果（设计文档 §15.3）：状态 + 动作 + 明细。
+                        if let Ok(outcome) = &result {
+                            if outcome.total_objects > 0 {
+                                data.logs.push(format!(
+                                    "对象结果：共 {} 个",
+                                    outcome.total_objects
+                                ));
+                            }
+                            for obj in &outcome.objects {
+                                let action = obj
+                                    .action
+                                    .map(|a| format!("（{}）", a.label()))
+                                    .unwrap_or_default();
+                                let detail = if obj.detail.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("：{}", obj.detail)
+                                };
+                                data.logs.push(format!(
+                                    "· {} {} → {}{detail}",
+                                    obj.name,
+                                    action,
+                                    obj.status.label()
+                                ));
+                            }
+                        }
                         if let Err(e) = persisted {
                             data.logs.push(format!("恢复记录保存失败：{e}"));
                         }
@@ -432,9 +699,81 @@ impl NavicatMain {
             cx.notify();
         }
     }
+
+    /// 「确认恢复」入口：计划含破坏性动作（重建/清空后导入）时先要求原样输入目标名，
+    /// 否则直接执行。设计文档 §6.4/§14：破坏性动作必须二次确认，避免误删目标数据。
+    fn confirm_or_run_restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(modal) = &self.restore_modal else {
+            return;
+        };
+        if modal.runtime.borrow().running {
+            return;
+        }
+        let prepared = modal.runtime.borrow().prepared.clone();
+        let Some((request, plan)) = prepared else {
+            return;
+        };
+        let destructive: Vec<String> = plan
+            .tables
+            .iter()
+            .filter(|t| t.default_action.destroys_target_data())
+            .map(|t| format!("{}（{}）", t.name, t.default_action.label()))
+            .collect();
+        // 整库覆盖（非逐表）到现有库同样具有破坏性：create_target=false 且非逐表时提示。
+        let whole_overwrite = plan.tables.is_empty() && !request.create_target;
+        if destructive.is_empty() && !whole_overwrite {
+            let runtime = modal.runtime.clone();
+            self.start_restore_execution(runtime, cx);
+            return;
+        }
+        if let Some(m) = &mut self.restore_modal {
+            m.confirm_open = true;
+            m.confirm_target = request.target.clone();
+            m.confirm_destructive = if destructive.is_empty() {
+                vec!["整库恢复到现有库将覆盖其中全部同名对象".to_string()]
+            } else {
+                destructive
+            };
+            m.confirm_input.update(cx, |input, cx| {
+                input.set_value(String::new(), window, cx);
+            });
+        }
+        cx.notify();
+        cx.refresh_windows();
+    }
+
+    /// 取消破坏性操作确认层（不执行恢复，回到计划查看）。
+    fn cancel_restore_confirm(&mut self, cx: &mut Context<Self>) {
+        if let Some(m) = &mut self.restore_modal {
+            m.confirm_open = false;
+        }
+        cx.notify();
+        cx.refresh_windows();
+    }
+
+    /// 确认层「确认执行」：输入必须与目标名完全一致，否则拒绝并提示。
+    fn run_restore_confirmed(&mut self, cx: &mut Context<Self>) {
+        let Some(modal) = &self.restore_modal else {
+            return;
+        };
+        let typed = modal.confirm_input.read(cx).value().trim().to_string();
+        if typed != modal.confirm_target {
+            self.show_message(
+                format!("请原样输入目标名称「{}」以确认", modal.confirm_target),
+                AppMessageKind::Warning,
+                cx,
+            );
+            return;
+        }
+        let runtime = modal.runtime.clone();
+        if let Some(m) = &mut self.restore_modal {
+            m.confirm_open = false;
+        }
+        self.start_restore_execution(runtime, cx);
+    }
 }
 
-/// 恢复弹框入口：遮罩 + 面板 + 头部/表单/日志/底栏，复用备份弹框的视觉规范。
+/// 恢复弹框入口：遮罩 + 面板 + 头部/页签/分页正文/底栏，复用备份弹框的视觉规范。
 fn database_restore_modal(
     modal: &RestoreModal,
     colors: UiColors,
@@ -444,10 +783,27 @@ fn database_restore_modal(
     let busy = runtime.running;
     let has_plan = runtime.prepared.is_some();
     let locked = busy || has_plan;
+    // 已存在对象未选策略时禁止预检查/确认（设计文档 §6.3/§14.7）。
+    let pending = modal
+        .table_grid
+        .iter()
+        .filter(|row| {
+            row.select
+                .read(cx)
+                .selected_value()
+                .is_some_and(|v| v == PLACEHOLDER_ACTION)
+        })
+        .count();
     let panel = restore_modal_panel(colors, cx)
-        .child(restore_modal_header(colors, cx))
+        .child(restore_modal_header(modal, colors, cx))
+        .child(restore_modal_tabs(modal.tab, colors, cx))
         .child(restore_modal_body(modal, &runtime, locked, colors, cx))
-        .child(restore_modal_footer(busy, has_plan, colors, cx));
+        .child(restore_modal_footer(
+            &runtime, busy, has_plan, pending, colors, cx,
+        ))
+        .when(modal.confirm_open, |p| {
+            p.child(restore_confirm_overlay(modal, colors, cx))
+        });
     restore_modal_shell(panel, colors, cx)
 }
 
@@ -477,6 +833,7 @@ fn restore_modal_shell(panel: Div, colors: UiColors, cx: &mut Context<NavicatMai
 
 fn restore_modal_panel(colors: UiColors, cx: &mut Context<NavicatMain>) -> Div {
     div()
+        .relative()
         .w(px(640.))
         .max_w(px(640.))
         .h(px(520.))
@@ -504,25 +861,55 @@ fn restore_modal_panel(colors: UiColors, cx: &mut Context<NavicatMain>) -> Div {
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
-fn restore_modal_header(colors: UiColors, cx: &mut Context<NavicatMain>) -> impl IntoElement {
+fn restore_modal_header(
+    modal: &RestoreModal,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> impl IntoElement {
+    // 上下文行（设计文档 §14.1 A 区）：连接名 · 引擎 · 目标，切页签不消失。
+    let conn_label = modal
+        .connection
+        .read(cx)
+        .selected_value()
+        .cloned()
+        .unwrap_or_default();
+    let context = if conn_label.is_empty() {
+        format!("{} · 未选择目标连接", database_kind_name(modal.kind))
+    } else {
+        format!("{conn_label} · {}", database_kind_name(modal.kind))
+    };
     div()
-        .h(px(56.))
         .flex_none()
         .px_5()
+        .pt_4()
+        .pb_3()
         .flex()
-        .items_center()
+        .items_start()
         .justify_between()
         .child(
             div()
                 .flex()
-                .items_center()
-                .gap_3()
-                .child(app_icon(AppIcon::Refresh, 18., colors.text))
+                .flex_col()
+                .gap_1()
                 .child(
                     div()
-                        .text_size(px(18.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("恢复数据库"),
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(app_icon(AppIcon::Refresh, 18., colors.text))
+                        .child(
+                            div()
+                                .text_size(px(18.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("恢复数据库"),
+                        ),
+                )
+                .child(
+                    div()
+                        .pl(px(30.))
+                        .text_size(px(12.))
+                        .text_color(colors.muted)
+                        .child(context),
                 ),
         )
         .child(
@@ -545,197 +932,32 @@ fn restore_modal_header(colors: UiColors, cx: &mut Context<NavicatMain>) -> impl
         )
 }
 
-/// 表单 + 消息日志。行布局与备份常规页一致：120px 标签列 + 弹性内容列。
+/// 分页正文：按当前页签渲染常规/对象选择/高级/消息日志（设计文档 §14.1）。
+/// 各页渲染函数在 database_restore/ui.rs，切页只改 modal.tab，不销毁表单实体。
 fn restore_modal_body(
     modal: &RestoreModal,
     runtime: &RestoreRuntime,
     locked: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> impl IntoElement {
-    let target_label = if modal.kind == DatabaseKind::Sqlite {
-        "目标新文件"
-    } else {
-        "目标数据库名称"
-    };
-    // 「现有库」模式：目标库走下拉，且显示逐表动作。
-    let existing_mode = modal.kind != DatabaseKind::Sqlite
-        && modal.mode.read(cx).selected_value().is_some_and(|v| v == "现有库");
+) -> Div {
     div()
         .flex_1()
         .min_h(px(0.))
-        .overflow_y_scrollbar()
-        .px_5()
-        .py_4()
+        // 必须是 flex 列：否则子页的 flex_1 拿不到受约束高度，
+        // 对象页的滚动框会塌成 0 高、把表头与数据行整块裁掉。
         .flex()
         .flex_col()
-        .gap_3()
-        // 目标连接
-        .child(
-            div()
-                .w_full()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(div().w(px(120.)).flex_none().child(sql_file_section_label(
-                    "目标连接",
-                    colors,
-                )))
-                .child(Select::new(&modal.connection).disabled(locked).w_full()),
-        )
-        // 备份文件完整路径：输入框 + 「选择」按钮（原生打开设置备份目录）
-        .child(
-            div()
-                .w_full()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(div().w(px(120.)).flex_none().child(sql_file_section_label(
-                    "备份文件",
-                    colors,
-                )))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(restore_input_frame(modal.source_input.clone(), colors))
-                        .child(
-                            Button::new("restore-pick-backup-file")
-                                .label("选择")
-                                .small()
-                                .rounded(colors.radius)
-                                .disabled(locked)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.choose_restore_backup_file(window, cx);
-                                })),
-                        ),
-                ),
-        )
-        .child(
-            div()
-                .pl(px(132.))
-                .text_size(px(11.))
-                .text_color(colors.muted)
-                .child("按文件内容识别格式；SQLite 备份恢复为 .db 新文件。"),
-        )
-        // 目标库名称/文件 + 恢复方式
-        // 「现有库」模式 -> 目标库下拉（目标连接下的库）；「新数据库」/Sqlite -> 文本框。
-        .child({
-            let label = if existing_mode {
-                "目标数据库"
-            } else {
-                target_label
-            };
-            let content = if existing_mode {
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .child(Select::new(&modal.target_db).disabled(locked).w_full())
-            } else {
-                restore_input_frame(modal.target_input.clone(), colors)
-            };
-            div()
-                .w_full()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(div().w(px(120.)).flex_none().child(sql_file_section_label(
-                    label,
-                    colors,
-                )))
-                .child(content)
+        .child(match modal.tab {
+            RestoreTab::General => restore_general_page(modal, locked, colors, cx).into_any_element(),
+            RestoreTab::Objects => {
+                restore_objects_page(modal, runtime, locked, colors, cx).into_any_element()
+            }
+            RestoreTab::Advanced => {
+                restore_advanced_page(modal, runtime, locked, colors, cx).into_any_element()
+            }
+            RestoreTab::Log => restore_log_page(runtime, colors).into_any_element(),
         })
-        .child(
-            div()
-                .w_full()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(div().w(px(120.)).flex_none().child(sql_file_section_label(
-                    "恢复方式",
-                    colors,
-                )))
-                .child(Select::new(&modal.mode).disabled(locked).w_full()),
-        )
-        // 逐表模式：目标库已有同名表/追加数据等，列出源表 + 每表动作。
-        .when(existing_mode && !modal.table_grid.is_empty(), |this| {
-            this.child(
-                div()
-                    .w_full()
-                    .flex()
-                    .items_start()
-                    .gap_3()
-                    .child(div().w(px(120.)).flex_none().child(sql_file_section_label(
-                        "表动作",
-                        colors,
-                    )))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .h(px(150.))
-                                    .overflow_y_scrollbar()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .children(modal.table_grid.iter().map(|row| {
-                                        div().flex().items_center().gap_2().child(
-                                            div()
-                                                .flex_1()
-                                                .min_w(px(0.))
-                                                .text_size(px(13.))
-                                                .child(
-                                                    if row.exists {
-                                                        format!("{}（目标已有）", row.name)
-                                                    } else {
-                                                        row.name.clone()
-                                                    },
-                                                ),
-                                        ).child(
-                                            div().w(px(150.)).flex_none().child(
-                                                Select::new(&row.select).disabled(locked).w_full(),
-                                            ),
-                                        )
-                                    })),
-                            ),
-                    ),
-            )
-        })
-        .child(
-            div()
-                .text_size(px(11.))
-                .text_color(colors.muted)
-                .child("先「预检查」生成恢复计划并确认，才能「确认恢复」；非空目标禁止覆盖。"),
-        )
-        // 消息日志：与备份任务日志同款边框区域，预检查计划/警告与执行进度都在此追加。
-        .child(
-            div()
-                .flex_1()
-                .min_h(px(0.))
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(sql_file_section_label("消息日志", colors))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h(px(0.))
-                        .rounded(colors.radius)
-                        .border_1()
-                        .border_color(colors.border)
-                        .bg(colors.input_bg)
-                        .overflow_y_scrollbar()
-                        .child(restore_log_list(&runtime.logs, colors)),
-                ),
-        )
 }
 
 /// 表单输入框：34px 外框 + 无边框内嵌 Input（ui-style 规范，与备份弹框一致）。
@@ -784,11 +1006,23 @@ fn restore_log_list(logs: &[String], colors: UiColors) -> Div {
 }
 
 fn restore_modal_footer(
+    runtime: &RestoreRuntime,
     busy: bool,
     has_plan: bool,
+    pending: usize,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
+    // 底栏左侧状态（设计文档 §14.1 D 区）：任务状态 / 计划摘要 / 待选择策略提示 / 草稿提示。
+    let status = if busy {
+        "正在处理…".to_string()
+    } else if let Some((_, plan)) = &runtime.prepared {
+        plan.summary.clone()
+    } else if pending > 0 {
+        format!("已有 {pending} 个对象待选择还原策略")
+    } else {
+        "编辑草稿 · 先「预检查」生成计划".to_string()
+    };
     div()
         .h(px(54.))
         .flex_none()
@@ -797,8 +1031,16 @@ fn restore_modal_footer(
         .border_color(colors.border)
         .flex()
         .items_center()
-        .justify_end()
         .gap_2()
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .text_size(px(11.))
+                .text_color(colors.muted)
+                .truncate()
+                .child(status),
+        )
         .child(
             Button::new("restore-cancel-task")
                 .label(if busy { "取消任务" } else { "关闭" })
@@ -840,7 +1082,7 @@ fn restore_modal_footer(
                 .label(if busy { "处理中…" } else { "预检查" })
                 .small()
                 .w(px(92.))
-                .disabled(busy || has_plan)
+                .disabled(busy || has_plan || pending > 0)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.request_restore_preflight(cx);
                     cx.stop_propagation();
@@ -852,14 +1094,157 @@ fn restore_modal_footer(
                 .primary()
                 .small()
                 .w(px(92.))
-                .disabled(busy || !has_plan)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if let Some(modal) = &this.restore_modal {
-                        let runtime = modal.runtime.clone();
-                        this.start_restore_execution(runtime, cx);
-                    }
+                .disabled(busy || !has_plan || pending > 0)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.confirm_or_run_restore(window, cx);
                     cx.stop_propagation();
                 })),
+        )
+}
+
+/// 破坏性动作二次确认层（设计文档 §6.4/§14）：覆盖在恢复面板之上，
+/// 列出将删除目标数据/定义的对象，要求原样输入目标名后才能执行。
+fn restore_confirm_overlay(
+    modal: &RestoreModal,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let target = modal.confirm_target.clone();
+    div()
+        .absolute()
+        .inset_0()
+        .occlude()
+        .bg(if colors.is_dark {
+            opaque_grey(0.02, 0.58)
+        } else {
+            opaque_grey(0.75, 0.28)
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(
+            div()
+                .w(px(430.))
+                .max_w(px(430.))
+                .rounded(colors.radius_lg)
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.panel_bg)
+                .shadow(vec![box_shadow(
+                    px(0.),
+                    px(18.),
+                    px(42.),
+                    px(0.),
+                    hsla(0., 0., 0., if colors.is_dark { 0.42 } else { 0.18 }),
+                )])
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .text_size(px(13.))
+                .text_color(colors.text)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                // 头部：危险图标 + 标题。
+                .child(
+                    div()
+                        .px_5()
+                        .pt_4()
+                        .pb_3()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(app_icon_box(AppIcon::CircleSlash, 22., 15., rgb(0xe5484d)))
+                        .child(
+                            div()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_size(px(15.))
+                                .child("破坏性操作确认"),
+                        ),
+                )
+                // 主体：说明 + 破坏性对象清单 + 原样输入目标名。
+                .child(
+                    div()
+                        .px_5()
+                        .pb_4()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(colors.muted)
+                                .child("以下对象将删除目标现有数据或定义，此操作无法撤销："),
+                        )
+                        .child(
+                            div()
+                                .max_h(px(150.))
+                                .overflow_y_scrollbar()
+                                .rounded(colors.radius)
+                                .border_1()
+                                .border_color(colors.border)
+                                .bg(colors.input_bg)
+                                .p_2()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .children(modal.confirm_destructive.iter().map(|item| {
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(app_icon(AppIcon::Trash, 13., rgb(0xe5484d)))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(colors.text)
+                                                .child(item.clone()),
+                                        )
+                                })),
+                        )
+                        .child(div().text_size(px(12.)).child(format!(
+                            "请输入目标名称「{target}」以确认执行："
+                        )))
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .child(restore_input_frame(modal.confirm_input.clone(), colors)),
+                        ),
+                )
+                .child(div().h(px(1.)).flex_none().bg(colors.border))
+                // 底栏：取消 / 确认执行（危险样式）。
+                .child(
+                    div()
+                        .h(px(54.))
+                        .flex_none()
+                        .px_5()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("restore-confirm-cancel")
+                                .label("取消")
+                                .small()
+                                .w(px(88.))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.cancel_restore_confirm(cx);
+                                    cx.stop_propagation();
+                                })),
+                        )
+                        .child(
+                            Button::new("restore-confirm-run")
+                                .label("确认执行")
+                                .danger()
+                                .small()
+                                .w(px(100.))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.run_restore_confirmed(cx);
+                                    cx.stop_propagation();
+                                })),
+                        ),
+                ),
         )
 }
 
@@ -933,6 +1318,10 @@ impl NavicatMain {
 
     /// 从挂载的弹框实体读取表单值,构造 RestoreRequest 并启动预检查。
     fn request_restore_preflight(&mut self, cx: &mut Context<Self>) {
+        // 有已存在对象未选策略：不生成计划（按钮已禁用，此处兜底防止陈旧计划）。
+        if self.restore_pending_count(cx) > 0 {
+            return;
+        }
         let Some(modal) = &self.restore_modal else {
             return;
         };
@@ -959,13 +1348,11 @@ impl NavicatMain {
         } else {
             modal.target_input.read(cx).value().to_string()
         };
-        let label = modal
-            .connection
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .unwrap_or_default();
-        let Some(index) = modal.labels.iter().position(|l| l == &label) else {
+        // 按选中行索引取候选连接（不用名称匹配：同名连接会错配）。
+        let Some(row) = modal.connection.read(cx).selected_index(cx).map(|p| p.row) else {
+            return;
+        };
+        let Some(config) = modal.candidates.get(row).cloned() else {
             return;
         };
         // Sqlite 走「新文件」，恒建新目标；非 Sqlite 仅「现有库」不建。
@@ -975,31 +1362,70 @@ impl NavicatMain {
             .as_ref()
             .filter(|m| Path::new(&m.output_path) == source)
             .and_then(|m| m.manifest.clone());
+        // 高级页选项：按选中行索引映射回枚举（越界回退默认）。
+        let transaction = match modal.transaction.read(cx).selected_index(cx).map(|p| p.row) {
+            Some(1) => fluxdb_app::RestoreTransactionMode::SingleTransaction,
+            _ => fluxdb_app::RestoreTransactionMode::EngineDefault,
+        };
+        let validation = match modal.validation.read(cx).selected_index(cx).map(|p| p.row) {
+            Some(1) => fluxdb_app::RestoreValidation::RowCount,
+            _ => fluxdb_app::RestoreValidation::Basic,
+        };
         let request = fluxdb_app::RestoreRequest {
-            config: modal.candidates[index].clone(),
+            config,
             source,
             target,
             create_target,
             tool: PathBuf::new(),
             manifest,
             table_decisions: self.restore_table_choices(cx),
+            options: fluxdb_app::RestoreOptions {
+                transaction,
+                validation,
+            },
         };
         let runtime = modal.runtime.clone();
         self.start_restore_preflight(request, runtime, cx);
     }
 }
 
-/// 恢复弹框当前选中的「目标连接」id（按标签匹配候选配置）。
+/// 依据探测事实（存在性 + 备份内容）给出某行的合法动作候选与默认选择索引（设计文档 §6.4）。
+/// - 目标不存在：有结构默认「新建表」；无结构无处建表，只能「不处理」。
+/// - 目标已存在：默认「待选择策略」占位强制显式选择；重建需结构，清空/追加需数据；恒含「不处理」。
+fn restore_row_action_plan(exists: bool, has_ddl: bool, has_data: bool) -> (Vec<String>, usize) {
+    if !exists {
+        if has_ddl {
+            (vec!["新建表".to_string(), "不处理".to_string()], 0)
+        } else {
+            (vec!["不处理".to_string()], 0)
+        }
+    } else {
+        let mut real: Vec<String> = Vec::new();
+        if has_ddl {
+            real.push("重建表".to_string());
+        }
+        if has_data {
+            real.push("清空后导入".to_string());
+            real.push("追加数据".to_string());
+        }
+        if real.is_empty() {
+            (vec!["不处理".to_string()], 0)
+        } else {
+            let mut labels = vec![PLACEHOLDER_ACTION.to_string()];
+            labels.extend(real);
+            labels.push("不处理".to_string());
+            (labels, 0)
+        }
+    }
+}
+
+/// 恢复弹框当前选中的「目标连接」id（按选中行索引取候选，避免同名连接错配）。
 fn restore_selected_connection_id(
     modal: &RestoreModal,
     cx: &Context<NavicatMain>,
 ) -> Option<ConnectionId> {
-    let label = modal.connection.read(cx).selected_value()?.clone();
-    modal
-        .labels
-        .iter()
-        .position(|l| l == &label)
-        .map(|i| modal.candidates[i].id)
+    let row = modal.connection.read(cx).selected_index(cx)?.row;
+    modal.candidates.get(row).map(|c| c.id)
 }
 
 #[cfg(target_os = "macos")]
