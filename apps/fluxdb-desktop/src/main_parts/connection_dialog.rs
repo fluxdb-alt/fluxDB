@@ -201,8 +201,12 @@ fn toggle_window_maximized(window: &Window) {
             SW_MAXIMIZE
         };
         // GPUI 0.3.3 的 Windows zoom() 只会最大化，无法还原，因此显式切换 Win32 状态。
-        if let Err(err) = unsafe { ShowWindowAsync(HWND(handle.hwnd.get()), command) } {
-            tracing::error!(target: "fluxdb_desktop", error = %err, "切换 Windows 窗口最大化状态失败");
+        if !unsafe { ShowWindowAsync(HWND(handle.hwnd.get()), command) }.as_bool() {
+            tracing::error!(
+                target: "fluxdb_desktop",
+                error = %std::io::Error::last_os_error(),
+                "切换 Windows 窗口最大化状态失败"
+            );
         }
     }
 
