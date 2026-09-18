@@ -16,6 +16,7 @@ OutputDir=..\target\windows-package
 OutputBaseFilename=FluxDB-{#AppVersion}-windows-x64-setup
 Compression=lzma2
 SolidCompression=yes
+SetupIconFile=..\apps\fluxdb-desktop\assets\app-icon.ico
 UninstallDisplayIcon={app}\fluxdb-desktop.exe
 
 [Files]
