@@ -68,6 +68,10 @@ fn main() {
                     focus: true,
                     is_resizable: true,
                     titlebar: Some(platform_titlebar_options()),
+                    // Linux 请求客户端装饰：撤掉系统标题栏，避免与顶栏自绘窗口按钮出现两套关闭；
+                    // X11 无合成器时 gpui 自动回退 Server，CSD 阴影与拖边缩放由 gpui-component window_border 提供。
+                    #[cfg(target_os = "linux")]
+                    window_decorations: Some(gpui::WindowDecorations::Client),
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
