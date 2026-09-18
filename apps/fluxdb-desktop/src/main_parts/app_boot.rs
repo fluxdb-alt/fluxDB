@@ -68,6 +68,9 @@ fn main() {
                     focus: true,
                     is_resizable: true,
                     titlebar: Some(platform_titlebar_options()),
+                    // 与 .desktop ID 保持一致，Wayland app_id / X11 WM_CLASS 才能关联启动器图标。
+                    #[cfg(target_os = "linux")]
+                    app_id: Some("com.shining3d.fluxdb".to_string()),
                     // Linux 请求客户端装饰：撤掉系统标题栏，避免与顶栏自绘窗口按钮出现两套关闭；
                     // X11 无合成器时 gpui 自动回退 Server，CSD 阴影与拖边缩放由 gpui-component window_border 提供。
                     #[cfg(target_os = "linux")]

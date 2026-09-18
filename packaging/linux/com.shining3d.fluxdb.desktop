@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=FluxDB
+GenericName=Database Client
+Comment=Connect to PostgreSQL, MySQL, SQLite, and Redis
+Exec=fluxdb
+Icon=fluxdb
+Terminal=false
+Categories=Development;Database;
+Keywords=FluxDB;SQL;PostgreSQL;MySQL;SQLite;Redis;Database;
+StartupWMClass=com.shining3d.fluxdb
+StartupNotify=true
