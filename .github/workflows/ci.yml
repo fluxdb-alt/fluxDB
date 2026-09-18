@@ -170,9 +170,14 @@ jobs:
           pkg="fluxdb_${version}_amd64"
           dir="target/linux-package/$pkg"
           rm -rf target/linux-package
-          mkdir -p "$dir/DEBIAN" "$dir/usr/bin" "$dir/usr/share/fluxdb"
+          mkdir -p "$dir/DEBIAN" "$dir/usr/bin" "$dir/usr/share/fluxdb" \
+            "$dir/usr/share/applications" "$dir/usr/share/icons/hicolor/512x512/apps"
           install -m 0755 "target/${{ matrix.target }}/release/fluxdb-desktop" "$dir/usr/bin/fluxdb"
           cp -r apps/fluxdb-desktop/assets "$dir/usr/share/fluxdb/assets"
+          install -m 0644 packaging/linux/com.shining3d.fluxdb.desktop \
+            "$dir/usr/share/applications/com.shining3d.fluxdb.desktop"
+          install -m 0644 apps/fluxdb-desktop/assets/app-icon.png \
+            "$dir/usr/share/icons/hicolor/512x512/apps/fluxdb.png"
           cat > "$dir/DEBIAN/control" <<EOF
           Package: fluxdb
           Version: $version
@@ -195,10 +200,14 @@ jobs:
           dpkg-deb -c "$deb" | tee target/linux-package/contents.txt
           grep -q "usr/bin/fluxdb" target/linux-package/contents.txt
           grep -q "usr/share/fluxdb/assets/" target/linux-package/contents.txt
+          grep -q "usr/share/applications/com.shining3d.fluxdb.desktop" target/linux-package/contents.txt
+          grep -q "usr/share/icons/hicolor/512x512/apps/fluxdb.png" target/linux-package/contents.txt
           # 安装到临时 root 验证文件可解压且可执行位正确（无图形会话，不启动 GUI）。
           dpkg-deb -x "$deb" target/linux-package/extract
           test -x target/linux-package/extract/usr/bin/fluxdb
           test -f target/linux-package/extract/usr/share/fluxdb/assets/app-icon.png
+          test -f target/linux-package/extract/usr/share/applications/com.shining3d.fluxdb.desktop
+          test -f target/linux-package/extract/usr/share/icons/hicolor/512x512/apps/fluxdb.png
           sha256sum "$deb" | tee "$deb.sha256"
           # 运行依赖报告（供正式发布映射 Depends；内部候选仅记录，不声称 GUI 已验）。
           ldd target/linux-package/extract/usr/bin/fluxdb 2>/dev/null \
