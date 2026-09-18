@@ -411,7 +411,7 @@ fn redis_hash_table_seq_cell(row_ix: usize, colors: UiColors) -> impl IntoElemen
         .overflow_hidden()
         .whitespace_nowrap()
         .text_ellipsis()
-        .font_family("Menlo")
+        .font_family(crate::PLATFORM_MONOSPACE_FONT)
         .text_size(px(11.))
         .text_color(colors.muted)
         .child(format!("{:02}", row_ix + 1))
@@ -435,7 +435,7 @@ fn redis_hash_table_field_cell(
         .whitespace_nowrap()
         .text_ellipsis()
         .text_size(px(13.))
-        .font_family("Menlo")
+        .font_family(crate::PLATFORM_MONOSPACE_FONT)
         .text_color(colors.text)
         .tooltip(move |window, cx| Tooltip::new(field_tooltip.clone()).build(window, cx))
         .child(row.field)
@@ -525,7 +525,7 @@ fn redis_hash_table_value_cell(
                 .whitespace_nowrap()
                 .text_ellipsis()
                 .text_size(px(13.))
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(if truncated { colors.muted } else { colors.text })
                 .tooltip(move |window, cx| Tooltip::new(value_tooltip.clone()).build(window, cx))
                 .child(row.value),
@@ -619,7 +619,7 @@ fn redis_hash_table_ttl_cell(
                 .whitespace_nowrap()
                 .text_ellipsis()
                 .text_size(px(13.))
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(if truncated { colors.muted } else { colors.text })
                 .when_some(disabled_tooltip, move |this, message| {
                     this.tooltip(move |window, cx| {
@@ -733,7 +733,7 @@ fn redis_hash_table_value_edit_cell(
                                 .focus_bordered(false)
                                 .w_full()
                                 .h_full()
-                                .font_family("Menlo")
+                                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                                 .line_height(px(19.))
                                 .text_size(px(13.)),
                         ),
@@ -979,7 +979,7 @@ fn redis_hash_field_delete_confirm_popover(
                                     .gap_1()
                                     .child(
                                         div()
-                                            .font_family("Menlo")
+                                            .font_family(crate::PLATFORM_MONOSPACE_FONT)
                                             .text_size(px(14.))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(colors.text)

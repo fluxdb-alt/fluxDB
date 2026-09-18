@@ -2334,7 +2334,7 @@ fn redis_workbench_record_row(
                         .min_w(px(0.))
                         .flex_shrink(1.)
                         .text_size(px(12.))
-                        .font_family("Menlo")
+                        .font_family(crate::PLATFORM_MONOSPACE_FONT)
                         .text_color(colors.text)
                         .overflow_x_hidden()
                         .whitespace_nowrap()
@@ -2653,7 +2653,7 @@ fn redis_workbench_command_row(
                         .flex_1()
                         .min_w(px(0.))
                         .text_size(px(13.))
-                        .font_family("Menlo")
+                        .font_family(crate::PLATFORM_MONOSPACE_FONT)
                         .text_color(colors.text)
                         .overflow_x_hidden()
                         .whitespace_nowrap()
@@ -2713,7 +2713,7 @@ fn redis_workbench_json_view_dropdown(
     .child(
         div()
             .text_size(px(11.))
-            .font_family("Menlo")
+            .font_family(crate::PLATFORM_MONOSPACE_FONT)
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(if is_json_view { colors.text } else { colors.muted })
             .child(current_label),
@@ -2761,7 +2761,7 @@ fn redis_workbench_json_view_dropdown(
                 div()
                     .w_full()
                     .text_size(px(12.))
-                    .font_family("Menlo")
+                    .font_family(crate::PLATFORM_MONOSPACE_FONT)
                     .font_weight(if active {
                         gpui::FontWeight::SEMIBOLD
                     } else {
@@ -2832,7 +2832,7 @@ fn redis_workbench_reply_row(reply: &CommandReply, colors: UiColors) -> Div {
         .min_w(px(0.))
         .pl_5()
         .text_size(px(12.))
-        .font_family("Menlo")
+        .font_family(crate::PLATFORM_MONOSPACE_FONT)
         .text_color(color)
         .whitespace_normal()
         .child(label)

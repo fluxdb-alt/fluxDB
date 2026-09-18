@@ -233,7 +233,7 @@ mod table_info_tests {
             obj(Some("appdb"), Some("tenant_b"), "other", ObjectKind::View),
         ];
         // 展开 tenant_b：加载 tenant_b 的关系，不得清掉 public 的同名 a。
-        let mut children = vec![
+        let children = vec![
             obj(Some("appdb"), Some("tenant_b"), "a", ObjectKind::Table),
             obj(Some("appdb"), Some("tenant_b"), "b", ObjectKind::Table),
         ];
@@ -263,7 +263,7 @@ mod table_info_tests {
         // MySQL：父为 Database（无 schema），仍清整个库的表/视图。
         let mut current = vec![obj(Some("db1"), None, "a", ObjectKind::Table)];
         let parent = obj(Some("db1"), None, "db1", ObjectKind::Database);
-        let mut children = vec![obj(Some("db1"), None, "b", ObjectKind::Table)];
+        let children = vec![obj(Some("db1"), None, "b", ObjectKind::Table)];
         replace_loaded_children(&mut current, &parent.path, children);
         assert_eq!(current.len(), 1);
         assert_eq!(current[0].path.name, "b");
@@ -274,7 +274,7 @@ mod table_info_tests {
         // PG：数据库节点右键刷新返回的是该库的 schema 列表（不含表），不能据此清空已加载的表。
         let mut current = vec![obj(Some("appdb"), Some("public"), "a", ObjectKind::Table)];
         let parent = obj(Some("appdb"), None, "appdb", ObjectKind::Database);
-        let mut children = vec![obj(Some("appdb"), Some("public"), "public", ObjectKind::Schema)];
+        let children = vec![obj(Some("appdb"), Some("public"), "public", ObjectKind::Schema)];
         replace_loaded_children(&mut current, &parent.path, children);
         // public 表 a 保留；仅并入新到的 schema 条目。
         assert_eq!(current.len(), 2);

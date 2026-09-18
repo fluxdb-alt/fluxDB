@@ -709,7 +709,7 @@ struct NavicatMain {
     // 用 Rc<RefCell> 而非裸字段：gpui-component 的 dialog builder 在 NavicatMain::render 期间被
     // `Root::render_dialog_layer` 同步执行，此时 NavicatMain 处于 lease 状态，builder 里 `view.read(cx)`
     // 会触发 double-lease panic，因此 builder 必须改读共享状态而不是 re-enter 视图本身。
-    redis_hash_full_value_viewer: Rc<RefCell<Option<RedisHashFullValueViewer>>>,
+    redis_hash_full_value_viewer: Rc<std::cell::RefCell<Option<RedisHashFullValueViewer>>>,
     pending_redis_hash_field_drawer: Option<RedisHashFieldDrawerForm>,
     redis_hash_field_drawer_rows: Vec<RedisHashFieldDrawerInputs>,
     redis_hash_field_drawer_scroll: ScrollHandle,
@@ -850,6 +850,8 @@ struct NavicatMain {
     backup_pending_metas: BTreeMap<u64, BackupFileMeta>,
     /// 备份 tab：删除确认弹框对应的备份文件路径（None = 未打开）。
     pending_delete_backup: Option<PathBuf>,
+    /// Windows 关闭确认弹框：点击自绘关闭按钮后先确认再退出（true = 弹框打开）。
+    pending_exit_confirm: bool,
     user_admin_search_input: Entity<InputState>,
     _user_admin_search_subscription: Subscription,
     user_admin_create_user_input: Entity<InputState>,

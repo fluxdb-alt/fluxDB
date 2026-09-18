@@ -401,7 +401,7 @@ fn redis_json_value_body(
                         .min_h(px(0.))
                         .overflow_x_scroll()
                         .overflow_y_scrollbar()
-                        .font_family("Menlo")
+                        .font_family(crate::PLATFORM_MONOSPACE_FONT)
                         .text_size(px(13.))
                         .line_height(px(19.))
                         .text_color(colors.text)
@@ -503,7 +503,7 @@ fn redis_json_edit_body(
                                 .h_full()
                                 .px_2()
                                 .py_2()
-                                .font_family("Menlo")
+                                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                                 .text_size(px(13.))
                                 .line_height(px(19.)),
                         ),
@@ -782,7 +782,7 @@ fn redis_json_text_row(
         })
         .child(
             div()
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_size(px(13.))
                 .line_height(px(JSON_ROW_HEIGHT))
                 .child(

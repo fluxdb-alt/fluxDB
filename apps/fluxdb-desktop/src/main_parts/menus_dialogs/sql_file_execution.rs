@@ -511,49 +511,15 @@ impl NavicatMain {
             .as_ref()
             .map(|profile| profile.tls.ssl_mode)
             .unwrap_or(PostgresSslMode::Prefer);
-        // SSH 隧道（若启用）：起 ssh -N -L 子进程把远端映射到本地端口，psql 经
-        // 127.0.0.1:local（PGHOSTADDR）拨号，-h 保持真实远端供 TLS 校验；保持通道至 psql 结束。
-        let ssh = config.postgres_profile.as_ref().and_then(|profile| profile.ssh());
-        let mut tunnel_child = None;
-        let connect_host = host.clone();
-        let mut connect_port = port;
-        let mut hostaddr: Option<String> = None;
-        if let Some(ssh) = ssh {
-            match pg_start_ssh_tunnel(ssh, &host, port, &cancel_flag) {
-                Ok((child, local_port)) => {
-                    tunnel_child = Some(child);
-                    connect_port = local_port;
-                    hostaddr = Some("127.0.0.1".to_string());
-                }
-                Err(error) => {
-                    let _ = error;
-                    self.show_message("SSH 隧道建立失败", AppMessageKind::Error, cx);
-                    return true;
-                }
-            }
-        }
-        let mut invocation = pg_psql_invocation(
-            &connect_host,
-            connect_port,
-            &user,
-            database.as_deref().unwrap_or_default(),
-            path.to_string_lossy().as_ref(),
-            Some(&password),
-            !form.continue_on_error,
-            ssl_mode,
-        );
-        if let Some(addr) = &hostaddr {
-            invocation.env.extend(fluxdb_app::pg_hostaddr_env(addr, connect_port));
-        }
-        // psql 路径与备份共用同一套客户端解析（设置目录 → 应用下载目录 → 系统安装 → PATH），
-        // 解析不到时保持裸名交给 PATH，由启动失败分支给出安装引导。
-        if let Some(resolved) = fluxdb_app::resolve_pg_client_tool(
-            &self.controller.state().settings,
-            fluxdb_app::PgClientTool::Psql,
-            None,
-        ) {
-            invocation.program = resolved.program;
-        }
+        // CA/客户端证书/私钥路径同样沿连接档案下发给 psql（经 libpq env，不入 argv）。
+        let tls_paths = config
+            .postgres_profile
+            .as_ref()
+            .map(|profile| fluxdb_app::pg_native_tls_paths(&profile.tls))
+            .unwrap_or_default();
+        let native_settings = self.controller.state().settings.clone();
+        let native_path = path.to_path_buf();
+        let continue_on_error = form.continue_on_error;
         let file_label = sql_file_name(path);
         // 捕获 owned 副本，避免借用逃逸到 spawn 的后台任务生命周期外。
         let cancel_for_spawn = cancel_flag.clone();
@@ -561,12 +527,65 @@ impl NavicatMain {
         let task = cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move {
-                    let result = run_pg_native_psql(invocation, &cancel_for_spawn);
-                    // 工具结束即关闭隧道并回收 ssh 子进程。
-                    if let Some(mut child) = tunnel_child {
-                        let _ = child.kill();
-                        let _ = child.wait();
+                    if cancel_for_spawn.load(Ordering::Relaxed) {
+                        anyhow::bail!("SQL 文件已取消");
                     }
+                    // SSH 隧道（若启用）：复用连接器的 libssh2 把远端映射到本地端口，psql 经
+                    // 127.0.0.1:local（PGHOSTADDR）拨号，-h 保持真实远端供 TLS 校验；保持通道至 psql 结束。
+                    let ssh = config.postgres_profile.as_ref().and_then(|profile| profile.ssh());
+                    let mut native_tunnel = None;
+                    let connect_host = host.clone();
+                    let mut connect_port = port;
+                    let mut hostaddr: Option<String> = None;
+                    if let Some(ssh) = ssh {
+                        match fluxdb_app::pg_open_native_ssh_tunnel(
+                            ssh,
+                            &host,
+                            port,
+                            config
+                                .postgres_profile
+                                .as_ref()
+                                .map(|profile| profile.connect_timeout_secs())
+                                .unwrap_or(5),
+                        ) {
+                            Ok(tunnel) => {
+                                connect_port = tunnel.local_port();
+                                hostaddr = Some("127.0.0.1".to_string());
+                                native_tunnel = Some(tunnel);
+                            }
+                            Err(error) => return Err(anyhow::anyhow!("SSH 隧道建立失败：{error}")),
+                        }
+                    }
+                    let mut invocation = pg_psql_invocation(
+                        &connect_host,
+                        connect_port,
+                        &user,
+                        database.as_deref().unwrap_or_default(),
+                        native_path.to_string_lossy().as_ref(),
+                        Some(&password),
+                        !continue_on_error,
+                        ssl_mode,
+                        &tls_paths,
+                    );
+                    if let Some(addr) = &hostaddr {
+                        invocation.env.extend(fluxdb_app::pg_hostaddr_env(addr, connect_port));
+                    }
+                    // psql 路径与备份共用同一套客户端解析（设置目录 → 应用下载目录 → 系统安装 → PATH），
+                    // 解析不到时保持裸名交给 PATH，由启动失败分支给出安装引导。
+                    if let Some(resolved) = fluxdb_app::resolve_pg_client_tool(
+                        &native_settings,
+                        fluxdb_app::PgClientTool::Psql,
+                        None,
+                    ) {
+                        invocation.program = resolved.program;
+                    }
+
+                    if cancel_for_spawn.load(Ordering::Relaxed) {
+                        anyhow::bail!("SQL 文件已取消");
+                    }
+                    let result = run_pg_native_psql(invocation, &cancel_for_spawn);
+                    // 保持隧道到 psql 退出；句柄 Drop 负责关闭监听并回收桥线程。
+                    drop(native_tunnel);
                     result
                 })
                 .await;
@@ -1594,6 +1613,7 @@ fn run_pg_native_psql(
     for (key, value) in &invocation.env {
         cmd.env(key, value);
     }
+    prepare_tree_kill_command(&mut cmd);
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1614,8 +1634,7 @@ fn run_pg_native_psql(
     // 等待期间定期检测取消并 kill；kill 后仍要 wait 回收避免僵尸进程。
     let status = loop {
         if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_child_tree(&mut child);
             anyhow::bail!("已取消");
         }
         match child.try_wait()? {

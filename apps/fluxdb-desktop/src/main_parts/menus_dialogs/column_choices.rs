@@ -380,7 +380,7 @@ fn column_choices_field(column_name: String, type_name: String, colors: UiColors
             div()
                 .overflow_hidden()
                 .text_ellipsis()
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .child(column_name),
         )
@@ -393,7 +393,7 @@ fn column_choices_field(column_name: String, type_name: String, colors: UiColors
                 .text_color(colors.muted)
                 .flex()
                 .items_center()
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .child(type_name),
         )
 }
@@ -478,7 +478,7 @@ fn column_choices_row(
                 .w(px(154.))
                 .overflow_hidden()
                 .text_ellipsis()
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .child(choice.value),
         )
         .child(

@@ -325,7 +325,7 @@ fn redis_workbench_history_row(
                 .child(
                     div()
                         .text_size(px(12.))
-                        .font_family("Menlo")
+                        .font_family(crate::PLATFORM_MONOSPACE_FONT)
                         .text_color(colors.text)
                         .whitespace_nowrap()
                         .overflow_hidden()

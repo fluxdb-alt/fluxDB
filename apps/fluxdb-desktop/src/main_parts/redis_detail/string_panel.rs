@@ -177,7 +177,7 @@ fn redis_string_value_body(
                                         .h_full()
                                         .px_2()
                                         .py_2()
-                                        .font_family("Menlo")
+                                        .font_family(crate::PLATFORM_MONOSPACE_FONT)
                                         .text_size(px(13.))
                                         .line_height(px(19.)),
                                 ),
@@ -245,7 +245,7 @@ fn redis_string_value_body(
                         .min_h(px(0.))
                         .overflow_x_scroll()
                         .overflow_y_scrollbar()
-                        .font_family("Menlo")
+                        .font_family(crate::PLATFORM_MONOSPACE_FONT)
                         .text_size(px(13.))
                         .line_height(px(19.))
                         .text_color(colors.text)
@@ -293,7 +293,7 @@ fn redis_string_value_body(
             .size_full()
             .overflow_x_scroll()
             .overflow_y_scrollbar()
-            .font_family("Menlo")
+            .font_family(crate::PLATFORM_MONOSPACE_FONT)
             .text_size(px(13.))
             .line_height(px(19.))
             .text_color(colors.text)

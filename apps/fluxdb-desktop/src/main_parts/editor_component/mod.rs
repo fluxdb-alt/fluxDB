@@ -56,7 +56,7 @@ pub(crate) const EDITOR_GUTTER_GAP: f32 = 10.;
 pub(crate) const EDITOR_CONTENT_GAP: f32 = 6.;
 pub(crate) const EDITOR_MIN_GUTTER: f32 = 44.;
 pub(crate) const EDITOR_FOLD_GUTTER: f32 = 16.;
-pub(crate) const EDITOR_FONT: &str = "Menlo";
+pub(crate) const EDITOR_FONT: &str = crate::PLATFORM_MONOSPACE_FONT;
 pub(crate) const EDITOR_TEXT_SIZE: f32 = 12.;
 pub(crate) const COMPLETION_POPUP_MIN_WIDTH: f32 = 280.;
 pub(crate) const COMPLETION_POPUP_MAX_WIDTH: f32 = 540.;
@@ -245,14 +245,25 @@ pub(crate) fn register_editor_shortcuts(cx: &mut App) {
         KeyBinding::new("ctrl-y", Redo, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-f", OpenFind, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-f", OpenFind, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-/", ToggleLineComment, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-/", ToggleLineComment, Some(CONTEXT)),
         KeyBinding::new("ctrl-space", TriggerCompletion, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-shift-]", ToggleFold, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-]", ToggleFold, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-shift-{", FoldAll, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-[", FoldAll, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-alt-{", UnfoldAll, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-alt-[", UnfoldAll, Some(CONTEXT)),
     ]);
 }
 

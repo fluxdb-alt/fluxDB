@@ -30,6 +30,8 @@ fn install_tray_icon(cx: &mut App) {
 fn create_tray_icon() -> anyhow::Result<TrayIcon> {
     let icon = load_tray_icon()?;
     let menu = create_tray_menu()?;
+    // macOS 分支重赋值 builder（icon_as_template），其余平台不重赋值，mut 仅 macOS 需要。
+    #[allow(unused_mut)]
     let mut builder = TrayIconBuilder::new()
         .with_tooltip("FluxDB")
         .with_menu(Box::new(menu))
@@ -89,11 +91,10 @@ fn activate_main_window(cx: &mut App) {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn install_close_to_tray(window: &Window, cx: &mut App) {
     window.on_window_should_close(cx, |_, cx| {
-        #[cfg(target_os = "macos")]
         cx.hide();
-
         false
     });
 }

@@ -1003,7 +1003,7 @@ mod tests {
         redis_type(&mut g, "a"); // 先输入 a，光标字节 1
         // 手动构造：a + 中 + b，光标落在 中 之前（字节 1），按一次 Delete。
         let mut buf = "a中b".as_bytes().to_vec();
-        let mut pos = 1usize; // 光标在 'a' 后，'中' 前
+        let pos = 1usize; // 光标在 'a' 后，'中' 前
         redis_refresh(&mut g, &buf, pos);
         // Delete x1：删掉 '中' 的第 1 字节 → 剩下 a + 2 个残留字节 + b。
         buf.remove(pos);

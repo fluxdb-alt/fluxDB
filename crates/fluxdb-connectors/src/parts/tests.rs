@@ -3366,7 +3366,7 @@ SELECT item_id, name FROM audit_log;"
     }
 
     /// 读 FLUXDB_PG_SMOKE 环境变量 → (host, port, user, password, db)。
-    fn pg_smoke_params() -> Option<(String, u16, String, String, String)> {
+    pub(crate) fn pg_smoke_params() -> Option<(String, u16, String, String, String)> {
         let value = std::env::var("FLUXDB_PG_SMOKE").ok()?;
         let mut parts = value.split(':');
         let host = parts.next()?.to_string();
@@ -3377,7 +3377,7 @@ SELECT item_id, name FROM audit_log;"
         Some((host, port, user, password, db))
     }
 
-    fn pg_smoke_config((host, port, user, password, db): (String, u16, String, String, String)) -> ConnectionConfig {
+    pub(crate) fn pg_smoke_config((host, port, user, password, db): (String, u16, String, String, String)) -> ConnectionConfig {
         ConnectionConfig {
             id: ConnectionId(9),
             name: "PG Smoke".to_string(),
@@ -3938,7 +3938,7 @@ SELECT item_id, name FROM audit_log;"
         };
         assert_eq!(
             pg_create_database_sql(&request).unwrap(),
-            "CREATE DATABASE \"app-db\" ENCODING 'UTF8' LC_COLLATE 'zh_CN.UTF-8' LC_CTYPE 'zh_CN.UTF-8'"
+            "CREATE DATABASE \"app-db\" ENCODING 'UTF8' LC_COLLATE 'zh_CN.UTF-8' LC_CTYPE 'zh_CN.UTF-8' TEMPLATE template0"
         );
 
         // 空名称拒绝；含引号/分号的 locale 拒绝（防注入）。
@@ -4200,6 +4200,7 @@ SELECT item_id, name FROM audit_log;"
             Some("s3cret"),
             true,
             PostgresSslMode::Require,
+            &NativeTlsPaths::default(),
         );
         assert_eq!(invocation.program, "psql");
         assert!(invocation.args.contains(&"--no-psqlrc".to_string()));
@@ -4225,7 +4226,17 @@ SELECT item_id, name FROM audit_log;"
             "应注入 PGPASSWORD"
         );
         // 无密码且 Prefer 时不注入任何 env；ON_ERROR_STOP=off。
-        let no_pw = pg_psql_invocation("h", 5432, "u", "d", "f", None, false, PostgresSslMode::Prefer);
+        let no_pw = pg_psql_invocation(
+            "h",
+            5432,
+            "u",
+            "d",
+            "f",
+            None,
+            false,
+            PostgresSslMode::Prefer,
+            &NativeTlsPaths::default(),
+        );
         assert!(no_pw.env.is_empty());
         assert!(no_pw.args.contains(&"ON_ERROR_STOP=off".to_string()));
     }
@@ -4241,6 +4252,57 @@ SELECT item_id, name FROM audit_log;"
         assert_eq!(pg_sslmode_value(S::Prefer), None);
     }
 
+    /// 原生工具继承连接档案的 TLS 证书路径：CA/客户端证书/私钥只经 libpq env
+    /// （PGSSLROOTCERT/PGSSLCERT/PGSSLKEY），不进 argv；空字段不写变量。
+    #[test]
+    fn pg_native_tool_inherits_tls_paths_via_env_not_argv() {
+        let paths = NativeTlsPaths {
+            ca: Some("/certs/ca.pem".to_string()),
+            client_cert: Some("/certs/root.crt".to_string()),
+            client_key: Some("/certs/root.key".to_string()),
+        };
+        let iv = pg_dump_invocation(
+            "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::VerifyCa,
+            &paths, PgDumpScope::Full, false, false, &[],
+        );
+        for (name, value) in [
+            ("PGSSLROOTCERT", "/certs/ca.pem"),
+            ("PGSSLCERT", "/certs/root.crt"),
+            ("PGSSLKEY", "/certs/root.key"),
+        ] {
+            assert!(
+                iv.env.iter().any(|(k, v)| k == name && v == value),
+                "应在 env 下发 {name}={value}：{:?}",
+                iv.env
+            );
+        }
+        // 证书路径与 sslmode 均不得进入 argv。
+        for arg in &iv.args {
+            assert!(
+                !arg.contains("ca.pem")
+                    && !arg.contains("root.crt")
+                    && !arg.contains("root.key")
+                    && !arg.contains("sslmode"),
+                "TLS 路径/模式不得进入 argv：{arg}"
+            );
+        }
+        assert!(iv.env.iter().any(|(k, v)| k == "PGSSLMODE" && v == "verify-ca"));
+
+        // 空 TLS 字段不写对应 env；psql 路径同规则。
+        let empty = pg_psql_invocation(
+            "h", 5432, "u", "d", "f", None, false, PostgresSslMode::Require,
+            &NativeTlsPaths::default(),
+        );
+        assert!(
+            empty.env.iter().all(|(k, _)| !matches!(
+                k.as_str(),
+                "PGSSLROOTCERT" | "PGSSLCERT" | "PGSSLKEY"
+            )),
+            "空字段不应下发证书 env：{:?}",
+            empty.env
+        );
+    }
+
     /// pg_dump 调用参数：默认 plain+inserts+no-owner+no-acl；owner/acl 勾选才保留；
     /// 结构/数据范围；表过滤；密码与 sslmode 只入 env 不入 argv。
     #[test]
@@ -4254,6 +4316,7 @@ SELECT item_id, name FROM audit_log;"
             "db",
             Some("secret"),
             PostgresSslMode::Require,
+            &NativeTlsPaths::default(),
             PgDumpScope::Full,
             false,
             false,
@@ -4271,7 +4334,7 @@ SELECT item_id, name FROM audit_log;"
         // 勾选 owner/acl：不再追加 --no-owner/--no-acl。
         let with_owner = pg_dump_invocation(
             "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::Prefer,
-            PgDumpScope::Full, true, true, &[],
+            &NativeTlsPaths::default(), PgDumpScope::Full, true, true, &[],
         );
         assert!(!with_owner.args.contains(&"--no-owner".to_string()));
         assert!(!with_owner.args.contains(&"--no-acl".to_string()));
@@ -4279,19 +4342,20 @@ SELECT item_id, name FROM audit_log;"
         // 结构/数据范围。
         let schema_only = pg_dump_invocation(
             "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::Prefer,
-            PgDumpScope::SchemaOnly, false, false, &[],
+            &NativeTlsPaths::default(), PgDumpScope::SchemaOnly, false, false, &[],
         );
         assert!(schema_only.args.contains(&"--schema-only".to_string()));
         let data_only = pg_dump_invocation(
             "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::Prefer,
-            PgDumpScope::DataOnly, false, false, &[],
+            &NativeTlsPaths::default(), PgDumpScope::DataOnly, false, false, &[],
         );
         assert!(data_only.args.contains(&"--data-only".to_string()));
 
         // 表过滤：按 -t schema.table 透传。
         let tables = pg_dump_invocation(
             "pg_dump", "h", 5432, "u", "db", None, PostgresSslMode::Prefer,
-            PgDumpScope::Full, false, false, &["public.t".to_string(), "s.q".to_string()],
+            &NativeTlsPaths::default(), PgDumpScope::Full, false, false,
+            &["public.t".to_string(), "s.q".to_string()],
         );
         assert!(tables.args.windows(2).any(|w| w[0] == "-t" && w[1] == "public.t"));
         assert!(tables.args.windows(2).any(|w| w[0] == "-t" && w[1] == "s.q"));
@@ -4803,7 +4867,7 @@ SELECT item_id, name FROM audit_log;"
                     type_schema: Some("pg_catalog".into()),
                     type_name: Some("text".into()),
                     nullable: true,
-                    default_expr: None,
+                    default_expr: Some("expr".into()),
                     is_identity: false,
                     identity_generation: None,
                     is_generated: true,
@@ -4913,7 +4977,7 @@ SELECT item_id, name FROM audit_log;"
         assert!(ddl.contains("\"full_name\" text GENERATED ALWAYS AS (expr) STORED"));
         // 主键 / 唯一约束。
         assert!(ddl.contains("PRIMARY KEY (\"id\")"));
-        assert!(ddl.contains("CONSTRAINT \"t08_master_name_key\" UNIQUE (\"name\")"));
+        assert!(ddl.contains("CONSTRAINT \"t08_master_name_key\" UNIQUE (name)"));
         // CHECK 表达式。
         assert!(ddl.contains("CONSTRAINT \"t08_master_total_check\" CHECK ((total >= 0))"));
         // 外键：动作/延迟属性。
@@ -6592,14 +6656,17 @@ SELECT item_id, name FROM audit_log;"
 #[cfg(test)]
 mod pg_plan_apply_tests {
     use super::*;
-    use crate::tests::{postgres_config as pg_cfg, pg_qtxt};
+    use crate::tests::{pg_qtxt, pg_smoke_config, pg_smoke_params};
 
-// ===== PG 角色变更计划：单事务应用（需本机 fluxdb-t09-pg 容器；无环境时失败即如实报告）=====
+// ===== PG 角色变更计划：单事务应用（由 FLUXDB_PG_SMOKE 显式启用真实 PG 集成验证）=====
 
 /// 集成：任一语句失败 → 整批回滚，不产生半完成状态（角色不应存在）。
 #[test]
 fn pg_apply_role_plan_rolls_back_as_a_whole() {
-    let config = pg_cfg();
+    let Some(params) = pg_smoke_params() else {
+        return;
+    };
+    let config = pg_smoke_config(params);
     let connector = PostgresConnector::with_config(config.clone());
     // 前置清理同名遗留角色，保证断言可靠。
     let _ = connector.execute(&pg_qtxt(
@@ -6648,7 +6715,10 @@ fn pg_apply_role_plan_rolls_back_as_a_whole() {
     /// 集成：成功路径——创建（属性+密码）→ 成员授予 → 对象授权 → 改名，读模型逐一核实后清理。
     #[test]
     fn pg_apply_role_plan_end_to_end_and_rename() {
-        let config = pg_cfg();
+        let Some(params) = pg_smoke_params() else {
+            return;
+        };
+        let config = pg_smoke_config(params);
         let connector = PostgresConnector::with_config(config.clone());
         let sql = |text: &str| {
             let _ = connector.execute(&pg_qtxt(&config, text));

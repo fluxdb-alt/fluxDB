@@ -169,7 +169,7 @@ fn data_cell_temporal_editor_body(
                         .w_full()
                         .h_full()
                         .text_size(px(11.))
-                        .font_family("Menlo"),
+                        .font_family(crate::PLATFORM_MONOSPACE_FONT),
                 ),
         )
         .when(kind.has_date(), |this| {
@@ -380,7 +380,7 @@ fn data_cell_temporal_spin_box(
                 .justify_center()
                 .text_size(px(15.))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(text)
                 .cursor_text()
                 .when(active, |this| {
@@ -391,7 +391,7 @@ fn data_cell_temporal_spin_box(
                             .w_full()
                             .h_full()
                             .text_size(px(14.))
-                            .font_family("Menlo"),
+                            .font_family(crate::PLATFORM_MONOSPACE_FONT),
                     )
                 })
                 .when(!active, |this| {

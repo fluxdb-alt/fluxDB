@@ -305,7 +305,7 @@ fn redis_detail_editable_meta_field(
                             .px_2()
                             .text_size(px(if mono { 16. } else { 13. }))
                             .when(mono, |this| this.line_height(px(24.)))
-                            .when(mono, |this| this.font_family("Menlo")),
+                            .when(mono, |this| this.font_family(crate::PLATFORM_MONOSPACE_FONT)),
                     ),
             );
     }
@@ -350,7 +350,7 @@ fn redis_detail_editable_meta_field(
                         .line_height(px(if mono { 24. } else { 18. }))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
-                        .when(mono, |this| this.font_family("Menlo"))
+                        .when(mono, |this| this.font_family(crate::PLATFORM_MONOSPACE_FONT))
                         .child(
                             div()
                                 .flex_1()

@@ -1,10 +1,8 @@
-use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-#[cfg(target_os = "macos")]
-use std::process::Command;
 
+mod credential;
 mod sqlite;
 
 use fluxdb_core::{
@@ -16,8 +14,6 @@ use fluxdb_core::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 const PLAINTEXT_PASSWORD_OPTION: &str = "password";
-#[cfg(target_os = "macos")]
-const KEYCHAIN_SERVICE: &str = "com.fluxdb.connection";
 
 pub trait Storage {
     fn load_settings(&self) -> Result<Settings>;
@@ -57,11 +53,133 @@ impl FileStorage {
         Self { root: root.into() }
     }
 
+    /// 解析默认持久化根目录（目录策略统一在此定义，见方案 §4.1）：
+    /// - macOS：`~/Library/Application Support/fluxdb`（与历史版本一致，旧数据不受影响）
+    /// - Windows：Known Folder LocalAppData 下的 `FluxDB`（即 `%LOCALAPPDATA%/FluxDB`）。
+    ///   注意 dirs::data_dir() 在 Windows 是 Roaming，必须用 data_local_dir()。
+    /// - Linux：`$XDG_DATA_HOME/fluxdb`，缺省 `~/.local/share/fluxdb`
+    ///
+    /// 解析失败（系统目录不存在等极端环境）返回 Err，由调用方给出可见错误；
+    /// 不再静默回退到当前目录/安装目录。
     pub fn default_root() -> Result<PathBuf> {
-        let home = env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or_else(|| Error::new(ErrorKind::Internal, "HOME 环境变量不存在"))?;
-        Ok(home.join("Library/Application Support/fluxdb"))
+        #[cfg(target_os = "macos")]
+        let base = dirs::data_dir();
+        #[cfg(target_os = "windows")]
+        let base = dirs::data_local_dir();
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let base = dirs::data_dir();
+
+        let base =
+            base.ok_or_else(|| Error::new(ErrorKind::Internal, "无法解析系统应用数据目录"))?;
+        // Windows 产品目录名用大写 FluxDB（计划 §4.1）；macOS/Linux 保持小写以兼容旧目录。
+        let app_dir = if cfg!(target_os = "windows") {
+            "FluxDB"
+        } else {
+            "fluxdb"
+        };
+        Ok(base.join(app_dir))
+    }
+
+    /// `default_root` 的显式失败版本，供启动路径使用：
+    /// 目录解析失败时由调用方输出可见错误并退出，而不是静默用错误目录继续运行。
+    pub fn try_default() -> Result<Self> {
+        Ok(Self::new(Self::default_root()?))
+    }
+
+    /// 默认日志目录（方案 §4.1）：
+    /// - Linux：`$XDG_STATE_HOME/fluxdb/logs`，缺省 `~/.local/state/fluxdb/logs`
+    /// - macOS/Windows：持久化根目录下 `logs/`（与历史布局一致）
+    ///
+    /// 日志目录解析失败不阻断启动，回退系统临时目录（调用方应记录该降级）。
+    pub fn default_log_dir() -> PathBuf {
+        let fallback = || std::env::temp_dir().join("fluxdb").join("logs");
+        #[cfg(target_os = "linux")]
+        {
+            let state = std::env::var_os("XDG_STATE_HOME")
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .or_else(|| dirs::home_dir().map(|h| h.join(".local/state")));
+            return state
+                .map(|s| s.join("fluxdb").join("logs"))
+                .unwrap_or_else(fallback);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Self::default_root()
+                .map(|root| root.join("logs"))
+                .unwrap_or_else(|_| fallback())
+        }
+    }
+
+    /// 默认导出下载目录（方案 §12.4）：优先平台下载目录（Known Folder / XDG），
+    /// 退回用户主目录，最后退回临时目录；不回退到进程工作目录/安装目录。
+    pub fn default_download_dir() -> PathBuf {
+        dirs::download_dir()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(std::env::temp_dir)
+    }
+
+    // ---- 系统凭据后端（方案 §4.2）----
+    // 通过 credential::backend() 单例访问，保留非系统 root（测试）跳过系统凭据的语义。
+    // 读/写失败传播错误（写不再假成功），删除对 NotFound 幂等容忍。
+
+    fn secret_backend_read(&self, account: &str) -> Result<Option<String>> {
+        if !self.should_use_credential_backend() {
+            return Ok(None);
+        }
+        use crate::credential::{backend, to_storage_error};
+        backend().read(account).map_err(|e| to_storage_error(&e))
+    }
+
+    fn secret_backend_write(&self, account: &str, secret: &str) -> Result<()> {
+        if !self.should_use_credential_backend() {
+            return Ok(());
+        }
+        use crate::credential::{backend, to_storage_error};
+        backend()
+            .write(account, secret)
+            .map_err(|e| to_storage_error(&e))
+    }
+
+    fn best_effort_secret_read(&self, account: &str) -> Option<String> {
+        match self.secret_backend_read(account) {
+            Ok(v) => v,
+            Err(e) => {
+                // 凭据服务不可用/锁定：保留连接资料，不回填密码并记日志，避免把"无凭据服务"
+                // 误处理成"没有连接"或覆盖原配置。UI 级可理解提示属界面层（AI-03）。
+                tracing::warn!(target: "fluxdb_storage", error = %e, account, "读取系统凭据失败，连接保留但不回填密码");
+                None
+            }
+        }
+    }
+
+    fn secret_backend_delete(&self, account: &str) {
+        if let Err(e) = self.secret_backend_delete_checked(account) {
+            tracing::warn!(target: "fluxdb_storage", error = %e, account, "删除系统凭据失败");
+        }
+    }
+
+    fn secret_backend_delete_checked(&self, account: &str) -> Result<()> {
+        if !self.should_use_credential_backend() {
+            return Ok(());
+        }
+        use crate::credential::{backend, to_storage_error};
+        match backend().delete(account) {
+            Ok(()) | Err(crate::credential::CredentialError::NotFound) => Ok(()),
+            Err(e) => Err(to_storage_error(&e)),
+        }
+    }
+
+    /// 是否应访问系统凭据后端。测试注入 override 时绕过"非系统 root 短路"，
+    /// 以便用隔离内存后端驱动凭据路径；否则按系统 root 判断（保持原有语义）。
+    fn should_use_credential_backend(&self) -> bool {
+        #[cfg(any(test, feature = "test-util"))]
+        {
+            if crate::credential::test_override_active() {
+                return true;
+            }
+        }
+        self.uses_system_keychain()
     }
 
     fn config_path(&self) -> PathBuf {
@@ -273,13 +391,6 @@ impl FileStorage {
     }
 }
 
-impl Default for FileStorage {
-    fn default() -> Self {
-        let root = Self::default_root().unwrap_or_else(|_| PathBuf::from(".fluxdb"));
-        Self::new(root)
-    }
-}
-
 impl Storage for FileStorage {
     fn load_settings(&self) -> Result<Settings> {
         let path = self.config_path();
@@ -292,32 +403,83 @@ impl Storage for FileStorage {
     }
 
     fn save_settings(&self, settings: &Settings) -> Result<()> {
-        fs::create_dir_all(&self.root).map_err(storage_error)?;
+        ensure_private_dir(&self.root)?;
         let text = toml::to_string_pretty(settings).map_err(storage_error)?;
-        fs::write(self.config_path(), text).map_err(storage_error)
+        fs::write(self.config_path(), text).map_err(storage_error)?;
+        // 配置文件收敛为 0o600（方案 §12.2；含存量旧文件）。
+        harden_file_perms(&self.config_path())
     }
 
     fn load_connections(&self) -> Result<Vec<ConnectionConfig>> {
         let conn = self.open_sqlite()?;
-        Ok(
-            sqlite::get_json::<Vec<ConnectionConfig>>(&conn, sqlite::KEY_CONNECTIONS)?
-                .unwrap_or_default()
-                .into_iter()
-                .map(|connection| self.load_connection_secret(connection))
-                .collect(),
-        )
+        sqlite::get_json::<Vec<ConnectionConfig>>(&conn, sqlite::KEY_CONNECTIONS)?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|connection| self.load_connection_secret(connection))
+            .collect()
     }
 
     fn save_connections(&self, connections: &[ConnectionConfig]) -> Result<()> {
+        // 方案 §4.2 / §10.4-1：系统凭据与 SQLite 配置不是同一事务，采用"暂存-提交-切换"：
+        // 1) 把整套新凭据写入临时 staging 键（验证可写，失败只删 staging，正式旧值不动）；
+        // 2) 读取正式键旧值后切换正式凭据；任一写入失败则恢复全部旧值；
+        // 3) 原子提交 SQLite 配置；提交失败同样恢复正式凭据，最后清理 staging。
+        // 由此保证进程内任一阶段失败都不会留下“新配置 + 部分新密码”的状态。
+        let mut staged: Vec<String> = Vec::new(); // 已写入的 staging 键
+        let mut pending: Vec<(String, String)> = Vec::new(); // (正式键, 新值)
         for connection in connections {
-            self.save_connection_secret(connection)?;
+            match self.stage_connection_secret(connection, &mut staged, &mut pending) {
+                Ok(()) => {}
+                Err(e) => {
+                    self.cleanup_staged_credentials(&staged);
+                    return Err(e);
+                }
+            }
         }
-        // 与历史行为一致：保存连接时若已有 layout 则保留并修复，否则按连接重建。
-        let conn = self.open_sqlite()?;
-        let mut layout = sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)?
-            .unwrap_or_else(|| SidebarLayout::for_connections(connections));
+
+        let conn = match self.open_sqlite() {
+            Ok(conn) => conn,
+            Err(error) => {
+                self.cleanup_staged_credentials(&staged);
+                return Err(error);
+            }
+        };
+        let mut layout = match sqlite::get_json::<SidebarLayout>(&conn, sqlite::KEY_SIDEBAR_LAYOUT)
+        {
+            Ok(layout) => layout.unwrap_or_else(|| SidebarLayout::for_connections(connections)),
+            Err(error) => {
+                self.cleanup_staged_credentials(&staged);
+                return Err(error);
+            }
+        };
         layout.repair(connections);
-        self.write_connections_and_layout(&conn, connections, &layout)
+        let mut old_credentials = Vec::with_capacity(pending.len());
+        for (account, _) in &pending {
+            match self.secret_backend_read(account) {
+                Ok(value) => old_credentials.push((account.clone(), value)),
+                Err(error) => {
+                    self.cleanup_staged_credentials(&staged);
+                    return Err(error);
+                }
+            }
+        }
+
+        for (account, value) in &pending {
+            if let Err(write_error) = self.secret_backend_write(account, value) {
+                let rollback_errors = self.restore_credentials(&old_credentials);
+                self.cleanup_staged_credentials(&staged);
+                return Err(credential_switch_error(write_error, rollback_errors));
+            }
+        }
+
+        // connections 与 layout 在同一 SQLite 事务中提交；失败时恢复正式凭据。
+        if let Err(e) = self.write_connections_and_layout(&conn, connections, &layout) {
+            let rollback_errors = self.restore_credentials(&old_credentials);
+            self.cleanup_staged_credentials(&staged);
+            return Err(credential_switch_error(e, rollback_errors));
+        }
+        self.cleanup_staged_credentials(&staged);
+        Ok(())
     }
 
     fn delete_connection_secrets(&self, connection: &ConnectionConfig) {
@@ -345,14 +507,14 @@ impl Storage for FileStorage {
 }
 
 impl FileStorage {
-    fn load_connection_secret(&self, mut connection: ConnectionConfig) -> ConnectionConfig {
+    fn load_connection_secret(&self, mut connection: ConnectionConfig) -> Result<ConnectionConfig> {
         let Some(credential_ref) = self.credential_ref_for_keychain(&connection) else {
-            return connection;
+            return Ok(connection);
         };
 
         // 扁平历史参数：`options["password"]` 从 Keychain 取回。
         if !connection.options.contains_key(PLAINTEXT_PASSWORD_OPTION) {
-            if let Some(secret) = read_keychain_password(credential_ref.clone()) {
+            if let Some(secret) = self.best_effort_secret_read(&credential_ref) {
                 connection
                     .options
                     .insert(PLAINTEXT_PASSWORD_OPTION.to_string(), secret);
@@ -366,7 +528,7 @@ impl FileStorage {
                     slot.key = format!("{credential_ref}{suffix}");
                 }
                 if slot.inline.is_none() {
-                    slot.inline = read_keychain_password(slot.key.clone());
+                    slot.inline = self.best_effort_secret_read(&slot.key);
                 }
             }
         }
@@ -378,7 +540,7 @@ impl FileStorage {
                     slot.key = format!("{credential_ref}{suffix}");
                 }
                 if slot.inline.is_none() {
-                    slot.inline = read_keychain_password(slot.key.clone());
+                    slot.inline = self.best_effort_secret_read(&slot.key);
                 }
             }
         }
@@ -390,80 +552,85 @@ impl FileStorage {
                     slot.key = format!("{credential_ref}{suffix}");
                 }
                 if slot.inline.is_none() {
-                    slot.inline = read_keychain_password(slot.key.clone());
+                    slot.inline = self.best_effort_secret_read(&slot.key);
                 }
             }
         }
 
-        connection
+        Ok(connection)
     }
 
-    fn save_connection_secret(&self, connection: &ConnectionConfig) -> Result<()> {
+    // 方案 §4.2 / §10.4-1 的"暂存-提交-切换"辅助：见 save_connections 编排注释。
+
+    fn stage_connection_secret(
+        &self,
+        connection: &ConnectionConfig,
+        staged: &mut Vec<String>,
+        pending: &mut Vec<(String, String)>,
+    ) -> Result<()> {
         let Some(credential_ref) = self.credential_ref_for_keychain(connection) else {
             return Ok(());
         };
-
-        // 扁平历史参数：`options["password"]` 写入 Keychain。
+        let mut batch: Vec<(String, String)> = Vec::new();
         if let Some(password) = connection.options.get(PLAINTEXT_PASSWORD_OPTION) {
-            write_keychain_password(&credential_ref, password)?;
+            batch.push((credential_ref.clone(), password.clone()));
         }
-
-        // 结构化档案：逐槽位写 Keychain 后清空内存值。
-        if let Some(profile) = connection.redis_profile.as_ref() {
-            for (suffix, slot) in profile_secret_slots(profile) {
-                let account = if slot.key.is_empty() {
-                    format!("{credential_ref}{suffix}")
-                } else {
-                    slot.key.clone()
-                };
-                if let Some(value) = slot.inline.as_deref() {
-                    write_keychain_password(&account, value)?;
-                }
+        for (suffix, slot) in profile_secret_slots_combined(connection) {
+            if let Some(value) = slot.inline.as_deref() {
+                batch.push((
+                    secret_slot_account(&credential_ref, suffix, slot),
+                    value.to_string(),
+                ));
             }
         }
 
-        // MySQL 结构化档案：同理写 Keychain（MySQL/Redis 不同栈，槽位后缀无冲突）。
-        if let Some(profile) = connection.mysql_profile.as_ref() {
-            for (suffix, slot) in mysql_profile_secret_slots(profile) {
-                let account = if slot.key.is_empty() {
-                    format!("{credential_ref}{suffix}")
-                } else {
-                    slot.key.clone()
-                };
-                if let Some(value) = slot.inline.as_deref() {
-                    write_keychain_password(&account, value)?;
+        // 写 staging；任一失败，删本次已写 staging（正式旧值不动），报错。
+        let mut written_staging: Vec<String> = Vec::new();
+        for (real, value) in &batch {
+            let key = staging_key(real);
+            match self.secret_backend_write(&key, value) {
+                Ok(()) => written_staging.push(key),
+                Err(e) => {
+                    for k in &written_staging {
+                        self.secret_backend_delete(k);
+                    }
+                    return Err(e);
                 }
             }
         }
-
-        // PostgreSQL 结构化档案：同理写 Keychain（与 MySQL/Redis 槽位后缀无冲突）。
-        if let Some(profile) = connection.postgres_profile.as_ref() {
-            for (suffix, slot) in postgres_profile_secret_slots(profile) {
-                let account = if slot.key.is_empty() {
-                    format!("{credential_ref}{suffix}")
-                } else {
-                    slot.key.clone()
-                };
-                if let Some(value) = slot.inline.as_deref() {
-                    write_keychain_password(&account, value)?;
-                }
-            }
-        }
-
+        staged.extend(written_staging);
+        pending.extend(batch);
         Ok(())
     }
 
-    /// 删除该连接自身 credential_ref 所拥有的全部 Keychain 条目（扁平密码 + 各类档案槽位）。
-    ///
-    /// 按连接拥有权清理：每个连接经 CreateConnection 派生独立 ref，删除只清本连接 ref 下的条目，
-    /// 不触碰其他连接的 ref（即保护共享引用——引用共享只在显式共享时才有，本路径不跨连接）。
-    /// 删除幂等：条目不存在按成功处理。Keychain 不可用（非常规 root / 非 macOS）时无副作用。
+    fn cleanup_staged_credentials(&self, staged: &[String]) {
+        for key in staged {
+            self.secret_backend_delete(key);
+        }
+    }
+
+    /// 把本轮可能触及的正式凭据完整恢复到保存前状态。
+    fn restore_credentials(&self, old_credentials: &[(String, Option<String>)]) -> Vec<String> {
+        let mut errors = Vec::new();
+        for (account, old_value) in old_credentials {
+            let result = match old_value {
+                Some(value) => self.secret_backend_write(account, value),
+                None => self.secret_backend_delete_checked(account),
+            };
+            if let Err(error) = result {
+                tracing::error!(target: "fluxdb_storage", %error, account, "恢复系统凭据失败");
+                errors.push(format!("{account}: {error}"));
+            }
+        }
+        errors
+    }
+
     fn delete_owned_keychain_secrets(&self, connection: &ConnectionConfig) {
         let Some(credential_ref) = self.credential_ref_for_keychain(connection) else {
             return;
         };
         // 扁平历史密码与结构化档案槽位同属该 ref。
-        delete_keychain_password(&credential_ref);
+        self.secret_backend_delete(&credential_ref);
         let mut accounts: Vec<String> = Vec::new();
         if let Some(profile) = connection.redis_profile.as_ref() {
             for (suffix, slot) in profile_secret_slots(profile) {
@@ -481,12 +648,12 @@ impl FileStorage {
             }
         }
         for account in accounts {
-            delete_keychain_password(&account);
+            self.secret_backend_delete(&account);
         }
     }
 
     fn credential_ref_for_keychain(&self, connection: &ConnectionConfig) -> Option<String> {
-        if !self.uses_system_keychain() {
+        if !self.should_use_credential_backend() {
             return None;
         }
 
@@ -514,10 +681,19 @@ impl FileStorage {
         connections: &[ConnectionConfig],
         layout: &SidebarLayout,
     ) -> Result<()> {
+        // 测试注入：模拟"凭据已写但配置提交失败"。仅测试/ test-util 下有效，生产恒 false。
+        if crate::credential::consume_commit_failure() {
+            return Err(Error::new(
+                ErrorKind::Internal,
+                "注入：配置提交失败（测试）",
+            ));
+        }
         let stripped: Vec<ConnectionConfig> =
             connections.iter().map(strip_plaintext_secrets).collect();
-        sqlite::put_json(conn, sqlite::KEY_CONNECTIONS, &stripped)?;
-        sqlite::put_json(conn, sqlite::KEY_SIDEBAR_LAYOUT, layout)?;
+        let tx = conn.unchecked_transaction().map_err(storage_error)?;
+        sqlite::put_json(&tx, sqlite::KEY_CONNECTIONS, &stripped)?;
+        sqlite::put_json(&tx, sqlite::KEY_SIDEBAR_LAYOUT, layout)?;
+        tx.commit().map_err(storage_error)?;
         Ok(())
     }
 }
@@ -608,6 +784,57 @@ fn storage_error(error: impl ToString) -> Error {
     Error::new(ErrorKind::Internal, error.to_string())
 }
 
+/// 单实例锁文件路径（方案 §12.1，方案 A）：
+/// - Linux：优先 `$XDG_RUNTIME_DIR/fluxdb.lock`（tmpfs 运行时目录）
+/// - macOS/Windows：持久化根目录下 `fluxdb.lock`
+/// 锁本体由 flock（Unix）/ 命名互斥量（Windows）持有，文件只是锚点；
+/// 进程退出（含强杀）时锁自动释放，不存在"崩溃后无法启动"的陈旧锁问题。
+pub fn runtime_lock_file() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+        {
+            return runtime_dir.join("fluxdb.lock");
+        }
+    }
+    FileStorage::default_root()
+        .unwrap_or_else(|_| std::env::temp_dir().join("fluxdb"))
+        .join("fluxdb.lock")
+}
+
+/// 创建仅属主可访问的目录（Unix 0o700，创建后立即收紧、不依赖 umask；Windows 为 no-op，
+/// ACL 收敛由方案 §12.2 后续 Windows 实测处理）。敏感目录（持久化根目录）统一走此函数。
+pub(crate) fn ensure_private_dir(path: &std::path::Path) -> Result<()> {
+    fs::create_dir_all(path).map_err(storage_error)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(storage_error)?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+/// 将已存在的文件权限收紧为仅属主可读写（Unix 0o600；Windows no-op）。
+/// 用于配置文件（历史上可能含明文 password option）与 SQLite 数据库。
+pub(crate) fn harden_file_perms(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(storage_error)?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
 fn read_toml_file<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
     let text = fs::read_to_string(path).map_err(storage_error)?;
     toml::from_str::<T>(&text).map_err(storage_error)
@@ -615,10 +842,16 @@ fn read_toml_file<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
 
 fn write_toml_file_if_changed<T: Serialize>(path: &PathBuf, value: &T) -> Result<()> {
     let text = toml::to_string_pretty(value).map_err(storage_error)?;
-    if path.exists() && fs::read_to_string(path).map_err(storage_error)? == text {
+    let existed = path.exists();
+    if existed && fs::read_to_string(path).map_err(storage_error)? == text {
+        // 内容未变也要收敛存量文件权限（升级场景：旧版本可能以宽松权限创建）。
+        harden_file_perms(path)?;
         return Ok(());
     }
-    fs::write(path, text).map_err(storage_error)
+    fs::write(path, text).map_err(storage_error)?;
+    // 配置/历史文件含业务数据，创建与覆写后均收紧为 0o600（方案 §12.2）。
+    harden_file_perms(path)?;
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -710,6 +943,40 @@ fn secret_slot_account(credential_ref: &str, suffix: &str, slot: &SecretRef) -> 
     } else {
         slot.key.clone()
     }
+}
+
+/// 合并 Redis/MySQL/PostgreSQL 三栈的密码槽位，返回 `(后缀, SecretRef)` 列表。
+fn profile_secret_slots_combined(connection: &ConnectionConfig) -> Vec<(&'static str, &SecretRef)> {
+    let mut slots: Vec<(&'static str, &SecretRef)> = Vec::new();
+    if let Some(profile) = connection.redis_profile.as_ref() {
+        slots.extend(profile_secret_slots(profile));
+    }
+    if let Some(profile) = connection.mysql_profile.as_ref() {
+        slots.extend(mysql_profile_secret_slots(profile));
+    }
+    if let Some(profile) = connection.postgres_profile.as_ref() {
+        slots.extend(postgres_profile_secret_slots(profile));
+    }
+    slots
+}
+
+/// 暂存（staging）凭据键名：与正式键一一对应，前缀唯一，绝不与正式/其它连接键冲突。
+/// 提交成功后删除 staging；任何失败只清理 staging，正式旧值不受影响。
+fn staging_key(real_account: &str) -> String {
+    format!("__fluxdb_staging__/{real_account}")
+}
+
+fn credential_switch_error(error: Error, rollback_errors: Vec<String>) -> Error {
+    if rollback_errors.is_empty() {
+        return error;
+    }
+    Error::new(
+        ErrorKind::Internal,
+        format!(
+            "{error}；恢复旧凭据时仍有失败：{}",
+            rollback_errors.join("；")
+        ),
+    )
 }
 
 fn profile_secret_slots(profile: &RedisConnectionProfile) -> Vec<(&'static str, &SecretRef)> {
@@ -827,79 +1094,6 @@ fn postgres_profile_secret_slots_mut(
     slots
 }
 
-#[cfg(target_os = "macos")]
-fn read_keychain_password(account: String) -> Option<String> {
-    let output = Command::new("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-a",
-            &account,
-            "-w",
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let password = String::from_utf8(output.stdout).ok()?;
-    Some(password.trim_end_matches(['\r', '\n']).to_string())
-        .filter(|password| !password.is_empty())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn read_keychain_password(_: String) -> Option<String> {
-    None
-}
-
-#[cfg(target_os = "macos")]
-fn write_keychain_password(account: &str, password: &str) -> Result<()> {
-    let status = Command::new("security")
-        .args([
-            "add-generic-password",
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-a",
-            account,
-            "-w",
-            password,
-            "-U",
-        ])
-        .status()
-        .map_err(storage_error)?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(Error::new(ErrorKind::Internal, "保存密码到 Keychain 失败"))
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn delete_keychain_password(account: &str) {
-    let _ = Command::new("security")
-        .args([
-            "delete-generic-password",
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-a",
-            account,
-        ])
-        .status();
-    // 条目不存在（含未保存过）按成功处理：删除幂等，不因缺条目报错。
-}
-
-#[cfg(not(target_os = "macos"))]
-fn delete_keychain_password(_: &str) {}
-
-#[cfg(not(target_os = "macos"))]
-fn write_keychain_password(_: &str, _: &str) -> Result<()> {
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -913,6 +1107,234 @@ mod tests {
     };
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    // ---- AI-02 系统凭据：用线程隔离的 InMemoryBackend 驱动，不访问真实密码库 ----
+
+    use crate::credential::{
+        InMemoryBackend, UnavailableBackend, clear_test_backend, set_test_backend,
+    };
+    use std::sync::Arc;
+
+    /// 构造带扁平密码的 MySQL 连接。
+    fn conn_with_password(id: u64, credential_ref: &str, password: &str) -> ConnectionConfig {
+        ConnectionConfig {
+            id: ConnectionId(id),
+            name: format!("conn-{id}"),
+            kind: DatabaseKind::MySql,
+            endpoint: Endpoint::Tcp {
+                host: "127.0.0.1".to_string(),
+                port: 3306,
+                database: Some("app".to_string()),
+            },
+            credential_ref: Some(credential_ref.to_string()),
+            options: BTreeMap::from([(
+                PLAINTEXT_PASSWORD_OPTION.to_string(),
+                password.to_string(),
+            )]),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+        }
+    }
+
+    // ① 移除假成功：后端写失败时 save_connections 必须返回 Err（不得 Ok(())=假装保存成功）。
+    #[test]
+    fn save_connection_secret_propagates_write_failure() {
+        let backend = Arc::new(InMemoryBackend::new());
+        backend.fail_writes_with_prefix("__fluxdb_staging__/gdb.connection.1");
+        set_test_backend(backend.clone());
+        let storage = FileStorage::new(unique_temp_dir());
+
+        let conn = conn_with_password(1, "gdb.connection.1", "s3cret");
+        let err = storage.save_connections(&[conn]).unwrap_err();
+        assert!(!err.to_string().is_empty(), "写失败应返回非空错误");
+        // 正式键不应被写入（失败发生在暂存阶段）。
+        assert!(backend.peek("gdb.connection.1").is_none());
+        clear_test_backend();
+    }
+
+    // ② 配置提交失败：凭据已暂存、但 SQLite 提交失败 → 返回 Err，且正式凭据与配置均保持旧值。
+    #[test]
+    fn save_connections_rolls_back_credentials_when_config_commit_fails() {
+        let backend = Arc::new(InMemoryBackend::new());
+        set_test_backend(backend.clone());
+        let storage = FileStorage::new(unique_temp_dir());
+
+        // 先保存成功（写入正式凭据 + 配置）。
+        let v1 = conn_with_password(1, "gdb.connection.1", "old-pw");
+        storage.save_connections(&[v1.clone()]).unwrap();
+
+        // 注入：下一次配置提交失败；再保存新密码。
+        crate::credential::fail_next_commit();
+        let v2 = conn_with_password(1, "gdb.connection.1", "new-pw");
+        assert!(storage.save_connections(&[v2.clone()]).is_err());
+
+        // 正式凭据仍是旧值（新值未被写入）。
+        assert_eq!(backend.peek("gdb.connection.1").as_deref(), Some("old-pw"));
+        // 暂存键无残留。
+        assert!(
+            backend
+                .peek("__fluxdb_staging__/gdb.connection.1")
+                .is_none()
+        );
+        // 配置仍为旧连接（静默失效被阻止，连接资料保留）。
+        let loaded = storage.load_connections().unwrap();
+        assert_eq!(loaded.len(), 1);
+        clear_test_backend();
+    }
+
+    // ③ 多个密码槽位跨连接部分失败：第二连接暂存失败时，第一连接已写的暂存被清理，正式键均未写。
+    #[test]
+    fn save_connections_cleans_staging_on_multi_slot_failure() {
+        let backend = Arc::new(InMemoryBackend::new());
+        // 第二个连接的暂存写失败。
+        backend.fail_writes_with_prefix("__fluxdb_staging__/gdb.connection.2");
+        set_test_backend(backend.clone());
+        let storage = FileStorage::new(unique_temp_dir());
+
+        let c1 = conn_with_password(1, "gdb.connection.1", "pw1");
+        let c2 = conn_with_password(2, "gdb.connection.2", "pw2");
+        assert!(storage.save_connections(&[c1, c2]).is_err());
+
+        // 两连接的正式键都未写；第一连接的暂存被清理。
+        assert!(backend.peek("gdb.connection.1").is_none());
+        assert!(backend.peek("gdb.connection.2").is_none());
+        assert!(
+            backend
+                .peek("__fluxdb_staging__/gdb.connection.1")
+                .is_none()
+        );
+        clear_test_backend();
+    }
+
+    // ④ 正式键切换中途失败：已覆盖的键恢复旧值，配置保持旧版本，staging 无残留。
+    #[test]
+    fn save_connections_restores_formal_credentials_when_switch_fails() {
+        let backend = Arc::new(InMemoryBackend::new());
+        set_test_backend(backend.clone());
+        let storage = FileStorage::new(unique_temp_dir());
+
+        let old1 = conn_with_password(1, "gdb.connection.1", "old-1");
+        let old2 = conn_with_password(2, "gdb.connection.2", "old-2");
+        storage
+            .save_connections(&[old1.clone(), old2.clone()])
+            .unwrap();
+
+        // 第一项先写成新值，第二项失败一次；恢复阶段不再失败。
+        backend.fail_next_write("gdb.connection.2");
+        let new1 = conn_with_password(1, "gdb.connection.1", "new-1");
+        let new2 = conn_with_password(2, "gdb.connection.2", "new-2");
+        assert!(storage.save_connections(&[new1, new2]).is_err());
+
+        assert_eq!(backend.peek("gdb.connection.1").as_deref(), Some("old-1"));
+        assert_eq!(backend.peek("gdb.connection.2").as_deref(), Some("old-2"));
+        assert!(
+            backend
+                .peek("__fluxdb_staging__/gdb.connection.1")
+                .is_none()
+        );
+        assert!(
+            backend
+                .peek("__fluxdb_staging__/gdb.connection.2")
+                .is_none()
+        );
+        let loaded = storage.load_connections().unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(
+            loaded[0]
+                .options
+                .get(PLAINTEXT_PASSWORD_OPTION)
+                .map(String::as_str),
+            Some("old-1")
+        );
+        clear_test_backend();
+    }
+
+    // ⑤ 读失败降级：凭据服务不可用（Unavailable）时，连接资料保留、不等于"没有连接"，
+    //    密码不回填（可重输）；失败不被吞成假成功，也不覆盖原配置。
+    #[test]
+    fn load_connections_preserves_connections_when_credential_unavailable() {
+        // 先写一条连接（含凭据写入）。
+        set_test_backend(Arc::new(InMemoryBackend::new()));
+        let storage = FileStorage::new(unique_temp_dir());
+        storage
+            .save_connections(&[conn_with_password(1, "gdb.connection.1", "pw")])
+            .unwrap();
+
+        // 切换为不可用后端，验证读仍返回该连接、且密码未回填。
+        set_test_backend(Arc::new(UnavailableBackend));
+        let loaded = storage.load_connections().unwrap();
+        assert_eq!(loaded.len(), 1, "凭据服务不可用不应导致连接列表为空");
+        assert!(
+            loaded[0].options.get(PLAINTEXT_PASSWORD_OPTION).is_none()
+                || loaded[0]
+                    .options
+                    .get(PLAINTEXT_PASSWORD_OPTION)
+                    .map(String::as_str)
+                    == Some(""),
+            "凭据不可用时密码不应被回填"
+        );
+        clear_test_backend();
+    }
+
+    // 平台目录解析：三平台 CI 各自原生运行，验证本平台分支（AI-01，方案 §4.1）。
+    #[test]
+    fn default_root_resolves_platform_data_dir() {
+        let root = FileStorage::default_root().expect("default_root 应能解析");
+        #[cfg(target_os = "macos")]
+        assert!(
+            root.ends_with("Library/Application Support/fluxdb"),
+            "macOS 根目录不符: {root:?}"
+        );
+        #[cfg(target_os = "windows")]
+        assert!(
+            root.ends_with("FluxDB") && root.to_string_lossy().contains("Local"),
+            "Windows 根目录应为 %LOCALAPPDATA%/FluxDB: {root:?}"
+        );
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        assert!(
+            root.ends_with("fluxdb") && root.to_string_lossy().contains(".local/share"),
+            "Linux 根目录应为 XDG data/fluxdb: {root:?}"
+        );
+    }
+
+    #[test]
+    fn default_log_dir_is_absolute() {
+        let dir = FileStorage::default_log_dir();
+        assert!(dir.is_absolute(), "日志目录应为绝对路径: {dir:?}");
+        assert!(dir.ends_with("logs"), "日志目录应以 logs 结尾: {dir:?}");
+    }
+
+    #[test]
+    fn default_download_dir_is_absolute() {
+        assert!(FileStorage::default_download_dir().is_absolute());
+    }
+
+    // 权限收敛（方案 §12.2）：root 0o700、config/db 0o600，存量宽松权限文件也必须被收紧。
+    #[cfg(unix)]
+    #[test]
+    fn perms_are_tightened_for_root_config_and_db() {
+        use std::os::unix::fs::PermissionsExt;
+        let storage = FileStorage::new(unique_temp_dir());
+        storage.save_settings(&Settings::default()).unwrap();
+
+        let mode = |p: &std::path::Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&storage.root), 0o700, "root 应为 0o700");
+        assert_eq!(mode(&storage.config_path()), 0o600, "config 应为 0o600");
+
+        // 预置一个宽松权限的存量 config，再次保存应被收紧。
+        fs::set_permissions(storage.config_path(), fs::Permissions::from_mode(0o644)).unwrap();
+        storage.save_settings(&Settings::default()).unwrap();
+        assert_eq!(mode(&storage.config_path()), 0o600, "存量 config 应被收紧");
+
+        let conn = storage.open_sqlite().unwrap();
+        drop(conn);
+        assert_eq!(
+            mode(&sqlite::db_path(&storage.root)),
+            0o600,
+            "db 应为 0o600"
+        );
+    }
 
     #[test]
     fn missing_settings_returns_default() {
@@ -1492,7 +1914,7 @@ mod tests {
 
     fn unique_temp_dir() -> PathBuf {
         let counter = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-        env::temp_dir().join(format!(
+        std::env::temp_dir().join(format!(
             "fluxdb-storage-test-{}-{}-{}",
             std::process::id(),
             counter,

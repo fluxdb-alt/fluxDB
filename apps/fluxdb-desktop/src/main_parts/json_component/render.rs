@@ -76,7 +76,7 @@ fn json_component_edit_body(
                     if diagnostic.is_some() { theme.error_border } else { colors.border },
                 )
                 .rounded(colors.radius)
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_size(px(13.))
                 .text_color(colors.text)
                 .child(text)

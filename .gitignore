@@ -5,4 +5,3 @@ target/
 .claude/
 docs/design
 apps/gdb-desktop/target/
-AGENTS.md
