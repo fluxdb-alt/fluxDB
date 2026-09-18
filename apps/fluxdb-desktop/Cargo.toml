@@ -3,6 +3,10 @@ name = "fluxdb-desktop"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0"
+build = "build.rs"
+
+[build-dependencies]
+embed-resource = "3.0"
 
 [dependencies]
 anyhow = "1"
@@ -46,6 +50,7 @@ tray-icon = { version = "0.23.1", default-features = false }
 nix = { version = "0.28", default-features = false, features = ["fs", "signal"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle = "0.6"
 windows = { version = "0.57", features = [
     "Win32_Foundation",
     # Win32_System_Threading 提供 Win32::System::Threading 模块路径；

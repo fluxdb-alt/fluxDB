@@ -131,7 +131,7 @@ fn topbar(
                 .h_full()
                 .on_mouse_down(MouseButton::Left, |event, window, cx| {
                     if event.click_count >= 2 {
-                        window.zoom_window();
+                        toggle_window_maximized(window);
                     } else {
                         window.start_window_move();
                     }
@@ -178,11 +178,47 @@ fn topbar(
 /// 因为隐藏原生标题栏后 GPUI 不提供窗口按钮，需应用自绘；macOS 走原生红绿灯不加此处。
 /// 关闭按钮按 Windows 惯例 hover 变红；最大化按钮按当前最大化态切换图标。
 /// 仅 `#[cfg(not(target_os = "macos"))]` 下被 topbar 引用。
-fn window_control_buttons(window: &mut Window, colors: UiColors, cx: &mut Context<NavicatMain>) -> impl IntoElement {
+fn toggle_window_maximized(window: &Window) {
+    #[cfg(target_os = "windows")]
+    {
+        use raw_window_handle::RawWindowHandle;
+        use windows::Win32::{
+            Foundation::HWND,
+            UI::WindowsAndMessaging::{SW_MAXIMIZE, SW_RESTORE, ShowWindowAsync},
+        };
+
+        let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
+            tracing::error!(target: "fluxdb_desktop", "无法取得 Windows 窗口句柄");
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            tracing::error!(target: "fluxdb_desktop", "当前窗口不是 Win32 窗口");
+            return;
+        };
+        let command = if window.is_maximized() {
+            SW_RESTORE
+        } else {
+            SW_MAXIMIZE
+        };
+        // GPUI 0.3.3 的 Windows zoom() 只会最大化，无法还原，因此显式切换 Win32 状态。
+        if let Err(err) = unsafe { ShowWindowAsync(HWND(handle.hwnd.get()), command) } {
+            tracing::error!(target: "fluxdb_desktop", error = %err, "切换 Windows 窗口最大化状态失败");
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    window.zoom_window();
+}
+
+fn window_control_buttons(
+    window: &mut Window,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> impl IntoElement {
     // UiColors 非 Copy，闭包前先取出需要的 Rgba 值。
     let hover_bg = colors.hover;
     let muted = colors.muted;
-    // 最大化/还原：Windows 上 zoom 即切换，is_maximized 决定按钮图标。
+    // 最大化/还原：is_maximized 决定按钮图标，点击时按平台切换窗口状态。
     let maximized = window.is_maximized();
     let maximize_icon = if maximized { AppIcon::Square } else { AppIcon::Maximize };
     let maximize_label = if maximized { "还原" } else { "最大化" };
@@ -220,9 +256,9 @@ fn window_control_buttons(window: &mut Window, colors: UiColors, cx: &mut Contex
                 .hover(move |style| style.bg(hover_bg))
                 .tooltip(move |window, cx| Tooltip::new(maximize_label).build(window, cx))
                 .child(app_icon_box(maximize_icon, 34., 16., muted))
-                // zoom 切换最大化/还原会触发窗口 resize 重绘，is_maximized 图标随之刷新。
+                // 状态变化会触发窗口 resize 重绘，is_maximized 图标随之刷新。
                 .on_mouse_down(MouseButton::Left, |_, window, _| {
-                    window.zoom_window();
+                    toggle_window_maximized(window);
                 }),
         )
         .child(
