@@ -5,20 +5,21 @@
 ![Rust](https://img.shields.io/badge/Rust-edition%202024-orange)
 ![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue)
 ![macOS](https://img.shields.io/badge/macOS-supported-brightgreen)
-![Platform](https://img.shields.io/badge/Platform-Windows%20%2F%20Linux%20planned-lightgrey)
+![Windows](https://img.shields.io/badge/Windows-supported-brightgreen)
+![Linux](https://img.shields.io/badge/Linux-supported-brightgreen)
 ![UI Framework](https://img.shields.io/badge/UI-GPUI-blue)
 ![Databases](https://img.shields.io/badge/Databases-MySQL%20%7C%20PostgreSQL%20%7C%20SQLite%20%7C%20Redis-green)
 
 ## 早期阶段说明
 
-> 本项目处于早期阶段，还在积极开发中，尚未经历大量真实场景测试，可能存在各种 bug。目前仅支持 macOS 平台，Windows / Linux 支持规划中。
+> 本项目处于早期阶段，还在积极开发中，尚未经历大量真实场景测试，可能存在各种 bug。当前已提供 macOS、Windows 和 Linux 的安装包。
 >
 > 本项目**完全由 AI 生成**，人工角色是**需求定义与验收**：提出目标、审阅差异、运行测试、目验 UI 效果。
 
 
 ## 快速开始
 
-> 当前阶段仅发布 macOS 目标；Windows / Linux 支持规划中。
+> 当前稳定发布版本为 [v0.1.5](https://github.com/fluxdb-alt/fluxDB/releases/tag/v0.1.5)，提供 macOS、Windows 和 Linux 安装包。
 
 详细使用说明请参阅：[FluxDB 操作手册](./docs/user-guide.md)。
 
@@ -47,6 +48,16 @@ cargo run -p fluxdb-desktop
 脚本会构建 release 版本、内嵌 Homebrew 动态库、ad-hoc 签名，并生成 `.dmg`（可用 `PROFILE=debug`、`CREATE_DMG=0` 等环境变量调整）。
 
 > 生成的 bundle 为 ad-hoc 签名、未公证，分发给他人时可能触发 Gatekeeper 拦截，需右键「打开」或用 `xattr -dr com.apple.quarantine` 放行。
+
+### Windows / Linux 发布包
+
+从 [v0.1.5 Release](https://github.com/fluxdb-alt/fluxDB/releases/tag/v0.1.5) 下载对应平台的安装包：
+
+- **Windows x64**：`FluxDB-0.1.5-windows-x64-setup.exe`。安装器支持创建开始菜单和可选桌面快捷方式；应用使用 GUI 子系统启动，不会额外弹出控制台窗口。
+- **Linux x64**：`fluxdb_0.1.5_amd64.deb`，适用于 Ubuntu 22.04/24.04 等 Debian 系发行版，安装后提供桌面启动项和应用图标。
+- **macOS**：`FluxDB-0.1.5-macos-arm64.dmg`（Apple Silicon）或 `FluxDB-0.1.5-macos-x64.dmg`（Intel）。
+
+所有发布包均提供对应的 `.sha256` 校验文件。Windows 当前支持 x64；Linux 首版支持 x64、X11/Wayland 图形桌面。Windows ARM64、Linux ARM64、AppImage、Flatpak 和 Snap 暂不在发布范围内。
 
 ## 项目简介
 
@@ -123,7 +134,7 @@ apps/fluxdb-desktop          桌面入口（GPUI 应用、内容视图、编辑�
 - [x] **接入 PostgreSQL**：连接管理、Schema 与对象浏览、SQL 编辑器与补全、表结构管理、数据浏览与编辑回写等。
 - [x] **接入 Redis**：连接总览、键值浏览与编辑、工作台、终端内嵌命令。
 - [ ] **设置项真正生效**：部分设置配置尚未真实接入，逐步让各项偏好设置完整生效。
-- [ ] **支持 Windows / Linux 平台**：目前仅支持 macOS，后续补齐 Windows、Linux 的打包与适配。
+- [x] **支持 Windows / Linux 平台**：已完成 Windows x64 安装器和 Linux x64 DEB 的打包、桌面集成与 CI 构建；Windows/Linux 仍需持续补充更多发行版和硬件环境验证。
 - [ ] **接入 MongoDB**：基于现有连接器抽象新增 NoSQL 数据源，支持集合浏览、文档查看与编辑。
 - [ ] **多语言支持**：为界面与应用内容接入国际化（i18n），支持中英文等多语言切换。
 - [ ] **AI 接入**：引入大模型能力，探索自然语言转 SQL、智能补全增强与查询结果智能解释等场景。
