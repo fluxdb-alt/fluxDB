@@ -1,4 +1,4 @@
-; Windows 流程暂未启用；需在 Windows 验证动态库依赖后发布。
+; Windows 安装包由 tag 触发的 release workflow 构建；当前未做代码签名。
 #ifndef AppVersion
   #error AppVersion must be supplied by the release workflow
 #endif
