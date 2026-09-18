@@ -22,8 +22,12 @@ UninstallDisplayIcon={app}\fluxdb-desktop.exe
 Source: "..\target\x86_64-pc-windows-msvc\release\fluxdb-desktop.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\apps\fluxdb-desktop\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce
+
 [Icons]
 Name: "{group}\FluxDB"; Filename: "{app}\fluxdb-desktop.exe"
+Name: "{autodesktop}\FluxDB"; Filename: "{app}\fluxdb-desktop.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\fluxdb-desktop.exe"; Description: "Launch FluxDB"; Flags: nowait postinstall skipifsilent
