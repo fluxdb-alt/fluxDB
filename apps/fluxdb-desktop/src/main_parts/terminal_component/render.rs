@@ -9,7 +9,7 @@ use fluxdb_core::terminal::{TermRowView, byte_cursor_to_cell};
 use gpui::TextAlign;
 
 /// 终端用等宽字体与字号（与需要宽字符显示的 grid 对齐）。
-pub(crate) const TERMINAL_FONT: &str = "Menlo";
+pub(crate) const TERMINAL_FONT: &str = crate::PLATFORM_MONOSPACE_FONT;
 pub(crate) const TERMINAL_FONT_SIZE: f32 = 12.0;
 
 /// 终端前景/背景色（随主题深浅取两套近似配色）。

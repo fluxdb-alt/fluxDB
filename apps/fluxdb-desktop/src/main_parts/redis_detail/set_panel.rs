@@ -356,7 +356,7 @@ fn redis_set_member_row(
                 .flex_none()
                 .flex()
                 .items_center()
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_size(px(11.))
                 .text_color(colors.muted)
                 .child(format!("{:02}", row_index + 1)),
@@ -370,7 +370,7 @@ fn redis_set_member_row(
                 .text_ellipsis()
                 .text_size(px(13.))
                 .line_height(px(18.))
-                .font_family("Menlo")
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(colors.text)
                 .child(member.clone()),
         )
@@ -466,7 +466,7 @@ fn redis_set_member_delete_confirm_popover(
                                     .gap_1()
                                     .child(
                                         div()
-                                            .font_family("Menlo")
+                                            .font_family(crate::PLATFORM_MONOSPACE_FONT)
                                             .text_size(px(14.))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(colors.text)

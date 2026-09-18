@@ -125,6 +125,14 @@ impl LegacyInputStateExt for InputState {
     }
 }
 
+// 平台等宽字体仅指定通用首选项；具体 CJK/emoji 回退仍由系统字体栈处理。
+#[cfg(target_os = "macos")]
+pub(crate) const PLATFORM_MONOSPACE_FONT: &str = "Menlo";
+#[cfg(target_os = "windows")]
+pub(crate) const PLATFORM_MONOSPACE_FONT: &str = "Consolas";
+#[cfg(target_os = "linux")]
+pub(crate) const PLATFORM_MONOSPACE_FONT: &str = "monospace";
+
 // First-pass source split: these files are included at crate-root scope to keep behavior unchanged.
 include!("main_parts/foundation.rs");
 include!("main_parts/theme_registry.rs");
@@ -166,6 +174,9 @@ include!("main_parts/data_table_ui.rs");
 include!("main_parts/tree_helpers.rs");
 include!("main_parts/sidebar_visible_rows.rs");
 include!("main_parts/logging.rs");
+include!("main_parts/single_instance.rs");
+// Linux 首版不启用系统托盘（tray-icon 在 Linux 会无条件链接 GTK），托盘实现仅限 macOS/Windows。
+#[cfg(not(target_os = "linux"))]
 include!("main_parts/tray_icon.rs");
 include!("main_parts/app_boot.rs");
 include!("main_parts/app_boot_helpers.rs");

@@ -48,6 +48,9 @@ pub fn open(root: &Path) -> Result<Connection> {
     }
     // bundled 特性保证 libsqlite3 静态编译，无系统依赖。
     let conn = Connection::open(&path).map_err(sqlite_error)?;
+    // 数据库含工作台历史等业务数据，创建后立即收紧为 0o600（方案 §12.2）；
+    // WAL/SHM 文件继承 db 文件权限。
+    super::harden_file_perms(&path)?;
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(sqlite_error)?;
     Ok(conn)

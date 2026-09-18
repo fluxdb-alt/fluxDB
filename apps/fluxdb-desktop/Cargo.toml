@@ -27,12 +27,33 @@ smol = "2"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tray-icon = { version = "0.23.1", default-features = false }
 tree-sitter = "=0.26.13"
 tree-sitter-json = "=0.24.8"
 tree-sitter-sequel = "=0.3.11"
 streaming-iterator = "0.1"
 gpui-fps = "0.6.0"
+
+# Linux 首版不启用系统托盘（见 docs/2026-09-14-windows-linux-support-plan.md §3.2/§4.3）。
+# tray-icon 在 Linux 目标上会无条件链接 GTK（libappindicator → gtk），即使 default-features=false 且不调用托盘函数也一样，
+# 因此把它限定为“非 Linux”目标条件依赖，避免 Linux 发布包被迫携带 GTK 运行库。
+# Windows / macOS 保留托盘能力。
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+tray-icon = { version = "0.23.1", default-features = false }
+
+# 单实例守卫（方案 §12.1 方案 A）：Unix 用 flock（nix），Windows 用命名互斥量。
+# 两库均已在 Cargo.lock（nix 0.28 经 portable-pty、windows 0.57 经 gpui 栈），无版本升级。
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.28", default-features = false, features = ["fs", "signal"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.57", features = [
+    "Win32_Foundation",
+    # Win32_System_Threading 提供 Win32::System::Threading 模块路径；
+    # Win32_Security 门控该模块内的 CreateMutexW 函数（windows 0.57 实读源码确认）。
+    "Win32_System_Threading",
+    "Win32_Security",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"

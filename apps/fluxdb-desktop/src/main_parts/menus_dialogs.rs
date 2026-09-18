@@ -18,4 +18,5 @@ include!("menus_dialogs/sql_file_execution.rs");
 include!("menus_dialogs/data_export.rs");
 include!("menus_dialogs/database_backup.rs");
 include!("menus_dialogs/database_backup/ui.rs");
+include!("menus_dialogs/subprocess.rs");
 include!("menus_dialogs/menu_items.rs");

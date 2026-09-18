@@ -1,0 +1,230 @@
+name: CI
+
+# AI-00：三平台原生构建、测试与内部候选产物。
+# 本工作流只生成内部候选产物，不创建 tag、不公开发布 Release。
+# 各平台使用原生 runner；macOS 上的交叉 cargo check 不作为 Windows/Linux 验证通过依据。
+on:
+  # 适配分支自身 push + 面向 main 的 PR 触发；另提供 workflow_dispatch 手动复跑。
+  # 不修改 main 版本 workflow（不动 release.yml），仅在当前适配分支配置。
+  push:
+    branches:
+      - main
+      - adapt/win-linux
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  socket-probe:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Diagnose socket cancellation on Windows
+        shell: pwsh
+        run: |
+          rustc --edition 2024 scripts/ci/socket-shutdown.rs -o socket-shutdown.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./socket-shutdown.exe
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS (Apple Silicon)
+          - os: macos-14
+            target: aarch64-apple-darwin
+            arch: aarch64
+          # Windows x64 (MSVC)
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            arch: x64
+          # Linux x64 基线 (Ubuntu 22.04)
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            arch: x64
+    runs-on: ${{ matrix.os }}
+
+    timeout-minutes: 90
+
+    env:
+      CARGO_TERM_COLOR: always
+      TARGET: ${{ matrix.target }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux system build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # 按 docs/2026-09-14-windows-linux-support-plan.md §3.4 安装 GPUI/Linux 原生构建依赖。
+          # 包含: C/C++ 编译器、pkg-config、OpenSSL、fontconfig、FreeType、
+          #   xkbcommon、X11/XCB、Wayland 开发包，以及 wgpu 图形后端的库。
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake clang \
+            libssl-dev \
+            libfontconfig1-dev libfreetype6-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libdbus-1-dev
+
+      # Windows/Ubuntu/macOS 均使用 Cargo.lock + --locked，避免浮动依赖。
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ github.workspace }}
+          key: ${{ matrix.target }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Workspace check (locked)
+        run: cargo check --workspace --locked --target ${{ matrix.target }}
+
+      # release 构建/产物在测试之前执行，先验证 Windows fxc/HLSL 等完整 release 链路。
+      - name: Build fluxdb-desktop (release, locked)
+        run: cargo build --locked --release --target ${{ matrix.target }} -p fluxdb-desktop
+
+      - name: Generate release artifact checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd "target/${{ matrix.target }}/release"
+          # sha256sum 在 macOS 默认不存在，用 python3 做跨平台校验和。
+          python3 - <<'PY'
+          import hashlib, pathlib, os
+          files = [p for p in pathlib.Path('.').iterdir()
+                   if p.name.startswith('fluxdb-desktop') and not p.name.endswith('.sha256') and p.is_file()]
+          with open('fluxdb-desktop.sha256', 'w') as out:
+              for p in sorted(files):
+                  h = hashlib.sha256(p.read_bytes()).hexdigest()
+                  print(f"{h}  {p.name}", file=out)
+          PY
+          cat fluxdb-desktop.sha256
+
+      - name: Upload internal candidate artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: fluxdb-desktop-${{ matrix.os }}-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/fluxdb-desktop*
+            target/${{ matrix.target }}/release/fluxdb-desktop.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      # ---- AI-05：内部安装包（仅内部候选，不创建 tag、不公开发布 Release）----
+      # 内部版本号：Cargo 包版本 + 提交短 SHA；未签名的 EXE 首次运行会触发 SmartScreen
+      # （方案 §12.9，已知限制，正式发布再处理签名与信任）。
+      - name: Build Windows installer (Inno Setup, internal)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          $version = "0.1.0-$("$env:GITHUB_SHA".Substring(0,7))"
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DAppVersion=$version" scripts/windows-installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify and checksum Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem target/windows-package/FluxDB-*-windows-x64-setup.exe
+          if (-not ($setup.Length -gt 0)) { throw "未生成 Windows 安装包" }
+          $hash = Get-FileHash $setup.FullName -Algorithm SHA256
+          "$($hash.Hash.ToLower())  $($hash.Path)" | Set-Content "$($setup.FullName).sha256"
+          Write-Output "Installer bytes: $($setup.Length)"
+          Write-Output "Installer SHA256: $($hash.Hash)"
+      - name: Upload internal Windows installer artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v5
+        with:
+          name: fluxdb-windows-installer-internal
+          path: target/windows-package/FluxDB-*-windows-x64-setup.exe*
+          if-no-files-found: error
+          retention-days: 14
+
+      # Linux 首版包格式选 .deb（与安装布局 <prefix>/bin + <prefix>/share/fluxdb/assets 一致，
+      # 依赖最少、Ubuntu 22.04 原生 dpkg 即可构建验证；AppImage 需额外运行时打包）。
+      - name: Build Linux .deb (internal)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="0.1.0-${GITHUB_SHA:0:7}"
+          pkg="fluxdb_${version}_amd64"
+          dir="target/linux-package/$pkg"
+          rm -rf target/linux-package
+          mkdir -p "$dir/DEBIAN" "$dir/usr/bin" "$dir/usr/share/fluxdb"
+          install -m 0755 "target/${{ matrix.target }}/release/fluxdb-desktop" "$dir/usr/bin/fluxdb"
+          cp -r apps/fluxdb-desktop/assets "$dir/usr/share/fluxdb/assets"
+          cat > "$dir/DEBIAN/control" <<EOF
+          Package: fluxdb
+          Version: $version
+          Section: database
+          Priority: optional
+          Architecture: amd64
+          Maintainer: FluxDB <fluxdb@shining3d.com>
+          Depends: libc6
+          Description: FluxDB cross-platform SQL client (internal candidate)
+          EOF
+          dpkg-deb --build --root-owner-group "$dir" "target/linux-package/${pkg}.deb"
+      - name: Verify, checksum and report Linux package deps
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="0.1.0-${GITHUB_SHA:0:7}"
+          deb="target/linux-package/fluxdb_${version}_amd64.deb"
+          # 包内容检查：须含可执行文件与 assets 目录。
+          dpkg-deb -c "$deb" | tee target/linux-package/contents.txt
+          grep -q "usr/bin/fluxdb" target/linux-package/contents.txt
+          grep -q "usr/share/fluxdb/assets/" target/linux-package/contents.txt
+          # 安装到临时 root 验证文件可解压且可执行位正确（无图形会话，不启动 GUI）。
+          dpkg-deb -x "$deb" target/linux-package/extract
+          test -x target/linux-package/extract/usr/bin/fluxdb
+          test -f target/linux-package/extract/usr/share/fluxdb/assets/app-icon.png
+          sha256sum "$deb" | tee "$deb.sha256"
+          # 运行依赖报告（供正式发布映射 Depends；内部候选仅记录，不声称 GUI 已验）。
+          ldd target/linux-package/extract/usr/bin/fluxdb 2>/dev/null \
+            | awk '/=>/ {print $1, "->", $3}' > target/linux-package/ldd-report.txt || true
+          cat target/linux-package/ldd-report.txt
+      - name: Upload internal Linux .deb artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v5
+        with:
+          name: fluxdb-linux-deb-internal
+          path: |
+            target/linux-package/*.deb
+            target/linux-package/*.deb.sha256
+            target/linux-package/contents.txt
+            target/linux-package/ldd-report.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      # 与数据库/SSH/凭据服务无关的单元测试；真实 PG 用例由 FLUXDB_PG_SMOKE 显式启用，
+      # 在具备隔离服务的集成测试 job 中执行。
+      - name: Test core crates
+        run: cargo test --locked --target ${{ matrix.target }} -p fluxdb-core -p fluxdb-editor-core -p fluxdb-editor-language
+
+      - name: Test storage/app/connectors
+        run: cargo test --locked --target ${{ matrix.target }} -p fluxdb-storage -p fluxdb-app -p fluxdb-connectors
+
+      - name: Test PTY child cleanup (Unix)
+        if: runner.os != 'Windows'
+        run: cargo test --locked --target ${{ matrix.target }} -p fluxdb-desktop -- terminal_reap_tests kill_child_tree_tests

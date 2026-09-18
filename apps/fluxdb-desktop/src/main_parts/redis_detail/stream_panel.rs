@@ -316,7 +316,7 @@ fn redis_stream_groups_section(
                     .pl_4()
                     .text_size(px(11.))
                     .text_color(colors.muted)
-                    .font_family("Menlo")
+                    .font_family(crate::PLATFORM_MONOSPACE_FONT)
                     .child(format!(
                         "{name}　未确认 {pending}　空闲 {}s",
                         idle_ms / 1000

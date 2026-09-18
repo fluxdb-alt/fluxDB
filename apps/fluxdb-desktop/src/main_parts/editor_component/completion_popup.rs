@@ -346,7 +346,7 @@ fn completion_doc_cell(
             color.into(),
             font,
         )]));
-    let cell = if mono { cell.font_family("Menlo") } else { cell };
+    let cell = if mono { cell.font_family(crate::PLATFORM_MONOSPACE_FONT) } else { cell };
     if width == px(0.) {
         cell.flex_1()
     } else {

@@ -1,5 +1,20 @@
 fn main() {
-    let storage = FileStorage::default();
+    // 单实例守卫最先执行（方案 §12.1 方案 A）：避免第二实例与首实例并发写同一
+    // SQLite/配置。第二实例明确提示并退出；锁基础设施失败时降级放行（见 single_instance.rs）。
+    if !acquire_single_instance() {
+        notify_second_instance_and_exit();
+    }
+
+    // 应用数据目录解析失败时明确报错退出（AI-01，方案 §4.1/§10.4-4：启动失败必须有证据），
+    // 不再静默回退到当前目录。日志系统此时未初始化，先以 stderr 输出；
+    // Windows GUI 子系统下 stderr 不可见的兜底可见性属后续任务（方案 §12.8）。
+    let storage = match FileStorage::try_default() {
+        Ok(storage) => storage,
+        Err(err) => {
+            eprintln!("FluxDB 无法解析应用数据目录，启动终止: {err}");
+            std::process::exit(1);
+        }
+    };
     let saved_settings = storage.load_settings().unwrap_or_default();
     // 最先初始化日志系统；guard 持有到 main 结束，保证日志 worker 线程存活。
     let _log_guard = init_logging(saved_settings.log_level, &saved_settings.log_path);
@@ -15,6 +30,8 @@ fn main() {
         })
         .run(move |cx: &mut App| {
             set_dock_icon();
+            // Linux 首版无托盘；tray_icon.rs 仅在非 Linux 编译（见 main.rs include 与 Cargo.toml）。
+            #[cfg(not(target_os = "linux"))]
             install_tray_icon(cx);
             gpui_component::init(cx);
             register_sql_highlighter();
@@ -50,15 +67,17 @@ fn main() {
                 WindowOptions {
                     focus: true,
                     is_resizable: true,
-                    titlebar: Some(TitlebarOptions {
-                        appears_transparent: true,
-                        traffic_light_position: Some(point(px(17.), px(12.))),
-                        ..Default::default()
-                    }),
+                    titlebar: Some(platform_titlebar_options()),
+                    // Linux 请求客户端装饰：撤掉系统标题栏，避免与顶栏自绘窗口按钮出现两套关闭；
+                    // X11 无合成器时 gpui 自动回退 Server，CSD 阴影与拖边缩放由 gpui-component window_border 提供。
+                    #[cfg(target_os = "linux")]
+                    window_decorations: Some(gpui::WindowDecorations::Client),
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
                 |window, cx| {
+                    // Windows/Linux 默认正常关闭。当前只有 macOS 的隐藏/恢复行为经过验证。
+                    #[cfg(target_os = "macos")]
                     install_close_to_tray(window, cx);
                     let view = cx.new(|cx| {
                         let rename_group_input =
@@ -2371,7 +2390,7 @@ fn main() {
                             redis_hash_field_rows: Vec::new(),
                             redis_hash_field_hovered: None,
                             redis_hash_field_editing: None,
-                            redis_hash_full_value_viewer: Rc::new(RefCell::new(None)),
+                            redis_hash_full_value_viewer: Rc::new(std::cell::RefCell::new(None)),
                             pending_redis_hash_field_drawer: None,
                             redis_hash_field_drawer_rows: Vec::new(),
                             redis_hash_field_drawer_scroll: ScrollHandle::new(),
@@ -2510,6 +2529,7 @@ fn main() {
                             backup_note_edit_input,
                             backup_pending_metas: BTreeMap::new(),
                             pending_delete_backup: None,
+                            pending_exit_confirm: false,
                             user_admin_search_input,
                             _user_admin_search_subscription: user_admin_search_subscription,
                             user_admin_create_user_input,

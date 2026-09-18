@@ -651,8 +651,8 @@ mod tests {
         assert_eq!(state, S::Connecting);
         state = S::PtyRunning;
         assert_eq!(state, S::PtyRunning);
-        state = S::Ready;
         state = S::Busy;
+        assert_eq!(state, S::Busy);
         state = S::Ready;
         assert_eq!(state, S::Ready);
         // 退出 / 失败为终止态。

@@ -29,7 +29,7 @@ fn redis_add_key_string_form(
                         .h_full()
                         .px_2()
                         .py_2()
-                        .font_family("Menlo")
+                        .font_family(crate::PLATFORM_MONOSPACE_FONT)
                         .text_size(px(12.))
                         .line_height(px(18.)),
                 ),

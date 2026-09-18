@@ -420,7 +420,7 @@ fn redis_hash_full_value_inline_panel(
                                             .h_full()
                                             .px_2()
                                             .py_2()
-                                            .font_family("Menlo")
+                                            .font_family(crate::PLATFORM_MONOSPACE_FONT)
                                             .text_size(px(13.))
                                             .line_height(px(19.)),
                                     ),
@@ -472,7 +472,7 @@ fn redis_hash_full_value_inline_panel(
                     .size_full()
                     .overflow_x_scroll()
                     .overflow_y_scrollbar()
-                    .font_family("Menlo")
+                    .font_family(crate::PLATFORM_MONOSPACE_FONT)
                     .text_size(px(13.))
                     .line_height(px(19.))
                     .text_color(colors.text)

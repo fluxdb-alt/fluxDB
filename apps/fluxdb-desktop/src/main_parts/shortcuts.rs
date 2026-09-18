@@ -137,21 +137,40 @@ pub(crate) fn current_shortcut(
 }
 
 pub(crate) fn shortcut_display(spec: &str) -> String {
-    spec.split('-')
-        .map(|part| match part {
-            "cmd" => "⌘",
-            "ctrl" => "⌃",
-            "alt" => "⌥",
-            "shift" => "⇧",
-            "enter" => "↵",
-            "escape" => "Esc",
-            "backspace" => "⌫",
-            "delete" => "⌫",
-            "space" => "Space",
-            other => other,
-        })
-        .collect::<Vec<_>>()
-        .join("")
+    let parts = spec.split('-').map(|part| {
+        if cfg!(target_os = "macos") {
+            match part {
+                "cmd" => "⌘",
+                "ctrl" => "⌃",
+                "alt" => "⌥",
+                "shift" => "⇧",
+                "enter" => "↵",
+                "escape" => "Esc",
+                "backspace" | "delete" => "⌫",
+                "space" => "Space",
+                other => other,
+            }
+        } else {
+            match part {
+                "cmd" => "Meta",
+                "ctrl" => "Ctrl",
+                "alt" => "Alt",
+                "shift" => "Shift",
+                "enter" => "Enter",
+                "escape" => "Esc",
+                "backspace" => "Backspace",
+                "delete" => "Delete",
+                "space" => "Space",
+                other => other,
+            }
+        }
+    });
+
+    if cfg!(target_os = "macos") {
+        parts.collect::<Vec<_>>().join("")
+    } else {
+        parts.collect::<Vec<_>>().join("+")
+    }
 }
 
 pub(crate) fn bind_shortcut(
@@ -209,7 +228,23 @@ mod shortcut_tests {
     }
 
     #[test]
-    fn shortcut_display_uses_platform_symbols() {
+    fn shortcut_display_uses_platform_conventions() {
+        #[cfg(target_os = "macos")]
         assert_eq!("⇧⌘h", shortcut_display("shift-cmd-h"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!("Ctrl+Shift+h", shortcut_display("ctrl-shift-h"));
+    }
+
+    #[test]
+    fn cross_platform_editor_shortcuts_are_valid_keystrokes() {
+        for spec in [
+            "ctrl-f",
+            "ctrl-/",
+            "ctrl-shift-]",
+            "ctrl-shift-[",
+            "ctrl-alt-[",
+        ] {
+            assert!(Keystroke::parse(spec).is_ok(), "invalid shortcut: {spec}");
+        }
     }
 }

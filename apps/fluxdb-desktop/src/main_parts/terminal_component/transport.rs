@@ -54,12 +54,11 @@ impl TerminalPty {
             cmd.cwd(cwd);
         }
 
-        // 子进程在属主 slave 上运行；drop slave 释放资源。
-        let child = pair.slave.spawn_command(cmd)?;
-        drop(pair.slave);
-
+        // 先获取读写端，再启动子进程，避免初始化失败时遗留无人回收的子进程。
         let mut reader = pair.master.try_clone_reader()?;
         let master_writer = pair.master.take_writer()?;
+        let child = pair.slave.spawn_command(cmd)?;
+        drop(pair.slave);
         let (tx, rx): (Sender<TerminalTransportEvent>, Receiver<TerminalTransportEvent>) = channel();
 
         // 后台读线程：阻塞读 PTY，读到增量即回传；EOF 表示进程退出。
@@ -129,13 +128,37 @@ impl TerminalPty {
         }
     }
 
-    /// 关闭：杀掉子进程并丢弃 writer；读线程随之 EOF 退出。
+    /// 关闭：在后台终止并回收进程，避免 kill/wait 阻塞 UI。
     fn close(&mut self) {
         self.writer.take();
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
+        if let Some(child) = self.child.take() {
+            reap_terminal_child(child);
         }
     }
+}
+
+impl Drop for TerminalPty {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+fn reap_terminal_child(
+    mut child: Box<dyn portable_pty::Child + Send + Sync>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => {},
+            Err(error) => tracing::warn!(%error, "查询终端子进程状态失败"),
+        }
+        if let Err(error) = child.kill() {
+            tracing::warn!(%error, "终止终端子进程失败");
+        }
+        if let Err(error) = child.wait() {
+            tracing::warn!(%error, "回收终端子进程失败");
+        }
+    })
 }
 
 /// 为 PTY 子进程解析可执行文件路径。
@@ -143,35 +166,124 @@ impl TerminalPty {
 /// `std::process::Command` 在 PATH 缺失时不会自动知道 Homebrew 等包管理器目录；
 /// 这里仅对不带目录的程序名做解析，显式路径仍完全按调用方指定的值使用。
 fn resolve_program_path(program: &str) -> String {
-    let path = std::path::Path::new(program);
-    if path.is_absolute() || program.contains('/') || program.contains('\\') {
-        return program.to_string();
-    }
-
-    let mut search_paths: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+    let search_paths: Vec<std::path::PathBuf> = std::env::var_os("PATH")
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_default();
 
     #[cfg(target_os = "macos")]
-    {
+    let search_paths = {
         // Finder 启动时常见的 PATH 不包含这些目录；按稳定顺序去重，避免重复 stat。
+        let mut paths = search_paths;
         for directory in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"] {
             let directory = std::path::PathBuf::from(directory);
-            if !search_paths.contains(&directory) {
-                search_paths.push(directory);
+            if !paths.contains(&directory) {
+                paths.push(directory);
             }
         }
+        paths
+    };
+
+    resolve_program_from_paths(program, search_paths, cfg!(target_os = "windows"))
+}
+
+/// 按调用方注入的 PATH 解析 PTY 可执行文件；`windows` 参数模拟目标平台语义。
+///
+/// Windows 下裸名会尝试 `.exe/.com`；`.bat/.cmd` 不作为普通可执行文件传给 PTY，
+/// 避免绕过 shell 解释和参数引用规则。
+fn resolve_program_from_paths(
+    program: &str,
+    search_paths: Vec<std::path::PathBuf>,
+    windows: bool,
+) -> String {
+    let path = std::path::Path::new(program);
+    if path.is_absolute() || program.contains('/') || program.contains('\\') {
+        return program.to_string();
+    }
+    if windows && has_windows_shell_extension(program) {
+        tracing::warn!(program, "终端不通过 shell 解释器执行 .bat/.cmd");
+        return program.to_string();
     }
 
     for directory in search_paths {
-        let candidate = directory.join(program);
-        if candidate.is_file() {
-            let resolved = candidate.to_string_lossy().into_owned();
-            tracing::debug!(program, resolved = %resolved, "终端已解析可执行文件路径");
-            return resolved;
+        let mut candidates = vec![directory.join(program)];
+        if windows && path.extension().is_none() {
+            candidates.push(directory.join(format!("{program}.exe")));
+            candidates.push(directory.join(format!("{program}.com")));
+        }
+        for candidate in candidates {
+            if candidate.is_file() {
+                let resolved = candidate.to_string_lossy().into_owned();
+                tracing::debug!(program, resolved = %resolved, "终端已解析可执行文件路径");
+                return resolved;
+            }
         }
     }
 
     tracing::warn!(program, "终端未找到可执行文件，将交由 PTY 返回启动错误");
     program.to_string()
+}
+
+fn has_windows_shell_extension(program: &str) -> bool {
+    std::path::Path::new(program)
+        .extension()
+        .is_some_and(|extension| {
+            matches!(extension.to_string_lossy().to_ascii_lowercase().as_str(), "bat" | "cmd")
+        })
+}
+
+
+#[cfg(all(test, unix))]
+mod terminal_reap_tests {
+    #[test]
+    fn reaps_a_running_pty_child() {
+        use portable_pty::PtySystem as _;
+        let pair = portable_pty::NativePtySystem::default()
+            .openpty(portable_pty::PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut command = portable_pty::CommandBuilder::new("/bin/sh");
+        command.args(["-c", "exec sleep 30"]);
+        let child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let worker = super::reap_terminal_child(child);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !worker.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(worker.is_finished(), "终端子进程未及时回收");
+        worker.join().unwrap();
+    }
+}
+
+
+#[cfg(test)]
+mod terminal_program_path_tests {
+    use super::resolve_program_from_paths;
+
+    #[test]
+    fn windows_resolves_native_executables_and_rejects_scripts() {
+        let root = std::env::temp_dir().join(format!("fluxdb-pty-path-{}", std::process::id()));
+        let native_dir = root.join("native");
+        let script_dir = root.join("scripts");
+        let unix_dir = root.join("unix");
+        for dir in [&native_dir, &script_dir, &unix_dir] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(native_dir.join("redis-cli.exe"), b"MZ").unwrap();
+        std::fs::write(script_dir.join("redis-cli.bat"), b"@echo off").unwrap();
+        std::fs::write(script_dir.join("run.cmd"), b"@echo off").unwrap();
+        std::fs::write(unix_dir.join("redis-cli"), b"#!/bin/sh").unwrap();
+
+        let native = resolve_program_from_paths("redis-cli", vec![native_dir.clone()], true);
+        let bat = resolve_program_from_paths("redis-cli", vec![script_dir.clone()], true);
+        let cmd = resolve_program_from_paths("run.cmd", vec![script_dir.clone()], true);
+        let unix = resolve_program_from_paths("redis-cli", vec![unix_dir.clone()], false);
+        let missing = resolve_program_from_paths("missing", vec![unix_dir.clone()], false);
+
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(native, native_dir.join("redis-cli.exe").to_string_lossy());
+        assert_eq!(bat, "redis-cli");
+        assert_eq!(cmd, "run.cmd");
+        assert_eq!(unix, unix_dir.join("redis-cli").to_string_lossy());
+        assert_eq!(missing, "missing");
+    }
 }

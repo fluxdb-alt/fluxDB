@@ -1,26 +1,19 @@
 // Included in crate-root scope by ../../src/main.rs.
 //
 // 日志系统初始化：基于 tracing + tracing-subscriber。
-// - 默认同时输出到 stderr 与滚动日志文件（~/Library/Application Support/fluxdb/logs/）。
+// - 默认同时输出到 stderr 与滚动日志文件（目录由 fluxdb-storage::FileStorage::default_log_dir 解析）。
 // - 输出级别使用保存的应用配置，不受运行环境变量影响。
 // - 日志文件不记录连接明文的密码等内容，敏感数据需在埋点时避免写入。
 
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-/// 应用数据根目录（与 fluxdb-storage 保持一致：~/Library/Application Support/fluxdb）。
-/// 注意：本文件通过 include! 并入 crate-root 作用域，因此这里用全限定路径避免
-/// 与 main.rs 及同作用域其他 include 文件的 use 冲突。
-fn app_data_dir() -> std::path::PathBuf {
-    match std::env::var_os("HOME") {
-        Some(home) => std::path::PathBuf::from(home).join("Library/Application Support/fluxdb"),
-        None => std::path::PathBuf::from("."),
-    }
-}
-
+/// 日志目录：目录策略统一由 fluxdb-storage 解析（AI-01，方案 §4.1），
+/// 此处不再自行读取 HOME，避免与 storage 各自拼接路径导致配置/日志分离。
+/// macOS/Windows：持久化根目录 `logs/`；Linux：`$XDG_STATE_HOME/fluxdb/logs`。
 fn configured_log_dir(log_path: &str) -> std::path::PathBuf {
     if log_path.trim().is_empty() {
-        app_data_dir().join("logs")
+        fluxdb_storage::FileStorage::default_log_dir()
     } else {
         std::path::PathBuf::from(log_path)
     }

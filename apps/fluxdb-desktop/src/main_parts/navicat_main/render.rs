@@ -137,7 +137,7 @@ impl Render for NavicatMain {
                     }
                 }),
             )
-            .child(topbar(&state, self.show_connection_browser, colors, cx))
+            .child(topbar(&state, self.show_connection_browser, window, colors, cx))
             .child(
                 div()
                     .flex()
@@ -389,6 +389,10 @@ impl Render for NavicatMain {
             // 备份 tab：删除确认弹框。
             .when_some(self.pending_delete_backup.clone(), |this, path| {
                 this.child(backup_delete_confirm_modal(path, colors, cx))
+            })
+            // Windows：点击自绘关闭按钮后的退出确认弹框。
+            .when(self.pending_exit_confirm, |this| {
+                this.child(exit_confirm_modal(colors, cx))
             })
             .when_some(self.backup_log_task, |this, task_id| {
                 if let Some(task) = self
