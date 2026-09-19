@@ -610,6 +610,12 @@ struct NavicatMain {
     redis_key_search_history_open: bool,
     redis_data_refresh_times: BTreeMap<TabId, Instant>,
     redis_refresh_time_task: Option<Task<()>>,
+    // ER 关系图画布数据：按 tab 缓存；首次打开自动后台加载（见 er/canvas.rs）。
+    er_graphs: BTreeMap<TabId, fluxdb_core::ErGraphData>,
+    // ER 图加载失败的错误文案：有值则渲染错误+重试，而非空图。
+    er_errors: BTreeMap<TabId, String>,
+    // 进行中的 ER 加载任务；存在即「请求中」，避免渲染重复触发加载。
+    er_load_tasks: BTreeMap<TabId, Task<()>>,
     // Redis 连接级概览（版本/内存/CPU）的定期刷新任务与进行中的单次拉取任务
     redis_overview_refresh_task: Option<Task<()>>,
     redis_overview_refresh_tasks: BTreeMap<u64, Task<()>>,

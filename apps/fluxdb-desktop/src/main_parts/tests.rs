@@ -2,6 +2,75 @@
 mod tests {
     use super::*;
 
+    // ER 画布固定栅格布局（er/canvas.rs::er_layout）的坐标有效性：
+    // 保证节点排布有限、不重叠列、连线锚点落在节点边缘，绘制期无 NaN/越界。
+    #[test]
+    fn er_layout_produces_finite_non_overlapping_positions() {
+        let graph = fluxdb_core::ErGraphData {
+            tables: vec![
+                fluxdb_core::ErTableNode {
+                    name: "customers".into(),
+                    comment: None,
+                    columns: vec![
+                        fluxdb_core::ErColumn { name: "id".into(), type_name: Some("INTEGER".into()), primary_key: true, nullable: false },
+                        fluxdb_core::ErColumn { name: "name".into(), type_name: Some("TEXT".into()), primary_key: false, nullable: false },
+                    ],
+                },
+                fluxdb_core::ErTableNode {
+                    name: "products".into(),
+                    comment: None,
+                    columns: vec![
+                        fluxdb_core::ErColumn { name: "id".into(), type_name: Some("INTEGER".into()), primary_key: true, nullable: false },
+                    ],
+                },
+                fluxdb_core::ErTableNode {
+                    name: "orders".into(),
+                    comment: None,
+                    columns: vec![
+                        fluxdb_core::ErColumn { name: "id".into(), type_name: Some("INTEGER".into()), primary_key: true, nullable: false },
+                        fluxdb_core::ErColumn { name: "customer_id".into(), type_name: Some("INTEGER".into()), primary_key: false, nullable: false },
+                        fluxdb_core::ErColumn { name: "product_id".into(), type_name: Some("INTEGER".into()), primary_key: false, nullable: false },
+                    ],
+                },
+            ],
+            edges: vec![
+                fluxdb_core::ErForeignKeyEdge { name: "fk1".into(), from_table: "orders".into(), from_column: "customer_id".into(), to_table: "customers".into(), to_column: "id".into() },
+                fluxdb_core::ErForeignKeyEdge { name: "fk2".into(), from_table: "orders".into(), from_column: "product_id".into(), to_table: "products".into(), to_column: "id".into() },
+            ],
+        };
+
+        let (content_w, content_h, layouts) = er_layout(&graph);
+
+        // 排序后的坐标必须全部有限（无 NaN/Inf）。
+        for layout in &layouts {
+            assert!(layout.x.is_finite() && layout.y.is_finite());
+            assert!(content_w > 0. && content_h > 0.);
+        }
+
+        // 表数与节点数一致，且名字保留。
+        assert_eq!(layouts.len(), 3);
+        assert!(layouts.iter().any(|l| l.name == "orders"));
+
+        // 高度随列数增长（orders 3 列 > customers 2 列 > products 1 列）。
+        let orders_h = layouts.iter().find(|l| l.name == "orders").unwrap();
+        let products_h = layouts.iter().find(|l| l.name == "products").unwrap();
+        assert!(header_h(orders_h) > header_h(products_h));
+
+        // 同列（第一行）节点纵向起点一致（y 相同），横向错开（x 递增且 >= 宽度）。
+        let mut first_row_y: Option<f32> = None;
+        let mut prev_x: Option<f32> = None;
+        for layout in layouts.iter().filter(|l| l.y == 0.0) {
+            match first_row_y {
+                None => first_row_y = Some(layout.y),
+                Some(y) => assert_eq!(y, layout.y, "同列节点 y 应相同"),
+            }
+            if let Some(px) = prev_x {
+                assert!(layout.x > px, "同列节点 x 应单调递增");
+            }
+            prev_x = Some(layout.x);
+        }
+    }
+
     #[test]
     fn mysql_ddl_highlight_query_maps_to_ddl_viewer_colors() {
         let query = mysql_ddl_highlights_query();

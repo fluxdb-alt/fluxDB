@@ -429,6 +429,7 @@ fn tab_width(tab: &TabState, compact: bool) -> f32 {
         TabKind::UserAdmin(_) => 180.,
         TabKind::Settings(_) => 160.,
         TabKind::BackupList(_) => 210.,
+        TabKind::ErDiagram(_) => 210.,
     };
 
     if compact { base.min(180.) } else { base }
@@ -479,6 +480,8 @@ fn tab_icon(tab: &TabState, colors: UiColors) -> impl IntoElement {
         TabKind::Settings(_) => (rgb(0xc8ccd2), None, rgb(0x4f5661), AppIcon::Settings, 12.),
         // 备份列表 tab：与侧边栏备份节点一致的保存图标，配色用墨绿区分数据表。
         TabKind::BackupList(_) => (rgb(0x0f9d78), None, rgb(0xffffff), AppIcon::Save, 12.),
+        // ER 关系图 tab：Schema 图标 + 紫色，与侧边栏 ER 节点一致。
+        TabKind::ErDiagram(_) => (rgb(0x8b5cf6), None, rgb(0xffffff), AppIcon::Schema, 12.),
     };
 
     div()

@@ -28,5 +28,6 @@ include!("parts/terminal.rs");
 include!("parts/sql_dialect.rs");
 include!("parts/process_util.rs");
 include!("parts/tests.rs");
+include!("parts/er_model.rs");
 
 include!("parts/backup_restore.rs");

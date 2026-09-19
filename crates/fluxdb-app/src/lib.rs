@@ -26,17 +26,18 @@ use fluxdb_core::{
     CompletionTrigger, ConnectionConfig, ConnectionDraft, ConnectionGroup, ConnectionGroupId,
     ConnectionId, ConnectionOverview, Connector, CreateDatabaseRequest, DataChangeSet,
     DataExportPreview, DataPage, DatabaseKind, DatabasePrivilegeGrant, DatabaseUserIdentity,
-    Endpoint, Error, ErrorKind, FilterSpec, ForeignKeyInfo, IndexInfo, InsertTextFormat,
-    ObjectKind, ObjectPath, ObjectSummary, Pagination, PgEffectivePrivilege, PgGrantTargetLists,
-    PgObjectGrantScope, PgObjectGrants, PgPasswordOp, PgRelationKind, PgRole, PgRoleChange,
-    PgRoleDraft, PgRoleMembership, PgRoleSavePlan, PgValidUntilOp, PrivilegeScope,
-    QueryCompletionItem, QueryCompletionKind, QueryCompletionResult, QueryDeleteRollbackSnapshot,
-    QueryExecutionOptions, QueryExecutionResult, QueryExecutionSummary,
-    QueryInsertRollbackSnapshot, QueryRequest, QueryRollbackRowSnapshot, QueryRollbackSnapshot,
-    QueryStatementKind, QueryUpdateRollbackSnapshot, RedisConnectionProfile, RedisHashFieldTtl,
-    RedisServerVersion, RoutineRef, Row, RowIdentity, RowUpdate, Settings, SidebarLayout, SortSpec,
-    TableFingerprint, TableRef, TriggerInfo, TriggerRef, UserFacingError, UserRoleMember,
-    UserRoleMembership, WorkbenchHistoryItem, WorkbenchHistoryScope, WorkbenchHistoryStore,
+    Endpoint, ErColumn, ErForeignKeyEdge, ErGraphData, ErTableNode, Error, ErrorKind, FilterSpec,
+    ForeignKeyInfo, IndexInfo, InsertTextFormat, ObjectKind, ObjectPath, ObjectSummary, Pagination,
+    PgEffectivePrivilege, PgGrantTargetLists, PgObjectGrantScope, PgObjectGrants, PgPasswordOp,
+    PgRelationKind, PgRole, PgRoleChange, PgRoleDraft, PgRoleMembership, PgRoleSavePlan,
+    PgValidUntilOp, PrivilegeScope, QueryCompletionItem, QueryCompletionKind,
+    QueryCompletionResult, QueryDeleteRollbackSnapshot, QueryExecutionOptions,
+    QueryExecutionResult, QueryExecutionSummary, QueryInsertRollbackSnapshot, QueryRequest,
+    QueryRollbackRowSnapshot, QueryRollbackSnapshot, QueryStatementKind,
+    QueryUpdateRollbackSnapshot, RedisConnectionProfile, RedisHashFieldTtl, RedisServerVersion,
+    RoutineRef, Row, RowIdentity, RowUpdate, Settings, SidebarLayout, SortSpec, TableFingerprint,
+    TableRef, TriggerInfo, TriggerRef, UserFacingError, UserRoleMember, UserRoleMembership,
+    WorkbenchHistoryItem, WorkbenchHistoryScope, WorkbenchHistoryStore,
     database_user_admin_provider, grants_from_query_result, infer_cloud_from_host,
     redact_uri_password, role_memberships_from_grants, set_sqlite_attached_database,
     sqlite_attached_database_path,
@@ -85,6 +86,7 @@ include!("parts/query_history.rs");
 include!("parts/workbench_history.rs");
 include!("parts/query_result_edit.rs");
 include!("parts/tests.rs");
+include!("parts/er_service.rs");
 
 pub use fluxdb_connectors::{
     MySqlClientVersion, MySqlDumpInvocation, MySqlDumpOptions, mysql_client_version,

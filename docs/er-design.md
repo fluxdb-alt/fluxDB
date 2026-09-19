@@ -1,9 +1,9 @@
 # FluxDB ER 关系模型与图形工作区设计
 
-> 日期：2026-09-19。状态：设计草案，数据结构待用户确认，尚未实施。  
+> 日期：2026-09-19。状态：画布原型已实施（§8 步骤 3），数据结构（第 5 节 D1-D9）仍待确认。  
 > 本文补充并细化 [Agent 与 MCP 设计](agent-mcp-design.md)，ER 关系模型相关决策以本文后续确认版本为准。  
-> 本轮只核对源码和编写文档，未运行画布原型、性能测试或三平台验证。  
 > 修订记录：  
+> - 2026-09-19 实施「最小可跑 ER 标签页」画布原型（§8 步骤 3）：侧边栏「ER 图」节点打开 `库名 · ER` 标签，首次打开自动读取真实库的表/列/外键并绘制表节点与连线。落地 `ErGraphData` 纯数据模型（core er_model.rs）、加载编排（app er_service.rs）、desktop 渲染（er/canvas.rs）。不触碰第 5 节逻辑关系数据模型，不做逻辑关系编辑/持久化/缩放/Agent 工具。验证：macOS 启动正常，`cargo test` app 461 通过（含 er 集成测试）。  
 > - 2026-09-19 移除多租户式权限机制（ReadContext、权限指纹、policy_revision、按主体绑定的游标与缓存键、`authorization_changed`）。FluxDB 是单机桌面应用，授权边界只有两层：连接可见性与外部 MCP 客户端。涉及 §3.5、§5.1、§5.9、§6.4–6.8、§6.10、§7、§9.1、§11。  
 > - 2026-09-19 明确 ER 结构快照为 ER 功能唯一元数据来源，不与 completion_index 互相复制。涉及 §6.8、§7。
 
@@ -720,7 +720,7 @@ apps/fluxdb-desktop/src/main_parts/er/details.rs
 
 主题用 UiColors，图标用 AppIcon，所有通用控件复用 gpui-component；确认弹框支持 Esc/遮罩/关闭按钮。Linux、Windows、macOS 分别验证字体测量、缩放、触控板、鼠标和键盘行为。
 
-实施 Rust 修改后运行 cargo fmt、cargo check 及相关测试；UI 修改后运行 cargo run -p fluxdb-desktop 验证主窗口和 ER 交互。本文仅为设计文件，不触发这些运行验证。
+实施 Rust 修改后运行 cargo fmt、cargo check 及相关测试；UI 修改后运行 cargo run -p fluxdb-desktop 验证主窗口和 ER 交互。§8 步骤 3 画布原型已实施（见 §12 实施记录），其余步骤仍待数据模型确认后推进。
 
 ## 10. 参考项目
 
@@ -747,4 +747,24 @@ ChartDB/drawDB 的许可证与嵌入方式必须独立评估；本方案默认�
 | D8 | 授权边界只有连接可见性与外部 MCP 白名单两层；服务签名不带调用主体 | 桌面单机场景下多主体权限体系无实际取值差异，且会阻断状态下推索引优化 |
 | D9 | 刷新重绑按稳定标识 → 限定名四步匹配，无相似度猜测；hub 实体默认不作为路径中转 | 前者决定结构变更后关系是否可信，后者决定路径搜索在真实库形状下是否可用 |
 
-已确认：首次打开 ER 自动生成，并关注用户体验，具体方案见第 3.3–3.6 节。上表数据结构及其他决策仍保持“待确认”；本轮不创建这些 Rust 类型、不更改导航行为、不添加依赖。用户确认或调整后，再将对应决策标记为已确认并按阶段实施。
+已确认：首次打开 ER 自动生成，并关注用户体验，具体方案见第 3.3–3.6 节。上表数据结构（D1-D9）及其他决策仍保持“待确认”；D1-D9 对应的逻辑关系 Rust 类型（ErRelationship/CatalogSnapshot/required_filters/usage 等）尚未创建。用户确认或调整后，再将对应决策标记为已确认并按阶段实施。
+
+## 12. 实施记录：画布原型（§8 步骤 3，2026-09-19）
+
+已落地最小可跑 ER 标签页（首次打开自动生成），作为确认 D1-D9 之前的可见产出：
+
+- **core 纯数据模型**（[er_model.rs](../crates/fluxdb-core/src/parts/er_model.rs)）：`ErGraphData`/`ErTableNode`/`ErColumn`/`ErForeignKeyEdge`，仅承载一次后台加载的结果，不含加载/驱动逻辑。
+- **app 加载编排**（[er_service.rs](../crates/fluxdb-app/src/parts/er_service.rs)）：`load_er_graph_in_background` 编排 `list_objects`（枚举表）+ `list_completion_columns_for_tables`（批量列/主键/注释）+ 逐表 `list_foreign_keys`（N+1）组装 ErGraphData。PG 拼 `schema.table` 区分同名表。
+- **desktop 渲染**（[er/canvas.rs](../apps/fluxdb-desktop/src/main_parts/er/canvas.rs)）：侧边栏「ER 图」节点 → `OpenErDiagram` 命令 → `库名 · ER` 标签；首次进入 content 自动触发后台加载（loading → 结果/错误），固定栅格排布表节点 div + PathBuilder 画外键连线。节点/对象/文本走 UiColors + 组件，连线共用同一套世界坐标。
+- **验证**：`cargo fmt`、`cargo check --workspace`、（app）`cargo test` 462、（desktop）`cargo test` 401 全部通过（含 `load_er_graph_reads_tables_and_foreign_keys`、`load_er_graph_reads_demo_database`、`er_layout_produces_finite_non_overlapping_positions`）、desktop 可 `cargo build`、macOS 实机验证。
+
+实跑验证发现并修复：
+
+- **连线不可见 bug**：ErCanvas `paint` 用了节点局部世界坐标却未加 `bounds.origin`，GPUI paint 坐标系相对元素起点；节点 div 由布局自动定位故正常，连线整体偏移被裁。修复：线段坐标统一加 `bounds.origin.x/y`。真实 MySQL（er_demo：customers/products/orders 3 表 2 外键）实机确认连线正常。
+- **demo.db 原为空文件**（0 字节）：SQLite Demo 连接开 ER 只得空画布。已填充示例库（customers/products/orders 3 表 + 2 外键 + 示例行），便于开箱验证画布渲染。
+- **侧边栏分组断言更新**：新增 ER 节点后分租数 6→7，`expanded_connection_lists_database_and_unassigned_table` 断言同步更新。
+
+**已知性能问题（待后续，属设计文档 §4 范畴）**：表一多（几十上百张）画布明显卡顿。根因与方向——① FK 逐表 N+1 查询（大库几十次连接）；② 渲染期全量重算布局 + 每帧重建全部 path；③ 无视口裁剪/虚拟化。优先做 FK 批量读取（connector 加库级外键枚举）与节点/边缓存，再做裁剪。
+
+**本轮边界**：不创建 D1-D9 逻辑关系模型与命令（关系编辑/required_filters/usage/Agent 工具仍待确认）；首版连线为 per-table N+1（`ponytail:` 标注）；画布固定栅格无平移/缩放/hit-test；无持久化（tab 不跨重启恢复，同 BackupList）；仅 macOS 实机验证，Windows/Linux 待复核。
+

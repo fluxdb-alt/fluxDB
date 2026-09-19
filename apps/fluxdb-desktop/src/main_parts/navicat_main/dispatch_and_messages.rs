@@ -758,6 +758,10 @@ impl NavicatMain {
                 self.data_filter_draft_rules.remove(tab_id);
                 self.data_sort_draft_rules.remove(tab_id);
                 self.redis_data_refresh_times.remove(tab_id);
+                // ER 图缓存与进行中任务随标签关闭一并回收，避免残留旧图/后台线程。
+                self.er_graphs.remove(tab_id);
+                self.er_errors.remove(tab_id);
+                self.er_load_tasks.remove(tab_id);
                 // Redis Key 列表展示模式 / 展开态 / 叶子选中 / hover 均为 tab 级状态，随 tab 关闭回收。
                 self.redis_key_list_modes.remove(tab_id);
                 self.redis_key_list_expanded.remove(tab_id);

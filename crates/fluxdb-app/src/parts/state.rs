@@ -168,6 +168,10 @@ impl TabState {
                 connection_id: list.connection_id,
                 database: list.database.clone(),
             }),
+            TabKind::ErDiagram(er) => Some(TabWorkspace {
+                connection_id: er.connection_id,
+                database: er.database.clone(),
+            }),
             TabKind::Settings(settings) => settings.workspace.clone(),
         }
     }
@@ -197,6 +201,8 @@ pub enum TabKind {
     Settings(SettingsTabState),
     /// 数据库备份列表 tab（侧边栏「备份」节点单击打开，按库一个）。
     BackupList(BackupListState),
+    /// ER 关系图 tab（侧边栏「ER 图」节点单击打开，按库一个；画布原型）。
+    ErDiagram(ErDiagramState),
 }
 
 /// 备份列表 tab 的标识状态：仅记录连接 + 库；行数据由 UI 侧渲染时
@@ -205,6 +211,16 @@ pub enum TabKind {
 pub struct BackupListState {
     pub connection_id: ConnectionId,
     pub database: String,
+}
+
+/// ER 图 tab 的标识状态：仅记录连接 + 库 + 可选 schema；图数据由 desktop 侧
+/// 后台加载并按 tab 缓存（与备份列表一样，controller 不持有行数据）。
+/// `schema` 为 None 表示整库范围（MySQL/SQLite 单库、PG 全部 schema）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct ErDiagramState {
+    pub connection_id: ConnectionId,
+    pub database: String,
+    pub schema: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1261,6 +1277,8 @@ pub enum AppCommand {
     OpenDataEditor(ObjectPath),
     /// 打开某数据库的备份列表 tab（传入数据库 ObjectPath）。
     OpenBackupList(ObjectPath),
+    /// 打开某数据库的 ER 关系图 tab（画布原型；Path 定位到库/表所在连接与 schema）。
+    OpenErDiagram(ObjectPath),
     CopyTable {
         object: ObjectPath,
         new_name: String,

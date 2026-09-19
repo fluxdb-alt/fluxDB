@@ -194,16 +194,19 @@ enum ObjectGroup {
     Procedures,
     Functions,
     Backup,
+    /// ER 关系图（画布原型；单击打开整库 ER 标签页，不展开子行）。
+    ErDiagram,
 }
 
 impl ObjectGroup {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Tables,
         Self::Views,
         Self::Procedures,
         Self::Functions,
         Self::Queries,
         Self::Backup,
+        Self::ErDiagram,
     ];
 
     fn label(self) -> &'static str {
@@ -214,6 +217,7 @@ impl ObjectGroup {
             Self::Procedures => "存储过程",
             Self::Functions => "函数",
             Self::Backup => "备份",
+            Self::ErDiagram => "ER 图",
         }
     }
 
@@ -225,6 +229,7 @@ impl ObjectGroup {
             Self::Procedures => "procedures",
             Self::Functions => "functions",
             Self::Backup => "backup",
+            Self::ErDiagram => "er",
         }
     }
 
@@ -236,6 +241,7 @@ impl ObjectGroup {
             Self::Procedures => "procedures",
             Self::Functions => "functions",
             Self::Backup => "backup",
+            Self::ErDiagram => "er",
         }
     }
 }

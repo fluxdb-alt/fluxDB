@@ -794,6 +794,41 @@ impl AppController {
                 });
                 AppEvent::TabOpened(tab_id)
             }
+            AppCommand::OpenErDiagram(path) => {
+                // 按库去重：同一连接+库+schema 已有 ER tab 则激活既有 tab。
+                let database = path
+                    .database
+                    .clone()
+                    .unwrap_or_else(|| path.name.clone());
+                let schema = path.schema.clone();
+                let connection_id = path.connection_id;
+                if let Some(existing_tab_id) = self.state.tabs.iter().find_map(|tab| {
+                    if let TabKind::ErDiagram(er) = &tab.kind
+                        && er.connection_id == connection_id
+                        && er.database == database
+                        && er.schema == schema
+                    {
+                        return Some(tab.id);
+                    }
+                    None
+                }) {
+                    self.state.active_tab = Some(existing_tab_id);
+                    return AppEvent::TabActivated(existing_tab_id);
+                }
+
+                let tab_id = self.next_tab_id();
+                self.push_tab(TabState {
+                    id: tab_id,
+                    title: format!("{database} · ER"),
+                    kind: TabKind::ErDiagram(ErDiagramState {
+                        connection_id,
+                        database,
+                        schema,
+                    }),
+                    dirty: false,
+                });
+                AppEvent::TabOpened(tab_id)
+            }
             AppCommand::LoadDataPage(tab_id) => {
                 self.load_data_page_command(tab_id, Vec::new(), Vec::new())
             }

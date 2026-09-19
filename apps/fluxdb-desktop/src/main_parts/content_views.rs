@@ -133,6 +133,12 @@ fn content(
             };
             backup_list_content(state, this, list, colors, cx)
         }
+        Some(tab) if matches!(tab.kind, TabKind::ErDiagram(_)) => {
+            let TabKind::ErDiagram(er) = &tab.kind else {
+                unreachable!();
+            };
+            er_diagram_content(tab.id, er, this, colors, cx)
+        }
         Some(tab) if matches!(tab.kind, TabKind::UserAdmin(_)) => {
             let TabKind::UserAdmin(admin) = &tab.kind else {
                 unreachable!();
