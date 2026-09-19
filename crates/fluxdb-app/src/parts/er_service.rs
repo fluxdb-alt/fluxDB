@@ -116,19 +116,19 @@ pub fn load_er_graph_in_background(
         }
     }
 
-    // 3) 逐表读外键，转成两端表名对齐节点的连线。
-    // ponytail: 首版 per-table 循环（N+1 查询）。大库表多时慢；确定成为瓶颈后再给
-    // connector 加 schema 级批量外键枚举方法，本函数改为调用批量接口。
+    // 3) 读取外键，转成两端表名对齐节点的连线。
+    // MySQL/SQLite：批量接口一次返回 (源表名, 外键)，避免大库 N+1；
+    // PG 保留逐表（需 schema 拼节点名，批量默认实现会丢 schema 身份）。
     let mut edges = Vec::new();
-    for path in &table_paths {
-        for fk in connector.list_foreign_keys(path)? {
-            edges.push(ErForeignKeyEdge {
-                name: fk.name,
-                from_table: table_name(config.kind, path),
-                from_column: fk.column,
-                to_table: {
-                    // 被引用端表名按同规则落到节点名；PG 无 schema 时补 source schema。
-                    if config.kind == DatabaseKind::Postgres {
+    if config.kind == DatabaseKind::Postgres {
+        for path in &table_paths {
+            for fk in connector.list_foreign_keys(path)? {
+                edges.push(ErForeignKeyEdge {
+                    name: fk.name,
+                    from_table: table_name(config.kind, path),
+                    from_column: fk.column,
+                    to_table: {
+                        // 被引用端表名按同规则落到节点名；PG 无 schema 时补 source schema。
                         match fk.ref_schema {
                             Some(s) => format!("{s}.{}", fk.ref_table),
                             None => {
@@ -136,10 +136,21 @@ pub fn load_er_graph_in_background(
                                 format!("{s}.{}", fk.ref_table)
                             }
                         }
-                    } else {
-                        fk.ref_table.clone()
-                    }
-                },
+                    },
+                    to_column: fk.ref_column,
+                });
+            }
+        }
+    } else {
+        // MySQL 真批量一次查全库外键；SQLite 走默认逐表实现（本地快，可接受）。
+        let batch = connector.list_foreign_keys_for_tables(Some(&database), None, &table_names)?;
+        for (src_table, fk) in batch {
+            // MySQL/SQLite 节点、被引用表名均为裸名，与批量返回一致。
+            edges.push(ErForeignKeyEdge {
+                name: fk.name,
+                from_table: src_table,
+                from_column: fk.column,
+                to_table: fk.ref_table,
                 to_column: fk.ref_column,
             });
         }

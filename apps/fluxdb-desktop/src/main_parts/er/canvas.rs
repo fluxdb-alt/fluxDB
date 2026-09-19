@@ -13,6 +13,9 @@ const NODE_ROW: f32 = 22.0; // 每列行高 px
 const NODE_GAP_X: f32 = 60.0; // 节点横向间距
 const NODE_GAP_Y: f32 = 30.0; // 节点纵向间距
 const COLUMNS: usize = 5; // 每行节点数
+/// 画布单次渲染的表节点数上限。超过则降级只渲染前 MAX 张（见 er_truncation_banner）。
+/// 150 张内流畅，1500 张一次性挂载会卡；上限取安全余量，先保可用再分组。
+const MAX_CANVAS_TABLES: usize = 300;
 
 /// 表节点布局：世界坐标下的矩形与列数，供节点 div 与连线 canvas 共用，
 /// 保证连线锚点与节点边缘严格对齐。
@@ -212,8 +215,26 @@ fn er_error_state(
 }
 
 /// 画布视图：节点 div（含文字）在上，连线 canvas 在背景，共用同一套世界坐标。
-fn er_canvas_view(tab_id: TabId, graph: &ErGraphData, colors: UiColors) -> impl IntoElement {
-    let (content_w, content_h, layouts) = er_layout(graph);
+fn er_canvas_view(tab_id: TabId, graph0: &ErGraphData, colors: UiColors) -> impl IntoElement {
+    let original_len = graph0.tables.len();
+    // 超大库降级：超过单次画布承载上限时只渲染前 MAX 张表（按名排序），
+    // 其余仅提示数量。防止 1000+ 表一次性挂载全部节点导致卡顿/无响应。
+    // ponytail: 截断非分组视图，后续做 >200 表的 schema/分组概览与局部 ER（design §4.1）。
+    let graph = if original_len > MAX_CANVAS_TABLES {
+        let mut visible = graph0.clone();
+        visible.tables.sort_by(|a, b| a.name.cmp(&b.name));
+        visible.tables.truncate(MAX_CANVAS_TABLES);
+        let visible_names: std::collections::BTreeSet<String> =
+            visible.tables.iter().map(|t| t.name.clone()).collect();
+        visible.edges.retain(|e| {
+            visible_names.contains(&e.from_table) && visible_names.contains(&e.to_table)
+        });
+        visible
+    } else {
+        graph0.clone()
+    };
+    let truncated = original_len > MAX_CANVAS_TABLES;
+    let (content_w, content_h, layouts) = er_layout(&graph);
     // 连线锚点：预先把端点到节点矩形左/右边缘中点算好，传入 canvas。
     let mut edges = Vec::new();
     for edge in &graph.edges {
@@ -238,23 +259,50 @@ fn er_canvas_view(tab_id: TabId, graph: &ErGraphData, colors: UiColors) -> impl 
     }
 
     div()
-        .id(("er-canvas-scroll", tab_id.0))
         .flex_1()
         .min_h_0()
-        .overflow_scroll()
+        .flex()
+        .flex_col()
         .bg(colors.content_bg)
+        .when(truncated, |this| {
+            this.child(er_truncation_banner(original_len, colors))
+        })
         .child(
-            // 连接线层：铺满内容尺寸，paint 阶段用 PathBuilder 画线。
             div()
-                .relative()
-                .w(px(content_w))
-                .h(px(content_h))
-                .child(ErCanvas {
-                    edges,
-                    color: colors.border,
-                })
-                .children(layouts.iter().map(|layout| node_view(layout, graph, colors))),
+                .id(("er-canvas-scroll", tab_id.0))
+                .flex_1()
+                .min_h_0()
+                .overflow_scroll()
+                .child(
+                    // 连接线层：铺满内容尺寸，paint 阶段用 PathBuilder 画线。
+                    div()
+                        .relative()
+                        .w(px(content_w))
+                        .h(px(content_h))
+                        .child(ErCanvas {
+                            edges,
+                            color: colors.border,
+                        })
+                        .children(layouts.iter().map(|layout| node_view(layout, &graph, colors))),
+                ),
         )
+}
+
+/// 超大库降级提示条：告知表数超出画布单次承载，展示数量与后续方向。
+fn er_truncation_banner(total: usize, colors: UiColors) -> Div {
+    div()
+        .h(px(32.))
+        .px(px(12.))
+        .flex()
+        .items_center()
+        .bg(rgb(0xfef3c7).opacity(0.35))
+        .border_b_1()
+        .border_color(colors.border_soft)
+        .text_size(px(12.))
+        .text_color(rgb(0x92400e))
+        .child(format!(
+            "该库共 {total} 张表，超出画布单次承载（{MAX_CANVAS_TABLES}），仅显示部分；后续将支持分组/局部视图"
+        ))
 }
 
 fn header_h(layout: &ErNodeLayout) -> f32 {

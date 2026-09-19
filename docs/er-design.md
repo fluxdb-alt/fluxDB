@@ -764,7 +764,25 @@ ChartDB/drawDB 的许可证与嵌入方式必须独立评估；本方案默认�
 - **demo.db 原为空文件**（0 字节）：SQLite Demo 连接开 ER 只得空画布。已填充示例库（customers/products/orders 3 表 + 2 外键 + 示例行），便于开箱验证画布渲染。
 - **侧边栏分组断言更新**：新增 ER 节点后分租数 6→7，`expanded_connection_lists_database_and_unassigned_table` 断言同步更新。
 
-**已知性能问题（待后续，属设计文档 §4 范畴）**：表一多（几十上百张）画布明显卡顿。根因与方向——① FK 逐表 N+1 查询（大库几十次连接）；② 渲染期全量重算布局 + 每帧重建全部 path；③ 无视口裁剪/虚拟化。优先做 FK 批量读取（connector 加库级外键枚举）与节点/边缓存，再做裁剪。
+**此节为「最小可跑画布原型」实施记录。性能优化后续按 §13 TODO 推进。**
 
-**本轮边界**：不创建 D1-D9 逻辑关系模型与命令（关系编辑/required_filters/usage/Agent 工具仍待确认）；首版连线为 per-table N+1（`ponytail:` 标注）；画布固定栅格无平移/缩放/hit-test；无持久化（tab 不跨重启恢复，同 BackupList）；仅 macOS 实机验证，Windows/Linux 待复核。
+**本轮边界**：不创建 D1-D9 逻辑关系模型与命令（关系编辑/required_filters/usage/Agent 工具仍待确认）；画布固定栅格无平移/缩放/hit-test；无持久化（tab 不跨重启恢复，同 BackupList）；仅 macOS 实机验证，Windows/Linux 待复核。
+
+## 13. 待办 TODO
+
+### 性能优化（连接已确认：后续再优化，当前以保可用为准）
+- [x] **FK 批量读取（MySQL）**：Connector trait 加 `list_foreign_keys_for_tables`（默认逐表兼容），MySQL 单次查全库外键替代逐表 N+1。SQLite 走默认逐表（本地快），PG 保留逐表（需 schema 拼节点名）。
+- [x] **超大库降级截断**：`er_canvas_view` 超过 `MAX_CANVAS_TABLES`（300）只渲染前 300 表节点 + 黄色提示条；防 1500 表一次性挂载卡死。
+- [ ] **超大库分组/概览视图**：设计文档 §4.1——>200 表按 schema/用户分组/连通分量概览，逐组进入；截断是临时降级，非最终形态。
+- [ ] **平移/缩放/视口裁剪**（design §2.3）：ErViewportController 变换 + 只渲染视口内节点与边；解决大库探索与仅显示 300 的局限。
+- [ ] **渲染缓存**：布局与 path 缓存，避免每帧重算；节点拖动/增量布局（design §2.3）。
+- [ ] **当前表局部 ER / 邻域视图**（design §3.2、D5）：以表为中心一跳邻域，逐层展开；全库与局部共用关系模型。
+
+### 功能后续（依赖 D1-D9 或独立）
+- [ ] **D1-D9 数据结构确认**：逻辑关系模型（ErRelationship/required_filters/usage 等）确认后才创建 §6 Rust 类型与命令。
+- [ ] **数据服务层**（design §8 步骤 1-2）：ErModelService、带状态前缀的双端邻接索引、有界路径搜索、er_store 持久化。
+- [ ] **关系编辑**：用户维护逻辑关系（无外键也能连线）、确认/拒绝流程、required_filters 结构化谓词。
+- [ ] **Agent/MCP 工具**（design §6.4）：er.search_entities / get_neighborhood / find_join_paths 等。
+- [ ] **画布高级交互**：节点拖动、关系详情面板、键盘选择、导出（DBML/Mermaid/SVG）。
+- [ ] **三平台复核**：仅 macOS 实机验证；Windows / Linux 待实机确认字体、滚动、缩放、DPI。
 
