@@ -90,7 +90,7 @@ fn er_diagram_content(
                 er_loading_state(colors).into_any_element()
             } else {
                 let graph = this.er_graphs.get(&tab_id).cloned().unwrap_or_default();
-                er_canvas_view(tab_id, &graph, colors).into_any_element()
+                er_canvas_view(tab_id, &graph, colors, cx).into_any_element()
             },
         )
 }
@@ -122,17 +122,20 @@ fn ensure_er_graph_loaded(
     let center_table = er.center_table.clone();
     // 展开深度（跳数）按 tab 隔离，默认 1 跳；切深度后清缓存重载。
     let depth = this.er_depths.get(&tab_id).copied().unwrap_or(1);
+    // 单节点式展开的额外种子（点某节点后加入），随重载一并扩 1 跳。
+    let extra = this.er_expanded.get(&tab_id).cloned().unwrap_or_default();
     let task = cx.spawn(async move |view, cx| {
         let result = cx
             .background_spawn(async move {
                 match &center_table {
-                    // 当前表关联 ER：以该表为中心 depth 跳邻域。
+                    // 当前表关联 ER：以该表为中心 depth 跳邻域 + 显式展开节点。
                     Some(center) => fluxdb_app::load_er_neighborhood_in_background(
                         &config,
                         Some(&database),
                         schema.as_deref(),
                         center,
                         depth,
+                        &extra,
                     ),
                     None => fluxdb_app::load_er_graph_in_background(
                         &config,
@@ -294,7 +297,12 @@ fn er_error_state(
 }
 
 /// 画布视图：节点 div（含文字）在上，连线 canvas 在背景，共用同一套世界坐标。
-fn er_canvas_view(tab_id: TabId, graph0: &ErGraphData, colors: UiColors) -> impl IntoElement {
+fn er_canvas_view(
+    tab_id: TabId,
+    graph0: &ErGraphData,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> impl IntoElement {
     let original_len = graph0.tables.len();
     // 超大库降级：超过单次画布承载上限时只渲染前 MAX 张表（按名排序），
     // 其余仅提示数量。防止 1000+ 表一次性挂载全部节点导致卡顿/无响应。
@@ -362,7 +370,7 @@ fn er_canvas_view(tab_id: TabId, graph0: &ErGraphData, colors: UiColors) -> impl
                             edges,
                             color: colors.border,
                         })
-                        .children(layouts.iter().map(|layout| node_view(layout, &graph, colors))),
+                        .children(layouts.iter().map(|layout| node_view(tab_id, layout, &graph, colors, cx))),
                 ),
         )
 }
@@ -389,7 +397,14 @@ fn header_h(layout: &ErNodeLayout) -> f32 {
 }
 
 /// 单个表节点：表名标题 + 逐列。absolute 定位到世界坐标。
-fn node_view(layout: &ErNodeLayout, graph: &ErGraphData, colors: UiColors) -> Div {
+/// 点击节点触发「单节点式展开」：把该表加入显式展开种子，重载后其更深层邻居并入。
+fn node_view(
+    tab_id: TabId,
+    layout: &ErNodeLayout,
+    graph: &ErGraphData,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
     // layout 由同一份 graph 生成，故名必命中；找不到则回退空列节点（不应发生）。
     let columns = graph
         .tables
@@ -398,6 +413,7 @@ fn node_view(layout: &ErNodeLayout, graph: &ErGraphData, colors: UiColors) -> Di
         .map(|t| t.columns.clone())
         .unwrap_or_default();
     let node_h = header_h(layout);
+    let expand_table = layout.name.clone();
     div()
         .absolute()
         .left(px(layout.x))
@@ -411,6 +427,18 @@ fn node_view(layout: &ErNodeLayout, graph: &ErGraphData, colors: UiColors) -> Di
         .overflow_hidden()
         .flex()
         .flex_col()
+        .cursor_pointer()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                // 单节点展开：把该表加入显式种子，清缓存重载（neighborhood 会以它扩 1 跳）。
+                this.er_expanded.entry(tab_id).or_default().insert(expand_table.clone());
+                this.er_graphs.remove(&tab_id);
+                this.er_errors.remove(&tab_id);
+                this.er_load_tasks.remove(&tab_id);
+                cx.notify();
+            }),
+        )
         .child(
             div()
                 .h(px(NODE_HEADER))

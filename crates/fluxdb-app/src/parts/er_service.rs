@@ -167,21 +167,24 @@ pub fn load_er_graph_in_background(
 }
 
 /// 加载「当前表关联 ER」：以 `center` 表为中心，沿外键（入向/出向）向外扩展
-/// `depth` 跳，返回只含中心表与可达邻域表的子图。复用整库 `load_er_graph_in_background`
-/// 的全量拓扑后再过滤，保证邻域判定与整库一致（design §3.2、D5）。
+/// `depth` 跳，返回只含中心表与可达邻域表的子图；`extra` 为单节点式展开额外
+/// 显式加入的种子表（与 center 同等作为起点各扩 depth 跳），用于「点某节点再扩」。
+/// 复用整库 `load_er_graph_in_background` 的全量拓扑后再过滤，
+/// 保证邻域判定与整库一致（design §3.2、D5）。
 pub fn load_er_neighborhood_in_background(
     config: &ConnectionConfig,
     database: Option<&str>,
     schema: Option<&str>,
     center: &str,
     depth: u8,
+    extra: &BTreeSet<String>,
 ) -> fluxdb_core::Result<ErGraphData> {
     let full = load_er_graph_in_background(config, database, schema)?;
 
-    // 宽度优先收集包含表：中心表 + 每跳入向/出向外键对端。
-    let mut included: BTreeSet<String> = BTreeSet::new();
+    // 宽度优先收集包含表：中心表 + 显式展开种子 + 每跳入向/出向外键对端。
+    let mut included: BTreeSet<String> = extra.clone();
     included.insert(center.to_string());
-    let mut frontier: Vec<String> = vec![center.to_string()];
+    let mut frontier: Vec<String> = included.iter().cloned().collect();
     for _ in 0..depth {
         let mut next: Vec<String> = Vec::new();
         for t in &frontier {

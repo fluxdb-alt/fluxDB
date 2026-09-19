@@ -619,6 +619,8 @@ struct NavicatMain {
     // 当前表关联 ER 的展开深度（跳数）：按 tab 隔离，默认 1。
     // 切换深度会清图缓存并重新加载 neighborhood（不在 tab 去重键内，同一表一个 tab）。
     er_depths: BTreeMap<TabId, u8>,
+    // 单节点式展开：显式点过展开的表集合；这些表作为额外种子与中心同层扩 1 跳。
+    er_expanded: BTreeMap<TabId, BTreeSet<String>>,
     // Redis 连接级概览（版本/内存/CPU）的定期刷新任务与进行中的单次拉取任务
     redis_overview_refresh_task: Option<Task<()>>,
     redis_overview_refresh_tasks: BTreeMap<u64, Task<()>>,

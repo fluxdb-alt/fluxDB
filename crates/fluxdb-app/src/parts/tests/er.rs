@@ -209,26 +209,30 @@
             mysql_profile: None,
             postgres_profile: None,
         };
-        let run = |center: &str| -> fluxdb_core::Result<ErGraphData> {
+        let run = |center: &str, extra: &BTreeSet<String>| -> fluxdb_core::Result<ErGraphData> {
+            let extra = extra.clone();
             std::thread::scope(|scope| {
                 scope
                     .spawn(|| {
-                        load_er_neighborhood_in_background(&config, Some("main"), None, center, 1)
+                        load_er_neighborhood_in_background(
+                            &config, Some("main"), None, center, 1, &extra,
+                        )
                     })
                     .join()
                     .expect("neighborhood thread panicked")
             })
         };
+        let empty = BTreeSet::new();
 
         // 以 orders 为中心：1 跳到 customers 与 products，全在其中。
-        let graph = run("orders").expect("neighborhood should succeed");
+        let graph = run("orders", &empty).expect("neighborhood should succeed");
         let mut names: Vec<&str> = graph.tables.iter().map(|t| t.name.as_str()).collect();
         names.sort();
         assert_eq!(names, vec!["customers", "orders", "products"]);
         assert_eq!(graph.edges.len(), 2);
 
         // 以 customers 为中心：1 跳只有 orders；products 需隔 orders 达 2 跳，不在其中。
-        let graph = run("customers").expect("neighborhood should succeed");
+        let graph = run("customers", &empty).expect("neighborhood should succeed");
         let mut names: Vec<&str> = graph.tables.iter().map(|t| t.name.as_str()).collect();
         names.sort();
         assert_eq!(names, vec!["customers", "orders"]);
@@ -237,8 +241,18 @@
         assert_eq!(graph.edges[0].to_table, "customers");
 
         // 中心表不存在：返回空图，不 panic。
-        let graph = run("不存在表").expect("neighborhood should not panic");
+        let graph = run("不存在表", &empty).expect("neighborhood should not panic");
         assert!(graph.tables.is_empty());
+
+        // 单节点式展开：customers 为中心 1 跳只有 orders；把 products 显式加入 extra 种子后，
+        // products 作为起点再扩 1 跳，其邻居（orders）已在图中，图仍含 3 表。
+        let extra_products: BTreeSet<String> = BTreeSet::from(["products".to_string()]);
+        let graph =
+            run("customers", &extra_products).expect("neighborhood with extra should succeed");
+        let mut names: Vec<&str> = graph.tables.iter().map(|t| t.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["customers", "orders", "products"]);
+        assert_eq!(graph.edges.len(), 2);
 
         let _ = std::fs::remove_file(&path);
     }

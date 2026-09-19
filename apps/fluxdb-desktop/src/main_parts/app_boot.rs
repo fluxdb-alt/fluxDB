@@ -2338,6 +2338,7 @@ fn main() {
                             er_errors: BTreeMap::new(),
                             er_load_tasks: BTreeMap::new(),
                             er_depths: BTreeMap::new(),
+                            er_expanded: BTreeMap::new(),
                             redis_key_list_hovered_tab: None,
                             redis_workbench_hovered_record: None,
                             redis_stream_table_state,
