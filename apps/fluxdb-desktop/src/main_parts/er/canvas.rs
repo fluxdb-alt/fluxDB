@@ -17,6 +17,24 @@ const COLUMNS: usize = 5; // 每行节点数
 /// 150 张内流畅，1500 张一次性挂载会卡；上限取安全余量，先保可用再分组。
 const MAX_CANVAS_TABLES: usize = 300;
 
+/// ER 画布视口：平移（pan）。冲屏坐标 = 世界坐标 + pan。
+/// 节点 div 定位、连线 canvas 与可见裁剪共用同一 pan，保证三端不漂移。
+/// （真正缩放需全自绘 Element，见 §13 TODO；届时在此加 zoom 字段。）
+#[derive(Clone, Copy, Debug)]
+struct ErViewport {
+    pan_x: f32,
+    pan_y: f32,
+}
+
+impl Default for ErViewport {
+    fn default() -> Self {
+        Self {
+            pan_x: 0.0,
+            pan_y: 0.0,
+        }
+    }
+}
+
 /// 表节点布局：世界坐标下的矩形与列数，供节点 div 与连线 canvas 共用，
 /// 保证连线锚点与节点边缘严格对齐。
 struct ErNodeLayout {
@@ -24,6 +42,69 @@ struct ErNodeLayout {
     x: f32,
     y: f32,
     column_count: usize,
+}
+
+/// 画布场景缓存：布局 + 连线端点一次算好，渲染复用避免每帧重算（design §4）。
+struct ErScene {
+    content_w: f32,
+    content_h: f32,
+    layouts: Vec<ErNodeLayout>,
+    /// 连线端点（世界坐标），元素为 (起点, 终点)。
+    edges: Vec<((f32, f32), (f32, f32))>,
+    /// 截断前的原始表数；0 表示未截断（无降级提示）。
+    original_tables: usize,
+}
+
+/// 由图表构建一次画布场景：布局 + 连线端点到节点边缘中点。
+/// 连线端点复用 er_layout 的节点坐标，保证与节点 div 严格对齐。
+fn build_er_scene(graph: &ErGraphData, original_tables: usize) -> ErScene {
+    let (content_w, content_h, layouts) = er_layout(graph);
+    let mut edges = Vec::new();
+    for edge in &graph.edges {
+        let Some(from) = layouts.iter().find(|l| l.name == edge.from_table) else {
+            continue; // 被引用到未加载/不存在的表：跳过该线。
+        };
+        let Some(to) = layouts.iter().find(|l| l.name == edge.to_table) else {
+            continue;
+        };
+        // 起点取左侧边缘中点的表，终点取另一侧边缘中点：连线在节点间隙走。
+        let (from_x, from_y) = if from.x <= to.x {
+            (from.x + NODE_WIDTH, from.y + header_h(from) / 2.0)
+        } else {
+            (from.x, from.y + header_h(from) / 2.0)
+        };
+        let (to_x, to_y) = if to.x >= from.x {
+            (to.x, to.y + header_h(to) / 2.0)
+        } else {
+            (to.x + NODE_WIDTH, to.y + header_h(to) / 2.0)
+        };
+        edges.push(((from_x, from_y), (to_x, to_y)));
+    }
+    ErScene {
+        content_w,
+        content_h,
+        layouts,
+        edges,
+        original_tables,
+    }
+}
+
+/// 超大库降级截断：超过上限只保留前 MAX 张表（按名排序）与两端都在内的边。
+/// 返回 (截断后图, 原始表数)。未超限时返回克隆图，original=len（scene 判 0 为未截断，故用 0）。
+fn truncate_er_graph(graph: &ErGraphData) -> (ErGraphData, usize) {
+    if graph.tables.len() <= MAX_CANVAS_TABLES {
+        return (graph.clone(), 0);
+    }
+    let original = graph.tables.len();
+    let mut visible = graph.clone();
+    visible.tables.sort_by(|a, b| a.name.cmp(&b.name));
+    visible.tables.truncate(MAX_CANVAS_TABLES);
+    let visible_names: std::collections::BTreeSet<String> =
+        visible.tables.iter().map(|t| t.name.clone()).collect();
+    visible.edges.retain(|e| {
+        visible_names.contains(&e.from_table) && visible_names.contains(&e.to_table)
+    });
+    (visible, original)
 }
 
 /// 由纯数据图算出每个节点的世界坐标 + 内容整体尺寸。
@@ -89,8 +170,18 @@ fn er_diagram_content(
             {
                 er_loading_state(colors).into_any_element()
             } else {
-                let graph = this.er_graphs.get(&tab_id).cloned().unwrap_or_default();
-                er_canvas_view(tab_id, &graph, colors, cx).into_any_element()
+                // 预计算场景存在才渲染画布（布局/连线端点缓存，配合图一起更新）。
+                match this.er_scenes.get(&tab_id).cloned() {
+                    Some(scene) => {
+                        let graph = this.er_graphs.get(&tab_id).cloned().unwrap_or_default();
+                        let viewport =
+                            this.er_viewports.get(&tab_id).copied().unwrap_or_default();
+                        er_canvas_view(tab_id, scene, &graph, viewport, colors, cx)
+                            .into_any_element()
+                    }
+                    // 图已加载但场景未就绪（不应发生，防御）→ 短暂 loading。
+                    None => er_loading_state(colors).into_any_element(),
+                }
             },
         )
 }
@@ -148,6 +239,12 @@ fn ensure_er_graph_loaded(
         view.update(cx, |this, cx| {
             match result {
                 Ok(graph) => {
+                    // 超大库降级截断 + 预计算画布场景（布局/连线端点一次算好），
+                    // 渲染复用避免每帧重算；新图重置视口（平移回到原点）。
+                    let (graph, original) = truncate_er_graph(&graph);
+                    this.er_scenes.insert(tab_id, Rc::new(build_er_scene(&graph, original)));
+                    // 不重置视口：单节点展开/深度切换重载保留当前平移，避免点节点后视野跳回原点。
+                    // 首次打开新 tab 时 er_viewports 无条目，渲染 fallback 到 pan=0。
                     this.er_graphs.insert(tab_id, graph);
                     this.er_errors.remove(&tab_id);
                 }
@@ -296,54 +393,20 @@ fn er_error_state(
         )
 }
 
-/// 画布视图：节点 div（含文字）在上，连线 canvas 在背景，共用同一套世界坐标。
+/// 画布视图：复用预计算场景（布局+连线端点缓存），节点 div 在上、连线 canvas 在下。
 fn er_canvas_view(
     tab_id: TabId,
-    graph0: &ErGraphData,
+    scene: Rc<ErScene>,
+    graph: &ErGraphData,
+    viewport: ErViewport,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
-    let original_len = graph0.tables.len();
-    // 超大库降级：超过单次画布承载上限时只渲染前 MAX 张表（按名排序），
-    // 其余仅提示数量。防止 1000+ 表一次性挂载全部节点导致卡顿/无响应。
-    // ponytail: 截断非分组视图，后续做 >200 表的 schema/分组概览与局部 ER（design §4.1）。
-    let graph = if original_len > MAX_CANVAS_TABLES {
-        let mut visible = graph0.clone();
-        visible.tables.sort_by(|a, b| a.name.cmp(&b.name));
-        visible.tables.truncate(MAX_CANVAS_TABLES);
-        let visible_names: std::collections::BTreeSet<String> =
-            visible.tables.iter().map(|t| t.name.clone()).collect();
-        visible.edges.retain(|e| {
-            visible_names.contains(&e.from_table) && visible_names.contains(&e.to_table)
-        });
-        visible
-    } else {
-        graph0.clone()
-    };
-    let truncated = original_len > MAX_CANVAS_TABLES;
-    let (content_w, content_h, layouts) = er_layout(&graph);
-    // 连线锚点：预先把端点到节点矩形左/右边缘中点算好，传入 canvas。
-    let mut edges = Vec::new();
-    for edge in &graph.edges {
-        let Some(from) = layouts.iter().find(|l| l.name == edge.from_table) else {
-            continue; // 被引用到未加载/不存在的表：跳过该线。
-        };
-        let Some(to) = layouts.iter().find(|l| l.name == edge.to_table) else {
-            continue;
-        };
-        // 起点取左侧边缘中点的表，终点取另一侧边缘中点：连线在节点间隙走。
-        let (from_x, from_y) = if from.x <= to.x {
-            (from.x + NODE_WIDTH, from.y + header_h(from) / 2.0)
-        } else {
-            (from.x, from.y + header_h(from) / 2.0)
-        };
-        let (to_x, to_y) = if to.x >= from.x {
-            (to.x, to.y + header_h(to) / 2.0)
-        } else {
-            (to.x + NODE_WIDTH, to.y + header_h(to) / 2.0)
-        };
-        edges.push(((from_x, from_y), (to_x, to_y)));
-    }
+    let content_w = scene.content_w;
+    let content_h = scene.content_h;
+    let truncated = scene.original_tables > 0;
+    let original_len = scene.original_tables;
+    let current_tab = tab_id;
 
     div()
         .flex_1()
@@ -359,18 +422,65 @@ fn er_canvas_view(
                 .id(("er-canvas-scroll", tab_id.0))
                 .flex_1()
                 .min_h_0()
-                .overflow_scroll()
+                .overflow_hidden()
+                // 空白处按住拖动平移画布（节点上点击是展开，见 node_view 的 stop_propagation）。
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, _, _cx| {
+                        this.er_viewport_drag = Some((
+                            current_tab,
+                            f32::from(event.position.x),
+                            f32::from(event.position.y),
+                            this.er_viewports
+                                .get(&current_tab)
+                                .map(|v| v.pan_x)
+                                .unwrap_or(0.0),
+                            this.er_viewports
+                                .get(&current_tab)
+                                .map(|v| v.pan_y)
+                                .unwrap_or(0.0),
+                        ));
+                    }),
+                )
+                .on_mouse_move(
+                    cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                        if let Some((tab, down_x, down_y, pan_x, pan_y)) = this.er_viewport_drag {
+                            if tab == current_tab {
+                                let vp = this.er_viewports.entry(tab).or_default();
+                                vp.pan_x = pan_x + (f32::from(event.position.x) - down_x);
+                                vp.pan_y = pan_y + (f32::from(event.position.y) - down_y);
+                                cx.notify();
+                            }
+                        }
+                    }),
+                )
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, _| {
+                        if this
+                            .er_viewport_drag
+                            .as_ref()
+                            .is_some_and(|(tab, _, _, _, _)| *tab == current_tab)
+                        {
+                            this.er_viewport_drag = None;
+                        }
+                    }),
+                )
                 .child(
-                    // 连接线层：铺满内容尺寸，paint 阶段用 PathBuilder 画线。
+                    // 连接线层：铺满内容尺寸，paint 阶段用 PathBuilder 画线，坐标过视口平移。
                     div()
                         .relative()
                         .w(px(content_w))
                         .h(px(content_h))
                         .child(ErCanvas {
-                            edges,
+                            edges: scene.edges.clone(),
                             color: colors.border,
+                            pan_x: viewport.pan_x,
+                            pan_y: viewport.pan_y,
                         })
-                        .children(layouts.iter().map(|layout| node_view(tab_id, layout, &graph, colors, cx))),
+                        .children(scene.layouts.iter().map(|layout| {
+                            node_view(tab_id, layout, graph, viewport, colors, cx)
+                        })),
                 ),
         )
 }
@@ -396,12 +506,13 @@ fn header_h(layout: &ErNodeLayout) -> f32 {
     NODE_HEADER + layout.column_count as f32 * NODE_ROW + 8.0
 }
 
-/// 单个表节点：表名标题 + 逐列。absolute 定位到世界坐标。
+/// 单个表节点：表名标题 + 逐列。absolute 定位到世界坐标 + 视口平移。
 /// 点击节点触发「单节点式展开」：把该表加入显式展开种子，重载后其更深层邻居并入。
 fn node_view(
     tab_id: TabId,
     layout: &ErNodeLayout,
     graph: &ErGraphData,
+    viewport: ErViewport,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -416,8 +527,8 @@ fn node_view(
     let expand_table = layout.name.clone();
     div()
         .absolute()
-        .left(px(layout.x))
-        .top(px(layout.y))
+        .left(px(layout.x + viewport.pan_x))
+        .top(px(layout.y + viewport.pan_y))
         .w(px(NODE_WIDTH))
         .h(px(node_h))
         .rounded(colors.radius_lg)
@@ -431,6 +542,8 @@ fn node_view(
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, _, cx| {
+                // 节点点击是「单节点式展开」而非画布平移，阻断事件冒泡。
+                cx.stop_propagation();
                 // 单节点展开：把该表加入显式种子，清缓存重载（neighborhood 会以它扩 1 跳）。
                 this.er_expanded.entry(tab_id).or_default().insert(expand_table.clone());
                 this.er_graphs.remove(&tab_id);
@@ -499,11 +612,15 @@ fn node_view(
 }
 
 /// 连线画布 Element：仅画外键线段，节点由上方 div 渲染。
+/// 线段存世界坐标，paint 时统一加平移，与节点 div 的视口平移保持一致。
 struct ErCanvas {
     /// 每对 ((起点 x,y),(终点 x,y)) 的世界坐标线段。
     edges: Vec<((f32, f32), (f32, f32))>,
     /// 线/描边颜色。
     color: gpui::Rgba,
+    /// 视口平移（屏幕偏移），与 node_view 的绝对定位共用同一 pan。
+    pan_x: f32,
+    pan_y: f32,
 }
 
 impl IntoElement for ErCanvas {
@@ -556,13 +673,19 @@ impl Element for ErCanvas {
         window: &mut Window,
         _cx: &mut App,
     ) {
-        // 节点坐标是相对内容 div 的局部坐标；paint 阶段需加本元素 bounds.origin
-        // 才能落到实际屏幕位置（与节点 div 的 GPUI 布局对齐），否则线会整体偏移/被裁。
+        // 节点坐标是相对内容 div 的局部坐标；paint 阶段加平移 + 本元素 bounds.origin
+        // 才能落到实际屏幕位置（与节点 div 的视口平移对齐），否则线会整体偏移/被裁。
         for ((ax, ay), (bx, by)) in &self.edges {
             // PathBuilder 的 move_to/line_to 返回 ()，不能链式；逐条构建路径。
             let mut builder = gpui::PathBuilder::stroke(px(1.5));
-            builder.move_to(point(px(*ax) + bounds.origin.x, px(*ay) + bounds.origin.y));
-            builder.line_to(point(px(*bx) + bounds.origin.x, px(*by) + bounds.origin.y));
+            builder.move_to(point(
+                px(*ax + self.pan_x) + bounds.origin.x,
+                px(*ay + self.pan_y) + bounds.origin.y,
+            ));
+            builder.line_to(point(
+                px(*bx + self.pan_x) + bounds.origin.x,
+                px(*by + self.pan_y) + bounds.origin.y,
+            ));
             if let Ok(path) = builder.build() {
                 window.paint_path(path, self.color);
             }

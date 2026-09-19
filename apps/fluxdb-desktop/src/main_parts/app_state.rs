@@ -621,6 +621,12 @@ struct NavicatMain {
     er_depths: BTreeMap<TabId, u8>,
     // 单节点式展开：显式点过展开的表集合；这些表作为额外种子与中心同层扩 1 跳。
     er_expanded: BTreeMap<TabId, BTreeSet<String>>,
+    // ER 画布视口（平移/缩放）：按 tab 隔离。缩放/拖动时重算节点坐标与可见裁剪。
+    er_viewports: BTreeMap<TabId, ErViewport>,
+    // ER 画布场景缓存（布局+连线端点预计算）：随图加载一次构建，渲染复用避免每帧重算。
+    er_scenes: BTreeMap<TabId, Rc<ErScene>>,
+    // ER 画布拖动平移进行中：记录 (tab, 按下时光标, 按下时 pan)，用于拖动更新 pan。
+    er_viewport_drag: Option<(TabId, f32, f32, f32, f32)>,
     // Redis 连接级概览（版本/内存/CPU）的定期刷新任务与进行中的单次拉取任务
     redis_overview_refresh_task: Option<Task<()>>,
     redis_overview_refresh_tasks: BTreeMap<u64, Task<()>>,
