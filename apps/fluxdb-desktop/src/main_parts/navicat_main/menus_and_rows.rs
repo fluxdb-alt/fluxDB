@@ -308,6 +308,9 @@ impl NavicatMain {
             TableMenuAction::ViewData => {
                 self.dispatch(AppCommand::OpenDataEditor(object_path), cx);
             }
+            TableMenuAction::OpenErDiagram => {
+                self.dispatch(AppCommand::OpenErDiagram(object_path), cx);
+            }
             TableMenuAction::Design => {
                 self.dispatch(AppCommand::OpenDesignTable(object_path), cx);
             }

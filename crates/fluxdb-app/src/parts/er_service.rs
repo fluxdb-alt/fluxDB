@@ -165,3 +165,59 @@ pub fn load_er_graph_in_background(
 
     Ok(ErGraphData { tables, edges })
 }
+
+/// 加载「当前表关联 ER」：以 `center` 表为中心，沿外键（入向/出向）向外扩展
+/// `depth` 跳，返回只含中心表与可达邻域表的子图。复用整库 `load_er_graph_in_background`
+/// 的全量拓扑后再过滤，保证邻域判定与整库一致（design §3.2、D5）。
+pub fn load_er_neighborhood_in_background(
+    config: &ConnectionConfig,
+    database: Option<&str>,
+    schema: Option<&str>,
+    center: &str,
+    depth: u8,
+) -> fluxdb_core::Result<ErGraphData> {
+    let full = load_er_graph_in_background(config, database, schema)?;
+
+    // 宽度优先收集包含表：中心表 + 每跳入向/出向外键对端。
+    let mut included: BTreeSet<String> = BTreeSet::new();
+    included.insert(center.to_string());
+    let mut frontier: Vec<String> = vec![center.to_string()];
+    for _ in 0..depth {
+        let mut next: Vec<String> = Vec::new();
+        for t in &frontier {
+            for edge in &full.edges {
+                let neighbor = if edge.from_table == *t {
+                    Some(edge.to_table.clone())
+                } else if edge.to_table == *t {
+                    Some(edge.from_table.clone())
+                } else {
+                    None
+                };
+                if let Some(n) = neighbor
+                    && !included.contains(&n)
+                {
+                    included.insert(n.clone());
+                    next.push(n);
+                }
+            }
+        }
+        frontier = next;
+        if frontier.is_empty() {
+            break;
+        }
+    }
+
+    // 过滤：只保留包含集内的节点与两端都在集内的边（排序稳定由 load_er_graph 保证）。
+    Ok(ErGraphData {
+        tables: full
+            .tables
+            .into_iter()
+            .filter(|t| included.contains(&t.name))
+            .collect(),
+        edges: full
+            .edges
+            .into_iter()
+            .filter(|e| included.contains(&e.from_table) && included.contains(&e.to_table))
+            .collect(),
+    })
+}

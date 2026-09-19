@@ -119,10 +119,25 @@ fn ensure_er_graph_loaded(
     };
     let database = er.database.clone();
     let schema = er.schema.clone();
+    let center_table = er.center_table.clone();
     let task = cx.spawn(async move |view, cx| {
         let result = cx
             .background_spawn(async move {
-                fluxdb_app::load_er_graph_in_background(&config, Some(&database), schema.as_deref())
+                match &center_table {
+                    // 当前表关联 ER：以该表为中心 1 跳邻域。
+                    Some(center) => fluxdb_app::load_er_neighborhood_in_background(
+                        &config,
+                        Some(&database),
+                        schema.as_deref(),
+                        center,
+                        1,
+                    ),
+                    None => fluxdb_app::load_er_graph_in_background(
+                        &config,
+                        Some(&database),
+                        schema.as_deref(),
+                    ),
+                }
             })
             .await;
         view.update(cx, |this, cx| {
@@ -158,7 +173,10 @@ fn er_toolbar(er: &ErDiagramState, colors: UiColors) -> Div {
                 .text_size(px(13.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(colors.text)
-                .child(format!("{} 的 ER 关系图", er.database)),
+                .child(match &er.center_table {
+                    Some(table) => format!("{table} 的关联 ER 关系图（1 跳）"),
+                    None => format!("{} 的 ER 关系图", er.database),
+                }),
         )
 }
 

@@ -795,18 +795,21 @@ impl AppController {
                 AppEvent::TabOpened(tab_id)
             }
             AppCommand::OpenErDiagram(path) => {
-                // 按库去重：同一连接+库+schema 已有 ER tab 则激活既有 tab。
+                // 表级 path → 当前表关联 ER（以该表为中心 1 跳）；库/其它 → 整库 ER。
                 let database = path
                     .database
                     .clone()
                     .unwrap_or_else(|| path.name.clone());
                 let schema = path.schema.clone();
+                let center_table = (path.kind == ObjectKind::Table).then(|| path.name.clone());
                 let connection_id = path.connection_id;
+                // 按「连接+库+schema+中心表」去重：整库与当前表关联视图各自唯一。
                 if let Some(existing_tab_id) = self.state.tabs.iter().find_map(|tab| {
                     if let TabKind::ErDiagram(er) = &tab.kind
                         && er.connection_id == connection_id
                         && er.database == database
                         && er.schema == schema
+                        && er.center_table == center_table
                     {
                         return Some(tab.id);
                     }
@@ -817,13 +820,18 @@ impl AppController {
                 }
 
                 let tab_id = self.next_tab_id();
+                let title = match &center_table {
+                    Some(table) => format!("{table} · 关联 ER"),
+                    None => format!("{database} · ER"),
+                };
                 self.push_tab(TabState {
                     id: tab_id,
-                    title: format!("{database} · ER"),
+                    title,
                     kind: TabKind::ErDiagram(ErDiagramState {
                         connection_id,
                         database,
                         schema,
+                        center_table,
                     }),
                     dirty: false,
                 });

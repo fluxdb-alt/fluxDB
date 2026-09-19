@@ -140,6 +140,8 @@ enum TableMenuAction {
     TogglePin,
     CopyName,
     ViewData,
+    /// 打开以当前表为中心 1 跳的关联 ER 关系图。
+    OpenErDiagram,
     Design,
     NewTable,
     Refresh,

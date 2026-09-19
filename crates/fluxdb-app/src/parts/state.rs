@@ -213,14 +213,17 @@ pub struct BackupListState {
     pub database: String,
 }
 
-/// ER 图 tab 的标识状态：仅记录连接 + 库 + 可选 schema；图数据由 desktop 侧
-/// 后台加载并按 tab 缓存（与备份列表一样，controller 不持有行数据）。
+/// ER 图 tab 的标识状态：仅记录连接 + 库 + 可选 schema + 可选中心表；图数据由
+/// desktop 侧后台加载并按 tab 缓存（与备份列表一样，controller 不持有行数据）。
 /// `schema` 为 None 表示整库范围（MySQL/SQLite 单库、PG 全部 schema）。
+/// `center_table` 为 Some 时表示「当前表关联 ER」：以该表为中心默认 1 跳绘制邻域；
+/// 为 None 时是整库 ER。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ErDiagramState {
     pub connection_id: ConnectionId,
     pub database: String,
     pub schema: Option<String>,
+    pub center_table: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

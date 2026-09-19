@@ -154,3 +154,91 @@
             "demo 无自关联边"
         );
     }
+
+    // 「当前表关联 ER」邻域过滤：以中心表 1 跳展开，只保留直接可达表与相关边。
+    #[test]
+    fn load_er_neighborhood_keeps_center_and_one_hop() {
+        let path = temp_sqlite_path("er-neighborhood");
+        let _ = std::fs::remove_file(&path);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut connection = sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .connect()
+                .await
+                .unwrap();
+            sqlx::query("PRAGMA foreign_keys = ON")
+                .execute(&mut connection)
+                .await
+                .unwrap();
+            sqlx::query("CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+                .execute(&mut connection)
+                .await
+                .unwrap();
+            sqlx::query("CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+                .execute(&mut connection)
+                .await
+                .unwrap();
+            sqlx::query(
+                "CREATE TABLE orders (
+                    id INTEGER PRIMARY KEY,
+                    customer_id INTEGER REFERENCES customers(id),
+                    product_id INTEGER REFERENCES products(id)
+                )",
+            )
+            .execute(&mut connection)
+            .await
+            .unwrap();
+            connection.close().await.unwrap();
+        });
+        let config = ConnectionConfig {
+            id: ConnectionId(998),
+            name: "neighborhood-test".to_string(),
+            kind: DatabaseKind::Sqlite,
+            endpoint: Endpoint::SqliteFile {
+                path: path.clone(),
+                read_only: false,
+            },
+            credential_ref: None,
+            options: BTreeMap::new(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+        };
+        let run = |center: &str| -> fluxdb_core::Result<ErGraphData> {
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        load_er_neighborhood_in_background(&config, Some("main"), None, center, 1)
+                    })
+                    .join()
+                    .expect("neighborhood thread panicked")
+            })
+        };
+
+        // 以 orders 为中心：1 跳到 customers 与 products，全在其中。
+        let graph = run("orders").expect("neighborhood should succeed");
+        let mut names: Vec<&str> = graph.tables.iter().map(|t| t.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["customers", "orders", "products"]);
+        assert_eq!(graph.edges.len(), 2);
+
+        // 以 customers 为中心：1 跳只有 orders；products 需隔 orders 达 2 跳，不在其中。
+        let graph = run("customers").expect("neighborhood should succeed");
+        let mut names: Vec<&str> = graph.tables.iter().map(|t| t.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["customers", "orders"]);
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(graph.edges[0].from_table, "orders");
+        assert_eq!(graph.edges[0].to_table, "customers");
+
+        // 中心表不存在：返回空图，不 panic。
+        let graph = run("不存在表").expect("neighborhood should not panic");
+        assert!(graph.tables.is_empty());
+
+        let _ = std::fs::remove_file(&path);
+    }

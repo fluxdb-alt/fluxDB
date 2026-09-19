@@ -756,7 +756,8 @@ ChartDB/drawDB 的许可证与嵌入方式必须独立评估；本方案默认�
 - **core 纯数据模型**（[er_model.rs](../crates/fluxdb-core/src/parts/er_model.rs)）：`ErGraphData`/`ErTableNode`/`ErColumn`/`ErForeignKeyEdge`，仅承载一次后台加载的结果，不含加载/驱动逻辑。
 - **app 加载编排**（[er_service.rs](../crates/fluxdb-app/src/parts/er_service.rs)）：`load_er_graph_in_background` 编排 `list_objects`（枚举表）+ `list_completion_columns_for_tables`（批量列/主键/注释）+ 逐表 `list_foreign_keys`（N+1）组装 ErGraphData。PG 拼 `schema.table` 区分同名表。
 - **desktop 渲染**（[er/canvas.rs](../apps/fluxdb-desktop/src/main_parts/er/canvas.rs)）：侧边栏「ER 图」节点 → `OpenErDiagram` 命令 → `库名 · ER` 标签；首次进入 content 自动触发后台加载（loading → 结果/错误），固定栅格排布表节点 div + PathBuilder 画外键连线。节点/对象/文本走 UiColors + 组件，连线共用同一套世界坐标。
-- **验证**：`cargo fmt`、`cargo check --workspace`、（app）`cargo test` 462、（desktop）`cargo test` 401 全部通过（含 `load_er_graph_reads_tables_and_foreign_keys`、`load_er_graph_reads_demo_database`、`er_layout_produces_finite_non_overlapping_positions`）、desktop 可 `cargo build`、macOS 实机验证。
+- **当前表关联 ER**：表右键菜单「关联 ER」→ 同一 `OpenErDiagram`（表级 path）→ `表名 · 关联 ER` 标签；`ErDiagramState.center_table` 标记中心表，`load_er_neighborhood_in_background` 以中心表 1 跳（入向/出向外键）过滤子图后走同一画布。<br>**附加（性能方向）**：FK 批量化（Connector `list_foreign_keys_for_tables`，MySQL 单次查全库）+ 超大库降级截断（`MAX_CANVAS_TABLES`=300，banner 提示），200+ 表的分组/裁剪仍留 §13 TODO。
+- **验证**：`cargo fmt`、`cargo check --workspace`、（app）`cargo test` 463、（desktop）`cargo test` 401 全部通过（含 `load_er_graph_reads_tables_and_foreign_keys`、`load_er_graph_reads_demo_database`、`er_layout_produces_finite_non_overlapping_positions`、`load_er_neighborhood_keeps_center_and_one_hop`）、desktop 可 `cargo build`、macOS 实机验证。
 
 实跑验证发现并修复：
 
@@ -776,7 +777,7 @@ ChartDB/drawDB 的许可证与嵌入方式必须独立评估；本方案默认�
 - [ ] **超大库分组/概览视图**：设计文档 §4.1——>200 表按 schema/用户分组/连通分量概览，逐组进入；截断是临时降级，非最终形态。
 - [ ] **平移/缩放/视口裁剪**（design §2.3）：ErViewportController 变换 + 只渲染视口内节点与边；解决大库探索与仅显示 300 的局限。
 - [ ] **渲染缓存**：布局与 path 缓存，避免每帧重算；节点拖动/增量布局（design §2.3）。
-- [ ] **当前表局部 ER / 邻域视图**（design §3.2、D5）：以表为中心一跳邻域，逐层展开；全库与局部共用关系模型。
+- [x] **当前表局部 ER / 邻域视图（1 跳）**（design §3.2、D5）：表右键「关联 ER」打开 `表名 · 关联 ER` 标签，以该表为中心 1 跳绘制邻域（入向/出向外键都含）。`ErDiagramState.center_table` + `load_er_neighborhood_in_background`。**逐层展开（节点上再展开 2 跳/更深）留待后续**。
 
 ### 功能后续（依赖 D1-D9 或独立）
 - [ ] **D1-D9 数据结构确认**：逻辑关系模型（ErRelationship/required_filters/usage 等）确认后才创建 §6 Rust 类型与命令。
