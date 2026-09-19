@@ -382,7 +382,7 @@ fn redis_workbench_history_row(
                             if this.request_redis_dangerous_confirmation(tab_id, &text, cx) {
                                 // 已弹确认框，交由确认流程执行。
                             } else {
-                                this.dispatch(AppCommand::ExecuteRedisWorkbench(tab_id), cx);
+                                this.run_redis_workbench(tab_id, None, cx);
                             }
                         }
                         cx.stop_propagation();

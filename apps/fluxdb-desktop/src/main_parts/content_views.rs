@@ -328,7 +328,8 @@ fn recent_connection_row(
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, _, cx| {
-                this.dispatch(AppCommand::OpenConnection(connection_id), cx);
+                // 建连走侧边栏同款后台路径：不卡主线程，重复点击由 connecting_connections 去重。
+                this.open_connection_from_sidebar(connection_id, cx);
                 cx.stop_propagation();
             }),
         )
@@ -1877,7 +1878,7 @@ fn redis_workbench_toolbar(
                         if this.request_redis_dangerous_confirmation(tab_id, &pending_text, cx) {
                             cx.stop_propagation();
                         } else {
-                            this.dispatch(AppCommand::ExecuteRedisWorkbench(tab_id), cx);
+                            this.run_redis_workbench(tab_id, None, cx);
                             cx.stop_propagation();
                         }
                     }
@@ -2097,7 +2098,7 @@ fn redis_workbench_results(
                 .outline()
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if !this.request_redis_dangerous_confirmation(tab_id, &pending_text, cx) {
-                        this.dispatch(AppCommand::ExecuteRedisWorkbench(tab_id), cx);
+                        this.run_redis_workbench(tab_id, None, cx);
                     }
                 }))
                 .into_any_element();
@@ -2507,13 +2508,7 @@ fn redis_workbench_record_actions(
                             ) {
                                 cx.stop_propagation();
                             } else {
-                                this.dispatch(
-                                    AppCommand::RerunRedisWorkbenchRecord {
-                                        tab_id,
-                                        execution_id,
-                                    },
-                                    cx,
-                                );
+                                this.run_redis_workbench(tab_id, Some(execution_id), cx);
                                 cx.stop_propagation();
                             }
                         }

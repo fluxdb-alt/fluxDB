@@ -5,7 +5,12 @@ edition = "2024"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
 vte = "0.14"
+
+# 原生客户端子进程进程组信号（取消时整树终止），Unix 平台使用。
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.28", default-features = false, features = ["signal"] }
 
 [dev-dependencies]
 serde_json = "1"

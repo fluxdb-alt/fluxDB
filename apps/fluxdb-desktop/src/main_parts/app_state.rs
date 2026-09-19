@@ -835,6 +835,9 @@ struct NavicatMain {
     _sql_file_path_subscription: Subscription,
     backup_file_name_input: Entity<InputState>,
     _backup_file_name_subscription: Subscription,
+    /// 新建备份弹框：备份目录输入（默认填充设置 backup_dir，可更换）。
+    backup_target_dir_input: Entity<InputState>,
+    _backup_target_dir_subscription: Subscription,
     backup_object_search_input: Entity<InputState>,
     _backup_object_search_subscription: Subscription,
     /// 新建备份弹框：备注输入（保存到 .meta.json）。
@@ -842,6 +845,8 @@ struct NavicatMain {
     _backup_note_subscription: Subscription,
     /// 备份 tab：查看「备份表」弹框（None = 未打开）。tables 为 None 表示该备份无表清单记录。
     backup_tables_modal: Option<BackupTablesModal>,
+    /// 备份 tab：查看「恢复记录」弹框（None = 未打开）。
+    restore_records_modal: Option<RestoreRecordsModal>,
     /// 备份 tab：备注编辑弹框对应的备份文件路径（None = 未打开）。
     backup_note_modal_path: Option<PathBuf>,
     /// 备注编辑弹框的输入控件。
@@ -962,6 +967,9 @@ struct NavicatMain {
     _database_tasks: BTreeMap<String, Task<()>>,
     _data_load_tasks: BTreeMap<u64, Task<()>>,
     _query_execute_tasks: BTreeMap<u64, Task<()>>,
+    /// Redis Workbench 命令的后台执行任务，按标签页 id 去重：同一标签页执行中再次触发
+    /// （Run / 重跑 / 历史「运行此条」）时直接提示，不并发发起第二条网络请求。
+    _redis_workbench_tasks: BTreeMap<u64, Task<()>>,
     _sql_file_execute_tasks: BTreeMap<u64, Task<()>>,
     _sql_file_cancel_flags: BTreeMap<u64, Arc<AtomicBool>>,
     _query_completion_tasks: BTreeMap<(TabId, u64), Task<()>>,
@@ -1029,6 +1037,8 @@ struct NavicatMain {
     // 此时主视图处于 lease 状态，builder 内不能 view.read(cx)，实时数据统一放 Rc<RefCell<..>>
     // （先例：redis_hash_full_value_viewer）。
     sql_file_modal: Rc<std::cell::RefCell<SqlFileModalData>>,
+    // 恢复弹框挂载状态:UI 实体 + 配置快照,运行时数据在 RestoreModal::runtime(Rc 共享)。
+    restore_modal: Option<RestoreModal>,
     pending_data_export: Option<TableDataExportForm>,
     data_export_custom_conditions_open: bool,
     data_export_preview: Option<TableDataExportPreviewState>,
@@ -1349,10 +1359,6 @@ impl Default for SqlFileModalData {
 /// 数据库备份方式。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BackupMode {
-    /// 原生工具（mysqldump / sqlite3）
-    Native,
-    /// 逻辑备份（SQL dump，复用现有导出能力）
-    Logic,
     /// 自动探测：原生工具可用则原生，否则逻辑。
     Auto,
 }
@@ -1360,8 +1366,6 @@ enum BackupMode {
 impl BackupMode {
     fn label(self) -> &'static str {
         match self {
-            Self::Native => "原生备份（推荐）",
-            Self::Logic => "逻辑备份（SQL）",
             Self::Auto => "自动选择",
         }
     }
@@ -1389,8 +1393,31 @@ impl BackupTab {
     }
 }
 
+/// 恢复配置弹框页签（与备份同款四页结构，设计文档 §14.1）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RestoreTab {
+    General,
+    Objects,
+    Advanced,
+    Log,
+}
+
+impl RestoreTab {
+    const ALL: [Self; 4] = [Self::General, Self::Objects, Self::Advanced, Self::Log];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::General => "常规",
+            Self::Objects => "对象选择",
+            Self::Advanced => "高级",
+            Self::Log => "消息日志",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BackupForm {
+    database_kind: DatabaseKind,
     connection_id: ConnectionId,
     database: Option<String>,
     mode: BackupMode,
@@ -1398,8 +1425,11 @@ struct BackupForm {
     tab: BackupTab,
     /// 常规：文件名/模板；留空用默认（库名_时间戳.sql）。
     file_name: String,
-    /// 对象选择：已勾选的表名集合（空集合 = 全选，由对象页签快速勾选改变）。
+    /// 对象选择：已勾选的表名集合（`scope_all` 为 false 时生效）。
     selected_tables: BTreeSet<String>,
+    /// 对象选择：是否整库备份（全部对象）。为 true 时执行阶段重新枚举全部用户表，
+    /// `selected_tables` 被忽略；为 false 时按 `selected_tables` 固定清单导出。
+    scope_all: bool,
     /// 对象选择：当前库下全部表名（弹框打开时快照，用于渲染表列表，避免渲染期读 self）。
     all_table_names: BTreeSet<String>,
     /// 对象选择：当前库下全部视图名（快照，用于「视图」分组展示与统计）。
@@ -1437,20 +1467,10 @@ struct PgClientDownloadState {
     cancel: Arc<AtomicBool>,
 }
 
-/// 备份文件的旁挂元数据（{备份文件}.meta.json）：记录表清单与备注。
-/// 仅新备份写入；历史备份无此文件时对应列显示「无记录」。
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-struct BackupFileMeta {
-    /// 本次备份勾选的表名（有序数组；Some(空数组) = 整库备份；None = 未记录，如仅编辑备注的老备份）。
-    #[serde(default)]
-    tables: Option<Vec<String>>,
-    /// 是否包含视图。
-    #[serde(default)]
-    include_views: bool,
-    /// 用户备注。
-    #[serde(default)]
-    note: String,
-}
+/// 备份记录（存 sqlite，真实数据在磁盘）：复用 fluxdb-storage 的 `BackupRecord`。
+/// 字段含 connection_id/database（按库筛选）、output_path（真实文件路径）、
+/// created_unix/size（备份时间与大小）、tables/include_views/note（表清单与备注）。
+use fluxdb_storage::BackupRecord as BackupFileMeta;
 
 /// 备份 tab「查看备份表」弹框状态。
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1461,6 +1481,14 @@ struct BackupTablesModal {
     tables: Option<Vec<String>>,
     /// 是否包含视图（仅在有元数据时有意义）。
     include_views: bool,
+}
+
+/// 备份 tab「恢复记录」弹框状态：该备份关联的全部恢复记录（新→旧）。
+#[derive(Clone, Debug)]
+struct RestoreRecordsModal {
+    /// 备份文件名（标题展示）。
+    file_name: String,
+    records: Vec<fluxdb_storage::RestoreRecord>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

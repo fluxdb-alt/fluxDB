@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 fluxdb-core = { path = "../fluxdb-core" }
+sqlparser = { version = "0.62.0", features = ["visitor"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["bigdecimal", "chrono", "mysql", "sqlite", "runtime-tokio-rustls"] }
 ssh2 = "0.9"
 dirs = "6"

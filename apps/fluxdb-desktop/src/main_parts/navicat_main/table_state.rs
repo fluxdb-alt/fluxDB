@@ -794,7 +794,7 @@ impl NavicatMain {
                     let _ = change;
                 }
                 editor_component::EditorEvent::Execute { range, mode } => {
-                    this.dispatch(AppCommand::ExecuteRedisWorkbench(tab_id), cx);
+                    this.run_redis_workbench(tab_id, None, cx);
                     let _ = range;
                     let _ = mode;
                 }

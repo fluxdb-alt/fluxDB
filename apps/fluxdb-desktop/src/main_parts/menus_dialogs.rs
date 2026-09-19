@@ -20,3 +20,8 @@ include!("menus_dialogs/database_backup.rs");
 include!("menus_dialogs/database_backup/ui.rs");
 include!("menus_dialogs/subprocess.rs");
 include!("menus_dialogs/menu_items.rs");
+
+include!("menus_dialogs/native_sql_transport.rs");
+include!("menus_dialogs/backup_execution.rs");
+include!("menus_dialogs/database_restore.rs");
+include!("menus_dialogs/database_restore/ui.rs");

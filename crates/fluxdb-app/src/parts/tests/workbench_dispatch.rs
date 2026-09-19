@@ -146,9 +146,28 @@ fn synthetic_execution(text: &str, failed: usize) -> CommandWorkbenchExecution {
     }
 }
 
+/// 以「一条命令一条记录」的形态把后台执行结果落回主线程（UI 的收尾步）。
+fn finish_executions(
+    controller: &mut AppController,
+    tab_id: TabId,
+    executions: Vec<CommandWorkbenchExecution>,
+) -> AppEvent {
+    let text = executions
+        .iter()
+        .map(|execution| execution.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    controller.dispatch(AppCommand::FinishRedisWorkbenchExecution {
+        tab_id,
+        text,
+        result: Ok(executions),
+    })
+}
+
 #[test]
-fn redis_workbench_execute_clears_input_immediately() {
-    // 点 Run 应立即清空顶部输入框（清空发生在发起底层执行之前，与执行成败无关）。
+fn redis_workbench_begin_marks_running_and_clears_input_immediately() {
+    // 点 Run 的 Prepare 步应在主线程同步清空顶部输入框并置运行态，
+    // 与后台执行成败无关（真实网络往返在其后的 RunRedisWorkbench 上跑）。
     let mut controller = AppController::with_mock_data();
     let tab_id = open_workbench(&mut controller);
     controller.dispatch(AppCommand::UpdateRedisWorkbenchText {
@@ -157,42 +176,53 @@ fn redis_workbench_execute_clears_input_immediately() {
     });
     assert_eq!(active_workbench(&controller).text, "SET a 1");
 
-    controller.dispatch(AppCommand::ExecuteRedisWorkbench(tab_id));
+    controller.dispatch(AppCommand::BeginRedisWorkbenchExecution {
+        tab_id,
+        execution_id: None,
+    });
 
-    // 无论底层 Redis 是否可达，输入框都已被同步清空。
+    let workbench = active_workbench(&controller);
     assert!(
-        active_workbench(&controller).text.is_empty(),
+        workbench.text.is_empty(),
         "Run 后顶部输入框应被立即清空"
     );
+    assert!(workbench.running, "Prepare 步应置为运行态以显示 loading");
 }
 
 #[test]
-fn redis_workbench_finish_appends_record_and_assigns_id() {
-    // 一次执行在结果区追加一条记录，并为 connector 产出的 execution 分配自增 id。
+fn redis_workbench_finish_appends_records_and_assigns_ids() {
+    // 一次执行可按「一条命令一条记录」追加多条，并为 connector 产出的 execution 分配自增 id。
     let mut controller = AppController::with_mock_data();
     let tab_id = open_workbench(&mut controller);
 
-    let event = controller.dispatch(AppCommand::FinishRedisWorkbenchExecution {
+    let event = finish_executions(
+        &mut controller,
         tab_id,
-        result: Ok(synthetic_execution("GET a", 0)),
-    });
-    assert!(matches!(event, AppEvent::RedisWorkbenchFinished(..)));
+        vec![
+            synthetic_execution("GET a", 0),
+            synthetic_execution("SET a 2", 1),
+        ],
+    );
+    assert!(matches!(event, AppEvent::TabActivated(id) if id == tab_id));
 
-    let workbench = active_workbench(&controller);
-    assert_eq!(workbench.executions.len(), 1);
-    assert_eq!(workbench.executions[0].id, 1);
-    assert_eq!(workbench.executions[0].text, "GET a");
-    assert_eq!(workbench.next_execution_id, 2);
-
-    // 再次执行：追加第二条记录，id 单调递增，互不影响。
-    controller.dispatch(AppCommand::FinishRedisWorkbenchExecution {
-        tab_id,
-        result: Ok(synthetic_execution("SET a 2", 0)),
-    });
     let workbench = active_workbench(&controller);
     assert_eq!(workbench.executions.len(), 2);
     assert_eq!(workbench.executions[0].id, 1);
+    assert_eq!(workbench.executions[0].text, "GET a");
     assert_eq!(workbench.executions[1].id, 2);
+    assert_eq!(workbench.executions[1].text, "SET a 2");
+    assert_eq!(workbench.next_execution_id, 3);
+    assert!(!workbench.running, "结果落回后应退出运行态");
+
+    // 再次执行：新记录接在末尾，id 单调递增，旧记录不受影响。
+    finish_executions(
+        &mut controller,
+        tab_id,
+        vec![synthetic_execution("GET b", 0)],
+    );
+    let workbench = active_workbench(&controller);
+    assert_eq!(workbench.executions.len(), 3);
+    assert_eq!(workbench.executions[2].id, 3);
 }
 
 #[test]
@@ -200,14 +230,16 @@ fn redis_workbench_delete_removes_only_target_record() {
     // Delete 只删除指定 id 的一条记录，其它记录与草稿不受影响。
     let mut controller = AppController::with_mock_data();
     let tab_id = open_workbench(&mut controller);
-    controller.dispatch(AppCommand::FinishRedisWorkbenchExecution {
+    finish_executions(
+        &mut controller,
         tab_id,
-        result: Ok(synthetic_execution("GET a", 0)),
-    });
-    controller.dispatch(AppCommand::FinishRedisWorkbenchExecution {
+        vec![synthetic_execution("GET a", 0)],
+    );
+    finish_executions(
+        &mut controller,
         tab_id,
-        result: Ok(synthetic_execution("GET b", 0)),
-    });
+        vec![synthetic_execution("GET b", 0)],
+    );
     assert_eq!(active_workbench(&controller).executions.len(), 2);
 
     controller.dispatch(AppCommand::DeleteRedisWorkbenchRecord {
@@ -223,7 +255,7 @@ fn redis_workbench_delete_removes_only_target_record() {
 
 #[test]
 fn redis_workbench_rerun_selects_record_text_and_keeps_draft() {
-    // 记录重跑：从记录自身取命令文本执行，且不打扰（不清理）顶部草稿。
+    // 记录重跑：Begin 只置运行态且不动草稿；Run 在副本上按记录 id 取文本执行。
     let mut controller = AppController::with_mock_data();
     let tab_id = open_workbench(&mut controller);
     // 顶部保留一段草稿，用于验证重跑不清空它。
@@ -231,15 +263,15 @@ fn redis_workbench_rerun_selects_record_text_and_keeps_draft() {
         tab_id,
         text: "草稿内容".to_string(),
     });
-    controller.dispatch(AppCommand::FinishRedisWorkbenchExecution {
+    finish_executions(
+        &mut controller,
         tab_id,
-        result: Ok(synthetic_execution("GET a", 0)),
-    });
+        vec![synthetic_execution("GET a", 0)],
+    );
 
-    // 重跑 id=1 的记录：无论底层 Redis 是否可达，重跑都不应触碰草稿。
-    controller.dispatch(AppCommand::RerunRedisWorkbenchRecord {
+    controller.dispatch(AppCommand::BeginRedisWorkbenchExecution {
         tab_id,
-        execution_id: 1,
+        execution_id: Some(1),
     });
     assert_eq!(
         active_workbench(&controller).text,
@@ -247,10 +279,20 @@ fn redis_workbench_rerun_selects_record_text_and_keeps_draft() {
         "记录重跑不应清空顶部草稿"
     );
 
-    // 不存在的记录 id：应返回失败事件，而不是静默吞掉。
-    let event = controller.dispatch(AppCommand::RerunRedisWorkbenchRecord {
+    // 重跑按 id 解析文本：即使草稿非空，实际执行的也是该条记录的命令。
+    let event = controller.dispatch(AppCommand::RunRedisWorkbench {
         tab_id,
-        execution_id: 999,
+        execution_id: Some(1),
+    });
+    match event {
+        AppEvent::RedisWorkbenchCommandsRan { text, .. } => assert_eq!(text, "GET a"),
+        other => panic!("Run 应返回 RedisWorkbenchCommandsRan，实际为 {other:?}"),
+    }
+
+    // 不存在的记录 id：应返回失败事件，而不是静默吞掉。
+    let event = controller.dispatch(AppCommand::BeginRedisWorkbenchExecution {
+        tab_id,
+        execution_id: Some(999),
     });
     assert!(matches!(event, AppEvent::Failed(_)));
 }
@@ -260,10 +302,11 @@ fn redis_workbench_toggle_collapse_toggles_record() {
     // 折叠/展开切换（需求 5）：第一次切换进入折叠态，第二次切回复原，且默认未折叠。
     let mut controller = AppController::with_mock_data();
     let tab_id = open_workbench(&mut controller);
-    controller.dispatch(AppCommand::FinishRedisWorkbenchExecution {
+    finish_executions(
+        &mut controller,
         tab_id,
-        result: Ok(synthetic_execution("GET a", 0)),
-    });
+        vec![synthetic_execution("GET a", 0)],
+    );
     let record_id = active_workbench(&controller).executions[0].id;
 
     // 默认全部展开（collapsed 为空）。
@@ -290,10 +333,11 @@ fn redis_workbench_toggle_json_view_membership() {
     // 再次切换移除；不同 command_index 互不影响。
     let mut controller = AppController::with_mock_data();
     let tab_id = open_workbench(&mut controller);
-    controller.dispatch(AppCommand::FinishRedisWorkbenchExecution {
+    finish_executions(
+        &mut controller,
         tab_id,
-        result: Ok(synthetic_execution("JSON.GET a", 0)),
-    });
+        vec![synthetic_execution("JSON.GET a", 0)],
+    );
     let record_id = active_workbench(&controller).executions[0].id;
 
     // 默认不开启任何 JSON 视图。
@@ -333,13 +377,15 @@ fn redis_workbench_delete_and_clear_prune_collapsed() {
     // Delete 只清理被删记录的折叠态；Clear 清空全部折叠态，避免残留过期 id。
     let mut controller = AppController::with_mock_data();
     let tab_id = open_workbench(&mut controller);
+    finish_executions(
+        &mut controller,
+        tab_id,
+        vec![synthetic_execution("GET a", 0)],
+    );
     controller.dispatch(AppCommand::FinishRedisWorkbenchExecution {
         tab_id,
-        result: Ok(synthetic_execution("GET a", 0)),
-    });
-    controller.dispatch(AppCommand::FinishRedisWorkbenchExecution {
-        tab_id,
-        result: Ok(synthetic_execution("GET b", 0)),
+        text: "GET b".to_string(),
+        result: Ok(vec![synthetic_execution("GET b", 0)]),
     });
     let first_id = active_workbench(&controller).executions[0].id;
     let second_id = active_workbench(&controller).executions[1].id;

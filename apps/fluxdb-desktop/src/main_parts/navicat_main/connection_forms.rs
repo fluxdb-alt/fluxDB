@@ -92,10 +92,42 @@ impl NavicatMain {
         }
 
         let test_config = draft.clone().into_config(fluxdb_core::ConnectionId(0));
-        match self
-            .controller
-            .dispatch(AppCommand::TestConnection(test_config))
-        {
+        // 建连测试是真实网络 I/O：交给后台线程跑，既不让弹框卡住主线程，也让驱动里可能的
+        // panic 不再落进 GPUI 主线程的 C 回调栈帧（该栈不能 unwind，会 abort 整个进程）。
+        self.new_connection_form.test_status =
+            Some(ConnectionTestStatus::Pending("正在测试连接...".to_string()));
+        let mut controller = self.controller.clone();
+        self._test_connection_task = Some(cx.spawn(async move |view, cx| {
+            let event = cx
+                .background_spawn(async move {
+                    controller.dispatch(AppCommand::TestConnection(test_config))
+                })
+                .await;
+            let _ = cx.update(|cx| {
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| {
+                    this._test_connection_task = None;
+                    // 测试期间弹框已取消：丢弃迟到结果，不再继续保存。
+                    if !this.saving_connection {
+                        return;
+                    }
+                    this.finish_new_connection_creation(draft, event, cx);
+                });
+            });
+        }));
+        cx.notify();
+    }
+
+    /// 「保存并连接」的测试完成回调：测试通过才落库并打开连接，失败则把错误留在弹框里。
+    fn finish_new_connection_creation(
+        &mut self,
+        draft: ConnectionDraft,
+        event: fluxdb_app::AppEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
             fluxdb_app::AppEvent::ConnectionTested(_, Ok(())) => {}
             fluxdb_app::AppEvent::ConnectionTested(_, Err(error)) => {
                 self.new_connection_form.test_status =
@@ -268,6 +300,10 @@ impl NavicatMain {
     }
 
     fn cancel_new_connection(&mut self, cx: &mut Context<Self>) {
+        // 释放建连测试任务槽并复位 loading：否则下次打开弹框时按钮仍是禁用态，
+        // 迟到的测试结果也会被保存流程丢弃。
+        self._test_connection_task = None;
+        self.saving_connection = false;
         self.new_connection_kind = None;
         self.new_connection_password_visible = false;
         self.editing_connection_id = None;

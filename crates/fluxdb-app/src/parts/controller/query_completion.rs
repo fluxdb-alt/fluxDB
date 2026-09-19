@@ -26,25 +26,32 @@ fn quote_completion_insert_text(
     item: &mut QueryCompletionItem,
     kind: DatabaseKind,
     reserved: &impl Fn(&str) -> bool,
-    force_quote: bool,
 ) {
-    let is_identifier = matches!(
+    // 表/视图/列/模式等命名数据库对象：点击即按方言补引号（MySQL/TiDB 反引号，
+    // PostgreSQL/SQLite 双引号），与 Navicat 一致，避免“点了表没加上引号”。
+    let always_quote = matches!(
         item.kind,
         QueryCompletionKind::Schema
             | QueryCompletionKind::Table
             | QueryCompletionKind::View
             | QueryCompletionKind::Column
-            | QueryCompletionKind::Function
-            | QueryCompletionKind::Procedure
-            | QueryCompletionKind::Trigger
     );
+    let is_identifier = always_quote
+        || matches!(
+            item.kind,
+            QueryCompletionKind::Function
+                | QueryCompletionKind::Procedure
+                | QueryCompletionKind::Trigger
+        );
     if !is_identifier {
         return;
     }
+    // 复合标识符逐段处理；函数调用保留括号。函数/存储过程/触发器仅在“必须引号”
+    // （保留字/特殊字符/大写）时才补引号，避免把 `COUNT()` 误写成 `` `COUNT`() ``。
     let quote_name = |name: &str| {
         name.split('.')
             .map(|part| {
-                if force_quote {
+                if always_quote {
                     quote_identifier(part, kind, |_| true)
                 } else {
                     quote_identifier(part, kind, reserved)
@@ -609,16 +616,10 @@ impl AppController {
             }
         }
 
-        // 对按标识符插入的候选按方言做引号处理（P1.6）。复合标识符逐段处理，
-        // 函数调用保留括号，避免把 `COUNT()` / `alias.column` 当成单个标识符。
+        // 对按标识符插入的候选按方言补引号（表/列/模式点击即带引号，与 Navicat 一致）。
         let reserved = |word: &str| dialect.keywords().iter().any(|k| k.eq_ignore_ascii_case(word));
         for item in &mut items {
-            quote_completion_insert_text(
-                item,
-                config.kind,
-                &reserved,
-                context.quoted_identifier,
-            );
+            quote_completion_insert_text(item, config.kind, &reserved);
         }
 
         // T014/T020：按下一步意图注入 expected-token 候选，并统一全局重排后再去重。

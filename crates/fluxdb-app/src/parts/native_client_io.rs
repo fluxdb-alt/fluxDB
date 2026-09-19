@@ -4,7 +4,8 @@ use std::io::Write;
 const NATIVE_CLIENT_VERSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 fn native_client_version_output(program: &Path) -> Option<String> {
-    let mut child = std::process::Command::new(program)
+    // Windows 下隐藏子进程控制台窗口（检测/下载校验客户端时避免弹黑框）。
+    let mut child = fluxdb_core::no_console(std::process::Command::new(program))
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

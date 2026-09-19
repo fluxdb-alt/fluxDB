@@ -20,6 +20,9 @@ impl AppController {
         }
 
         match command {
+            command @ (AppCommand::PrepareBackup { .. } | AppCommand::RunBackup(_) | AppCommand::PrepareRestore(_) | AppCommand::ProbeRestore(_) | AppCommand::RunRestore { .. }) => {
+                self.dispatch_database_task(command, &AtomicBool::new(false), &mut |_| {})
+            }
             AppCommand::LoadConnections => {
                 let connections = mock_connections();
                 self.next_connection_id = connections
@@ -1425,93 +1428,146 @@ impl AppController {
                     self.fail(Error::new(ErrorKind::Internal, "Redis Workbench 标签页不存在"))
                 }
             }
-            AppCommand::ExecuteRedisWorkbench(tab_id) => {
-                // 从 Workbench 标签页读取当前输入文本（独立于运行状态），
-                // 再通过共享执行入口发起执行，并清空顶部输入框。
-                let text = self
-                    .find_tab(tab_id)
-                    .and_then(|tab| match &tab.kind {
-                        TabKind::RedisWorkbench(workbench) => Some(workbench.text.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                self.execute_redis_workbench(tab_id, text, true)
+            AppCommand::BeginRedisWorkbenchExecution {
+                tab_id,
+                execution_id,
+            } => {
+                // 准备步只做状态变更：真实 RESP 往返由 UI 派发到后台线程跑
+                // `RunRedisWorkbench`，结果再经 `FinishRedisWorkbenchExecution` 落回。
+                // 重跑要按 id 定位记录，记录已被删除时明确失败，不进入运行态。
+                if execution_id.is_some() && self.redis_workbench_text(tab_id, execution_id).is_none()
+                {
+                    return self.fail(Error::new(
+                        ErrorKind::Internal,
+                        "Redis Workbench 记录不存在",
+                    ));
+                }
+                let Some(tab) = self.find_tab_mut(tab_id) else {
+                    return self.fail(Error::new(
+                        ErrorKind::Internal,
+                        "Redis Workbench 标签页不存在",
+                    ));
+                };
+                let TabKind::RedisWorkbench(workbench) = &mut tab.kind else {
+                    return self.fail(Error::new(
+                        ErrorKind::Internal,
+                        "Redis Workbench 标签页不存在",
+                    ));
+                };
+                workbench.running = true;
+                workbench.error = None;
+                // 执行顶部草稿才清空输入框；重跑结果区记录不打扰当前草稿。
+                if execution_id.is_none() {
+                    workbench.text.clear();
+                    workbench.saved_fingerprint = Some(QueryFingerprint::for_text(""));
+                    tab.dirty = workbench.has_unsaved_text();
+                }
+                AppEvent::TabActivated(tab_id)
             }
-            AppCommand::FinishRedisWorkbenchExecution { tab_id, result } => match result {
-                Ok(mut execution) => {
+            AppCommand::RunRedisWorkbench {
+                tab_id,
+                execution_id,
+            } => {
+                // 只执行、不写标签页状态：本命令跑在后台线程的控制器副本上，
+                // 状态回写统一交给主线程的 FinishRedisWorkbenchExecution。
+                let Some((target, text)) = self.redis_workbench_run_scope(tab_id, execution_id)
+                else {
+                    return self.fail(Error::new(
+                        ErrorKind::Internal,
+                        "Redis Workbench 标签页不存在",
+                    ));
+                };
+                // 执行单元 = 单条命令：把输入文本交给批量执行入口，得到
+                // 「每条命令一个 `CommandWorkbenchExecution`」的列表，逐条追加到
+                // 结果区，各自独立占一张卡片（独立 Run / Delete / 时间 / 耗时）。
+                let request = CommandWorkbenchRequest {
+                    target,
+                    text: text.clone(),
+                    run_mode: CommandRunMode::Text,
+                    results_mode: CommandResultsMode::Default,
+                    batch_size: 0,
+                    continue_on_error: true,
+                    source: CommandExecutionSource::Workbench,
+                };
+                // 失败也用同一事件回传：入历史要带实际执行的文本，而不是执行期间的草稿。
+                let result = self
+                    .execute_command_workbench_commands(&request)
+                    .map_err(UserFacingError::from);
+                AppEvent::RedisWorkbenchCommandsRan {
+                    tab_id,
+                    text,
+                    result,
+                }
+            }
+            AppCommand::FinishRedisWorkbenchExecution {
+                tab_id,
+                text,
+                result,
+            } => match result {
+                Ok(executions) => {
+                    let mut history_entries = Vec::new();
                     let Some(tab) = self.find_tab_mut(tab_id) else {
                         return self.fail(Error::new(
                             ErrorKind::Internal,
                             "Redis Workbench 标签页不存在",
                         ));
                     };
-                    if let TabKind::RedisWorkbench(workbench) = &mut tab.kind {
-                        workbench.running = false;
-                        workbench.error = None;
-                        // 追加一条执行记录：App 层为 connector 产出的 execution 分配自增 id，
-                        // 供结果区的单条 Run / Delete 精确定位。
-                        execution.id = workbench.next_execution_id;
-                        workbench.next_execution_id += 1;
-                        workbench.executions.push(execution.clone());
-                        // 顶部输入框可能已被 Run 清空；脏标记基于「未执行改动」实时更新。
-                        tab.dirty = workbench.has_unsaved_text();
-                    } else {
+                    let TabKind::RedisWorkbench(workbench) = &mut tab.kind else {
                         return self.fail(Error::new(
                             ErrorKind::Internal,
                             "Redis Workbench 标签页不存在",
                         ));
+                    };
+                    workbench.running = false;
+                    workbench.error = None;
+                    for mut execution in executions {
+                        // App 层为 connector 产出的每条 execution 分配自增 id，
+                        // 供结果区的单条 Run / Delete 精确定位。
+                        execution.id = workbench.next_execution_id;
+                        workbench.next_execution_id += 1;
+                        history_entries.push(execution.clone());
+                        workbench.executions.push(execution);
                     }
-                    // 命令进入历史体系（execution.target 为 Redis 时记录；持久化由桌面层落盘）。
-                    self.record_redis_workbench_history_execution(&execution);
-                    AppEvent::RedisWorkbenchFinished(tab_id, execution)
+                    // 顶部输入框可能已被 Run 清空；脏标记基于「未执行改动」实时更新。
+                    tab.dirty = workbench.has_unsaved_text();
+                    // 每条命令进入历史体系（持久化由桌面层在 state 变化时落盘）。
+                    for execution in &history_entries {
+                        self.record_redis_workbench_history_execution(execution);
+                    }
+                    // 结果区由 state 驱动渲染：返回 TabActivated 触发该标签页 UI 重绘，
+                    // 桌面端 dispatch 包装会统一 cx.notify()。
+                    AppEvent::TabActivated(tab_id)
                 }
-                Err(error) => {
-                    let user_error = UserFacingError::from(error);
-                    let mut failed_scope = None;
-                    if let Some(tab) = self.find_tab_mut(tab_id)
-                        && let TabKind::RedisWorkbench(workbench) = &mut tab.kind
-                    {
-                        workbench.running = false;
-                        workbench.error = Some(user_error.clone());
-                        failed_scope = Some((
-                            workbench.connection_id,
-                            workbench.database,
-                            workbench.text.clone(),
+                Err(user_error) => {
+                    let Some(tab) = self.find_tab_mut(tab_id) else {
+                        return self.fail(Error::new(
+                            ErrorKind::Internal,
+                            "Redis Workbench 标签页不存在",
                         ));
-                    }
-                    if let Some((connection_id, database, text)) = failed_scope {
-                        self.record_redis_workbench_history_failure(
-                            connection_id,
-                            database,
-                            &text,
-                            &user_error.message,
-                        );
-                    }
+                    };
+                    let (connection_id, database) = match &mut tab.kind {
+                        TabKind::RedisWorkbench(workbench) => {
+                            workbench.running = false;
+                            workbench.error = Some(user_error.clone());
+                            (workbench.connection_id, workbench.database)
+                        }
+                        _ => {
+                            return self.fail(Error::new(
+                                ErrorKind::Internal,
+                                "Redis Workbench 标签页不存在",
+                            ));
+                        }
+                    };
+                    self.record_redis_workbench_history_failure(
+                        connection_id,
+                        database,
+                        &text,
+                        &user_error.message,
+                    );
                     self.state.last_error = Some(user_error.clone());
                     AppEvent::Failed(user_error)
                 }
             },
-            AppCommand::RerunRedisWorkbenchRecord { tab_id, execution_id } => {
-                // 重跑某条执行记录：按 id 定位记录并复用其命令文本重新执行，
-                // 不清空顶部输入框（记录重跑不打扰当前草稿）。
-                let text = self
-                    .find_tab(tab_id)
-                    .and_then(|tab| match &tab.kind {
-                        TabKind::RedisWorkbench(workbench) => workbench
-                            .executions
-                            .iter()
-                            .find(|execution| execution.id == execution_id)
-                            .map(|execution| execution.text.clone()),
-                        _ => None,
-                    });
-                let Some(text) = text else {
-                    return self.fail(Error::new(
-                        ErrorKind::Internal,
-                        "Redis Workbench 记录不存在",
-                    ));
-                };
-                self.execute_redis_workbench(tab_id, text, false)
-            }
             AppCommand::DeleteRedisWorkbenchRecord { tab_id, execution_id } => {
                 let Some(tab) = self.find_tab_mut(tab_id) else {
                     return self.fail(Error::new(
@@ -3368,95 +3424,42 @@ impl AppController {
         }
     }
 
-    /// Redis Workbench 共享执行入口：以给定命令文本发起执行。
-    ///
-    /// `clear_input` 为 true 时（顶部 Run），点击后立刻清空输入框并把
-    /// 「未执行改动」指纹置为空文本指纹，避免空输入仍被标脏；为 false 时
-    /// （记录重跑）不打扰当前草稿输入。
-    fn execute_redis_workbench(&mut self, tab_id: TabId, text: String, clear_input: bool) -> AppEvent {
-        let Some(tab) = self.find_tab(tab_id) else {
-            return self.fail(Error::new(ErrorKind::Internal, "Redis Workbench 标签页不存在"));
-        };
+    /// 解析本次 Redis Workbench 要执行的命令文本：给了 `execution_id` 取结果区那条记录，
+    /// 否则取顶部草稿；标签页不存在或不是 Workbench 时返回 None。
+    fn redis_workbench_text(&self, tab_id: TabId, execution_id: Option<u64>) -> Option<String> {
+        let tab = self.find_tab(tab_id)?;
         let TabKind::RedisWorkbench(workbench) = &tab.kind else {
-            return self.fail(Error::new(ErrorKind::Internal, "Redis Workbench 标签页不存在"));
+            return None;
         };
-        let request = CommandWorkbenchRequest {
-            target: CommandExecutionTarget::Redis {
+        match execution_id {
+            Some(execution_id) => workbench
+                .executions
+                .iter()
+                .find(|execution| execution.id == execution_id)
+                .map(|execution| execution.text.clone()),
+            None => Some(workbench.text.clone()),
+        }
+    }
+
+    /// 解析一次执行的目标作用域与命令文本。
+    ///
+    /// 文本由本函数按 `execution_id` 解析、不接 UI 传值：`RunRedisWorkbench` 跑在后台线程的
+    /// 控制器副本上，而 UI 在派发前已把草稿清空，只有副本自己知道本次该执行什么。
+    fn redis_workbench_run_scope(
+        &self,
+        tab_id: TabId,
+        execution_id: Option<u64>,
+    ) -> Option<(CommandExecutionTarget, String)> {
+        let tab = self.find_tab(tab_id)?;
+        let target = match &tab.kind {
+            TabKind::RedisWorkbench(workbench) => CommandExecutionTarget::Redis {
                 connection_id: workbench.connection_id,
                 database: workbench.database,
             },
-            text: text.clone(),
-            run_mode: CommandRunMode::Text,
-            results_mode: CommandResultsMode::Default,
-            batch_size: 0,
-            continue_on_error: true,
-            source: CommandExecutionSource::Workbench,
+            _ => return None,
         };
-        if let Some(tab) = self.find_tab_mut(tab_id)
-            && let TabKind::RedisWorkbench(workbench) = &mut tab.kind
-        {
-            workbench.running = true;
-            workbench.error = None;
-            if clear_input {
-                workbench.text.clear();
-                workbench.saved_fingerprint = Some(QueryFingerprint::for_text(""));
-                tab.dirty = workbench.has_unsaved_text();
-            }
-        }
-        // 执行单元 = 单条命令：把输入文本交给批量执行入口，得到
-        // 「每条命令一个 `CommandWorkbenchExecution`」的列表，逐条追加到
-        // 结果区，各自独立占一张卡片（独立 Run / Delete / 时间 / 耗时）。
-        match self.execute_command_workbench_commands(&request) {
-            Ok(executions) => {
-                // 先回写 tab 状态，再统一记录历史（避免与 tab 的可变借用冲突）。
-                let mut history_entries = Vec::new();
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::RedisWorkbench(workbench) = &mut tab.kind
-                {
-                    workbench.running = false;
-                    workbench.error = None;
-                    for mut execution in executions {
-                        // 为 connector 产出的每条 execution 分配自增 id，
-                        // 供结果区的单条 Run / Delete 精确定位。
-                        execution.id = workbench.next_execution_id;
-                        workbench.next_execution_id += 1;
-                        history_entries.push(execution.clone());
-                        workbench.executions.push(execution);
-                    }
-                    // 顶部输入框可能已被 Run 清空；脏标记基于「未执行改动」实时更新。
-                    tab.dirty = workbench.has_unsaved_text();
-                }
-                // 每条命令进入历史体系（持久化由桌面层在 state 变化时落盘）。
-                for execution in &history_entries {
-                    self.record_redis_workbench_history_execution(execution);
-                }
-                // 结果区由 state 驱动渲染：返回 TabActivated 触发该标签页 UI 重绘，
-                // 桌面端 dispatch 包装会统一 cx.notify()。
-                AppEvent::TabActivated(tab_id)
-            }
-            Err(error) => {
-                let user_error = UserFacingError::from(error);
-                // 失败也要入历史（text 在请求参数中仍可用，失败时输入框已被清空）。
-                let mut failed_scope = None;
-                if let Some(tab) = self.find_tab_mut(tab_id)
-                    && let TabKind::RedisWorkbench(workbench) = &mut tab.kind
-                {
-                    workbench.running = false;
-                    workbench.error = Some(user_error.clone());
-                    failed_scope = Some((workbench.connection_id, workbench.database));
-                }
-                if let Some((connection_id, database)) = failed_scope {
-                    self.record_redis_workbench_history_failure(
-                        connection_id,
-                        database,
-                        &text,
-                        &user_error.message,
-                    );
-                }
-                self.state.last_error = Some(user_error.clone());
-                AppEvent::Failed(user_error)
-            }
-        }
+        let text = self.redis_workbench_text(tab_id, execution_id)?;
+        Some((target, text))
     }
 
     fn apply_create_table(&self, tab_id: TabId) -> fluxdb_core::Result<()> {

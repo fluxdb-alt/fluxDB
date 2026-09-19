@@ -1614,7 +1614,8 @@ fn run_pg_native_psql(
         cmd.env(key, value);
     }
     prepare_tree_kill_command(&mut cmd);
-    let mut child = cmd
+    // Windows 下隐藏子进程控制台窗口（SQL 文件执行调用 psql 时避免弹黑框）。
+    let mut child = fluxdb_core::no_console(cmd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

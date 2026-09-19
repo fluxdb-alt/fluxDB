@@ -5,6 +5,30 @@ impl Render for NavicatMain {
         let app_state = self.controller.state();
         let state = render_state_snapshot(app_state);
         let colors = ui_colors_from_theme(self.theme_mode, cx);
+        // 恢复弹框「现有库」目标下拉：目标连接切换时重载该连接下的库（渲染期消费，靠 target_db_loaded_for 防抖）。
+        let restore_db_reload = self.restore_modal.as_ref().and_then(|modal| {
+            let existing_mode = modal.kind != DatabaseKind::Sqlite
+                && modal
+                    .mode
+                    .read(cx)
+                    .selected_value()
+                    .is_some_and(|v| v == "现有库");
+            if !existing_mode {
+                return None;
+            }
+            let cid = restore_selected_connection_id(modal, cx)?;
+            (modal.target_db_loaded_for != Some(cid)).then_some((modal.target_db.clone(), cid))
+        });
+        if let Some((db, cid)) = restore_db_reload {
+            self.load_restore_target_databases(db, window, cx);
+            if let Some(m) = &mut self.restore_modal {
+                m.target_db_loaded_for = Some(cid);
+            }
+        }
+        // 对象选择页「进入即探测」：现有库模式下后台检查目标存在性/备份内容，回填动作候选。
+        if self.restore_modal.is_some() {
+            self.sync_restore_probe(window, cx);
+        }
         let show_status_bar = if self
             .controller
             .state()
@@ -360,6 +384,7 @@ impl Render for NavicatMain {
                 this.child(database_backup_modal(
                     form,
                     self.backup_file_name_input.clone(),
+                    self.backup_target_dir_input.clone(),
                     self.backup_note_input.clone(),
                     self.backup_object_search_input.clone(),
                     &self.backup_objects_scroll,
@@ -370,9 +395,17 @@ impl Render for NavicatMain {
                     cx,
                 ))
             })
+            // 恢复数据库弹框：与备份弹框同款自绘模态。
+            .when_some(self.restore_modal.clone(), |this, modal| {
+                this.child(database_restore_modal(&modal, colors, cx))
+            })
             // 备份 tab：「备份表」查看弹框。
             .when_some(self.backup_tables_modal.clone(), |this, modal| {
                 this.child(backup_tables_modal(modal, colors, cx))
+            })
+            // 备份 tab：「恢复记录」查看弹框。
+            .when_some(self.restore_records_modal.clone(), |this, modal| {
+                this.child(restore_records_modal(modal, colors, cx))
             })
             // 备份 tab：备注编辑弹框（仅当弹框打开时挂载）。
             .when_some(self.backup_note_modal_path.clone(), |this, _| {

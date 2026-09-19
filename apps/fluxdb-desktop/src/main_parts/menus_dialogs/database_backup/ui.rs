@@ -16,6 +16,14 @@ impl NavicatMain {
         }
     }
 
+    /// 对象选择：切换「整库备份（全部对象）」与「按对象清单备份」。
+    fn set_backup_scope_all(&mut self, value: bool, cx: &mut Context<Self>) {
+        if let Some(form) = &mut self.pending_backup_modal {
+            form.scope_all = value;
+            cx.notify();
+        }
+    }
+
     fn set_backup_lock_tables(&mut self, value: bool, cx: &mut Context<Self>) {
         if let Some(form) = &mut self.pending_backup_modal {
             form.lock_tables = value;
@@ -105,6 +113,7 @@ impl NavicatMain {
 fn database_backup_modal(
     form: BackupForm,
     file_name_input: Entity<InputState>,
+    target_dir_input: Entity<InputState>,
     note_input: Entity<InputState>,
     object_search_input: Entity<InputState>,
     objects_scroll: &VirtualListScrollHandle,
@@ -114,14 +123,18 @@ fn database_backup_modal(
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
-    // 至少勾选一个对象（任一表或包含视图）才允许「开始备份」；备份目录统一取自设置。
-    let can_start = !form.selected_tables.is_empty() || form.include_views;
+    // 「开始备份」可用条件：SQLite 整库快照、整库备份、或已选任一对象（表或包含视图）。
+    let can_start = form.database_kind == DatabaseKind::Sqlite
+        || form.scope_all
+        || !form.selected_tables.is_empty()
+        || form.include_views;
     let panel = database_backup_modal_panel(colors, cx)
         .child(database_backup_modal_header(colors, cx))
         .child(database_backup_tabs(form.tab, colors, cx))
         .child(database_backup_modal_body(
             &form,
             file_name_input,
+            target_dir_input,
             note_input,
             object_search_input,
             objects_scroll,
@@ -296,6 +309,7 @@ fn database_backup_tabs(
 fn database_backup_modal_body(
     form: &BackupForm,
     file_name_input: Entity<InputState>,
+    target_dir_input: Entity<InputState>,
     note_input: Entity<InputState>,
     object_search_input: Entity<InputState>,
     objects_scroll: &VirtualListScrollHandle,
@@ -303,10 +317,13 @@ fn database_backup_modal_body(
     mysql_client_missing: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-) -> Div {
+) -> impl IntoElement {
     div()
         .flex_1()
         .min_h(px(0.))
+        // 常规页增加备份目录输入后，内容可能超过固定高度的弹框；
+        // 只滚动中间内容区，避免内容覆盖固定在底部的操作栏。
+        .overflow_y_scrollbar()
         .p_5()
         .flex()
         .flex_col()
@@ -327,9 +344,14 @@ fn database_backup_modal_body(
             ))
         })
         .child(match form.tab {
-            BackupTab::General => {
-                database_backup_general_body(form, file_name_input, note_input, colors, cx)
-            }
+            BackupTab::General => database_backup_general_body(
+                form,
+                target_dir_input,
+                file_name_input,
+                note_input,
+                colors,
+                cx,
+            ),
             BackupTab::Objects => {
                 database_backup_objects_body(form, object_search_input, objects_scroll, colors, cx)
             }
@@ -340,6 +362,7 @@ fn database_backup_modal_body(
 
 fn database_backup_general_body(
     form: &BackupForm,
+    target_dir_input: Entity<InputState>,
     file_name_input: Entity<InputState>,
     note_input: Entity<InputState>,
     colors: UiColors,
@@ -356,21 +379,82 @@ fn database_backup_general_body(
             form.database.clone().unwrap_or_default(),
             colors,
         ))
+        .child(database_backup_dir_row(target_dir_input, colors, cx))
         .child(database_backup_mode_info(colors))
         .child(database_backup_file_name_row(file_name_input, colors))
+        .child(div().text_size(px(12.)).text_color(colors.muted).child(format!("输出文件：{}{}", resolve_backup_file_name(form), if form.database_kind == DatabaseKind::Sqlite { "（完整数据库快照，包含全部对象）" } else { "" })))
         .child(database_backup_note_row(note_input, colors))
         .child(div().flex_1())
+}
+
+/// 备份目录输入行：默认填充设置 backup_dir，可在此更换本次备份的输出目录。
+fn database_backup_dir_row(
+    input: Entity<InputState>,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .items_center()
+        .gap_3()
+        .child(div().w(px(120.)).flex_none().child(sql_file_section_label(
+            "备份目录",
+            colors,
+        )))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .h(px(34.))
+                        .rounded(colors.radius)
+                        .border_1()
+                        .border_color(colors.border)
+                        .bg(colors.input_bg)
+                        .overflow_hidden()
+                        .child(
+                            Input::new(&input)
+                                .appearance(false)
+                                .focus_bordered(false)
+                                .w_full()
+                                .h_full()
+                                .text_size(px(13.)),
+                        ),
+                )
+                .child(
+                    Button::new("backup-select-target-dir")
+                        .label("选择")
+                        .small()
+                        .rounded(colors.radius)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.choose_backup_target_dir(window, cx);
+                        })),
+                ),
+        )
 }
 
 /// 常规页「备注」输入行：随备份成功写入 {文件}.sql.meta.json，可在备份 tab 内继续编辑。
 fn database_backup_note_row(input: Entity<InputState>, colors: UiColors) -> Div {
     div()
+        .w_full()
         .flex()
-        .flex_col()
-        .gap_2()
-        .child(sql_file_section_label("备注（可空）", colors))
+        .items_center()
+        .gap_3()
+        .child(div().w(px(120.)).flex_none().child(sql_file_section_label(
+            "备注（可空）",
+            colors,
+        )))
         .child(
             div()
+                .flex_1()
+                .min_w(px(0.))
                 .h(px(34.))
                 .rounded(colors.radius)
                 .border_1()
@@ -385,12 +469,6 @@ fn database_backup_note_row(input: Entity<InputState>, colors: UiColors) -> Div 
                         .h_full()
                         .text_size(px(13.)),
                 ),
-        )
-        .child(
-            div()
-                .text_size(px(11.))
-                .text_color(colors.muted)
-                .child("备注将保存在备份文件的元数据中，可在「备份」列表 tab 的备注列查看与编辑。"),
         )
 }
 
@@ -449,26 +527,38 @@ fn database_backup_client_banner(
 
 fn database_backup_mode_info(colors: UiColors) -> Div {
     div()
+        .w_full()
         .flex()
-        .flex_col()
-        .gap_2()
-        .child(sql_file_section_label("备份方式", colors))
+        .items_center()
+        .gap_3()
+        .child(div().w(px(120.)).flex_none().child(sql_file_section_label(
+            "备份方式",
+            colors,
+        )))
         .child(
             div()
+                .flex_1()
+                .min_w(px(0.))
                 .text_size(px(13.))
                 .text_color(colors.text)
-                .child("自动选择（按数据库类型与已装工具自动判断：优先原生，否则逻辑备份）"),
+                .child("自动选择"),
         )
 }
 
 fn database_backup_file_name_row(input: Entity<InputState>, colors: UiColors) -> Div {
     div()
+        .w_full()
         .flex()
-        .flex_col()
-        .gap_2()
-        .child(sql_file_section_label("备份文件名（模板）", colors))
+        .items_center()
+        .gap_3()
+        .child(div().w(px(120.)).flex_none().child(sql_file_section_label(
+            "备份文件名（模板）",
+            colors,
+        )))
         .child(
             div()
+                .flex_1()
+                .min_w(px(0.))
                 .h(px(34.))
                 .rounded(colors.radius)
                 .border_1()
@@ -483,11 +573,6 @@ fn database_backup_file_name_row(input: Entity<InputState>, colors: UiColors) ->
                         .h_full()
                         .text_size(px(13.)),
                 ),
-        )
-        .child(
-            div().text_size(px(11.)).text_color(colors.muted).child(
-                "留空使用默认文件名（库名_时间戳.sql）；支持 {timestamp} / {database} 占位。",
-            ),
         )
 }
 
@@ -704,8 +789,16 @@ fn database_backup_task_card(
                         div()
                             .w_full()
                             .min_w(px(0.))
+                            // 文件名是卡片的首行，必须保留完整的行盒高度。
+                            // 在 flex 列中如果允许收缩，GPUI 会把文本元素压到小于字体实际高度，
+                            // overflow_hidden 随后会裁掉文字的下半部分（完成状态时最明显）。
+                            .h(px(22.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
                             .overflow_hidden()
                             .text_ellipsis()
+                            .whitespace_nowrap()
                             .text_size(px(13.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(filename),
@@ -716,6 +809,7 @@ fn database_backup_task_card(
                     div()
                         .w_full()
                         .min_w(px(0.))
+                        .flex_none()
                         .max_h(px(120.))
                         .overflow_y_scrollbar()
                         .child(
@@ -733,6 +827,7 @@ fn database_backup_task_card(
                 )
                 .child(
                     div()
+                        .flex_none()
                         .flex()
                         .items_center()
                         .gap_2()
