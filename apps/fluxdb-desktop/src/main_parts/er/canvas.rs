@@ -80,7 +80,7 @@ fn er_diagram_content(
         .flex_col()
         .bg(colors.content_bg)
         .text_color(colors.text)
-        .child(er_toolbar(er, colors))
+        .child(er_toolbar(tab_id, er, this, colors, cx))
         .child(
             if let Some(error) = this.er_errors.get(&tab_id) {
                 er_error_state(tab_id, er, error.clone(), colors, cx).into_any_element()
@@ -120,17 +120,19 @@ fn ensure_er_graph_loaded(
     let database = er.database.clone();
     let schema = er.schema.clone();
     let center_table = er.center_table.clone();
+    // 展开深度（跳数）按 tab 隔离，默认 1 跳；切深度后清缓存重载。
+    let depth = this.er_depths.get(&tab_id).copied().unwrap_or(1);
     let task = cx.spawn(async move |view, cx| {
         let result = cx
             .background_spawn(async move {
                 match &center_table {
-                    // 当前表关联 ER：以该表为中心 1 跳邻域。
+                    // 当前表关联 ER：以该表为中心 depth 跳邻域。
                     Some(center) => fluxdb_app::load_er_neighborhood_in_background(
                         &config,
                         Some(&database),
                         schema.as_deref(),
                         center,
-                        1,
+                        depth,
                     ),
                     None => fluxdb_app::load_er_graph_in_background(
                         &config,
@@ -158,14 +160,21 @@ fn ensure_er_graph_loaded(
     this.er_load_tasks.insert(tab_id, task);
 }
 
-/// 顶部工具栏：标题 + 刷新（清除缓存并重新加载）。
-fn er_toolbar(er: &ErDiagramState, colors: UiColors) -> Div {
-    div()
+/// 顶部工具栏：标题 + 当前表 ER 的展开深度切换。
+fn er_toolbar(
+    tab_id: TabId,
+    er: &ErDiagramState,
+    this: &mut NavicatMain,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let current_depth = this.er_depths.get(&tab_id).copied().unwrap_or(1);
+    let mut base = div()
         .h(px(36.))
         .flex()
         .items_center()
         .px(px(12.))
-        .gap(px(8.))
+        .gap(px(12.))
         .border_b_1()
         .border_color(colors.border_soft)
         .child(
@@ -174,10 +183,62 @@ fn er_toolbar(er: &ErDiagramState, colors: UiColors) -> Div {
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(colors.text)
                 .child(match &er.center_table {
-                    Some(table) => format!("{table} 的关联 ER 关系图（1 跳）"),
+                    Some(table) => format!("{table} 的关联 ER 关系图（{current_depth} 跳）"),
                     None => format!("{} 的 ER 关系图", er.database),
                 }),
-        )
+        );
+
+    // 当前表关联 ER 才支持逐层展开：1/2/3 跳切换，切换即清缓存重载。
+    if er.center_table.is_some() {
+        base = base.child(er_depth_selector(tab_id, current_depth, colors, cx));
+    }
+    base
+}
+
+/// 展开深度选择按钮组：点选后清该 tab 图缓存并重载 neighborhood。
+fn er_depth_selector(
+    tab_id: TabId,
+    current: u8,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .child(div().text_size(px(12.)).text_color(colors.muted).child("展开深度"))
+        .children((1..=3).map(|depth| {
+            let active = depth == current;
+            div()
+                .h(px(24.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(colors.radius)
+                .border_1()
+                .border_color(if active { colors.text } else { colors.border })
+                .bg(if active { colors.panel_alt } else { colors.panel_bg })
+                .text_size(px(12.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(if active { colors.text } else { colors.muted })
+                .cursor_pointer()
+                .hover(|style| style.bg(colors.hover))
+                .child(format!("{depth} 跳"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        if this.er_depths.get(&tab_id).copied().unwrap_or(1) != depth {
+                            // 切深度：清图缓存 + 错误，触发 ensure_er_graph_loaded 以新深度重载。
+                            this.er_depths.insert(tab_id, depth);
+                            this.er_graphs.remove(&tab_id);
+                            this.er_errors.remove(&tab_id);
+                            this.er_load_tasks.remove(&tab_id);
+                            cx.notify();
+                        }
+                    }),
+                )
+        }))
 }
 
 /// 加载中状态。

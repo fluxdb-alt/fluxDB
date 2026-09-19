@@ -616,6 +616,9 @@ struct NavicatMain {
     er_errors: BTreeMap<TabId, String>,
     // 进行中的 ER 加载任务；存在即「请求中」，避免渲染重复触发加载。
     er_load_tasks: BTreeMap<TabId, Task<()>>,
+    // 当前表关联 ER 的展开深度（跳数）：按 tab 隔离，默认 1。
+    // 切换深度会清图缓存并重新加载 neighborhood（不在 tab 去重键内，同一表一个 tab）。
+    er_depths: BTreeMap<TabId, u8>,
     // Redis 连接级概览（版本/内存/CPU）的定期刷新任务与进行中的单次拉取任务
     redis_overview_refresh_task: Option<Task<()>>,
     redis_overview_refresh_tasks: BTreeMap<u64, Task<()>>,

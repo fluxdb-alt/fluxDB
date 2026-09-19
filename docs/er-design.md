@@ -777,7 +777,8 @@ ChartDB/drawDB 的许可证与嵌入方式必须独立评估；本方案默认�
 - [ ] **超大库分组/概览视图**：设计文档 §4.1——>200 表按 schema/用户分组/连通分量概览，逐组进入；截断是临时降级，非最终形态。
 - [ ] **平移/缩放/视口裁剪**（design §2.3）：ErViewportController 变换 + 只渲染视口内节点与边；解决大库探索与仅显示 300 的局限。
 - [ ] **渲染缓存**：布局与 path 缓存，避免每帧重算；节点拖动/增量布局（design §2.3）。
-- [x] **当前表局部 ER / 邻域视图（1 跳）**（design §3.2、D5）：表右键「关联 ER」打开 `表名 · 关联 ER` 标签，以该表为中心 1 跳绘制邻域（入向/出向外键都含）。`ErDiagramState.center_table` + `load_er_neighborhood_in_background`。**逐层展开（节点上再展开 2 跳/更深）留待后续**。
+- [x] **当前表局部 ER / 邻域视图（1 跳）**（design §3.2、D5）：表右键「关联 ER」打开 `表名 · 关联 ER` 标签，以该表为中心逐层绘制邻域（入向/出向外键都含）。`ErDiagramState.center_table` + `load_er_neighborhood_in_background`。
+- [x] **逐层展开（深度 1/2/3 跳）**：当前表关联 ER 工具栏「展开深度」切换，`er_depths` 按 tab 隔离；切深度清缓存重载 neighborhood。深链测试库 er_chain 实测 1→2→3 跳节点数 3→4→5 递增。单节点式展开（点某节点再扩）仍留后续。
 
 ### 功能后续（依赖 D1-D9 或独立）
 - [ ] **D1-D9 数据结构确认**：逻辑关系模型（ErRelationship/required_filters/usage 等）确认后才创建 §6 Rust 类型与命令。

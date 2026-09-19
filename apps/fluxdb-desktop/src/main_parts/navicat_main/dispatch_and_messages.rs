@@ -762,6 +762,7 @@ impl NavicatMain {
                 self.er_graphs.remove(tab_id);
                 self.er_errors.remove(tab_id);
                 self.er_load_tasks.remove(tab_id);
+                self.er_depths.remove(tab_id);
                 // Redis Key 列表展示模式 / 展开态 / 叶子选中 / hover 均为 tab 级状态，随 tab 关闭回收。
                 self.redis_key_list_modes.remove(tab_id);
                 self.redis_key_list_expanded.remove(tab_id);
