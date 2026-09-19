@@ -2342,6 +2342,7 @@ fn main() {
                             er_viewports: BTreeMap::new(),
                             er_scenes: BTreeMap::new(),
                             er_viewport_drag: None,
+                            er_canvas_sizes: BTreeMap::new(),
                             redis_key_list_hovered_tab: None,
                             redis_workbench_hovered_record: None,
                             redis_stream_table_state,

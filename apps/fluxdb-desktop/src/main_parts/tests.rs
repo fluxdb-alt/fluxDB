@@ -2,73 +2,499 @@
 mod tests {
     use super::*;
 
-    // ER 画布固定栅格布局（er/canvas.rs::er_layout）的坐标有效性：
-    // 保证节点排布有限、不重叠列、连线锚点落在节点边缘，绘制期无 NaN/越界。
+    // —— ER 画布二维虚拟化（er/canvas.rs）纯逻辑验证 ——
+
+    /// 构造合成表节点：`columns` 个字段。
+    fn er_table(name: &str, columns: usize) -> fluxdb_core::ErTableNode {
+        fluxdb_core::ErTableNode {
+            name: name.to_string(),
+            comment: None,
+            columns: (0..columns)
+                .map(|i| fluxdb_core::ErColumn {
+                    name: format!("c{i}"),
+                    type_name: None,
+                    primary_key: i == 0,
+                    nullable: false,
+                })
+                .collect(),
+        }
+    }
+
     #[test]
-    fn er_layout_produces_finite_non_overlapping_positions() {
-        let graph = fluxdb_core::ErGraphData {
-            tables: vec![
-                fluxdb_core::ErTableNode {
-                    name: "customers".into(),
-                    comment: None,
-                    columns: vec![
-                        fluxdb_core::ErColumn { name: "id".into(), type_name: Some("INTEGER".into()), primary_key: true, nullable: false },
-                        fluxdb_core::ErColumn { name: "name".into(), type_name: Some("TEXT".into()), primary_key: false, nullable: false },
-                    ],
-                },
-                fluxdb_core::ErTableNode {
-                    name: "products".into(),
-                    comment: None,
-                    columns: vec![
-                        fluxdb_core::ErColumn { name: "id".into(), type_name: Some("INTEGER".into()), primary_key: true, nullable: false },
-                    ],
-                },
-                fluxdb_core::ErTableNode {
-                    name: "orders".into(),
-                    comment: None,
-                    columns: vec![
-                        fluxdb_core::ErColumn { name: "id".into(), type_name: Some("INTEGER".into()), primary_key: true, nullable: false },
-                        fluxdb_core::ErColumn { name: "customer_id".into(), type_name: Some("INTEGER".into()), primary_key: false, nullable: false },
-                        fluxdb_core::ErColumn { name: "product_id".into(), type_name: Some("INTEGER".into()), primary_key: false, nullable: false },
-                    ],
-                },
-            ],
-            edges: vec![
-                fluxdb_core::ErForeignKeyEdge { name: "fk1".into(), from_table: "orders".into(), from_column: "customer_id".into(), to_table: "customers".into(), to_column: "id".into() },
-                fluxdb_core::ErForeignKeyEdge { name: "fk2".into(), from_table: "orders".into(), from_column: "product_id".into(), to_table: "products".into(), to_column: "id".into() },
-            ],
+    fn er_viewport_visible_bounds_follow_pan() {
+        // pan=0：可见世界范围 = 画布尺寸外扩 overscan。
+        let vp = ErViewport::default();
+        let (x0, y0, x1, y1) = vp.visible_world_bounds(800., 600.);
+        assert_eq!((x0, y0), (-OVERSCAN, -OVERSCAN));
+        assert_eq!((x1, y1), (800. + OVERSCAN, 600. + OVERSCAN));
+
+        // 负方向平移：可见世界范围整体随 pan 反向移动。
+        let vp = ErViewport {
+            pan_x: -300.,
+            pan_y: -200.,
         };
+        let (x0, y0, x1, y1) = vp.visible_world_bounds(800., 600.);
+        assert_eq!((x0, y0), (300. - OVERSCAN, 200. - OVERSCAN));
+        assert_eq!((x1, y1), (1100. + OVERSCAN, 800. + OVERSCAN));
+    }
 
-        let (content_w, content_h, layouts) = er_layout(&graph);
+    #[test]
+    fn er_layout_covers_all_tables_with_row_index() {
+        // 空图：无节点无行。
+        let empty = fluxdb_core::ErGraphData::default();
+        let (layouts, rows) = er_layout(&empty);
+        assert!(layouts.is_empty() && rows.is_empty());
 
-        // 排序后的坐标必须全部有限（无 NaN/Inf）。
-        for layout in &layouts {
-            assert!(layout.x.is_finite() && layout.y.is_finite());
-            assert!(content_w > 0. && content_h > 0.);
+        // 7 表、列数不同（第 6 表 60 列超高）：全部有位置，行索引覆盖所有节点。
+        let mut tables = (0..7).map(|i| er_table(&format!("t{i}"), 1 + i)).collect::<Vec<_>>();
+        tables[5].columns = (0..60)
+            .map(|i| fluxdb_core::ErColumn {
+                name: format!("c{i}"),
+                type_name: None,
+                primary_key: i == 0,
+                nullable: false,
+            })
+            .collect();
+        let graph = fluxdb_core::ErGraphData { tables, edges: vec![] };
+        let (layouts, rows) = er_layout(&graph);
+        assert_eq!(layouts.len(), 7, "全部表都有布局位置（无截断）");
+        assert_eq!(
+            rows.iter().map(|r| r.idx_end - r.idx_start).sum::<usize>(),
+            7,
+            "行索引应覆盖全部节点"
+        );
+        // 行间按 y 有序且不重叠。
+        for pair in rows.windows(2) {
+            assert!(pair[0].y_end <= pair[1].y_start + f32::EPSILON);
         }
+        // 超高节点所在行 y 范围反映其真实高度。
+        let giant_row = rows.iter().find(|r| r.idx_start == 5).expect("第 6 表所在行");
+        assert!(giant_row.y_end - giant_row.y_start > NODE_HEADER + 50. * NODE_ROW);
+    }
 
-        // 表数与节点数一致，且名字保留。
-        assert_eq!(layouts.len(), 3);
-        assert!(layouts.iter().any(|l| l.name == "orders"));
+    /// 用「列数」构造场景的辅助：`columns[i]` 决定第 i 表列数；另可加自定义边。
+    fn scene_with(tables: Vec<(String, usize)>, edges: Vec<fluxdb_core::ErForeignKeyEdge>) -> ErScene {
+        let graph = fluxdb_core::ErGraphData {
+            tables: tables
+                .into_iter()
+                .map(|(name, cols)| er_table(&name, cols))
+                .collect(),
+            edges,
+        };
+        build_er_scene(&graph)
+    }
 
-        // 高度随列数增长（orders 3 列 > customers 2 列 > products 1 列）。
-        let orders_h = layouts.iter().find(|l| l.name == "orders").unwrap();
-        let products_h = layouts.iter().find(|l| l.name == "products").unwrap();
-        assert!(header_h(orders_h) > header_h(products_h));
+    #[test]
+    fn er_visible_nodes_and_edges_cull_to_viewport() {
+        // 100 表（每表 2 列），视口只能容纳少数行。
+        let tables = (0..100).map(|i| er_table(&format!("t{i:03}"), 2)).collect::<Vec<_>>();
+        let graph = fluxdb_core::ErGraphData { tables, edges: vec![] };
+        let scene = build_er_scene(&graph);
+        let vp = ErViewport::default();
+        let (wx0, wy0, wx1, wy1) = vp.visible_world_bounds(800., 600.);
+        let visible = scene.visible_nodes(wx0, wy0, wx1, wy1);
+        assert!(!visible.is_empty());
+        assert!(visible.len() < 50, "可见节点应有界：{}", visible.len());
 
-        // 同列（第一行）节点纵向起点一致（y 相同），横向错开（x 递增且 >= 宽度）。
-        let mut first_row_y: Option<f32> = None;
-        let mut prev_x: Option<f32> = None;
-        for layout in layouts.iter().filter(|l| l.y == 0.0) {
-            match first_row_y {
-                None => first_row_y = Some(layout.y),
-                Some(y) => assert_eq!(y, layout.y, "同列节点 y 应相同"),
-            }
-            if let Some(px) = prev_x {
-                assert!(layout.x > px, "同列节点 x 应单调递增");
-            }
-            prev_x = Some(layout.x);
+        // 平移约 10 行（共 20 行）：可见集合变化且非空——后面的表真实可达。
+        let row_pitch = NODE_HEADER + 2. * NODE_ROW + 8.0 + NODE_GAP_Y;
+        let far_pan = ErViewport {
+            pan_x: 0.,
+            pan_y: -(10. * row_pitch),
+        };
+        let (_, fy0, _, fy1) = far_pan.visible_world_bounds(800., 600.);
+        let far_visible = scene.visible_nodes(wx0, fy0, wx1, fy1);
+        assert!(!far_visible.is_empty(), "拖到远处后仍有表可达");
+        assert!(
+            far_visible.iter().all(|i| !visible.contains(i)),
+            "远处可见集合应与初始集合不同"
+        );
+
+        // 完全拖出图外：可见为空，不 panic（负/远视口）。
+        let outside = ErViewport {
+            pan_x: 0.,
+            pan_y: -(scene.layouts.last().unwrap().y + 10_000.),
+        };
+        let (_, oy0, _, oy1) = outside.visible_world_bounds(800., 600.);
+        assert!(scene.visible_nodes(wx0, oy0, wx1, oy1).is_empty());
+    }
+
+    #[test]
+    fn er_virtualization_name_distribution_neutral() {
+        // 1843 表、其中 1730 张以 S 开头：名称分布不影响可见集合规模（无分组/无截断）。
+        let mut tables = Vec::with_capacity(1843);
+        for i in 0..1730 {
+            tables.push(er_table(&format!("sales_{i:05}"), 3));
         }
+        for i in 0..113 {
+            tables.push(er_table(&format!("dim_{i:04}"), 2));
+        }
+        let scene = build_er_scene(&fluxdb_core::ErGraphData {
+            tables,
+            edges: vec![],
+        });
+        assert_eq!(scene.layouts.len(), 1843, "全部表都有位置（无截断/无分组）");
+
+        let vp = ErViewport::default();
+        let (wx0, wy0, wx1, wy1) = vp.visible_world_bounds(1200., 800.);
+        let visible = scene.visible_nodes(wx0, wy0, wx1, wy1);
+        // 视口 1200x800 + overscan 下可见节点有界，与 1730 张 S 前缀无关。
+        assert!(visible.len() > 0 && visible.len() < 200, "名称分布不应影响可见规模：{}", visible.len());
+    }
+
+    #[test]
+    fn er_full_intersect_keeps_tall_but_drops_same_row_short() {
+        // 同一行：t0 超高（80 列），t1..t4 矮（2 列）。行高被 t0 拉高到 ~1800px，
+        // 矮表实际高度仅 ~82px、贴行顶。视口只覆盖 t0 的下半部分（y ∈ [0.6*H, H]）：
+        // t0 自身保留，同排已在视口上方离开的矮表必须排除（不能按整行最大高度误挂载）。
+        let scene = scene_with(
+            vec![
+                ("t0".to_string(), 80),
+                ("t1".to_string(), 2),
+                ("t2".to_string(), 2),
+                ("t3".to_string(), 2),
+                ("t4".to_string(), 2),
+            ],
+            vec![],
+        );
+        let tall = &scene.layouts[0];
+        let h = tall.height;
+        assert!(h > 1000.0, "超高表行高应远大于矮表");
+        // 视口横向仅覆盖 t0 该列 [x, x+NODE_WIDTH]，纵向覆盖 t0 下半部分。
+        let visible = scene.visible_nodes(tall.x, tall.y + h * 0.6, tall.x + NODE_WIDTH, tall.y + h);
+        assert_eq!(visible, vec![0], "超高表保留、同排离开视口的矮表排除：{visible:?}");
+    }
+
+    #[test]
+    fn er_node_intersect_touching_and_negative_pan() {
+        // t0 高 80 列：顶/底与视口边界正好相切 → 算相交。
+        let scene = scene_with(vec![("t0".to_string(), 80)], vec![]);
+        let l = &scene.layouts[0];
+        // 视口顶边恰好压在 t0 顶边（含 overscan 外）；横向覆盖。
+        let bottom_half: Vec<usize> = scene.visible_nodes(l.x, l.y + l.height - 1.0, l.x + NODE_WIDTH, l.y + l.height + 1.0);
+        assert_eq!(bottom_half, vec![0]);
+        // 负平移：视口世界 y 为负区，不在任何节点 → 空。
+        let neg: Vec<usize> = scene.visible_nodes(l.x, -5000.0, l.x + NODE_WIDTH, -4000.0);
+        assert!(neg.is_empty());
+    }
+
+    #[test]
+    fn er_edge_exact_intersect_cases() {
+        // 直接验证精确线段相交函数（不经场景索引，聚焦几何）。
+        // 各条：两端都在矩形外、线段穿过矩形。
+        let e = ErEdge { ax: -100., ay: -100., bx: 200., by: 200. };
+        assert!(er_edge_intersects_rect(&e, 0., 0., 100., 100.), "两端屏外但穿过视口的斜线应相交");
+
+        // bbox 与矩形相交，但斜线本身不穿过：反对角线 (左上角→右上角) 只经过 y∈[60,100]，
+        // 查询矩形 [0,40]² 整块在其下方，bBox 虽有重叠但线段从未进入。
+        let e = ErEdge { ax: 0., ay: 100., bx: 100., by: 0. };
+        assert!(!er_edge_intersects_rect(&e, 0., 0., 40., 40.), "bbox 相交但斜线未穿视口应排除");
+
+        // 水平线穿过、水平线在矩形外。
+        assert!(er_edge_intersects_rect(&ErEdge { ax: -10., ay: 50., bx: 110., by: 50. }, 0., 0., 100., 100.));
+        assert!(!er_edge_intersects_rect(&ErEdge { ax: -10., ay: 150., bx: 110., by: 150. }, 0., 0., 100., 100.));
+
+        // 垂直线穿过、垂直线在矩形外。
+        assert!(er_edge_intersects_rect(&ErEdge { ax: 50., ay: -10., bx: 50., by: 110. }, 0., 0., 100., 100.));
+        assert!(!er_edge_intersects_rect(&ErEdge { ax: 150., ay: -10., bx: 150., by: 110. }, 0., 0., 100., 100.));
+
+        // 零长度线段：点在矩形内 → 相交；点在矩形外 → 不相交。
+        assert!(er_edge_intersects_rect(&ErEdge { ax: 50., ay: 50., bx: 50., by: 50. }, 0., 0., 100., 100.));
+        assert!(!er_edge_intersects_rect(&ErEdge { ax: 150., ay: 150., bx: 150., by: 150. }, 0., 0., 100., 100.));
+
+        // 恰好压在矩形边界上：视为相交。
+        assert!(er_edge_intersects_rect(&ErEdge { ax: 0., ay: 0., bx: 100., by: 100. }, 0., 0., 100., 100.));
+        assert!(er_edge_intersects_rect(&ErEdge { ax: 0., ay: 0., bx: 0., by: 100. }, 0., 0., 100., 100.));
+    }
+
+    #[test]
+    fn er_scene_edge_query_keeps_through_viewport_far_edge() {
+        // 远距离外键 t000→t099：两端都不在矩形内、但线段从矩形中穿过 → 必须保留。
+        // 布局：2 列/行高 ~82+gap、5 列每行；t000 起点 (x≈220, y≈41)，t099 终点在第 20 行 (x≈1120, y≈2169)。
+        let graph = fluxdb_core::ErGraphData {
+            tables: (0..100).map(|i| er_table(&format!("t{i:03}"), 2)).collect(),
+            edges: vec![fluxdb_core::ErForeignKeyEdge {
+                name: "fk_far".into(),
+                from_table: "t000".into(),
+                from_column: "c0".into(),
+                to_table: "t099".into(),
+                to_column: "c0".into(),
+            }],
+        };
+        let scene = build_er_scene(&graph);
+        let edge = &scene.edges[0];
+        // 确认这是个斜长线（两端端点确定符合预期）。
+        assert!((edge.by - edge.ay).abs() > 1000., "远距边应有长 y 跨度");
+
+        // 取一个「中部」矩形 [400,500]x[600,1200]：两端点都在矩形外（起点 x=220<400、终点在右下更远处），
+        // 但 t000→t099 的斜线段在 y∈[466~939] 时 x 落在 [400,600]，故与矩形相交 → visible_edges 必须命中。
+        let mids = scene.visible_edges(400., 600., 600., 1200.);
+        assert!(
+            !mids.is_empty(),
+            "两端都在矩形外、线段穿过的远距边必须经索引命中，实际 {mids:?}"
+        );
+
+        // 取一个偏离线段路径的矩形 [900,500]x[1100,800]：线段 x∈[900,1100] 需要 y≥~1650，
+        // 该矩形 y 全部 <1650，故线段不穿过 → visible_edges 必须排除（即使 bbox 可能重叠）。
+        let miss = scene.visible_edges(900., 500., 1100., 800.);
+        assert!(
+            miss.is_empty(),
+            "bbox 与矩形相交但斜线未穿过的边必须排除，实际 {miss:?}"
+        );
+
+        // 漫游到图最末行深处的一个矩形：不 panic 且候选有界（索引按带定位，不扫全表边）。
+        let _deep = scene.visible_edges(-100., 30_000., 5000., 40_000.);
+    }
+
+    #[test]
+    fn er_edge_index_bounds_query_work_with_many_edges() {
+        // 性能表征：带真实 FK 边的数据（非空边表）验证 y 带索引确实收缩候选、不扫全表边。
+        // 构造 2000 表 / 约 4000 条边，其中相当比例是跨多行的「远距外键」。
+        let n = 2000usize;
+        let mut tables = Vec::with_capacity(n);
+        for i in 0..n {
+            tables.push(er_table(&format!("t{i:04}"), 2 + (i % 3)));
+        }
+        let mut edges = Vec::with_capacity(2 * n);
+        for i in 0..n {
+            // 本地边：同/近邻表（短 y 跨带）。
+            let to = (i + 1).min(n - 1);
+            edges.push(fluxdb_core::ErForeignKeyEdge {
+                name: "fk_local".into(),
+                from_table: format!("t{i:04}"),
+                from_column: "c0".into(),
+                to_table: format!("t{to:04}"),
+                to_column: "c0".into(),
+            });
+            // 远距边：i → i+800（跨很多行，长跨带）。
+            let far = (i + 800).min(n - 1);
+            edges.push(fluxdb_core::ErForeignKeyEdge {
+                name: "fk_far".into(),
+                from_table: format!("t{i:04}"),
+                from_column: "c0".into(),
+                to_table: format!("t{far:04}"),
+                to_column: "c0".into(),
+            });
+        }
+        let scene = build_er_scene(&fluxdb_core::ErGraphData { tables, edges });
+        let total_edges = scene.edges.len();
+        assert_eq!(total_edges, 2 * n);
+
+        // 统计 y 带索引占用的候选总量（每个带里的边下标计数），对比全表边数。
+        let band_entries: usize = scene.edge_bands.iter().map(|v| v.len()).sum();
+        // 本地边（i→i+1）各自入 1 带；远距边（i→i+800）跨带数远超阈值 → 走 long_edges 不入带，
+        // 从而按跨越距离复制索引项的内存放大被钳制（band_entries 只含本地边，远小于 total_edges）。
+        assert!(
+            band_entries < total_edges,
+            "长边不应逐带复制索引项：band={band_entries} total={total_edges}"
+        );
+        assert!(
+            scene.long_edges.len() > 0,
+            "有跨越距离的远距外键应进入 long_edges（避免入带放大）"
+        );
+
+        // 查询：中部一个小视口。查询只扫与视口 y 重叠的少数带，候选量应显著小于全表边数。
+        let (wx0, wy0, wx1, wy1) = (400.0, 3000.0, 800.0, 3600.0);
+        let a_band = (wy0 / EDGE_BAND_H).floor().max(0.0) as usize;
+        let b_band = ((wy1 / EDGE_BAND_H).floor().max(0.0) as usize).min(scene.edge_bands.len() - 1);
+        let candidate_span: usize = scene.edge_bands[a_band..=b_band].iter().map(|v| v.len()).sum();
+        let t0 = std::time::Instant::now();
+        let visible = scene.visible_edges(wx0, wy0, wx1, wy1);
+        let dt = t0.elapsed();
+        eprintln!(
+            "er_edge_index_bounds: total_edges={total_edges} band_entries={band_entries} \
+             long_edges={} query_candidate_span={candidate_span} visible_edges={} query_us={}",
+            scene.long_edges.len(),
+            visible.len(),
+            dt.as_micros()
+        );
+        // 查询候选带宽度应远小于全表边数：不扫全表边（长边补扫数量亦远小于全表）。
+        assert!(
+            candidate_span < total_edges,
+            "候选带 {candidate_span} 应小于全表边 {total_edges}"
+        );
+        // 存储总量相对全表边数收敛：长边不再按跨越距离无限复制索引项。
+        assert!(
+            band_entries < total_edges * 2,
+            "带索引总量应受钳制：band_entries={band_entries} total_edges={total_edges}"
+        );
+        // 功能正确性：查询返回的边必须真的与视口精确相交。
+        for e in &visible {
+            assert!(er_edge_intersects_rect(e, wx0, wy0, wx1, wy1));
+        }
+    }
+
+    // —— 画布布局回归（真实 GPUI→taffy 填充语义，非字符串检查）——
+    // 用 gpui 实际编译的 taffy 0.13 引擎，按 er/canvas.rs 的 div 树逐层镜像计算真实剩余高度。
+    // 防止回归到「外层只 flex_1/min_h_0、内层 block + 全 absolute 子元素」→ 内层高度塌陷为 0。
+    fn taffy_style(
+        display: taffy::Display,
+        direction: taffy::FlexDirection,
+        grow: bool,
+    ) -> taffy::Style {
+        taffy::Style {
+            display,
+            flex_direction: direction,
+            flex_grow: if grow { 1.0 } else { 0.0 },
+            flex_shrink: 1.0,
+            flex_basis: taffy::Dimension::length(0.0),
+            min_size: taffy::Size {
+                width: taffy::Dimension::auto(),
+                height: taffy::Dimension::length(0.0),
+            },
+            ..Default::default()
+        }
+    }
+
+    /// 模拟 er 画布 div 树，返回 er_canvas_view 内层视口 div 的高度（像素）。
+    /// `with_fix` = 是否采用修复后的外层 flex_col（对应 er_canvas_view 当前 .flex().flex_col()）。
+    fn er_canvas_inner_height(with_fix: bool) -> f32 {
+        use taffy::{AvailableSpace, Display, FlexDirection, Size, TaffyTree};
+        let mut t: TaffyTree<()> = TaffyTree::new();
+        // render.rs 父容器：flex_col + h_full, 1200x800。
+        let root = t
+            .new_leaf(taffy::Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                size: Size {
+                    width: taffy::Dimension::length(1200.0),
+                    height: taffy::Dimension::length(800.0),
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        // er_diagram_content：flex_1, min_h_0, flex, flex_col。
+        let content = t
+            .new_leaf(taffy_style(Display::Flex, FlexDirection::Column, true))
+            .unwrap();
+        // 工具栏：h 36。
+        let toolbar = t
+            .new_leaf(taffy::Style {
+                size: Size {
+                    width: taffy::Dimension::auto(),
+                    height: taffy::Dimension::length(36.0),
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        // er_canvas_view 外层：flex_1, min_h_0；修复后为 flex_col，否则为 Block。
+        let outer = t
+            .new_leaf(taffy_style(
+                if with_fix { Display::Flex } else { Display::Block },
+                FlexDirection::Column,
+                true,
+            ))
+            .unwrap();
+        // 内层视口 div：flex_1, min_h_0, block；子元素全 absolute（探针/连线/节点）。
+        // 该层是 overflow_hidden 的实际裁切容器，必须拿到非零高度，否则节点连线全被裁掉、画布空白。
+        let inner = t
+            .new_leaf(taffy_style(Display::Block, FlexDirection::Column, true))
+            .unwrap();
+        // absolute inset_0 探针（不影响高度，模拟 ErCanvasProbe）。
+        let abs_child = t
+            .new_leaf(taffy::Style {
+                position: taffy::Position::Absolute,
+                inset: taffy::Rect {
+                    left: taffy::LengthPercentageAuto::length(0.0),
+                    right: taffy::LengthPercentageAuto::length(0.0),
+                    top: taffy::LengthPercentageAuto::length(0.0),
+                    bottom: taffy::LengthPercentageAuto::length(0.0),
+                },
+                ..Default::default()
+            })
+            .unwrap();
+
+        t.add_child(content, toolbar).unwrap();
+        t.add_child(content, outer).unwrap();
+        t.add_child(outer, inner).unwrap();
+        t.add_child(inner, abs_child).unwrap();
+        t.add_child(root, content).unwrap();
+        t.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(1200.0),
+                height: AvailableSpace::Definite(800.0),
+            },
+        )
+        .unwrap();
+        t.layout(inner).unwrap().size.height
+    }
+
+    #[test]
+    fn er_canvas_layout_fills_below_toolbar() {
+        let fixed = er_canvas_inner_height(true);
+        // 修复后：内层视口应填满工具栏下方剩余区域（800 - 36 = 764），非零。
+        assert!(fixed > 0.0, "修复后内层画布高度必须非零，实际 {fixed}");
+        assert!((fixed - 764.0).abs() < 1.0, "内层画布应填满工具栏下方：{fixed}");
+
+        // 校验「回归检测有效」：若撤掉外层 flex_col，内层会塌陷为 0 —— 该测试能抓住此回归。
+        let broken = er_canvas_inner_height(false);
+        assert!(
+            broken <= 0.0,
+            "对照：无 flex_col 的外层应使内层高度塌陷为 0（保证测试能抓到回归），实际 {broken}"
+        );
+    }
+
+    #[test]
+    fn er_canvas_layout_empty_graph_does_not_collapse() {
+        // 空图也保正常画布区域：画布高度与内容无关，只由父容器分工（工具栏下方剩余空间）。
+        let h = er_canvas_inner_height(true);
+        assert!(h > 0.0, "空图画布也不应塌陷：{h}");
+        assert!((h - 764.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn er_scene_handles_10k_tables() {
+        let tables = (0..10_000)
+            .map(|i| er_table(&format!("t{i:05}"), 2))
+            .collect::<Vec<_>>();
+        let scene = build_er_scene(&fluxdb_core::ErGraphData {
+            tables,
+            edges: vec![],
+        });
+        assert_eq!(scene.layouts.len(), 10_000);
+        let vp = ErViewport::default();
+        let (wx0, wy0, wx1, wy1) = vp.visible_world_bounds(800., 600.);
+        let visible = scene.visible_nodes(wx0, wy0, wx1, wy1);
+        assert!(visible.len() < 100, "万表下可见集合仍有界：{}", visible.len());
+    }
+
+    #[test]
+    fn er_layout_precomputes_field_display_text() {
+        // 字段展示文本随图构建一次预拼（`名  类型` / `名`），渲染复用、不做每帧 format!。
+        // 覆盖：有/无类型、主键标记，且各表预拼内容与列一一对应、顺序一致。
+        let mut graph = fluxdb_core::ErGraphData {
+            tables: vec![
+                er_table("t_typed", 3), // 构造时 type_name 全 None
+                er_table("t_plain", 2),
+            ],
+            edges: vec![],
+        };
+        // 手工给 t_typed 前两列带类型，验证预拼规则。
+        graph.tables[0].columns[0].type_name = Some("INTEGER".into());
+        graph.tables[0].columns[1].type_name = Some("TEXT".into());
+        // 仅表 0 的 id 列主键（er_table 把首列设为主键），reset 表 1 首列主键以区分。
+        graph.tables[1].columns[0].primary_key = false;
+
+        let (layouts, _rows) = er_layout(&graph);
+        assert_eq!(layouts.len(), 2);
+
+        let typed = &layouts[0];
+        assert_eq!(typed.columns.len(), 3);
+        assert_eq!(typed.columns[0].text, "c0  INTEGER");
+        assert!(typed.columns[0].primary);
+        assert_eq!(typed.columns[1].text, "c1  TEXT");
+        assert!(!typed.columns[1].primary);
+        // 无类型的列：text 恰为列名。
+        assert_eq!(typed.columns[2].text, "c2");
+        assert!(!typed.columns[2].primary);
+
+        // 表 1 首列非主键：precompute 应同样尊重原图主键标记。
+        let plain = &layouts[1];
+        assert!(!plain.columns[0].primary);
+        assert_eq!(plain.columns[0].text, "c0");
+        assert!(!plain.columns[1].primary);
+        assert_eq!(plain.columns[1].text, "c1");
     }
 
     #[test]

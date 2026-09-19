@@ -627,6 +627,8 @@ struct NavicatMain {
     er_scenes: BTreeMap<TabId, Rc<ErScene>>,
     // ER 画布拖动平移进行中：记录 (tab, 按下时光标, 按下时 pan)，用于拖动更新 pan。
     er_viewport_drag: Option<(TabId, f32, f32, f32, f32)>,
+    // ER 画布可见区域尺寸（px）：由画布区 Element 回报，用于虚拟化可见性计算。
+    er_canvas_sizes: BTreeMap<TabId, (f32, f32)>,
     // Redis 连接级概览（版本/内存/CPU）的定期刷新任务与进行中的单次拉取任务
     redis_overview_refresh_task: Option<Task<()>>,
     redis_overview_refresh_tasks: BTreeMap<u64, Task<()>>,

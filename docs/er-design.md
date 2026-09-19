@@ -756,8 +756,8 @@ ChartDB/drawDB 的许可证与嵌入方式必须独立评估；本方案默认�
 - **core 纯数据模型**（[er_model.rs](../crates/fluxdb-core/src/parts/er_model.rs)）：`ErGraphData`/`ErTableNode`/`ErColumn`/`ErForeignKeyEdge`，仅承载一次后台加载的结果，不含加载/驱动逻辑。
 - **app 加载编排**（[er_service.rs](../crates/fluxdb-app/src/parts/er_service.rs)）：`load_er_graph_in_background` 编排 `list_objects`（枚举表）+ `list_completion_columns_for_tables`（批量列/主键/注释）+ 逐表 `list_foreign_keys`（N+1）组装 ErGraphData。PG 拼 `schema.table` 区分同名表。
 - **desktop 渲染**（[er/canvas.rs](../apps/fluxdb-desktop/src/main_parts/er/canvas.rs)）：侧边栏「ER 图」节点 → `OpenErDiagram` 命令 → `库名 · ER` 标签；首次进入 content 自动触发后台加载（loading → 结果/错误），固定栅格排布表节点 div + PathBuilder 画外键连线。节点/对象/文本走 UiColors + 组件，连线共用同一套世界坐标。
-- **当前表关联 ER**：表右键菜单「关联 ER」→ 同一 `OpenErDiagram`（表级 path）→ `表名 · 关联 ER` 标签；`ErDiagramState.center_table` 标记中心表，`load_er_neighborhood_in_background` 以中心表 1 跳（入向/出向外键）过滤子图后走同一画布。<br>**附加（性能方向）**：FK 批量化（Connector `list_foreign_keys_for_tables`，MySQL 单次查全库）+ 超大库降级截断（`MAX_CANVAS_TABLES`=300，banner 提示）+ 渲染缓存（`ErScene` 布局/连线预计算）+ 拖动平移（`ErViewport.pan`，重载保留不跳回原点）。缩放/裁剪/分组概览留 §13 TODO。
-- **验证**：`cargo fmt`、`cargo check --workspace`、（app）`cargo test` 463、（desktop）`cargo test` 401 全部通过（含 `load_er_graph_reads_tables_and_foreign_keys`、`load_er_graph_reads_demo_database`、`er_layout_produces_finite_non_overlapping_positions`、`load_er_neighborhood_keeps_center_and_one_hop`）、desktop 可 `cargo build`、macOS 实机验证。
+- **当前表关联 ER**：表右键菜单「关联 ER」→ 同一 `OpenErDiagram`（表级 path）→ `表名 · 关联 ER` 标签；`ErDiagramState.center_table` 标记中心表，`load_er_neighborhood_in_background` 以中心表 1 跳（入向/出向外键）过滤子图后走同一画布。<br>**附加（性能方向）**：FK 批量化（Connector `list_foreign_keys_for_tables`，MySQL 单次查全库）+ 画布二维虚拟化（视口+overscan 内才创建节点控件，节点行索引二分 + 完整 x/y 相交，连线 y 带索引 + 精确线段相交，场景后台预计算）+ 拖动平移（`ErViewport.pan`，重载保留不跳回原点）。曾实现的截断（前 300 张）与首字母分组方案均已被虚拟化替代并删除。缩放留 §13 TODO。
+- **验证**：`cargo fmt`、`cargo check --workspace`、（app）`cargo test` 463、（desktop）`cargo test` 410 全部通过（含 `load_er_graph_reads_tables_and_foreign_keys`、`load_er_graph_reads_demo_database`、`er_visible_nodes_and_edges_cull_to_viewport`、`er_node_intersect_touching_and_negative_pan`、`er_edge_exact_intersect_cases`、`er_edge_index_bounds_query_work_with_many_edges`、`er_scene_handles_10k_tables`、`load_er_neighborhood_keeps_center_and_one_hop`）、desktop 可 `cargo build` 与 `cargo run`（GUI 命中单实例守卫、主窗口可启动）；macOS 实机验证。
 
 实跑验证发现并修复：
 
@@ -771,14 +771,13 @@ ChartDB/drawDB 的许可证与嵌入方式必须独立评估；本方案默认�
 
 ## 13. 待办 TODO
 
-### 性能优化（连接已确认：后续再优化，当前以保可用为准）
+### 性能优化
 - [x] **FK 批量读取（MySQL）**：Connector trait 加 `list_foreign_keys_for_tables`（默认逐表兼容），MySQL 单次查全库外键替代逐表 N+1。SQLite 走默认逐表（本地快），PG 保留逐表（需 schema 拼节点名）。
-- [x] **超大库降级截断**：`er_canvas_view` 超过 `MAX_CANVAS_TABLES`（300）只渲染前 300 表节点 + 黄色提示条；防 1500 表一次性挂载卡死。
-- [ ] **超大库分组/概览视图**：设计文档 §4.1——>200 表按 schema/用户分组/连通分量概览，逐组进入；截断是临时降级，非最终形态。
+- [x] **画布二维虚拟化（替代截断/分组方案）**：全库 ER 直接进入同一张画布，全部表都有布局位置、可平移访问。渲染只对「视口 + OVERSCAN(200px)」内的节点创建控件、连线经索引与精确相交后交绘制层。节点：`ErScene::visible_nodes` 先在行范围索引上 `partition_point` 二分跳过视口前的行，再逐节点做完整 x/y 矩形相交——避免「只按行最大高度筛 y、之后只判 x」导致同排已离开视口的矮表在超高表行里被误挂载。连线：`build_er_scene` 按静态直线布局在后台建 y 带索引（`edge_bands`，世界 y 等宽带，边按 bbox y 跨度入带）；`ErScene::visible_edges` 平移时只扫与视口 y 重叠的少数带得到候选边，再做 x AABB 快速拒绝 + Liang-Barsky 精确线段相交，两端屏外但线段穿视口的线保留、bbox 相交但斜线未穿视口的假阳性剔除、不为未穿视口的长斜线构建路径。场景（布局/行范围索引/边索引/连线端点）在后台线程一次构建、平移不重建不深拷贝全图。画布真实尺寸由 `ErCanvasProbe` 回报（首帧用明确估算值，测量到位后重算可见集合，尺寸变化才 notify）。**画布空白根因修复**：`er_canvas_view` 内层视口 div 是 block 且其子元素全为 absolute，若父容器（外层 div）不是 flex_col，block 布局会把内层视口高度塌陷为 0（`overflow_hidden` 裁掉全部节点/连线，探针测 0 又忽略 → 永远空白）。修复：外层 div 恢复 `.flex().flex_col()`，内层 `flex_1.min_h_0()` 作为 flex item 填满工具栏下方剩余区域。用 gpui 编译的 taffy 0.13 引擎复现：修复前内层 1200×0、修复后 1200×764。新增 `er_canvas_layout_fills_below_toolbar` / `er_canvas_layout_empty_graph_does_not_collapse` 布局回归测试（dev-dependency `taffy=0.13`，与 gpui 同版本已锁定）。拖到画布外松开鼠标由 move 事件检测左键释放，拖动状态不卡住。**首字母分组概览与截断（前 300 张）均已移除。**测试：1843 表（1730 张 S 前缀）、10,000 表下可见节点数有界，节点相交（同排超高/矮表、边界相切、负/远视口）、线段精确相交（两端屏外穿视口、bbox 相交但斜线未穿、水平/垂直/零长度/贴界）均有覆盖；带 4000 条 FK 边（含大量远距外键）验证 y 带索引候选量 393 ≪ 全表边 4000、查询 235µs。
 - [x] **拖动平移**：空白处按住拖动平移画布，节点 div 与连线 canvas 共用 `ErViewport.pan`；单节点展开/深度切换重载保留平移（不跳回原点，修 bug）。
-- [ ] **缩放 + 视口裁剪**（design §2.3）：GPUI div 无法 transform 缩放文字，需重写为全自绘 Element（节点矩形+文字+连线自绘，坐标过 viewport 缩放）；届时加 zoom 变换 + 视口内节点裁剪。工程量大，独立专项。
-- [x] **渲染缓存**：`ErScene` 预计算布局 + 连线端点，随图加载一次构建、渲染复用（design §4）；`truncate_er_graph` 截断逻辑并入加载期。
-- [ ] **分组概览**（design §4.1）：>200 表按 schema/分组/连通分量概览，逐组钻取；当前仍为截断前 MAX 表 + banner 降级。
+- [ ] **缩放**（design §2.3）：GPUI div 无法 transform 缩放文字，需重写为全自绘 Element（节点矩形+文字+连线自绘，坐标过 viewport 缩放）。与虚拟化相互独立——虚拟化已在无缩放前提下完成；缩放作为独立专项。
+- [x] **渲染缓存**：`ErScene` 预计算布局/行索引/连线端点，随图加载一次构建、渲染复用；加载与场景构建均在后台线程。
+- [ ] **字段按需加载**：全库 ER 当前一次加载所有表的字段元数据（数据库读取慢与画布交互卡是两件事，虚拟化只解决后者）；可见区域外的表字段按需加载留待后续。
 - [x] **当前表局部 ER / 邻域视图（1 跳）**（design §3.2、D5）：表右键「关联 ER」打开 `表名 · 关联 ER` 标签，以该表为中心逐层绘制邻域（入向/出向外键都含）。`ErDiagramState.center_table` + `load_er_neighborhood_in_background`。
 - [x] **逐层展开（深度 1/2/3 跳）**：当前表关联 ER 工具栏「展开深度」切换，`er_depths` 按 tab 隔离；切深度清缓存重载 neighborhood。深链测试库 er_chain 实测 1→2→3 跳节点数 3→4→5 递增。
 - [x] **单节点式展开**：点击图上某节点，把它加入 `er_expanded` 显式种子集合（`er_expanded` 按 tab 隔离），neighborhood 以该节点与中心同权重各扩 `depth` 跳并入其更远邻居；与全局深度互补、保留已展开节点。<br>说明：既有交互与设计 §3.2「在节点上逐次展开」一致；全库 ER（无中心表）暂不支持点节点展开。
