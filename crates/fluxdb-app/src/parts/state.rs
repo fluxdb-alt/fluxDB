@@ -1182,6 +1182,11 @@ pub struct TaskState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppCommand {
+    PrepareBackup { request: BackupRequest, method: BackupMethod },
+    RunBackup(BackupRequest),
+    PrepareRestore(RestoreRequest),
+    ProbeRestore(RestoreRequest),
+    RunRestore { request: RestoreRequest, plan: RestorePlan },
     LoadConnections,
     ReplaceConnections(Vec<ConnectionConfig>),
     ReplaceSidebarLayout(SidebarLayout),
@@ -1906,15 +1911,26 @@ pub enum AppCommand {
         tab_id: TabId,
         text: String,
     },
-    ExecuteRedisWorkbench(TabId),
+    /// Redis Workbench 执行的准备步：只置运行态并按需清空顶部草稿，不做网络 I/O。
+    ///
+    /// `execution_id` 给定时重跑结果区该条记录（保留顶部草稿），为 None 时执行顶部草稿。
+    /// UI 紧接着在后台线程派发 [`AppCommand::RunRedisWorkbench`]，再用
+    /// [`AppCommand::FinishRedisWorkbenchExecution`] 把结果落回主线程。
+    BeginRedisWorkbenchExecution {
+        tab_id: TabId,
+        execution_id: Option<u64>,
+    },
+    /// 执行 Redis 命令：在后台线程的控制器副本上跑，只读标签页作用域，不改动任何标签页状态。
+    RunRedisWorkbench {
+        tab_id: TabId,
+        execution_id: Option<u64>,
+    },
     FinishRedisWorkbenchExecution {
         tab_id: TabId,
-        result: std::result::Result<CommandWorkbenchExecution, UserFacingError>,
-    },
-    /// 重跑结果区某条执行记录（按 `CommandWorkbenchExecution.id` 定位，复用其命令文本）。
-    RerunRedisWorkbenchRecord {
-        tab_id: TabId,
-        execution_id: u64,
+        /// 本次实际执行的命令文本：失败入历史时要用，不能取执行期间的草稿。
+        text: String,
+        /// 一次运行按「一条命令一条记录」产出多条执行记录。
+        result: std::result::Result<Vec<CommandWorkbenchExecution>, UserFacingError>,
     },
     /// 删除结果区某条执行记录，只删当前一条。
     DeleteRedisWorkbenchRecord {
@@ -2296,6 +2312,11 @@ pub enum AppCommand {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppEvent {
+    BackupPrepared(BackupRequest),
+    BackupCompleted(BackupManifest),
+    RestorePrepared { request: RestoreRequest, plan: RestorePlan },
+    RestoreObjectsProbed(Vec<RestoreObjectProbe>),
+    RestoreCompleted(RestoreOutcome),
     ConnectionsLoaded(Vec<ConnectionConfig>),
     SidebarLayoutChanged(SidebarLayout),
     ConnectionCreated(ConnectionConfig),
@@ -2445,7 +2466,13 @@ pub enum AppEvent {
     QueryCompletionsLoaded(TabId, u64, QueryCompletionResult),
     CompletionIndexWarmed(ConnectionId, Option<String>),
     QueryFinished(TabId, QueryExecutionResult),
-    RedisWorkbenchFinished(TabId, CommandWorkbenchExecution),
+    /// Redis Workbench 后台执行完成：一次运行按「一条命令一条记录」产出多条结果。
+    /// 失败也用本事件回传，让实际执行的命令文本随结果一起回到主线程写历史。
+    RedisWorkbenchCommandsRan {
+        tab_id: TabId,
+        text: String,
+        result: std::result::Result<Vec<CommandWorkbenchExecution>, UserFacingError>,
+    },
     CreateTableApplied(TabId),
     TableRenamed {
         object: ObjectPath,

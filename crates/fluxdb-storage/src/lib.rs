@@ -389,6 +389,21 @@ impl FileStorage {
             &entries[start..].to_vec(),
         )
     }
+
+    /// 加载全部备份记录（全量扁平，由上层按连接/库过滤）。不存在时返回空列表。
+    pub fn load_backup_records(&self) -> Result<Vec<BackupRecord>> {
+        let conn = self.open_sqlite()?;
+        Ok(
+            sqlite::get_json::<Vec<BackupRecord>>(&conn, sqlite::KEY_BACKUP_RECORDS)?
+                .unwrap_or_default(),
+        )
+    }
+
+    /// 全量保存备份记录（单条 key，整个数组一个 JSON blob，与其它 kv 数据一致）。
+    pub fn save_backup_records(&self, records: &[BackupRecord]) -> Result<()> {
+        let conn = self.open_sqlite()?;
+        sqlite::put_json(&conn, sqlite::KEY_BACKUP_RECORDS, &records.to_vec())
+    }
 }
 
 impl Storage for FileStorage {
@@ -771,6 +786,8 @@ pub struct RedisWorkbenchHistoryRecord {
 fn default_redis_workbench_history_success() -> bool {
     true
 }
+
+include!("parts/backup_restore.rs");
 
 fn default_query_history_kind() -> String {
     "query".to_string()
@@ -1523,6 +1540,42 @@ mod tests {
         assert_eq!(loaded.len(), 1000);
         assert_eq!(loaded[0].text, "select 2");
         assert_eq!(loaded[999].text, "select 1001");
+    }
+
+    #[test]
+    fn saves_and_loads_backup_records() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let records = vec![
+            BackupRecord {
+                manifest: None,
+                id: "bk-1".to_string(),
+                connection_id: ConnectionId(4),
+                database: "shop".to_string(),
+                output_path: "/tmp/fluxdb/shop/shop_20260917.sql".to_string(),
+                created_unix: 1_700_000_000,
+                size: 2048,
+                tables: Some(vec!["orders".to_string()]),
+                include_views: false,
+                note: "周备份".to_string(),
+            },
+            BackupRecord {
+                manifest: None,
+                id: "bk-2".to_string(),
+                connection_id: ConnectionId(4),
+                database: "shop".to_string(),
+                output_path: "/tmp/fluxdb/shop/shop_20260910.sql".to_string(),
+                created_unix: 1_690_000_000,
+                size: 1024,
+                tables: None,
+                include_views: true,
+                note: String::new(),
+            },
+        ];
+
+        storage.save_backup_records(&records).unwrap();
+
+        let loaded = storage.load_backup_records().unwrap();
+        assert_eq!(loaded, records);
     }
 
     #[test]

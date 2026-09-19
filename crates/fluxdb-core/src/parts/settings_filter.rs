@@ -275,7 +275,7 @@ impl Default for Settings {
             results_placement: ResultsPlacement::default(),
             redis_workbench_editor_width: default_redis_workbench_editor_width(),
             custom_keybindings: BTreeMap::new(),
-            backup_dir: String::new(),
+            backup_dir: default_backup_dir(),
             mysqldump_path: String::new(),
             mysql_client_dir: String::new(),
             mysql_client_download_source: String::new(),
@@ -397,6 +397,18 @@ fn default_button_radius() -> u8 {
 
 fn default_large_radius() -> u8 {
     8
+}
+
+/// 默认备份目录：安装目录（当前可执行文件所在目录）下的 `backup` 子目录，类比
+/// Navicat 默认把备份放到安装路径附近。取不到可执行文件路径时回退为空字符串
+/// （沿用旧的未配置行为）。
+fn default_backup_dir() -> String {
+    std::env::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(std::path::Path::parent)
+        .map(|dir| dir.join("backup").to_string_lossy().to_string())
+        .unwrap_or_default()
 }
 
 fn default_true() -> bool {

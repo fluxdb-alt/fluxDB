@@ -582,7 +582,7 @@
             sort_text: None,
                     ..Default::default()
 };
-        quote_completion_insert_text(&mut function, DatabaseKind::MySql, &reserved, false);
+        quote_completion_insert_text(&mut function, DatabaseKind::MySql, &reserved);
         assert_eq!(function.insert_text, "COUNT()");
 
         let mut column = QueryCompletionItem {
@@ -595,8 +595,9 @@
             sort_text: None,
                     ..Default::default()
 };
-        quote_completion_insert_text(&mut column, DatabaseKind::MySql, &reserved, false);
-        assert_eq!(column.insert_text, "o.`select`");
+        // 列按“点击即补引号”规则逐段加引号（与重置前的“仅保留字加引号”不同）。
+        quote_completion_insert_text(&mut column, DatabaseKind::MySql, &reserved);
+        assert_eq!(column.insert_text, "`o`.`select`");
 
         let mut explicitly_quoted = QueryCompletionItem {
             label: "orders".into(),
@@ -608,12 +609,7 @@
             sort_text: None,
                     ..Default::default()
 };
-        quote_completion_insert_text(
-            &mut explicitly_quoted,
-            DatabaseKind::MySql,
-            &reserved,
-            true,
-        );
+        quote_completion_insert_text(&mut explicitly_quoted, DatabaseKind::MySql, &reserved);
         assert_eq!(explicitly_quoted.insert_text, "`orders`");
     }
 
@@ -3245,7 +3241,8 @@
         };
         assert_eq!(result.replace_start, "select * from ".len());
         assert!(result.items.iter().any(|item| {
-            item.kind == QueryCompletionKind::Table && item.insert_text == "Product"
+            // SQLite：点击表名按方言补双引号。
+            item.kind == QueryCompletionKind::Table && item.insert_text == "\"Product\""
         }));
     }
 
@@ -3273,7 +3270,8 @@
             panic!("expected query completions");
         };
         assert!(result.items.iter().any(|item| {
-            item.kind == QueryCompletionKind::Table && item.insert_text == "Product"
+            // SQLite：点击表名按方言补双引号。
+            item.kind == QueryCompletionKind::Table && item.insert_text == "\"Product\""
         }));
     }
 
@@ -3385,7 +3383,8 @@
         };
         assert!(
             result.items.iter().any(|item| {
-                item.kind == QueryCompletionKind::Column && item.insert_text == "id"
+                // SQLite：点击列名按方言补双引号。
+                item.kind == QueryCompletionKind::Column && item.insert_text == "\"id\""
             })
         );
     }
@@ -3414,7 +3413,8 @@
             panic!("expected query completions");
         };
         assert!(result.items.iter().any(|item| {
-            item.kind == QueryCompletionKind::Column && item.insert_text == "id"
+            // SQLite：点击列名按方言补双引号。
+            item.kind == QueryCompletionKind::Column && item.insert_text == "\"id\""
         }));
         assert!(result.items.iter().all(|item| {
             !matches!(
@@ -3449,7 +3449,8 @@
         };
         assert!(
             result.items.iter().any(|item| {
-                item.kind == QueryCompletionKind::Column && item.insert_text == "id"
+                // SQLite：点击列名按方言补双引号。
+                item.kind == QueryCompletionKind::Column && item.insert_text == "\"id\""
             })
         );
     }
@@ -3478,7 +3479,8 @@
             panic!("expected query completions");
         };
         assert!(result.items.iter().any(|item| {
-            item.kind == QueryCompletionKind::Column && item.insert_text == "name"
+            // SQLite：点击列名按方言补双引号。
+            item.kind == QueryCompletionKind::Column && item.insert_text == "\"name\""
         }));
     }
 
@@ -3506,7 +3508,8 @@
             panic!("expected query completions");
         };
         assert!(result.items.iter().any(|item| {
-            item.kind == QueryCompletionKind::Column && item.insert_text == "name"
+            // SQLite：点击列名按方言补双引号。
+            item.kind == QueryCompletionKind::Column && item.insert_text == "\"name\""
         }));
     }
 
@@ -3599,8 +3602,9 @@
             panic!("expected query completions");
         };
         assert!(result.items.iter().any(|item| {
+            // SQLite：点击列名按方言补双引号。
             item.kind == QueryCompletionKind::Column
-                && item.insert_text == "name"
+                && item.insert_text == "\"name\""
                 && item.detail.as_deref().is_some_and(|detail| detail.contains("Product"))
         }));
     }
@@ -3730,7 +3734,8 @@
             panic!("expected query completions");
         };
         assert!(result.items.iter().any(|item| {
-            item.kind == QueryCompletionKind::Column && item.insert_text == "name"
+            // SQLite：点击列名按方言补双引号。
+            item.kind == QueryCompletionKind::Column && item.insert_text == "\"name\""
         }));
         let index = second.completion_index.lock().unwrap();
         assert!(index.has_database_index(ConnectionId(1), Some("main"), None));

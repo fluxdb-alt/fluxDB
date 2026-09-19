@@ -756,8 +756,12 @@ impl NavicatMain {
     }
 
     fn cancel_dialog(&mut self, _: &CancelDialog, window: &mut Window, cx: &mut Context<Self>) {
-        // 备份 tab 的三个弹框（表清单/备注/删除确认）优先响应 Esc。
+        // 备份 tab 的弹框（表清单/恢复记录/备注/删除确认）优先响应 Esc。
         if self.backup_tables_modal.take().is_some() {
+            cx.notify();
+            return;
+        }
+        if self.restore_records_modal.take().is_some() {
             cx.notify();
             return;
         }
@@ -773,6 +777,11 @@ impl NavicatMain {
         // 不在 NavicatMain 子树内，Esc 的 CancelDialog 只能靠这里兜底关闭。
         if self.sql_file_modal.borrow().dialog_open {
             self.request_close_sql_file_dialog(window, cx);
+            return;
+        }
+        // 恢复弹框面板已自挂 CancelDialog(Esc) 处理,这里兜底防遗漏。
+        if self.restore_modal.is_some() {
+            self.close_restore_dialog(cx);
             return;
         }
         if self.query_history_quick_open {
@@ -1122,7 +1131,8 @@ impl NavicatMain {
     fn refresh_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.controller.state().active_tab().cloned() else {
             if let Some(connection_id) = self.first_connection_id() {
-                self.dispatch(AppCommand::OpenConnection(connection_id), cx);
+                // 建连走后台路径，避免刷新快捷键在主线程等握手。
+                self.open_connection_from_sidebar(connection_id, cx);
             }
             return;
         };
@@ -1197,7 +1207,7 @@ impl NavicatMain {
             .filter(|connection| connection.expanded)
             .flat_map(|connection| {
                 let connection_id = connection.config.id;
-                connection_databases(connection)
+                connection_databases(connection, false)
                     .into_iter()
                     .map(move |database| {
                         let name = database

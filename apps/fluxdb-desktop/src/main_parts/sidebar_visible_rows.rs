@@ -251,7 +251,7 @@ fn push_connection_visible_rows(
     let databases = if search_active && (!connection.connected || connection.objects.is_empty()) {
         Vec::new()
     } else {
-        connection_databases(connection)
+        connection_databases(connection, false)
     };
     let mut databases = databases;
     databases.sort_by_key(|database| {

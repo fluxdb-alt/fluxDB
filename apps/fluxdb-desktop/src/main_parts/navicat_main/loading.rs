@@ -967,23 +967,90 @@ impl NavicatMain {
         cx.notify();
     }
 
-    /// 确认危险命令后才真正派发执行：顶部草稿走 ExecuteRedisWorkbench，
-    /// 结果区记录重跑走 RerunRedisWorkbenchRecord。
+    /// 确认危险命令后才真正派发执行：顶部草稿与结果区记录重跑共用同一条后台链路，
+    /// 由 `execution_id` 区分（None 执行草稿，Some 重跑该条记录）。
     fn confirm_dangerous_redis_command(&mut self, cx: &mut Context<Self>) {
         let Some(pending) = self.pending_dangerous_redis_command.take() else {
             return;
         };
-        if let Some(execution_id) = pending.execution_id {
-            self.dispatch(
-                AppCommand::RerunRedisWorkbenchRecord {
-                    tab_id: pending.tab_id,
-                    execution_id,
-                },
-                cx,
-            );
-        } else {
-            self.dispatch(AppCommand::ExecuteRedisWorkbench(pending.tab_id), cx);
+        self.run_redis_workbench(pending.tab_id, pending.execution_id, cx);
+    }
+
+    /// Redis Workbench 执行入口：把网络 I/O 挪到后台线程，主线程只负责状态回写。
+    ///
+    /// 三段式与 SQL 执行保持一致：
+    /// 1. `Begin` 在主线程同步置运行态并按需清空草稿，loading 立即可见；
+    /// 2. `Run` 在 Begin 之前取的控制器副本上执行——副本自己按 `execution_id` 解析待执行
+    ///    文本，因此不会被主线程的后续编辑干扰，也不会把整份状态合并回来覆盖用户输入；
+    /// 3. `Finish` 回到主线程写结果与历史，标签页已关闭时直接丢弃。
+    fn run_redis_workbench(
+        &mut self,
+        tab_id: TabId,
+        execution_id: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
+        if self._redis_workbench_tasks.contains_key(&tab_id.0) {
+            self.show_message("Redis 命令正在执行", AppMessageKind::Warning, cx);
+            return;
         }
+
+        // 副本必须在 Begin 之前取：Begin 会清空顶部草稿，后台线程要按清空前的快照解析文本。
+        let mut controller = self.controller.clone();
+        self.dispatch(AppCommand::BeginRedisWorkbenchExecution {
+            tab_id,
+            execution_id,
+        }, cx);
+
+        let task = cx.spawn(async move |view, cx| {
+            let event = cx
+                .background_spawn(async move {
+                    controller.dispatch(AppCommand::RunRedisWorkbench {
+                        tab_id,
+                        execution_id,
+                    })
+                })
+                .await;
+            let (text, result) = match event {
+                AppEvent::RedisWorkbenchCommandsRan { text, result, .. } => (text, result),
+                AppEvent::Failed(error) => (String::new(), Err(error)),
+                _ => (
+                    String::new(),
+                    Err(fluxdb_core::UserFacingError {
+                        title: "执行失败".to_string(),
+                        message: "Redis 命令执行没有返回结果".to_string(),
+                        detail: None,
+                        retryable: true,
+                    }),
+                ),
+            };
+
+            let _ = cx.update(|cx| {
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| {
+                    this._redis_workbench_tasks.remove(&tab_id.0);
+                    let tab_still_exists = this
+                        .controller
+                        .state()
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.id == tab_id);
+                    if tab_still_exists {
+                        this.dispatch(
+                            AppCommand::FinishRedisWorkbenchExecution {
+                                tab_id,
+                                text,
+                                result,
+                            },
+                            cx,
+                        );
+                    }
+                });
+            });
+        });
+        self._redis_workbench_tasks.insert(tab_id.0, task);
+        cx.notify();
     }
 }
 

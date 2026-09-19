@@ -16,13 +16,19 @@ fn mysql_list_objects(
         }
         _ => None,
     };
+    let connect_timeout = Duration::from_secs(5);
+    ensure_mysql_classic_greeting(
+        options.get_host(),
+        options.get_port(),
+        mysql_greeting_probe_timeout(connect_timeout),
+    )?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let connect = tokio::time::timeout(Duration::from_secs(5), options.connect()).await;
+        let connect = tokio::time::timeout(connect_timeout, options.connect()).await;
         let mut connection = match connect {
             Ok(Ok(connection)) => connection,
             Ok(Err(error)) => return Err(mysql_error(error)),
@@ -51,11 +57,13 @@ async fn mysql_database_objects(
     connection_id: ConnectionId,
     connection: &mut sqlx::MySqlConnection,
 ) -> fluxdb_core::Result<Vec<ObjectSummary>> {
+    // 列出全部 schema（含系统库 information_schema/mysql/performance_schema/sys）。
+    // 默认展示与侧边栏隐藏系统库由 UI 层决定（“显示数据库”弹框可勾选系统库后保存），
+    // 不再在 SQL 层硬编码排除，否则系统库永远无法显示。
     let rows = sqlx::query(
         r#"
         SELECT CAST(schema_name AS CHAR) AS database_name
         FROM information_schema.schemata
-        WHERE schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
         ORDER BY schema_name
         "#,
     )

@@ -144,3 +144,174 @@ fn mysql_dial(
     Ok((options, tunnel))
 }
 
+/// 正常握手包的 payload 首字节（protocol_version = 10）。
+const MYSQL_HANDSHAKE_PROTOCOL_VERSION: u8 = 0x0a;
+/// 服务端直接回错误包（如 host 被封、连接数已满）时的 payload 首字节。
+const MYSQL_ERR_PACKET: u8 = 0xff;
+
+/// 拨号前确认 `host:port` 说的是 MySQL 经典协议。
+///
+/// 经典 MySQL 服务端在 TCP 建连后立即下发握手包，payload 首字节是协议版本 10；直接回错误时
+/// 是 ERR 包。把端口填成 MySQL X 协议端口（默认 33060）时，对端回的帧头会被 sqlx 当作握手包
+/// 解析，而 sqlx 0.8.6 的 `Handshake::decode_with` 不校验 protocol_version，会在残包上继续读
+/// 4 字节 connection_id，最终在空缓冲上 panic（`bytes` 的 advance 越界）。UI 线程驱动该 future
+/// 时 panic 无法穿过 macOS 的 C 回调栈帧，整个进程会 abort，所以在交给驱动之前先挡掉。
+///
+/// 只做协议判定：解析地址、TCP 建连、读包超时或提前关闭都放行，由驱动给出标准错误；
+/// 因此探测本身不会让任何原本能成功的连接失败，最坏只多等一个探测预算。
+fn ensure_mysql_classic_greeting(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+) -> fluxdb_core::Result<()> {
+    use std::io::Read;
+    use std::net::{TcpStream, ToSocketAddrs};
+
+    let Ok(mut addresses) = (host, port).to_socket_addrs() else {
+        return Ok(());
+    };
+    let Some(address) = addresses.next() else {
+        return Ok(());
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
+        return Ok(());
+    };
+    if stream.set_read_timeout(Some(timeout)).is_err() {
+        return Ok(());
+    }
+    // 经典包头是 3 字节小端长度 + 1 字节序号，第 5 字节才是 payload 首字节。
+    let mut header = [0u8; 5];
+    if stream.read_exact(&mut header).is_err() {
+        return Ok(());
+    }
+    if matches!(
+        header[4],
+        MYSQL_HANDSHAKE_PROTOCOL_VERSION | MYSQL_ERR_PACKET
+    ) {
+        return Ok(());
+    }
+
+    let message = format!(
+        "{host}:{port} 未返回 MySQL 握手包（首字节 0x{:02x}），请确认填写的是 MySQL 服务端口（默认 3306）；\
+         MySQL X 协议端口（默认 33060）不能用于数据库连接",
+        header[4]
+    );
+    tracing::warn!(
+        target: "fluxdb_connectors",
+        host,
+        port,
+        first_byte = header[4],
+        "MySQL 端口协议探测失败"
+    );
+    Err(Error::new(ErrorKind::Connection, message))
+}
+
+/// 探测预算：够本地/正常链路拿到握手包，又不至于拖慢静默端口的建连（超时即放行给驱动）。
+const MYSQL_GREETING_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn mysql_greeting_probe_timeout(connect_timeout: Duration) -> Duration {
+    connect_timeout.min(MYSQL_GREETING_PROBE_TIMEOUT)
+}
+
+// 探测逻辑的离线测试放在本文件，避免继续膨胀 `parts/tests.rs`。
+#[cfg(test)]
+mod greeting_probe_tests {
+    use super::*;
+    use std::io::Write;
+    use std::net::{Shutdown, TcpListener};
+
+    enum FakeEndpoint {
+        /// 建连后立刻回一段字节（模拟对端协议的第一个包）。
+        Replies(&'static [u8]),
+        /// 建连后什么都不发（多数非 MySQL 服务的行为）。
+        Silent,
+        /// 建连后直接关闭。
+        Closes,
+    }
+
+    /// 起一个只服务一次探测连接的假端口，返回其端口号。
+    fn fake_endpoint(mode: FakeEndpoint) -> u16 {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("假端口应可监听");
+        let port = listener.local_addr().expect("假端口应有本地地址").port();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            match mode {
+                FakeEndpoint::Replies(bytes) => {
+                    // 先 shutdown(Write) 发 FIN，保证数据送达后再释放 socket。
+                    let _ = stream.write_all(bytes);
+                    let _ = stream.shutdown(Shutdown::Write);
+                }
+                FakeEndpoint::Silent => std::thread::sleep(Duration::from_secs(3)),
+                FakeEndpoint::Closes => {}
+            }
+        });
+        port
+    }
+
+    fn probe(port: u16, timeout: Duration) -> fluxdb_core::Result<()> {
+        ensure_mysql_classic_greeting("127.0.0.1", port, timeout)
+    }
+
+    #[test]
+    fn x_protocol_endpoint_is_rejected_before_driver_handshake() {
+        // mysqlx 建连后立即回的帧头：交给 sqlx 会被当握手包解析并在空缓冲上 panic。
+        let port = fake_endpoint(FakeEndpoint::Replies(&[
+            0x05, 0x00, 0x00, 0x00, 0x0b, 0x08, 0x05, 0x1a, 0x00,
+        ]));
+
+        let error = probe(port, Duration::from_secs(2)).expect_err("X 协议端口应被探测拦下");
+
+        assert_eq!(error.kind, ErrorKind::Connection);
+        assert!(
+            error.message.contains("未返回 MySQL 握手包"),
+            "错误信息应说明协议不符: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("33060"),
+            "错误信息应提示 X 协议端口: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn classic_greeting_and_error_packet_pass_probe() {
+        // 8.0 服务端握手包：长度 0x4a + 序号 0 + payload 首字节 0x0a（协议版本 10）。
+        let greeting = fake_endpoint(FakeEndpoint::Replies(&[
+            0x4a, 0x00, 0x00, 0x00, 0x0a, b'8', b'.', b'0', 0x00,
+        ]));
+        // host 被封等场景服务端直接回 ERR 包（payload 首字节 0xff），交由驱动报错。
+        let err_packet = fake_endpoint(FakeEndpoint::Replies(&[
+            0x10, 0x00, 0x00, 0x00, 0xff, 0x28, 0x00, 0x00, 0x00,
+        ]));
+
+        assert!(probe(greeting, Duration::from_secs(2)).is_ok());
+        assert!(probe(err_packet, Duration::from_secs(2)).is_ok());
+    }
+
+    #[test]
+    fn undecidable_endpoints_pass_probe_to_driver() {
+        // 静默 / 建连即关 / 无监听：探测不裁定，由驱动给出标准连接错误。
+        let silent = fake_endpoint(FakeEndpoint::Silent);
+        let closed = fake_endpoint(FakeEndpoint::Closes);
+
+        assert!(probe(silent, Duration::from_millis(300)).is_ok());
+        assert!(probe(closed, Duration::from_secs(2)).is_ok());
+        assert!(probe(1, Duration::from_millis(300)).is_ok());
+    }
+
+    #[test]
+    fn probe_budget_is_capped_below_connect_timeout() {
+        assert_eq!(
+            mysql_greeting_probe_timeout(Duration::from_secs(30)),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            mysql_greeting_probe_timeout(Duration::from_millis(500)),
+            Duration::from_millis(500)
+        );
+    }
+}
+

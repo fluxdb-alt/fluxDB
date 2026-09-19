@@ -2168,6 +2168,7 @@ dependencies = [
  "rustls",
  "rustls-pemfile",
  "rustls-pki-types",
+ "sqlparser",
  "sqlx",
  "ssh2",
  "tokio",
@@ -2181,8 +2182,10 @@ dependencies = [
 name = "fluxdb-core"
 version = "0.1.0"
 dependencies = [
+ "nix",
  "serde",
  "serde_json",
+ "tracing",
  "vte",
 ]
 

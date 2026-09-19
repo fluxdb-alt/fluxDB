@@ -89,112 +89,167 @@ fn database_backup_objects_body(
         .flex()
         .flex_col()
         .gap_2()
-        // 搜索框：左侧搜索图标、右侧输入非空时显示清除按钮。
-        .child(
-            div()
-                .id("backup-object-search")
-                .track_focus(&object_search_input.read(cx).focus_handle(cx))
-                .flex_none()
-                .h(px(34.))
-                .px_2()
-                .rounded(colors.radius)
-                .border_1()
-                .border_color(colors.border)
-                .hover(move |s| s.border_color(colors.muted))
-                .focus(move |s| {
-                    s.border_color(if colors.is_dark {
-                        rgb(0x8ab4ff)
-                    } else {
-                        rgb(0x111111)
-                    })
-                })
-                .bg(colors.input_bg)
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(app_icon(AppIcon::Search, 15., colors.muted))
-                .child(
-                    div().flex_1().min_w(px(0.)).child(
-                        Input::new(&object_search_input)
-                            .appearance(false)
-                            .focus_bordered(false)
-                            .cleanable(true)
-                            .w_full()
-                            .h_full()
-                            .text_size(px(13.)),
-                    ),
-                ),
-        )
-        // 批量操作工具条：全选复选框 + 结果数量 + 清空按钮。
+        // 备份范围：整库（全部对象，执行时重新枚举）或按下面的对象清单。
         .child(
             div()
                 .h(px(28.))
                 .flex_none()
                 .flex()
                 .items_center()
-                .gap_2()
                 .child(
-                    Checkbox::new("backup-select-all")
-                        .label("全选表")
+                    Checkbox::new("backup-scope-all")
+                        .label("整库备份（全部对象）")
+                        .checked(form.scope_all)
                         .cursor_pointer()
-                        .disabled(filtered_tables.is_empty())
-                        .checked(
-                            !filtered_tables.is_empty()
-                                && filtered_tables
-                                    .iter()
-                                    .all(|n| form.selected_tables.contains(n)),
-                        )
                         .on_click({
                             let view = view.clone();
-                            // 全选/取消全选：当前筛选中存在未选中的表则全选，否则全部取消。
-                            let select_all = filtered_tables
-                                .iter()
-                                .any(|n| !form.selected_tables.contains(n));
-                            move |_, _, cx| {
-                                let _ = view.update(cx, |this, cx| {
-                                    this.set_backup_filtered_tables(select_all, cx);
-                                });
+                            move |checked, _, cx| {
+                                view.update(cx, |this, cx| this.set_backup_scope_all(*checked, cx));
+                                cx.stop_propagation();
                             }
                         }),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(colors.muted)
-                        .child(format!(
-                            "{} 项 · 已选 {selected_objects}/{total_objects}",
-                            filtered_tables.len()
-                        )),
-                )
-                .child(div().flex_1())
-                .child(
-                    Button::new("backup-clear-btn")
-                        .label("清空")
-                        .small()
-                        .ghost()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.set_backup_filtered_tables(false, cx);
-                            cx.stop_propagation();
-                        })),
                 ),
         )
-        // 表列表：带边框、圆角、背景色的滚动容器。虚拟化列表的滚动条挂在此容器上。
-        .child(
-            div()
-                .flex_1()
-                .min_h(px(0.))
-                .rounded(colors.radius)
-                .border_1()
-                .border_color(colors.border)
-                .bg(colors.input_bg)
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .vertical_scrollbar(&objects_scroll.clone())
-                .child(list_scroll),
-        )
+        // 整库模式：说明横幅，不再逐对象勾选。
+        .when(form.scope_all, |this| {
+            this.child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .rounded(colors.radius)
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.input_bg)
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap_1()
+                    .child(app_icon(AppIcon::Database, 22., colors.muted))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(colors.text)
+                            .child(format!("将备份全部对象（共 {total_objects} 个）")),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(colors.muted)
+                            .child("执行时会重新枚举数据库，包含打开弹框后新增的表"),
+                    ),
+            )
+        })
+        // 对象清单模式：搜索框 + 批量操作栏 + 表列表。
+        .when(!form.scope_all, |this| {
+            this
+                // 搜索框：左侧搜索图标、右侧输入非空时显示清除按钮。
+                .child(
+                    div()
+                        .id("backup-object-search")
+                        .track_focus(&object_search_input.read(cx).focus_handle(cx))
+                        .flex_none()
+                        .h(px(34.))
+                        .px_2()
+                        .rounded(colors.radius)
+                        .border_1()
+                        .border_color(colors.border)
+                        .hover(move |s| s.border_color(colors.muted))
+                        .focus(move |s| {
+                            s.border_color(if colors.is_dark {
+                                rgb(0x8ab4ff)
+                            } else {
+                                rgb(0x111111)
+                            })
+                        })
+                        .bg(colors.input_bg)
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(app_icon(AppIcon::Search, 15., colors.muted))
+                        .child(
+                            div().flex_1().min_w(px(0.)).child(
+                                Input::new(&object_search_input)
+                                    .appearance(false)
+                                    .focus_bordered(false)
+                                    .cleanable(true)
+                                    .w_full()
+                                    .h_full()
+                                    .text_size(px(13.)),
+                            ),
+                        ),
+                )
+                // 批量操作工具条：全选复选框 + 结果数量 + 清空按钮。
+                .child(
+                    div()
+                        .h(px(28.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Checkbox::new("backup-select-all")
+                                .label("全选表")
+                                .cursor_pointer()
+                                .disabled(filtered_tables.is_empty())
+                                .checked(
+                                    !filtered_tables.is_empty()
+                                        && filtered_tables
+                                            .iter()
+                                            .all(|n| form.selected_tables.contains(n)),
+                                )
+                                .on_click({
+                                    let view = view.clone();
+                                    // 全选/取消全选：当前筛选中存在未选中的表则全选，否则全部取消。
+                                    let select_all = filtered_tables
+                                        .iter()
+                                        .any(|n| !form.selected_tables.contains(n));
+                                    move |_, _, cx| {
+                                        let _ = view.update(cx, |this, cx| {
+                                            this.set_backup_filtered_tables(select_all, cx);
+                                        });
+                                    }
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(colors.muted)
+                                .child(format!(
+                                    "{} 项 · 已选 {selected_objects}/{total_objects}",
+                                    filtered_tables.len()
+                                )),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            Button::new("backup-clear-btn")
+                                .label("清空")
+                                .small()
+                                .ghost()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.set_backup_filtered_tables(false, cx);
+                                    cx.stop_propagation();
+                                })),
+                        ),
+                )
+                // 表列表：带边框、圆角、背景色的滚动容器。虚拟化列表的滚动条挂在此容器上。
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.))
+                        .rounded(colors.radius)
+                        .border_1()
+                        .border_color(colors.border)
+                        .bg(colors.input_bg)
+                        .flex()
+                        .flex_col()
+                        .overflow_hidden()
+                        .vertical_scrollbar(&objects_scroll.clone())
+                        .child(list_scroll),
+                )
+        })
         // 视图分组：数据模型为单一开关（include_views），非逐视图勾选，故只渲染一行。
         .when(view_tables > 0, |this| {
             this.child(
@@ -210,7 +265,7 @@ fn database_backup_objects_body(
                 ),
             )
         })
-        // 底部提示：次级文字 + 图标，说明对象选择仅对逻辑备份生效。
+        // 底部提示：范围同时作用于原生工具与逻辑备份。
         .child(
             div()
                 .flex()
@@ -221,7 +276,7 @@ fn database_backup_objects_body(
                     div()
                         .text_size(px(11.))
                         .text_color(colors.muted)
-                        .child("对象选择仅对「逻辑备份」生效；原生备份导出整库。"),
+                        .child("所选范围同时适用于原生工具（mysqldump/pg_dump）与逻辑备份。"),
                 ),
         )
 }

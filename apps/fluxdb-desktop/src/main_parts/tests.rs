@@ -3289,7 +3289,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             redis_overview: RedisConnectionOverview::default(),
         };
 
-        assert!(connection_databases(&connection).is_empty());
+        assert!(connection_databases(&connection, false).is_empty());
 
         connection.objects.push(ObjectSummary {
             path: ObjectPath {
@@ -3304,7 +3304,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             modified_at: None,
         });
 
-        assert_eq!(connection_databases(&connection).len(), 1);
+        assert_eq!(connection_databases(&connection, false).len(), 1);
     }
 
     #[test]

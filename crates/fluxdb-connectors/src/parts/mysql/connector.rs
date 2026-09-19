@@ -42,6 +42,11 @@ impl Connector for MySqlConnector {
         let query_timeout = profile
             .and_then(|p| (p.advanced.query_timeout_secs > 0).then_some(p.advanced.query_timeout_secs))
             .map(|secs| Duration::from_secs(u64::from(secs)));
+        ensure_mysql_classic_greeting(
+            options.get_host(),
+            options.get_port(),
+            mysql_greeting_probe_timeout(connect_timeout),
+        )?;
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
