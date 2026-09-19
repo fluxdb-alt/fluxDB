@@ -645,8 +645,15 @@ impl NavicatMain {
         self.connection_context_menu = None;
         self.group_context_menu = None;
         self.display_database_connection = Some(connection_id);
+        // 默认勾选全部非系统库（系统库默认不显示）；勾选“显示系统库”后可再加选系统库。
         self.display_database_selection = configured_visible_databases(&connection.config.options)
-            .unwrap_or_else(|| databases.iter().cloned().collect::<BTreeSet<_>>());
+            .unwrap_or_else(|| {
+                databases
+                    .iter()
+                    .filter(|database| !is_system_database(database))
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+            });
         self.display_database_search.clear();
         self.display_database_search_input
             .update(cx, |input, cx| input.set_value(String::new(), window, cx));

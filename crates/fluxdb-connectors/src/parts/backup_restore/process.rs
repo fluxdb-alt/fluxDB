@@ -31,7 +31,8 @@ fn run_client(
 ) -> fluxdb_core::Result<()> {
     canceled(cancel)?;
     command.stderr(Stdio::piped());
-    let mut child = ManagedChild(command.spawn().map_err(io_error)?);
+    // Windows 下隐藏子进程控制台窗口，避免备份/恢复弹出黑框。
+    let mut child = ManagedChild(fluxdb_core::no_console(command).spawn().map_err(io_error)?);
     let stderr = child
         .0
         .stderr

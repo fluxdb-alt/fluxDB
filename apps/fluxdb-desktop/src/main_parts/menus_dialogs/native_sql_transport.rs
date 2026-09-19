@@ -119,7 +119,7 @@ pub fn pg_start_ssh_tunnel(
             tunnel_cmd.env("SSHPASS", pass);
         }
     }
-    let mut child = tunnel_cmd
+    let mut child = fluxdb_core::no_console(tunnel_cmd)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

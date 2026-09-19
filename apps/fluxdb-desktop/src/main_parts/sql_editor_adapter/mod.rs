@@ -464,6 +464,20 @@ impl SqlAdapter {
                 items.push(item);
             }
         }
+        // 表/列/模式等标识符候选点击插入时补引号（与解析器补全路径一致）：MySQL 反引号，
+        // 其余（SQLite/PostgreSQL 等）双引号。函数/关键字保持原样，避免 `COUNT`() 被误引号。
+        let quote = |name: &str| match self.dialect {
+            SqlDialect::Mysql => format!("`{name}`"),
+            _ => format!("\"{name}\""),
+        };
+        for item in &mut items {
+            match item.kind {
+                CompletionKind::Table | CompletionKind::Column | CompletionKind::Schema => {
+                    item.insert_text = quote(&item.label);
+                }
+                _ => {}
+            }
+        }
         for item in &mut items {
             item.filter_text = item.label.to_ascii_lowercase();
         }

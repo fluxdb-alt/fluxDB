@@ -194,7 +194,7 @@ fn new_query_database_list(
     }
 
     let mut has_database = false;
-    for database in connection_databases(connection) {
+    for database in connection_databases(connection, false) {
         let name = database.path.database.unwrap_or(database.path.name);
         has_database = true;
         list = list.child(new_query_database_item(

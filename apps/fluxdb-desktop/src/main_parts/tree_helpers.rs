@@ -1148,7 +1148,7 @@ fn saved_queries_for_database<'a>(
         .collect()
 }
 
-fn connection_databases(connection: &ConnectionState) -> Vec<ObjectSummary> {
+fn connection_databases(connection: &ConnectionState, include_system: bool) -> Vec<ObjectSummary> {
     let visible_databases = configured_visible_databases(&connection.config.options);
     let mut databases: BTreeMap<String, ObjectSummary> = BTreeMap::new();
     for object in &connection.objects {
@@ -1194,9 +1194,12 @@ fn connection_databases(connection: &ConnectionState) -> Vec<ObjectSummary> {
         .filter(|database| {
             let name = database_display_name(database);
             if let Some(visible) = &visible_databases {
-                visible.contains(&name)
+                // 用户显式保存的可见库集合（可能已勾选系统库）原样展示。
+                include_system || visible.contains(&name)
             } else {
-                !is_system_database(&name)
+                // 未设置可见库筛选时，默认隐藏系统库；include_system=true（如“显示数据库”弹框
+                // 的候选列表）则保留系统库，交由弹框内“显示系统库”开关控制展示。
+                include_system || !is_system_database(&name)
             }
         })
         .collect()
@@ -1250,7 +1253,9 @@ fn all_connection_database_names(connection: &ConnectionState) -> Vec<String> {
 fn connection_databases_unfiltered(connection: &ConnectionState) -> Vec<ObjectSummary> {
     let mut connection = connection.clone();
     connection.config.options.remove(VISIBLE_DATABASES_OPTION);
-    connection_databases(&connection)
+    // 候选列表需要包含系统库（供“显示系统库”开关勾选后加入可见库集合），
+    // 与侧边栏默认隐藏系统库的展示策略分离。
+    connection_databases(&connection, true)
 }
 
 fn database_display_name(database: &ObjectSummary) -> String {

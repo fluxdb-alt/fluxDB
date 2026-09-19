@@ -90,10 +90,9 @@ fn inspect_restore(
         if request.tool.as_os_str().is_empty() {
             return Err(task_error("未找到数据库恢复客户端"));
         }
-        let version = Command::new(&request.tool)
-            .arg("--version")
-            .output()
-            .map_err(io_error)?;
+        let mut version_cmd = Command::new(&request.tool);
+        version_cmd.arg("--version");
+        let version = fluxdb_core::no_console(version_cmd).output().map_err(io_error)?;
         if !version.status.success() {
             return Err(task_error("恢复客户端版本检查失败"));
         }
@@ -612,10 +611,9 @@ fn restore_database(
         }
         postgres_env(&mut command, &config, tunnel.is_some())?;
     } else {
-        let version = Command::new(&request.tool)
-            .arg("--version")
-            .output()
-            .map_err(io_error)?;
+        let mut version_cmd = Command::new(&request.tool);
+        version_cmd.arg("--version");
+        let version = fluxdb_core::no_console(version_cmd).output().map_err(io_error)?;
         let version = mysql_client_version(&String::from_utf8_lossy(&version.stdout))
             .ok_or_else(|| task_error("无法识别 MySQL 恢复客户端版本"))?;
         command.args([

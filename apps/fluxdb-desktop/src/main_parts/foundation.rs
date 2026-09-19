@@ -179,7 +179,19 @@ fn apply_global_theme_settings(settings: &Settings, cx: &mut App) {
     theme.shadow = settings.show_shadows;
     theme.focus_ring = settings.focus_ring;
     theme.scrollbar_mode = match settings.scrollbar_mode {
-        ScrollbarMode::Scrolling => ComponentScrollbarMode::Scrolling,
+        // Windows 用户习惯常驻滚动条（类比 Navicat 默认展示）。
+        // 默认的 Scrolling（自动隐藏）在 Windows 下会导致数据表等没有左右滚动条，
+        // 因此在 Windows 上将默认的 Scrolling 映射为 Always；Hover/Always 尊重用户显式选择。
+        ScrollbarMode::Scrolling => {
+            #[cfg(target_os = "windows")]
+            {
+                ComponentScrollbarMode::Always
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                ComponentScrollbarMode::Scrolling
+            }
+        }
         ScrollbarMode::Hover => ComponentScrollbarMode::Hover,
         ScrollbarMode::Always => ComponentScrollbarMode::Always,
     };

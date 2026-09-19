@@ -1207,7 +1207,7 @@ impl NavicatMain {
             .filter(|connection| connection.expanded)
             .flat_map(|connection| {
                 let connection_id = connection.config.id;
-                connection_databases(connection)
+                connection_databases(connection, false)
                     .into_iter()
                     .map(move |database| {
                         let name = database

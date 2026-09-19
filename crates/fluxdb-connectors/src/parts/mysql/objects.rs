@@ -57,11 +57,13 @@ async fn mysql_database_objects(
     connection_id: ConnectionId,
     connection: &mut sqlx::MySqlConnection,
 ) -> fluxdb_core::Result<Vec<ObjectSummary>> {
+    // 列出全部 schema（含系统库 information_schema/mysql/performance_schema/sys）。
+    // 默认展示与侧边栏隐藏系统库由 UI 层决定（“显示数据库”弹框可勾选系统库后保存），
+    // 不再在 SQL 层硬编码排除，否则系统库永远无法显示。
     let rows = sqlx::query(
         r#"
         SELECT CAST(schema_name AS CHAR) AS database_name
         FROM information_schema.schemata
-        WHERE schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
         ORDER BY schema_name
         "#,
     )
