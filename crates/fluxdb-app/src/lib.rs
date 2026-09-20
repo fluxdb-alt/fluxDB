@@ -26,11 +26,11 @@ use fluxdb_core::{
     CompletionTrigger, ConnectionConfig, ConnectionDraft, ConnectionGroup, ConnectionGroupId,
     ConnectionId, ConnectionOverview, Connector, CreateDatabaseRequest, DataChangeSet,
     DataExportPreview, DataPage, DatabaseKind, DatabasePrivilegeGrant, DatabaseUserIdentity,
-    Endpoint, ErColumn, ErForeignKeyEdge, ErGraphData, ErTableNode, Error, ErrorKind, FilterSpec,
-    ForeignKeyInfo, IndexInfo, InsertTextFormat, ObjectKind, ObjectPath, ObjectSummary, Pagination,
-    PgEffectivePrivilege, PgGrantTargetLists, PgObjectGrantScope, PgObjectGrants, PgPasswordOp,
-    PgRelationKind, PgRole, PgRoleChange, PgRoleDraft, PgRoleMembership, PgRoleSavePlan,
-    PgValidUntilOp, PrivilegeScope, QueryCompletionItem, QueryCompletionKind,
+    Endpoint, ErColumn, ErForeignKeyEdge, ErGraphData, ErLoadStatus, ErTableNode, Error, ErrorKind,
+    FilterSpec, ForeignKeyInfo, IndexInfo, InsertTextFormat, ObjectKind, ObjectPath, ObjectSummary,
+    Pagination, PgEffectivePrivilege, PgGrantTargetLists, PgObjectGrantScope, PgObjectGrants,
+    PgPasswordOp, PgRelationKind, PgRole, PgRoleChange, PgRoleDraft, PgRoleMembership,
+    PgRoleSavePlan, PgValidUntilOp, PrivilegeScope, QueryCompletionItem, QueryCompletionKind,
     QueryCompletionResult, QueryDeleteRollbackSnapshot, QueryExecutionOptions,
     QueryExecutionResult, QueryExecutionSummary, QueryInsertRollbackSnapshot, QueryRequest,
     QueryRollbackRowSnapshot, QueryRollbackSnapshot, QueryStatementKind,
@@ -87,6 +87,8 @@ include!("parts/workbench_history.rs");
 include!("parts/query_result_edit.rs");
 include!("parts/tests.rs");
 include!("parts/er_service.rs");
+include!("parts/er_catalog.rs");
+include!("parts/er_layout.rs");
 
 pub use fluxdb_connectors::{
     MySqlClientVersion, MySqlDumpInvocation, MySqlDumpOptions, mysql_client_version,

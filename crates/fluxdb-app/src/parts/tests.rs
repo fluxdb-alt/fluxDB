@@ -19,6 +19,7 @@ mod tests {
     include!("tests/sqlite_binary.rs");
     include!("tests/query.rs");
     include!("tests/er.rs");
+    include!("tests/er_catalog.rs");
     include!("tests/completion_postgres_live.rs");
     include!("tests/redis_overview.rs");
     include!("tests/redis_completion.rs");

@@ -5,11 +5,29 @@
 // er_service.rs，绘制在 desktop 的 er/canvas.rs）。逻辑关系编辑、required_filters、
 // usage、Agent 投影等仍属设计文档未确认部分，本轮不在此建模。
 
+/// ER 范围/实体的加载状态。空字段列表不能同时代表「未读取」与「没有字段」，
+/// 关系未加载也不能显示成「没有关系」；本枚举用于明确区分。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ErLoadStatus {
+    /// 尚未读取（例如该表未进入读取范围）。
+    #[default]
+    NotLoaded,
+    /// 读取进行中。
+    Loading,
+    /// 已读取完成（字段列表可能为空 —— 空是「确实没有字段」，不是「未读」）。
+    Loaded,
+    /// 读取失败；保留现有可用内容，不整体清空。
+    Failed,
+}
+
 /// 整库 ER 画布数据：表节点 + 外键连线。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ErGraphData {
     pub tables: Vec<ErTableNode>,
     pub edges: Vec<ErForeignKeyEdge>,
+    /// 关系（外键索引）的加载状态：与会话「无关系」区分开，
+    /// 关系未加载/部分失败时不能展示成「没有关系」。
+    pub relation_status: ErLoadStatus,
 }
 
 /// 表节点：展示表名 + 逐行可见列。
@@ -19,6 +37,8 @@ pub struct ErTableNode {
     /// MySQL/SQLite 单 schema 时即为裸表名。
     pub name: String,
     pub comment: Option<String>,
+    /// 该表字段（列）加载状态；字段是否为空据此理解，不能当作「未读」。
+    pub status: ErLoadStatus,
     pub columns: Vec<ErColumn>,
 }
 

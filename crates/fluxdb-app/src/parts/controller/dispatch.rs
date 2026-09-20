@@ -148,6 +148,8 @@ impl AppController {
                         self.state.active_tab = self.state.tabs.last().map(|tab| tab.id);
                     }
                 }
+                // 连接配置变更：ER 元数据缓存按连接修订整体失效，避免旧连接结果复用。
+                self.er_bump_connection_revision(config.id);
                 self.state.last_error = None;
                 AppEvent::ConnectionUpdated(config)
             }
@@ -402,6 +404,8 @@ impl AppController {
                 }
                 self.state.last_error = None;
                 self.state.sidebar_layout.repair(&self.connection_configs());
+                // 连接删除：清空该连接 ER 缓存与修订，避免同 id 复用旧图。
+                self.er_invalidate_connection(connection_id);
 
                 AppEvent::ConnectionDeleted(connection_id)
             }

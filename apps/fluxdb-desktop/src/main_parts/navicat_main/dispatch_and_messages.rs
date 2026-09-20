@@ -760,13 +760,42 @@ impl NavicatMain {
                 self.redis_data_refresh_times.remove(tab_id);
                 // ER 图缓存与进行中任务随标签关闭一并回收，避免残留旧图/后台线程。
                 self.er_graphs.remove(tab_id);
+                self.er_full_tables.remove(tab_id);
                 self.er_errors.remove(tab_id);
                 self.er_load_tasks.remove(tab_id);
+                self.er_relation_tasks.remove(tab_id);
+                self.er_pending_columns.remove(tab_id);
+                self.er_column_debounce_tasks.remove(tab_id);
+                self.er_node_scroll_px
+                    .retain(|(task_tab_id, _), _| *task_tab_id != *tab_id);
+                self.er_selected_table.remove(tab_id);
+                if self
+                    .er_scroll_drag
+                    .as_ref()
+                    .is_some_and(|(drag_tab, _)| *drag_tab == *tab_id)
+                {
+                    self.er_scroll_drag = None;
+                }
+                if self.er_node_drag.as_ref().is_some_and(|(drag_tab, ..)| *drag_tab == *tab_id) {
+                    self.er_node_drag = None;
+                }
+                self.er_scene_positions.remove(tab_id);
+                self.er_pinned.remove(tab_id);
+                self.er_user_interacted.remove(tab_id);
+                self.er_layout_applied.remove(tab_id);
+                self.er_frame_edges.remove(tab_id);
                 self.er_depths.remove(tab_id);
                 self.er_expanded.remove(tab_id);
                 self.er_viewports.remove(tab_id);
                 self.er_scenes.remove(tab_id);
                 self.er_canvas_sizes.remove(tab_id);
+                if self
+                    .er_viewport_drag
+                    .as_ref()
+                    .is_some_and(|(drag_tab, _, _, _, _)| *drag_tab == *tab_id)
+                {
+                    self.er_viewport_drag = None;
+                }
                 // Redis Key 列表展示模式 / 展开态 / 叶子选中 / hover 均为 tab 级状态，随 tab 关闭回收。
                 self.redis_key_list_modes.remove(tab_id);
                 self.redis_key_list_expanded.remove(tab_id);

@@ -2604,4 +2604,8 @@ pub struct AppController {
     /// `AppState`：UI 线程与后台执行线程各持一份 `AppController` 副本，只有共享 `Arc`
     /// 才能让两边看到同一个标志。
     query_cancel_flags: Arc<Mutex<BTreeMap<TabId, Arc<std::sync::atomic::AtomicBool>>>>,
+    /// ER 元数据共享缓存（字段按需 + 关系索引 + 连接修订）。UI 线程与后台执行线程
+    /// 各持一份 `AppController` 副本，`Arc<Mutex>` 让两边共享同一缓存与并发协调。
+    /// 见 parts/er_catalog.rs。
+    er_catalog: Arc<Mutex<crate::ErCatalogCache>>,
 }

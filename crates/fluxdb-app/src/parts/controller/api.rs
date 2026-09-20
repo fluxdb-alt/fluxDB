@@ -10,6 +10,7 @@ impl AppController {
             completion_index_storage: None,
             recency: Arc::new(Mutex::new(RecencyFrequency::new())),
             query_cancel_flags: Arc::new(Mutex::new(BTreeMap::new())),
+            er_catalog: Arc::new(Mutex::new(ErCatalogCache::default())),
         }
     }
 

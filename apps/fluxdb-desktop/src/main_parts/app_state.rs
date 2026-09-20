@@ -612,10 +612,15 @@ struct NavicatMain {
     redis_refresh_time_task: Option<Task<()>>,
     // ER 关系图画布数据：按 tab 缓存；首次打开自动后台加载（见 er/canvas.rs）。
     er_graphs: BTreeMap<TabId, fluxdb_core::ErGraphData>,
+    // 整库表目录（阶段 1 读取）。当前表关联 ER 视图据此在关系就绪后扩展邻域；
+    // 整库视图直接用它作为展示集。
+    er_full_tables: BTreeMap<TabId, Vec<fluxdb_core::ErTableNode>>,
     // ER 图加载失败的错误文案：有值则渲染错误+重试，而非空图。
     er_errors: BTreeMap<TabId, String>,
     // 进行中的 ER 加载任务；存在即「请求中」，避免渲染重复触发加载。
     er_load_tasks: BTreeMap<TabId, Task<()>>,
+    // ER 关系索引后台加载任务（按 tab，共享 app 层索引）。存在即请求中，避免重复发起。
+    er_relation_tasks: BTreeMap<TabId, Task<()>>,
     // 当前表关联 ER 的展开深度（跳数）：按 tab 隔离，默认 1。
     // 切换深度会清图缓存并重新加载 neighborhood（不在 tab 去重键内，同一表一个 tab）。
     er_depths: BTreeMap<TabId, u8>,
@@ -629,6 +634,30 @@ struct NavicatMain {
     er_viewport_drag: Option<(TabId, f32, f32, f32, f32)>,
     // ER 画布可见区域尺寸（px）：由画布区 Element 回报，用于虚拟化可见性计算。
     er_canvas_sizes: BTreeMap<TabId, (f32, f32)>,
+    // ER 节点内字段纵向滚动偏移（px，按 tab+表名）。字段多时在节点内滚动。
+    er_node_scroll_px: BTreeMap<(TabId, String), f32>,
+    // ER 字段滚动条拖拽进行中：记录 (tab, 表名)。
+    er_scroll_drag: Option<(TabId, String)>,
+    // ER 画布当前选中的表（按 tab）：表头点击选择，相关连线高亮；空白/Esc 取消。
+    er_selected_table: BTreeMap<TabId, Option<String>>,
+    // ER 节点自由世界坐标（按 tab + 表名，稳定表身份，不依赖布局下标）。
+    // 场景只存拓扑；坐标在此可变（拖动/布局应用更新）。
+    er_scene_positions: BTreeMap<TabId, BTreeMap<String, (f32, f32)>>,
+    // 手动固定（拖动过）的表：关系布局/重排保留其坐标（§6.3）。
+    er_pinned: BTreeMap<TabId, BTreeSet<String>>,
+    // 节点拖动进行中：(tab, 表名, 按下光标 x/y, 原坐标 x/y, 是否已超阈值)。
+    // 未超阈值释放 = 选择；超阈值 = 拖动（§7）。
+    er_node_drag: Option<(TabId, String, f32, f32, f32, f32, bool)>,
+    // 用户已操作画布（平移/拖动/选择/字段滚动）的 tab：关系就绪后不再自动重排。
+    er_user_interacted: BTreeSet<TabId>,
+    // 关系布局已应用过一次的 tab（首次关系就绪自动应用只此一次，§6.2）。
+    er_layout_applied: BTreeSet<TabId>,
+    // 本帧可见折线缓存（供空白点击的关系线命中，有界）。
+    er_frame_edges: BTreeMap<TabId, Vec<ErEdgeView>>,
+    // ER 字段按需加载的待请求表集合（去抖合并）：同一批可见表合并为一次批量请求。
+    er_pending_columns: BTreeMap<TabId, BTreeSet<String>>,
+    // ER 字段按需加载去抖任务：短暂窗口内合并需求，避免每个鼠标/渲染事件启动请求。
+    er_column_debounce_tasks: BTreeMap<TabId, Option<Task<()>>>,
     // Redis 连接级概览（版本/内存/CPU）的定期刷新任务与进行中的单次拉取任务
     redis_overview_refresh_task: Option<Task<()>>,
     redis_overview_refresh_tasks: BTreeMap<u64, Task<()>>,
