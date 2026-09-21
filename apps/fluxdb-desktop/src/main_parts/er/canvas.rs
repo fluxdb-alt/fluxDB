@@ -169,6 +169,26 @@ impl NavicatMain {
         self.er_relationship_tasks.insert(tab_id, task);
     }
 
+    /// 点击画布上的本地逻辑关系边：打开右侧抽屉并高亮该关系（供编辑/确认/删除）。
+    fn er_select_relationship(
+        &mut self,
+        tab_id: TabId,
+        relationship_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        // 打开抽屉（若未开）。
+        self.er_relationship_panel_open.insert(tab_id);
+        self.er_relationship_panel_selected
+            .insert(tab_id, Some(relationship_id));
+        // 关系目录可能尚未加载：先确保加载，加载后保留选中定位。
+        if !self.er_relationships.contains_key(&tab_id)
+            && !self.er_relationship_loading.contains(&tab_id)
+        {
+            self.ensure_er_relationships_loaded(tab_id, cx);
+        }
+        cx.notify();
+    }
+
     fn retry_er_relationships(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
         self.er_relationships.remove(&tab_id);
         self.er_relationship_errors.remove(&tab_id);
@@ -1551,49 +1571,6 @@ fn er_relationship_panel(
         .bg(colors.panel_bg)
         .shadow_lg();
 
-    // 左缘拖宽手柄。
-    panel = panel.child(
-        div()
-            .id(("er-rel-panel-handle", tab_id.0))
-            .absolute()
-            .top_0()
-            .left_0()
-            .bottom_0()
-            .w(px(6.))
-            .cursor_ew_resize()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    this.er_relationship_panel_resize_start = Some(SidebarResizeStart {
-                        x: f32::from(event.position.x),
-                        width: panel_width,
-                    });
-                    cx.stop_propagation();
-                }),
-            )
-            .on_drag(SidebarResizeDrag, |drag, _, _, cx| {
-                cx.stop_propagation();
-                cx.new(|_| drag.clone())
-            })
-            .on_drag_move(cx.listener(
-                move |this, event: &gpui::DragMoveEvent<SidebarResizeDrag>, _, cx| {
-                    cx.stop_propagation();
-                    if let Some(start) = this.er_relationship_panel_resize_start {
-                        // 手柄在面板左缘：向右拖 = 面板变窄（delta 为负向加大宽度）。
-                        let delta = start.x - f32::from(event.event.position.x);
-                        let width = (start.width + delta)
-                            .clamp(ER_REL_PANEL_MIN_W, ER_REL_PANEL_MAX_W);
-                        this.er_relationship_panel_width
-                            .entry(tab_id)
-                            .and_modify(|w| *w = width)
-                            .or_insert(width);
-                        cx.notify();
-                    }
-                },
-            ))
-            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
-    );
-
     panel = panel.child(
         div()
             .h(px(42.))
@@ -1782,15 +1759,41 @@ fn er_relationship_panel(
                 .map(|pair| er_relationship_pair_label(this, tab_id, &relationship, pair))
                 .collect::<Vec<_>>()
                 .join("\n");
+            // 高亮：点击画布逻辑边后定位到该关系。
+            let rel_selected = this
+                .er_relationship_panel_selected
+                .get(&tab_id)
+                .and_then(|sel| sel.as_ref())
+                == Some(&relationship_id);
+            let rel_click_tab = tab_id;
+            let rel_click_id = relationship_id.clone();
             list = list.child(
                 div()
                     .rounded_md()
                     .border_1()
                     .border_color(colors.border_soft)
+                    .when(rel_selected, |s| s.bg(colors.tree_selected))
+                    .cursor_pointer()
                     .p(px(10.))
                     .flex()
                     .flex_col()
                     .gap(px(5.))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            // 点卡片：切换选中。
+                            let currently = this
+                                .er_relationship_panel_selected
+                                .get(&rel_click_tab)
+                                .and_then(|sel| sel.as_ref())
+                                == Some(&rel_click_id);
+                            this.er_relationship_panel_selected.insert(
+                                rel_click_tab,
+                                if currently { None } else { Some(rel_click_id.clone()) },
+                            );
+                            cx.notify();
+                        }),
+                    )
                     .child(
                         div()
                             .flex()
@@ -1895,7 +1898,87 @@ fn er_relationship_panel(
         }
         panel = panel.child(list);
     }
+    // 左缘拖宽手柄：作为最后一个 child（渲染在最上层，不被内容覆盖；绘制与命中一致）。
+    panel = panel.child(er_rel_panel_resize_handle(tab_id, panel_width, colors, cx));
     panel
+}
+
+/// 关系表单分节小标题（基础信息 / 字段配对 / 常驻条件）。
+fn er_form_section_title(text: &str, colors: UiColors) -> Div {
+    div()
+        .pt(px(2.))
+        .text_size(px(10.))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(colors.muted)
+        .child(text.to_string())
+}
+
+/// 关系表单带左侧标签的一行（标签固定宽度，控件占余下宽度）。
+fn er_form_labeled_row(
+    label: &str,
+    control: impl gpui::IntoElement,
+    colors: UiColors,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(
+            div()
+                .w(px(36.))
+                .flex_shrink_0()
+                .text_size(px(11.))
+                .text_color(colors.muted)
+                .child(label.to_string()),
+        )
+        .child(div().flex_1().min_w_0().child(control))
+}
+
+/// 关系面板左缘拖宽手柄（独立函数，置于面板最上层，避免被内容区覆盖）。
+fn er_rel_panel_resize_handle(
+    tab_id: TabId,
+    panel_width: f32,
+    _colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> impl gpui::IntoElement {
+    div()
+        .id(("er-rel-panel-handle", tab_id.0))
+        .absolute()
+        .top_0()
+        .left_0()
+        .bottom_0()
+        .w(px(6.))
+        .cursor_ew_resize()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                this.er_relationship_panel_resize_start = Some(SidebarResizeStart {
+                    x: f32::from(event.position.x),
+                    width: panel_width,
+                });
+                cx.stop_propagation();
+            }),
+        )
+        .on_drag(SidebarResizeDrag, |drag, _, _, cx| {
+            cx.stop_propagation();
+            cx.new(|_| drag.clone())
+        })
+        .on_drag_move(cx.listener(
+            move |this, event: &gpui::DragMoveEvent<SidebarResizeDrag>, _, cx| {
+                cx.stop_propagation();
+                if let Some(start) = this.er_relationship_panel_resize_start {
+                    // 手柄在面板左缘：向右拖使得面板变窄（delta 为负向加大宽度）。
+                    let delta = start.x - f32::from(event.event.position.x);
+                    let width = (start.width + delta).clamp(ER_REL_PANEL_MIN_W, ER_REL_PANEL_MAX_W);
+                    this.er_relationship_panel_width
+                        .entry(tab_id)
+                        .and_modify(|w| *w = width)
+                        .or_insert(width);
+                    cx.notify();
+                }
+            },
+        ))
+        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
 fn er_relationship_pair_label(
@@ -1996,80 +2079,72 @@ fn er_relationship_form(
     let mut form = div()
         .mx(px(10.))
         .my(px(8.))
-        .p(px(10.))
+        .p(px(12.))
         .rounded_md()
         .border_1()
         .border_color(colors.border_soft)
         .bg(colors.canvas_bg)
         .flex()
         .flex_col()
-        .gap(px(8.))
+        .gap(px(9.))
         .child(
             div()
                 .text_size(px(12.))
-                .font_weight(gpui::FontWeight::MEDIUM)
+                .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child("新建本地逻辑关系"),
-        )
-        .child(
-            div()
-                .flex()
-                .gap(px(6.))
-                .child(
-                    div()
-                        .flex_1()
-                        .child(Select::new(&left_table).small().search_placeholder("选择左表")),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .child(Select::new(&right_table).small().search_placeholder("选择右表")),
-                ),
-        )
-        .child(Input::new(&role_input).small())
-        .child(Input::new(&description_input).small())
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .child(
-                    div()
-                        .w(px(64.))
-                        .text_size(px(11.))
-                        .text_color(colors.muted)
-                        .child("基数"),
-                )
-                .child(div().flex_1().child(Select::new(&cardinality).small())),
         );
 
+    // 基础信息分节：左表 / 右表 / 角色 / 说明 / 基数（各占一行，标签对齐）。
+    form = form.child(er_form_section_title("基础信息", colors));
+    form = form.child(er_form_labeled_row(
+        "左表",
+        Select::new(&left_table).small().search_placeholder("选择左表"),
+        colors,
+    ));
+    form = form.child(er_form_labeled_row(
+        "右表",
+        Select::new(&right_table).small().search_placeholder("选择右表"),
+        colors,
+    ));
+    form = form.child(er_form_labeled_row("角色", Input::new(&role_input).small(), colors));
+    form = form.child(er_form_labeled_row(
+        "说明",
+        Input::new(&description_input).small(),
+        colors,
+    ));
+    form = form.child(er_form_labeled_row("基数", Select::new(&cardinality).small(), colors));
+
+    // 字段配对分节：上下两列表头对齐，每对左右字段各占一列。
+    form = form.child(er_form_section_title("字段配对", colors));
+    form = form.child(
+        div()
+            .flex()
+            .gap(px(8.))
+            .child(div().flex_1().text_size(px(10.)).text_color(colors.muted).child("左表字段"))
+            .child(div().flex_1().text_size(px(10.)).text_color(colors.muted).child("右表字段")),
+    );
     for (index, (left, right)) in pairs.into_iter().enumerate() {
         form = form.child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(6.))
+                .gap(px(8.))
                 .child(
                     div()
-                        .w(px(18.))
+                        .w(px(16.))
+                        .flex_shrink_0()
                         .text_size(px(11.))
                         .text_color(colors.muted)
                         .child(format!("{}", index + 1)),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .child(Select::new(&left).small().search_placeholder("左字段")),
-                )
-                .child(div().text_color(colors.muted).child("↔"))
-                .child(
-                    div()
-                        .flex_1()
-                        .child(Select::new(&right).small().search_placeholder("右字段")),
-                ),
+                .child(div().flex_1().min_w_0().child(Select::new(&left).small().search_placeholder("左字段")))
+                .child(div().flex_1().min_w_0().child(Select::new(&right).small().search_placeholder("右字段"))),
         );
     }
 
+    // 常驻条件分节。
+    form = form.child(er_form_section_title("常驻条件", colors));
     for (index, (side, column, op, literal)) in filters.into_iter().enumerate() {
         form = form.child(
             div()

@@ -88,19 +88,28 @@ _canvas_size: Option<(f32, f32)>,
                         let vp = this.er_viewports.get(&current_tab).copied().unwrap_or_default();
                         let wx = vp.to_world_x(f32::from(event.position.x) - ox);
                         let wy = vp.to_world_y(f32::from(event.position.y) - oy);
-                        // 关系线命中：只扫本帧可见折线（有界）。
-                        let hit_desc = this.er_frame_edges.get(&current_tab).and_then(|edges| {
-                            edges
-                                .iter()
-                                .filter(|e| e.points.windows(2).any(|w| {
-                                    dist_point_seg(wx, wy, w[0], w[1]) <= 6.0
-                                }))
-                                .map(|e| e.desc.clone())
-                                .next()
-                        });
+                        // 关系线命中：只扫本帧可见折线（有界）。命中返回说明文本 + 逻辑关系 id
+                        // （物理外键 id 为 None）。克隆避免持有对 this 的不可变借用。
+                        let hit_edge = this
+                            .er_frame_edges
+                            .get(&current_tab)
+                            .and_then(|edges| {
+                                edges
+                                    .iter()
+                                    .filter(|e| e.points.windows(2).any(|w| {
+                                        dist_point_seg(wx, wy, w[0], w[1]) <= 6.0
+                                    }))
+                                    .next()
+                            })
+                            .cloned();
                         this.mark_er_interacted(current_tab);
-                        if let Some(desc) = hit_desc {
-                            this.show_message(desc, AppMessageKind::Info, cx);
+                        if let Some(edge) = hit_edge {
+                            // 本地逻辑关系：点击直接展开抽屉并选中该关系（供编辑/确认）；物理外键仅提示。
+                            if let Some(rel_id) = edge.logical_rel_id {
+                                this.er_select_relationship(current_tab, rel_id, cx);
+                            } else {
+                                this.show_message(edge.desc, AppMessageKind::Info, cx);
+                            }
                             cx.stop_propagation();
                             cx.notify();
                             return;

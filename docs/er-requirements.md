@@ -228,3 +228,9 @@
 - 基数选择：表单增基数下拉（1:1 / 1:N / N:1 / N:N / 未知），映射 `ErMatchCardinality`（用户选择时 basis=UserAssertion，未知则不声明）；新建默认未知、编辑预填当前值且可改。纯函数 `er_cardinality_to_option_id`/`er_option_id_to_cardinality` + 回归。
 - 验证：`cargo test -p fluxdb-desktop` 432 全通过（含 `er_cardinality_option_roundtrip`）；fmt 干净。
 
+## 本轮新增（关系交互/布局修复）
+- 抽屉拖宽修复：拖宽手柄从面板首 child 移到**最末 child**（GPUI 后声明者在同层之上），避免被内容区覆盖点不到；抽成 `er_rel_panel_resize_handle`（280–560px，按 tab 记忆）。
+- 点击逻辑边打开抽屉：`ErEdgeView` 增 `logical_rel_id`（由边名 `logic:{id}:{idx}` 提取，`er_logical_rel_id` 纯函数 + 回归）；interaction 命中逻辑边 → `er_select_relationship` 打开右侧抽屉并高亮该关系（列表卡片可点击选中/再点取消）；物理外键点击仍仅提示。
+- 表单重排：分节（基础信息/字段配对/常驻条件），左/右表各占一行带标签、字段对两列表头对齐（`er_form_section_title`/`er_form_labeled_row`）。
+- 验证：`cargo test -p fluxdb-desktop` 433 全通过（含 `er_logical_rel_id`）；fmt + `cargo check --workspace` 干净。
+

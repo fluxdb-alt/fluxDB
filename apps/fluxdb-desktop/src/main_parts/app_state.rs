@@ -747,6 +747,8 @@ struct NavicatMain {
     er_relationship_form_subscriptions: BTreeMap<TabId, Vec<Subscription>>,
     /// 关系面板宽度（按 tab，可拖动左缘调整）。
     er_relationship_panel_width: BTreeMap<TabId, f32>,
+    /// 关系面板中高亮选中的关系 id（点击画布逻辑边后定位，供编辑/确认）。
+    er_relationship_panel_selected: BTreeMap<TabId, Option<String>>,
     /// 关系面板拖动起点（全局拖动，无 tab_id 语义，参照 sidebar 模式）。
     er_relationship_panel_resize_start: Option<SidebarResizeStart>,
     er_relationship_delete_pending: BTreeMap<TabId, (String, u64)>,

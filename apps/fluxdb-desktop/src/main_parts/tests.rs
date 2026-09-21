@@ -363,6 +363,17 @@ mod tests {
     }
 
     #[test]
+    fn er_logical_rel_id_extracts_id_from_logic_edge_name() {
+        // 逻辑边名 `logic:{id}:{idx}`（画布投影）与 `logic:{id}`（邻域）都提取到 id；
+        // 物理外键名与复合展开的 `logic:{id}:{col}` 不误提取错段。
+        assert_eq!(er_logical_rel_id("logic:user-7-123:0"), Some("user-7-123".into()));
+        assert_eq!(er_logical_rel_id("logic:user-7-123"), Some("user-7-123".into()));
+        assert_eq!(er_logical_rel_id("logic:r:1:2"), Some("r".into()));
+        assert_eq!(er_logical_rel_id("fk_orders_customer"), None);
+        assert_eq!(er_logical_rel_id("fk-logic-foo"), None); // 非 `logic:` 前缀不误判
+    }
+
+    #[test]
     fn er_cardinality_option_roundtrip() {
         // 用户选 1:N → 生成 left_to_right.max=Many/right_to_left.max=One，basis=UserAssertion；
         // 反向能还原到同一选项 id。

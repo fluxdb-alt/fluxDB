@@ -58,6 +58,15 @@ struct ErNodeMeta {
     field_targets: std::collections::BTreeMap<usize, Vec<String>>,
 }
 
+/// 由边名提取本地逻辑关系 id：`logic:{id}:{idx}` → 取 `logic:` 后、下一个 `:` 前的段。
+/// 物理外键边名不以 `logic:` 开头 → None。
+fn er_logical_rel_id(edge_name: &str) -> Option<String> {
+    edge_name
+        .strip_prefix("logic:")
+        .and_then(|rest| rest.split(':').next())
+        .map(str::to_string)
+}
+
 /// 连线拓扑：端点表 + 字段列（全局列序；字段未加载/不存在时为 None → 汇总/待加载端口）。
 /// 端点所在表可自关联（from_idx==to_idx）。
 #[derive(Clone, Debug)]
@@ -69,6 +78,9 @@ struct ErEdgeTopo {
     /// 完整身份，供 tooltip/详情（复合关系不合并）。
     from_column_name: String,
     to_column_name: String,
+    /// 本地逻辑关系 id（边名 `logic:{id}:{idx}` 提取）；物理外键为 None。
+    /// 供「点击逻辑边展开抽屉选中该关系」定位（§五.7）。
+    logical_rel_id: Option<String>,
 }
 
 /// 画布场景：不可变拓扑与展示列（Send，可后台构建）。
@@ -97,6 +109,8 @@ struct ErEdgeView {
     to_idx: usize,
     from_anchor: ErAnchor,
     to_anchor: ErAnchor,
+    /// 本地逻辑关系 id（供点击展开抽屉定位；物理外键为 None）。
+    logical_rel_id: Option<String>,
     /// 关系说明：`表.字段 → 表.字段`（约束名）。选中/hover 展示（§5.2）。
     desc: String,
 }
@@ -226,6 +240,7 @@ fn build_er_scene(graph: &ErGraphData, layout: &ErLayoutResult) -> ErScene {
             to_column: to_col,
             from_column_name: e.from_column.clone(),
             to_column_name: e.to_column.clone(),
+            logical_rel_id: er_logical_rel_id(&e.name),
         });
     }
     for i in 0..nodes.len() {
@@ -832,6 +847,7 @@ impl ErScene {
                 to_idx: e.to_idx,
                 from_anchor: a,
                 to_anchor: b,
+                logical_rel_id: e.logical_rel_id.clone(),
                 desc,
             });
         }

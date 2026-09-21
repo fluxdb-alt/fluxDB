@@ -2390,6 +2390,7 @@ fn main() {
                             er_relationship_form_filters: BTreeMap::new(),
                             er_relationship_form_cardinality: BTreeMap::new(),
                             er_relationship_panel_width: BTreeMap::new(),
+                            er_relationship_panel_selected: BTreeMap::new(),
                             er_relationship_panel_resize_start: None,
                             er_relationship_form_subscriptions: BTreeMap::new(),
                             er_relationship_delete_pending: BTreeMap::new(),
