@@ -202,6 +202,70 @@ impl NavicatMain {
         cx.notify();
     }
 
+    /// 结构刷新重绑扫描（§5.2/D9）：把当前已加载结构比对上一次持久化快照，判断每条关系
+    /// 两端是否 unresolved / 同名重建需确认 / 缺列，产出待处理项（不自动改关系）。
+    /// 随后把当前结构存为快照，供下次刷新比对。无连接器稳定标识 → 只走限定名/列名重绑，
+    /// 不伪造稳定身份。
+    fn er_rebind_scan(&mut self, tab_id: TabId) {
+        let Some(scope_key) = self.er_relationship_scope_keys.get(&tab_id).cloned() else {
+            return;
+        };
+        let Some(rels) = self.er_relationships.get(&tab_id).cloned() else {
+            return;
+        };
+        let Some(full) = self.er_full_tables.get(&tab_id).cloned() else {
+            return;
+        };
+        let old_snap = self
+            .storage
+            .load_er_structure_snapshot(&scope_key)
+            .unwrap_or_default();
+        let old_map: std::collections::HashMap<String, fluxdb_core::ErRebindEntity> = old_snap
+            .into_iter()
+            .map(|e| (e.entity_id.clone(), e))
+            .collect();
+        let new_snap = er_snapshot_entities_from(&full);
+        let mut pending = Vec::new();
+        for rel in rels {
+            for (side, endpoint_entity, label) in [
+                (fluxdb_core::ErRelationSide::Left, rel.left_entity.clone(), "左表"),
+                (fluxdb_core::ErRelationSide::Right, rel.right_entity.clone(), "右表"),
+            ] {
+                let Some(old) = old_map.get(&endpoint_entity) else {
+                    continue; // 该端尚无旧记录（首次打开），不算待处理。
+                };
+                let used = er_rel_columns_side(&rel, side);
+                let out = fluxdb_core::rebind_entity(old, &used, &new_snap);
+                if out.entity_unresolved {
+                    pending.push(ErRebindPendingItem {
+                        rel_id: rel.id.clone(),
+                        endpoint: format!("{label}：实体未找到"),
+                        kind: format!("{}", old.qualified_name),
+                    });
+                } else if out.entity_needs_review {
+                    pending.push(ErRebindPendingItem {
+                        rel_id: rel.id.clone(),
+                        endpoint: format!("{label}：同名重建需确认"),
+                        kind: old.qualified_name.clone(),
+                    });
+                }
+                for col in out.columns {
+                    if col.unresolved {
+                        pending.push(ErRebindPendingItem {
+                            rel_id: rel.id.clone(),
+                            endpoint: format!("{label}：缺列"),
+                            kind: col.old_column_id,
+                        });
+                    }
+                }
+            }
+        }
+        let _ = self
+            .storage
+            .save_er_structure_snapshot(&scope_key, &new_snap);
+        self.er_rebind_pending.insert(tab_id, pending);
+    }
+
     fn retry_er_relationships(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
         self.er_relationships.remove(&tab_id);
         self.er_relationship_errors.remove(&tab_id);
@@ -590,6 +654,53 @@ fn er_column_display_name(column_id: &str) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or(column_id)
         .to_string()
+}
+
+/// 由已加载表节点（含字段）建结构快照实体列表（§5.2/D1）：结构化身份、跳过未加载、
+/// 无稳定标识如实留空（不伪造）。供刷新重绑扫描 `er_rebind_scan` 使用。
+fn er_snapshot_entities_from(
+    full: &[fluxdb_core::ErTableNode],
+) -> Vec<fluxdb_core::ErRebindEntity> {
+    full.iter()
+        .filter(|t| t.status != fluxdb_core::ErLoadStatus::NotLoaded)
+        .map(|t| fluxdb_core::ErRebindEntity {
+            entity_id: er_entity_id(&t.reference),
+            qualified_name: t.reference.display(),
+            stable_id: None,
+            columns: t
+                .columns
+                .iter()
+                .map(|c| fluxdb_core::ErRebindColumn {
+                    column_id: er_column_id(&t.reference, &c.name),
+                    name: c.name.clone(),
+                    stable_id: None,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// 取关系某侧用到的列 ID（column_pairs 该侧 + required_filters 该侧），去重保序。
+fn er_rel_columns_side(
+    rel: &fluxdb_core::ErRelationship,
+    side: fluxdb_core::ErRelationSide,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in &rel.column_pairs {
+        let col = match side {
+            fluxdb_core::ErRelationSide::Left => &p.left_column,
+            fluxdb_core::ErRelationSide::Right => &p.right_column,
+        };
+        if !out.contains(col) {
+            out.push(col.clone());
+        }
+    }
+    for f in &rel.required_filters {
+        if f.side == side && !out.contains(&f.column_id) {
+            out.push(f.column_id.clone());
+        }
+    }
+    out
 }
 
 /// 判断一条本地逻辑关系是否为「有效」关系（§二.3）：只有已确认且结构有效（current）的
@@ -1677,6 +1788,44 @@ fn er_relationship_panel(
                     })),
             ),
     );
+
+    // 结构刷新重绑待处理项横幅（§5.2/D9）：unresolved/同名重建/缺列，人工重绑（编辑关系）。
+    let pending = this.er_rebind_pending.get(&tab_id).cloned().unwrap_or_default();
+    if !this.er_relationship_form_open.contains(&tab_id) && !pending.is_empty() {
+        let mut pending_box = div()
+            .px(px(12.))
+            .py(px(8.))
+            .border_b_1()
+            .border_color(colors.border_soft)
+            .bg(if colors.is_dark { rgb(0x3a2f18) } else { rgb(0xfdf3e3) })
+            .flex()
+            .flex_col()
+            .gap(px(4.));
+        pending_box = pending_box.child(
+            div()
+                .text_size(px(11.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(if colors.is_dark { rgb(0xe6c27a) } else { rgb(0x8a5a00) })
+                .child(format!("{} 项待处理（结构刷新后需人工确认）", pending.len())),
+        );
+        for item in pending.iter().take(4) {
+            pending_box = pending_box.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child(format!("{} · {}：{}", item.endpoint, item.rel_id, item.kind)),
+            );
+        }
+        if pending.len() > 4 {
+            pending_box = pending_box.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child(format!("… 其余 {} 项", pending.len() - 4)),
+            );
+        }
+        panel = panel.child(pending_box);
+    }
 
     if this.er_relationship_form_open.contains(&tab_id) {
         // 表单内容可滚动：默认打开时把提交区推出视口外也能滚到，底部操作始终可达。
@@ -2933,9 +3082,11 @@ fn flush_pending_columns(
                 }
                 if changed {
                     // 重建拓扑（列内容/高度），坐标不动。若有本地逻辑关系，重投影逻辑边，
-                    // 用真实列名锚点（刷新后列刚加载，此前占位列名指向汇总端口）。
+                    // 用真实列名锚点（刷新后列刚加载，此前占位列名指向汇总端口）；并跑一次
+                    // 结构重绑扫描（字段已同步进 er_full_tables，产出 unresolved/needs_review）。
                     if this.er_relationships.contains_key(&tab_id) {
                         this.sync_er_local_relationship_edges(tab_id);
+                        this.er_rebind_scan(tab_id);
                     } else {
                         this.er_scenes.remove(&tab_id);
                         maybe_build_scene(tab_id, this);

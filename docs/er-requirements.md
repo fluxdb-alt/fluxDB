@@ -34,7 +34,7 @@
 | D6 | 原生 GPUI 画布（已按此实现） | §2 | desktop er/* | 验收通过方向 | 缩放需自绘评估 |
 | D7 | 四个读取工具、统一关系服务、宿主增量、快照分页、usage、有界路径 | §6.4-6.10 | 暂缓 | Agent/MCP 统一规划时实施 |
 | D8 | 授权边界仅连接可见性 + 外部 MCP 白名单；服务签名不带主体 | §6.4 | 暂缓 | Agent/MCP 统一规划时实施 |
-| D9 | 刷新重绑四步（稳定标识→限定名→unresolved），无相似度猜测；hub 默认不作中转 | core `rebind_entity` + app `rebind_report` | 部分实现 | 重绑四步已落地+测（无第5步猜测；重建检测→needs_review；缺列→unresolved 不静默接）；hub 抑制未做 |
+| D9 | 刷新重绑四步（稳定标识→限定名→unresolved），无相似度猜测；hub 默认不作中转 | core `rebind_entity` + app `rebind_report` + desktop `er_rebind_scan` | 部分实现 | 重绑四步已落地+测；desktop `er_rebind_scan` 在字段加载后比对新快照产出 unresolved/同名重建/缺列待处理项并在关系面板横幅展示（快照 `er_snapshot:{scope}`）；无连接器稳定标识→只走限定名/列名；人工作绑=编辑关系；hub 抑制未做 |
 
 ## 三、全库与局部 ER 探索（五）
 
@@ -178,7 +178,7 @@
 6. 导入导出、ER 查询、Agent/MCP
 7. 回归、性能、文档、人工验收
 
-> 当前进度：已完成关系服务按作用域复用、后台 AppCommand/AppEvent CRUD/确认/拒绝/删除、关系列表面板、非模态新建/编辑表单（含复合字段配对/结构化常量条件/基数）及本地逻辑边同步；字段缓存结构化身份、并发去重/取消、逻辑关系邻域与有效性过滤、ER JSON 导入解析/校验/差异、结构快照解析+持久化（`er_snapshot:{scope}`）已落地。仍未做：desktop 自动重绑/待处理项 UI（`rebind_entity`+`rebind_report` 算法已测，快照已可采集/存储，但未接到桌面刷新流程——缺连接器稳定标识，只走限定名/列名重绑）、导入「应用」编排、关系查询服务；Agent/MCP 按范围约束暂缓，后续统一规划；桌面视觉与交互仍需人工验收。
+> 当前进度：已完成关系服务按作用域复用、后台 AppCommand/AppEvent CRUD/确认/拒绝/删除、关系列表面板、非模态新建/编辑表单（含复合字段配对/结构化常量条件/基数）及本地逻辑边同步；字段缓存结构化身份、并发去重/取消、逻辑关系邻域与有效性过滤、ER JSON 导入解析/校验/差异、结构快照解析+持久化 + **desktop 刷新重绑扫描（unresolved/同名重建/缺列待处理项，面板横幅展示）** 已落地。仍未做：**自动/人工重绑写回关系**（当前待处理项仅展示，改关系端点/列需经编辑流程，未半自动接管；缺连接器稳定标识）、导入「应用」编排、关系查询服务；Agent/MCP 按范围约束暂缓，后续统一规划；桌面视觉与交互仍需人工验收。
 
 ## 本轮新增（逻辑关系编辑闭环）
 - 应用层：`AppController` 持有按 scope 缓存的 `ErModelService`，启动时注入 `FileStorage`；新增 `Load/Create/Update/Confirm/Reject/DeleteErRelationship` 命令及对应事件，桌面端通过后台 `Task` 调用。
@@ -246,4 +246,11 @@
 - **宽度**：默认 560 逻辑像素，拖宽上限 800，受 ER 内容区可用宽约束（`clamp_er_rel_panel_width`，窄窗收缩、下界 320、按 tab 记忆、窗口缩小重约束）；拖宽公式 = 起始宽度 + 起始 X - 当前 X。
 - **布局**：去掉「外层面板 + 内层大卡片重复标题/关闭」，表单直接铺在面板内（面板 header 在表单打开时标题切为「新建本地逻辑关系」并承担关闭）；去掉表单内自标题/自关闭/大卡片边框，改为弱化说明行 + 分节分隔；左右表并排默认各半、窄宽退单列；控件占位改中文（`Select.placeholder` 控制未选中、`search_placeholder` 控制搜索框，两者分别设置）；未选表时字段/条件字段选择器禁用并提示「请先选择表」；附加条件空态紧凑带辅助说明；表单内容外层滚动、底部取消/创建始终可达。
 - 验证：`cargo test -p fluxdb-desktop` 434 全通过（新增 `er_rel_panel_width_clamped_to_available_and_bounds`）；fmt + `cargo check --workspace` 干净；macOS `cargo build` 通过、`cargo run` 启动到主窗口（拖拽/布局交互需人工确认）。
+
+## 本轮新增（结构快照 + 刷新重绑闭环）
+- storage：`er_snapshot:{scope}` 结构快照 kv（`load/save_er_structure_snapshot`，`Vec<ErRebindEntity>` JSON upsert；round-trip + 跨作用域不串测试）。
+- app：`er_snapshot_from_tables`（由已加载表/列建快照；结构化身份、含点/跨 schema 不串、未加载跳过、无稳定标识如实留空；回归）。
+- desktop：`er_rebind_scan` —— 字段加载后比对上一次持久化快照，按 `rebind_entity` 四步产出 unresolved/同名重建需确认/缺列待处理项（`er_rebind_pending`），并落新快照供下次刷新比对；关系面板顶部横幅展示待处理项（人工重绑 = 编辑关系）。`er_snapshot_entities_from`/`er_rel_columns_side` 回归。
+- 一致性：desktop 与 app 的 entity/column ID 规则一致（`db:schema:name` / `...::col`），快照/关系/画布同 identity。
+- 验证：storage 35 / app 506 / desktop 436 全通过；fmt + `cargo check --workspace` 干净；macOS `cargo build` 通过、`cargo run` 到单实例守卫（重绑待处理横幅需人工确认）。
 

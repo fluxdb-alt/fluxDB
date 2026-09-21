@@ -900,6 +900,7 @@ impl NavicatMain {
                 self.er_relationship_form_subscriptions.remove(tab_id);
                 self.er_relationship_panel_width.remove(tab_id);
                 self.er_relationship_panel_selected.remove(tab_id);
+                self.er_rebind_pending.remove(tab_id);
                 if self
                     .er_relationship_panel_resize_start
                     .as_ref()

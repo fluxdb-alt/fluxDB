@@ -539,6 +539,16 @@ struct ErRelationshipPairControls {
     right_options_key: String,
 }
 
+/// 结构刷新重绑待处理项（§5.2/D9，供关系面板列出，人工重绑；不自动改关系）。
+/// `kind` 为可读描述，如「实体未找到」「同名重建需确认」「缺列: xxx」。
+#[derive(Clone, Debug, Default)]
+struct ErRebindPendingItem {
+    rel_id: String,
+    /// 端点描述（左表 / 右表）。
+    endpoint: String,
+    kind: String,
+}
+
 struct ErRelationshipFilterControls {
     side: Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>,
     column: Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>,
@@ -749,6 +759,9 @@ struct NavicatMain {
     er_relationship_panel_width: BTreeMap<TabId, f32>,
     /// 关系面板中高亮选中的关系 id（点击画布逻辑边后定位，供编辑/确认）。
     er_relationship_panel_selected: BTreeMap<TabId, Option<String>>,
+    /// 结构刷新重绑待处理项（§5.2/D9）：刷新后比对新快照产出的 unresolved/needs_review，
+    /// 供关系面板顶部列出，人工重绑。不自动改关系。
+    er_rebind_pending: BTreeMap<TabId, Vec<ErRebindPendingItem>>,
     /// 关系面板拖动起点（全局拖动，无 tab_id 语义，参照 sidebar 模式）。
     er_relationship_panel_resize_start: Option<SidebarResizeStart>,
     er_relationship_delete_pending: BTreeMap<TabId, (String, u64)>,

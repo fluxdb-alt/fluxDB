@@ -388,6 +388,116 @@ mod tests {
     }
 
     #[test]
+    fn er_rebind_columns_side_dedup_keeps_order() {
+        // 关系某侧用到的列（字段配对 + required_filters 该侧），去重保序，供重绑扫描用。
+        let rel = fluxdb_core::ErRelationship {
+            id: "r1".into(),
+            revision: 1,
+            left_entity: "db:pub:orders".into(),
+            right_entity: "db:pub:customers".into(),
+            role: "role".into(),
+            column_pairs: vec![
+                fluxdb_core::ErColumnPair {
+                    left_column: "A".into(),
+                    right_column: "a1".into(),
+                },
+                fluxdb_core::ErColumnPair {
+                    left_column: "B".into(),
+                    right_column: "b1".into(),
+                },
+            ],
+            required_filters: vec![
+                fluxdb_core::ErRequiredFilter {
+                    side: fluxdb_core::ErRelationSide::Left,
+                    column_id: "A".into(),
+                    op: fluxdb_core::ErFilterOp::Eq,
+                    literal: fluxdb_core::ErLiteral::Int(0),
+                },
+                fluxdb_core::ErRequiredFilter {
+                    side: fluxdb_core::ErRelationSide::Right,
+                    column_id: "r_dup".into(),
+                    op: fluxdb_core::ErFilterOp::IsNull,
+                    literal: fluxdb_core::ErLiteral::Null,
+                },
+            ],
+            match_cardinality: fluxdb_core::ErMatchCardinality {
+                left_to_right: fluxdb_core::ErCardinality {
+                    min: fluxdb_core::ErCardinalityBound::Unknown,
+                    max: fluxdb_core::ErCardinalityBound::Unknown,
+                },
+                right_to_left: fluxdb_core::ErCardinality {
+                    min: fluxdb_core::ErCardinalityBound::Unknown,
+                    max: fluxdb_core::ErCardinalityBound::Unknown,
+                },
+                basis: fluxdb_core::ErCardinalityBasis::Unknown,
+            },
+            origin: fluxdb_core::ErRelationshipOrigin::User,
+            review: fluxdb_core::ErRelationshipReview {
+                state: fluxdb_core::ErReviewState::Confirmed,
+                confirmed_revision: Some(1),
+                confirmed_by: None,
+            },
+            enforcement: fluxdb_core::ErRelationshipEnforcement {
+                kind: fluxdb_core::ErEnforcementKind::None,
+                constraint_ref: None,
+                enforced: None,
+            },
+            validity: fluxdb_core::ErValidity {
+                state: fluxdb_core::ErValidityState::Current,
+                reason: None,
+            },
+            description: None,
+            evidence_refs: Vec::new(),
+        };
+        // 左侧：A 在 pairs 和 filter 都出现 → 去重保留一次；B 追加。保序 A,B。
+        assert_eq!(
+            er_rel_columns_side(&rel, fluxdb_core::ErRelationSide::Left),
+            vec!["A".to_string(), "B".to_string()]
+        );
+        // 右侧：a1,b1 + filter 的 r_dup。
+        assert_eq!(
+            er_rel_columns_side(&rel, fluxdb_core::ErRelationSide::Right),
+            vec!["a1".to_string(), "b1".to_string(), "r_dup".to_string()]
+        );
+    }
+
+    #[test]
+    fn er_rebind_snapshot_entities_structured_and_skips_not_loaded() {
+        let mk = |schema: Option<&str>, name: &str, status: fluxdb_core::ErLoadStatus, cols: Vec<&str>| {
+            fluxdb_core::ErTableNode {
+                name: format!("{}.{name}", schema.unwrap_or("")),
+                reference: fluxdb_core::ErTableRef {
+                    database: "db".into(),
+                    schema: schema.map(str::to_string),
+                    name: name.into(),
+                },
+                comment: None,
+                status,
+                columns: cols
+                    .into_iter()
+                    .map(|n| fluxdb_core::ErColumn {
+                        name: n.into(),
+                        type_name: Some("text".into()),
+                        primary_key: false,
+                        nullable: false,
+                    })
+                    .collect(),
+            }
+        };
+        let full = vec![
+            mk(Some("s"), "my.table", fluxdb_core::ErLoadStatus::Loaded, vec!["id"]),
+            mk(None, "orders", fluxdb_core::ErLoadStatus::Loaded, vec!["id", "cid"]),
+            mk(None, "pending", fluxdb_core::ErLoadStatus::NotLoaded, vec![]),
+        ];
+        let snap = er_snapshot_entities_from(&full);
+        assert_eq!(snap.len(), 2, "未加载表不入快照");
+        let dotted = snap.iter().find(|e| e.entity_id == "db:s:my.table").unwrap();
+        assert_eq!(dotted.qualified_name, "s.my.table");
+        assert_eq!(dotted.columns[0].column_id, "db:s:my.table::id");
+        assert!(snap.iter().all(|e| e.stable_id.is_none()), "无稳定标识如实留空");
+    }
+
+    #[test]
     fn er_cardinality_option_roundtrip() {
         // 用户选 1:N → 生成 left_to_right.max=Many/right_to_left.max=One，basis=UserAssertion；
         // 反向能还原到同一选项 id。
