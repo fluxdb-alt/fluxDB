@@ -234,3 +234,10 @@
 - 表单重排：分节（基础信息/字段配对/常驻条件），左/右表各占一行带标签、字段对两列表头对齐（`er_form_section_title`/`er_form_labeled_row`）。
 - 验证：`cargo test -p fluxdb-desktop` 433 全通过（含 `er_logical_rel_id`）；fmt + `cargo check --workspace` 干净。
 
+## 本轮新增（表单重排 + 刷新丢线修复）
+- 新建关系表单按 `docs/mockups/local-relation.source.html` 重排：减弱灰底/边框，用细分隔线分区；标题行「新建本地逻辑关系 + 说明 + 关闭」；「基础信息」左表/右表并排（label 在上、窄宽退单列）、角色/说明各独占一行（说明标可选）；「关联字段」标题旁放整条关系基数下拉（一对多/多对一/多对多/未知，一对一），右侧「添加配对」，方向文案 `左表 → 右表 · 类型，所有字段配对共同生效`，字段对每行 `序号 | 左表字段 = 右表字段 | 删除`（等号用两条短横线组合，AppIcon 无 Equal）；「附加关联条件」（原常驻条件改名，可选）+ 辅助文案 + 空态；底部「仅保存本地逻辑关系」+「取消/创建关系」。
+- 新增 `er_remove_relationship_pair`（至少保留一组），关联字段删除按钮、基础信息/分节/等号/字段助手。
+- 刷新丢线修复：`sync_er_local_relationship_edges` 在字段未加载（刷新后列待加载）时用 column_id 末段占位仍投影逻辑边；字段加载完成后重投影用真实列名锚点。
+- 面板拖宽手柄加宽至 10px + hover/active 反馈。
+- 验证：`cargo test -p fluxdb-desktop` 433 全通过；fmt + `cargo check --workspace` 干净；macOS `cargo build` 通过、`cargo run` 到单实例守卫（表单拖宽/交互需人工确认）。
+

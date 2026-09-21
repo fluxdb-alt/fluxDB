@@ -85,22 +85,26 @@ impl NavicatMain {
                 continue;
             }
             for (index, pair) in relationship.column_pairs.iter().enumerate() {
-                let Some(left_column) = left.columns.iter().find(|column| {
-                    er_column_id(&left.reference, &column.name) == pair.left_column
-                }) else {
-                    continue;
-                };
-                let Some(right_column) = right.columns.iter().find(|column| {
-                    er_column_id(&right.reference, &column.name) == pair.right_column
-                }) else {
-                    continue;
-                };
+                // 列名解析：命中已加载列用真实名；字段尚未加载（刷新后待加载）时用 column_id
+                // 的末段占位，仍投影逻辑边，避免刷新后连线丢失（§3.6 刷新保留本地编辑）。
+                let left_column = left
+                    .columns
+                    .iter()
+                    .find(|column| er_column_id(&left.reference, &column.name) == pair.left_column)
+                    .map(|column| column.name.clone())
+                    .unwrap_or_else(|| er_column_display_name(&pair.left_column));
+                let right_column = right
+                    .columns
+                    .iter()
+                    .find(|column| er_column_id(&right.reference, &column.name) == pair.right_column)
+                    .map(|column| column.name.clone())
+                    .unwrap_or_else(|| er_column_display_name(&pair.right_column));
                 local_edges.push(fluxdb_core::ErForeignKeyEdge {
                     name: format!("logic:{}:{index}", relationship.id),
                     from_table: left.reference.display(),
-                    from_column: left_column.name.clone(),
+                    from_column: left_column,
                     to_table: right.reference.display(),
-                    to_column: right_column.name.clone(),
+                    to_column: right_column,
                     from_reference: left.reference.clone(),
                     to_reference: right.reference.clone(),
                 });
@@ -568,6 +572,17 @@ fn er_column_id(reference: &fluxdb_core::ErTableRef, column: &str) -> String {
     format!("{}::{column}", er_entity_id(reference))
 }
 
+/// 由 column_id（`db:schema:table::col`）取展示列名（`::` 后末段）。
+/// 字段未加载时作占位列名，供逻辑边投影不与真实 FK 冲突（§3.6 刷新保留）。
+fn er_column_display_name(column_id: &str) -> String {
+    column_id
+        .rsplit("::")
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(column_id)
+        .to_string()
+}
+
 /// 判断一条本地逻辑关系是否为「有效」关系（§二.3）：只有已确认且结构有效（current）的
 /// 关系才进入邻域展开与画布连线。Proposed/Rejected/Stale/Unresolved/Invalid 一律不伪装成
 /// 物理外键或已确认关系（默认不混入未确认候选、失效关系不冒充实约束）。
@@ -688,6 +703,17 @@ fn er_cardinality_to_option_id(
         (One, Many) | (Zero, Many) => "n_1",
         (Many, Many) => "n_n",
         (Unknown, _) | (_, Unknown) => "unknown",
+    }
+}
+
+/// 基数选项的中文展示（方向文案用）。
+fn er_cardinality_label(id: &str) -> &'static str {
+    match id {
+        "1_1" => "一对一",
+        "1_n" => "一对多",
+        "n_1" => "多对一",
+        "n_n" => "多对多",
+        _ => "未声明匹配数量",
     }
 }
 
@@ -959,6 +985,22 @@ impl NavicatMain {
                 left_options_key: String::new(),
                 right_options_key: String::new(),
             });
+    }
+
+    /// 删除一组字段配对；至少保留一组（沿用 HTML 参考「至少保留一组」约定）。
+    fn er_remove_relationship_pair(
+        &mut self,
+        tab_id: TabId,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(pairs) = self.er_relationship_form_pairs.get_mut(&tab_id)
+            && pairs.len() > 1
+            && index < pairs.len()
+        {
+            pairs.remove(index);
+            cx.notify();
+        }
     }
 
     fn er_add_relationship_filter(
@@ -1903,42 +1945,92 @@ fn er_relationship_panel(
     panel
 }
 
-/// 关系表单分节小标题（基础信息 / 字段配对 / 常驻条件）。
-fn er_form_section_title(text: &str, colors: UiColors) -> Div {
+/// 表单分节：标题（右侧可放操作）+ 内容，用细分隔线（border-top）与间距组织。
+fn er_form_section(
+    title: &str,
+    head_rear: Div,
+    body: Div,
+    colors: UiColors,
+) -> Div {
     div()
-        .pt(px(2.))
-        .text_size(px(10.))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
-        .text_color(colors.muted)
-        .child(text.to_string())
+        .flex()
+        .flex_col()
+        .border_t_1()
+        .border_color(colors.border_soft)
+        .py(px(14.))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(10.))
+                .mb(px(12.))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(colors.text)
+                        .child(title.to_string()),
+                )
+                .child(head_rear),
+        )
+        .child(body)
 }
 
-/// 关系表单带左侧标签的一行（标签固定宽度，控件占余下宽度）。
-fn er_form_labeled_row(
+/// 表单字段：标签在控件上方（可选标「可选」），供基础信息分节使用。
+fn er_form_field(
     label: &str,
+    optional: bool,
     control: impl gpui::IntoElement,
     colors: UiColors,
 ) -> Div {
     div()
         .flex()
-        .items_center()
-        .gap(px(8.))
+        .flex_col()
+        .gap(px(6.))
+        .min_w_0()
         .child(
             div()
-                .w(px(36.))
-                .flex_shrink_0()
-                .text_size(px(11.))
-                .text_color(colors.muted)
-                .child(label.to_string()),
+                .flex()
+                .items_baseline()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(colors.text)
+                        .child(label.to_string()),
+                )
+                .when(optional, |s| {
+                    s.child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(colors.muted)
+                            .child("可选"),
+                    )
+                }),
         )
-        .child(div().flex_1().min_w_0().child(control))
+        .child(div().w_full().min_w_0().child(control))
+}
+
+/// 等号图标：两条短横线堆叠（AppIcon 无 Equal，用最小布局组合，颜色走 UiColors）。
+fn er_equal_icon(colors: UiColors) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(2.))
+        .size(px(12.))
+        .child(div().w(px(8.)).h(px(1.5)).bg(colors.muted))
+        .child(div().w(px(8.)).h(px(1.5)).bg(colors.muted))
 }
 
 /// 关系面板左缘拖宽手柄（独立函数，置于面板最上层，避免被内容区覆盖）。
 fn er_rel_panel_resize_handle(
     tab_id: TabId,
     panel_width: f32,
-    _colors: UiColors,
+    colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> impl gpui::IntoElement {
     div()
@@ -1947,8 +2039,10 @@ fn er_rel_panel_resize_handle(
         .top_0()
         .left_0()
         .bottom_0()
-        .w(px(6.))
+        .w(px(10.))
         .cursor_ew_resize()
+        .hover(|s| s.bg(colors.hover))
+        .active(|s| s.bg(colors.hover))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
@@ -2076,132 +2170,292 @@ fn er_relationship_form(
         })
         .unwrap_or_default();
     let submitting = this.er_relationship_tasks.contains_key(&tab_id);
+    // 当前左/右表显示名与基数（供方向文案）。
+    let left_name = this
+        .er_relationship_form_left_tables
+        .get(&tab_id)
+        .and_then(|s| s.read(cx).selected_value().cloned())
+        .and_then(|id| this.er_form_table_by_id(tab_id, Some(&id)))
+        .map(|t| t.reference.display());
+    let right_name = this
+        .er_relationship_form_right_tables
+        .get(&tab_id)
+        .and_then(|s| s.read(cx).selected_value().cloned())
+        .and_then(|id| this.er_form_table_by_id(tab_id, Some(&id)))
+        .map(|t| t.reference.display());
+    let card_id = this
+        .er_relationship_form_cardinality
+        .get(&tab_id)
+        .and_then(|s| s.read(cx).selected_value().cloned())
+        .unwrap_or_else(|| "unknown".into());
+    // 表单容器：减弱灰底/边框，用分节分隔。
     let mut form = div()
         .mx(px(10.))
         .my(px(8.))
-        .p(px(12.))
+        .p(px(16.))
         .rounded_md()
         .border_1()
         .border_color(colors.border_soft)
-        .bg(colors.canvas_bg)
         .flex()
-        .flex_col()
-        .gap(px(9.))
-        .child(
-            div()
-                .text_size(px(12.))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(colors.text)
-                .child("新建本地逻辑关系"),
-        );
+        .flex_col();
 
-    // 基础信息分节：左表 / 右表 / 角色 / 说明 / 基数（各占一行，标签对齐）。
-    form = form.child(er_form_section_title("基础信息", colors));
-    form = form.child(er_form_labeled_row(
-        "左表",
-        Select::new(&left_table).small().search_placeholder("选择左表"),
-        colors,
-    ));
-    form = form.child(er_form_labeled_row(
-        "右表",
-        Select::new(&right_table).small().search_placeholder("选择右表"),
-        colors,
-    ));
-    form = form.child(er_form_labeled_row("角色", Input::new(&role_input).small(), colors));
-    form = form.child(er_form_labeled_row(
-        "说明",
-        Input::new(&description_input).small(),
-        colors,
-    ));
-    form = form.child(er_form_labeled_row("基数", Select::new(&cardinality).small(), colors));
-
-    // 字段配对分节：上下两列表头对齐，每对左右字段各占一列。
-    form = form.child(er_form_section_title("字段配对", colors));
+    // 标题 + 说明 + 关闭。
+    let close_tab = tab_id;
     form = form.child(
         div()
             .flex()
-            .gap(px(8.))
-            .child(div().flex_1().text_size(px(10.)).text_color(colors.muted).child("左表字段"))
-            .child(div().flex_1().text_size(px(10.)).text_color(colors.muted).child("右表字段")),
+            .items_start()
+            .justify_between()
+            .gap(px(12.))
+            .mb(px(14.))
+            .child(
+                div()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(colors.text)
+                            .child("新建本地逻辑关系"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(colors.muted)
+                            .child("连接两张表的字段，描述它们之间的业务关系。"),
+                    ),
+            )
+            .child(
+                Button::new(("er-rel-form-close", tab_id.0))
+                    .ghost()
+                    .child(app_icon(AppIcon::Close, 15., colors.muted))
+                    .tooltip("关闭")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.er_relationship_form_open.remove(&close_tab);
+                        cx.notify();
+                    })),
+            ),
     );
+
+    // 基础信息分节：左表/右表并排，角色/说明独占一行。
+    let mut basic = div().flex().flex_col().gap(px(12.));
+    basic = basic.child(
+        div()
+            .flex()
+            .gap(px(12.))
+            .flex_wrap()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(180.))
+                    .child(er_form_field("左表", false, Select::new(&left_table).small().search_placeholder("选择左表"), colors)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(180.))
+                    .child(er_form_field("右表", false, Select::new(&right_table).small().search_placeholder("选择右表"), colors)),
+            ),
+    );
+    basic = basic.child(er_form_field(
+        "业务角色",
+        false,
+        Input::new(&role_input).small(),
+        colors,
+    ));
+    basic = basic.child(er_form_field(
+        "说明",
+        true,
+        Input::new(&description_input).small(),
+        colors,
+    ));
+    form = form.child(er_form_section("基础信息", div(), basic, colors));
+
+    // 关联字段分节：标题 + 基数下拉 + 添加配对；方向文案 + 表头 + 每对（序号/左/等号/右/删除）。
+    let mut assoc_head = div().flex().items_center().gap(px(8.));
+    assoc_head = assoc_head.child(
+        div().w(px(120.)).child(Select::new(&cardinality).small()),
+    );
+    let add_pair_tab = tab_id;
+    assoc_head = assoc_head.child(
+        Button::new(("er-rel-add-pair", tab_id.0))
+            .ghost()
+            .xsmall()
+            .child(app_icon(AppIcon::Plus, 14., colors.text))
+            .label("添加配对")
+            .disabled(submitting)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.er_add_relationship_pair(add_pair_tab, window, cx);
+                cx.notify();
+            })),
+    );
+    let mut assoc_body = div().flex().flex_col().gap(px(8.));
+    // 方向与基数说明。
+    let direction = match (&left_name, &right_name) {
+        (Some(l), Some(r)) => format!(
+            "{l} → {r} · {}，所有字段配对共同生效",
+            er_cardinality_label(&card_id)
+        ),
+        _ => "请先选择左右表 · 所有字段配对共同生效".to_string(),
+    };
+    assoc_body = assoc_body.child(
+        div()
+            .text_size(px(11.))
+            .text_color(colors.muted)
+            .child(direction),
+    );
+    // 表头。
+    assoc_body = assoc_body.child(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .px(px(2.))
+            .child(div().w(px(18.)).flex_shrink_0().child(div()))
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(10.))
+                    .text_color(colors.muted)
+                    .child("左表字段"),
+            )
+            .child(div().w(px(14.)).flex_shrink_0().child(div()))
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(10.))
+                    .text_color(colors.muted)
+                    .child("右表字段"),
+            ),
+    );
+    // 每对字段行。
+    let pair_count = pairs.len();
     for (index, (left, right)) in pairs.into_iter().enumerate() {
-        form = form.child(
+        let remove_index = index;
+        let remove_tab = tab_id;
+        assoc_body = assoc_body.child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(8.))
                 .child(
                     div()
-                        .w(px(16.))
+                        .w(px(18.))
                         .flex_shrink_0()
                         .text_size(px(11.))
                         .text_color(colors.muted)
                         .child(format!("{}", index + 1)),
                 )
                 .child(div().flex_1().min_w_0().child(Select::new(&left).small().search_placeholder("左字段")))
-                .child(div().flex_1().min_w_0().child(Select::new(&right).small().search_placeholder("右字段"))),
+                .child(er_equal_icon(colors))
+                .child(div().flex_1().min_w_0().child(Select::new(&right).small().search_placeholder("右字段")))
+                .child(
+                    Button::new(format!("er-rel-del-pair-{}-{}", tab_id.0, index))
+                        .ghost()
+                        .child(app_icon(AppIcon::Trash, 14., colors.muted))
+                        .tooltip("删除本组配对")
+                        .disabled(submitting || pair_count <= 1)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.er_remove_relationship_pair(remove_tab, remove_index, cx);
+                        })),
+                ),
         );
     }
+    form = form.child(er_form_section("关联字段", assoc_head, assoc_body, colors));
 
-    // 常驻条件分节。
-    form = form.child(er_form_section_title("常驻条件", colors));
-    for (index, (side, column, op, literal)) in filters.into_iter().enumerate() {
-        form = form.child(
+    // 附加关联条件分节：标题 + 添加条件 + 辅助文案 + 条件行 + 空态。
+    let add_filter_tab = tab_id;
+    let cond_head = div().child(
+        Button::new(("er-rel-add-filter", tab_id.0))
+            .ghost()
+            .xsmall()
+            .child(app_icon(AppIcon::Plus, 14., colors.text))
+            .label("添加条件")
+            .disabled(submitting)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.er_add_relationship_filter(add_filter_tab, window, cx);
+                cx.notify();
+            })),
+    );
+    let mut cond_body = div().flex().flex_col().gap(px(8.));
+    cond_body = cond_body.child(
+        div()
+            .text_size(px(11.))
+            .text_color(colors.muted)
+            .child("使用这条关系生成 JOIN 时，始终附加以下条件。"),
+    );
+    if filters.is_empty() {
+        cond_body = cond_body.child(
+            div()
+                .px(px(10.))
+                .py(px(8.))
+                .rounded_md()
+                .bg(colors.canvas_bg)
+                .text_size(px(11.))
+                .text_color(colors.muted)
+                .child("暂无附加条件，例如：customers.is_deleted = 0"),
+        );
+    }
+    for (_index, (side, column, op, literal)) in filters.into_iter().enumerate() {
+        cond_body = cond_body.child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(5.))
-                .child(
-                    div()
-                        .w(px(18.))
-                        .text_size(px(11.))
-                        .text_color(colors.muted)
-                        .child(format!("F{}", index + 1)),
-                )
-                .child(div().w(px(58.)).child(Select::new(&side).small()))
-                .child(div().flex_1().child(Select::new(&column).small().search_placeholder("字段")))
-                .child(div().w(px(74.)).child(Select::new(&op).small()))
-                .child(div().flex_1().child(Input::new(&literal).small())),
+                .gap(px(6.))
+                .child(div().w(px(58.)).flex_shrink_0().child(Select::new(&side).small()))
+                .child(div().flex_1().min_w_0().child(Select::new(&column).small().search_placeholder("字段")))
+                .child(div().w(px(80.)).flex_shrink_0().child(Select::new(&op).small()))
+                .child(div().flex_1().min_w_0().child(Input::new(&literal).small())),
         );
     }
+    form = form.child(er_form_section("附加关联条件", cond_head, cond_body, colors));
 
-    let add_tab = tab_id;
+    // 底部操作区：左弱化说明 + 右取消/创建。
+    let submit_tab = tab_id;
+    let cancel_tab = tab_id;
     form = form.child(
         div()
             .flex()
-            .gap(px(6.))
+            .items_center()
+            .justify_between()
+            .gap(px(12.))
+            .border_t_1()
+            .border_color(colors.border_soft)
+            .pt(px(12.))
+            .mt(px(14.))
             .child(
-                Button::new(("er-rel-add-pair", tab_id.0))
-                    .ghost()
-                    .xsmall()
-                    .label("添加字段配对")
-                    .disabled(submitting)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.er_add_relationship_pair(add_tab, window, cx);
-                        cx.notify();
-                    })),
+                div()
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child("仅保存本地逻辑关系"),
             )
             .child(
-                Button::new(("er-rel-add-filter", tab_id.0))
-                    .ghost()
-                    .xsmall()
-                    .label("添加常驻条件")
-                    .disabled(submitting)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.er_add_relationship_filter(tab_id, window, cx);
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new(("er-rel-submit", tab_id.0))
-                    .primary()
-                    .xsmall()
-                    .label(if submitting { "提交中…" } else { "创建" })
-                    .disabled(submitting)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.submit_er_relationship_form(tab_id, cx);
-                        cx.notify();
-                    })),
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .child(
+                        Button::new(("er-rel-form-cancel", tab_id.0))
+                            .ghost()
+                            .xsmall()
+                            .label("取消")
+                            .disabled(submitting)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.er_relationship_form_open.remove(&cancel_tab);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new(("er-rel-submit", tab_id.0))
+                            .primary()
+                            .xsmall()
+                            .label(if submitting { "提交中…" } else { "创建关系" })
+                            .disabled(submitting)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.submit_er_relationship_form(submit_tab, cx);
+                                cx.notify();
+                            })),
+                    ),
             ),
     );
     form
@@ -2653,10 +2907,14 @@ fn flush_pending_columns(
                     }
                 }
                 if changed {
-                    // 只重建拓扑（列内容/高度），坐标不动。full_changed 只影响关系表单字段下拉，
-                    // 由下方 notify 触发重渲染刷新选项，无需重建场景。
-                    this.er_scenes.remove(&tab_id);
-                    maybe_build_scene(tab_id, this);
+                    // 重建拓扑（列内容/高度），坐标不动。若有本地逻辑关系，重投影逻辑边，
+                    // 用真实列名锚点（刷新后列刚加载，此前占位列名指向汇总端口）。
+                    if this.er_relationships.contains_key(&tab_id) {
+                        this.sync_er_local_relationship_edges(tab_id);
+                    } else {
+                        this.er_scenes.remove(&tab_id);
+                        maybe_build_scene(tab_id, this);
+                    }
                     tracing::debug!(tab = tab_id.0, "ER 字段批次已合并");
                 }
             }
