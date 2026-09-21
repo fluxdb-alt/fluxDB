@@ -514,6 +514,39 @@ struct PendingDeleteDatabase {
     database: String,
 }
 
+#[derive(Clone, Debug)]
+struct ErRelationshipSelectOption {
+    id: String,
+    label: String,
+}
+
+impl SelectItem for ErRelationshipSelectOption {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.label.clone().into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+}
+
+struct ErRelationshipPairControls {
+    left: Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>,
+    right: Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>,
+    left_options_key: String,
+    right_options_key: String,
+}
+
+struct ErRelationshipFilterControls {
+    side: Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>,
+    column: Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>,
+    op: Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>,
+    literal: Entity<InputState>,
+    column_options_key: String,
+}
+
 struct NavicatMain {
     focus_handle: FocusHandle,
     controller: AppController,
@@ -634,6 +667,8 @@ struct NavicatMain {
     er_viewport_drag: Option<(TabId, f32, f32, f32, f32)>,
     // ER 画布可见区域尺寸（px）：由画布区 Element 回报，用于虚拟化可见性计算。
     er_canvas_sizes: BTreeMap<TabId, (f32, f32)>,
+    // ER 画布区在窗口中的原点（px）：绘制/命中需统一画布原点偏移（§修复：命中遗漏原点）。
+    er_canvas_origins: BTreeMap<TabId, (f32, f32)>,
     // ER 节点内字段纵向滚动偏移（px，按 tab+表名）。字段多时在节点内滚动。
     er_node_scroll_px: BTreeMap<(TabId, String), f32>,
     // ER 字段滚动条拖拽进行中：记录 (tab, 表名)。
@@ -654,10 +689,67 @@ struct NavicatMain {
     er_layout_applied: BTreeSet<TabId>,
     // 本帧可见折线缓存（供空白点击的关系线命中，有界）。
     er_frame_edges: BTreeMap<TabId, Vec<ErEdgeView>>,
+    // 最近一次就绪的「整范围」关系索引全边集（按 tab）：供局部 ER 深度切换/单节点展开
+    // 无需重新读库即可同步重算邻域，避免撕图后出现空画布，同时保留人工坐标（§修复 1）。
+    er_all_edges: BTreeMap<TabId, Vec<fluxdb_core::ErForeignKeyEdge>>,
+    // 局部 ER 中心表身份（按 tab）：单节点展开按钮需用它同步重算邻域（node.rs 无 ErDiagramState）。
+    er_center_refs: BTreeMap<TabId, fluxdb_core::ErTableRef>,
+    // ER 隐藏字段定位后的高亮（按 tab → (表名, 字段名)）：从汇总端口定位到精确字段后高亮该行。
+    er_field_highlights: BTreeMap<TabId, (String, String)>,
+    // ER 最近一次成功元数据加载的时间（按 tab，展示「更新时间」）。
+    er_last_updated: BTreeMap<TabId, String>,
+    // 手动刷新进行中的 tab：刷新时保留当前可用图，仅重新读取元数据（§3.3 手动刷新）。
+    er_refreshing: BTreeSet<TabId>,
     // ER 字段按需加载的待请求表集合（去抖合并）：同一批可见表合并为一次批量请求。
-    er_pending_columns: BTreeMap<TabId, BTreeSet<String>>,
+    /// 待请求字段的表集合（结构化身份，缓存/结果归并据此进行，不从展示名反推）。
+    er_pending_columns: BTreeMap<TabId, BTreeSet<fluxdb_core::ErTableRef>>,
+    /// 最近一次 ER JSON 导入结果（校验/差异预览；本轮仅用于展示，未做「应用」）。
+    er_last_import: BTreeMap<TabId, ErImportReport>,
     // ER 字段按需加载去抖任务：短暂窗口内合并需求，避免每个鼠标/渲染事件启动请求。
     er_column_debounce_tasks: BTreeMap<TabId, Option<Task<()>>>,
+    // ER 表搜索（§五.6）：按 tab 的输入框实体 / 订阅 / 当前查询 / 选中索引。
+    er_search_input: BTreeMap<TabId, Entity<InputState>>,
+    er_search_subs: BTreeMap<TabId, Subscription>,
+    er_search_query: BTreeMap<TabId, String>,
+    er_search_sel: BTreeMap<TabId, usize>,
+    // ER 业务分组（§五.9-12）：按 schema 分组进入/返回全部；None=全部。
+    er_group: BTreeMap<TabId, Option<String>>,
+    // 最近一次据以构建场景的分组（用于分组切换时触发重建，不因普通 pan/滚动重建）。
+    er_group_built: BTreeMap<TabId, Option<String>>,
+    // ER 小地图（§六.25）：小地图在窗口中的 (x,y,w,h)，供点击导航归一化换算（paint 回报）。
+    er_minimap_rect: BTreeMap<TabId, (f32, f32, f32, f32)>,
+    // ER 导出菜单展开（§十）：true 显示 JSON/DBML/Mermaid/SVG 导出动作，点击复制到剪贴板。
+    er_export_open: BTreeSet<TabId>,
+    // ER 视图持久化已恢复标记（按 tab）：首次渲染本 tab 时应用上次保存的分组/坐标/固定一次。
+    er_view_restored: BTreeSet<TabId>,
+    // ER 作用域持久化 key（按 tab）：打开时由 ErDiagramState 生成，保存/恢复据此定位。
+    er_scope_keys: BTreeMap<TabId, String>,
+    er_relationship_scope_keys: BTreeMap<TabId, String>,
+    // ER 本地逻辑关系目录显示缓存与后台请求状态；按 tab 隔离，结果回填前校验 scope。
+    er_relationships: BTreeMap<TabId, Vec<fluxdb_core::ErRelationship>>,
+    er_relationship_loading: BTreeSet<TabId>,
+    er_relationship_tasks: BTreeMap<TabId, Task<()>>,
+    er_relationship_errors: BTreeMap<TabId, String>,
+    er_relationship_panel_open: BTreeSet<TabId>,
+    er_relationship_form_open: BTreeSet<TabId>,
+    er_relationship_form_editing: BTreeMap<TabId, Option<String>>,
+    er_relationship_form_role_inputs: BTreeMap<TabId, Entity<InputState>>,
+    er_relationship_form_description_inputs: BTreeMap<TabId, Entity<InputState>>,
+    er_relationship_form_left_tables:
+        BTreeMap<TabId, Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>>,
+    er_relationship_form_right_tables:
+        BTreeMap<TabId, Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>>,
+    er_relationship_form_pairs: BTreeMap<TabId, Vec<ErRelationshipPairControls>>,
+    er_relationship_form_filters: BTreeMap<TabId, Vec<ErRelationshipFilterControls>>,
+    /// 基数选择：`1:1 / 1:N / N:1 / N:N / 未知`（映射到 ErMatchCardinality，basis=UserAssertion）。
+    er_relationship_form_cardinality:
+        BTreeMap<TabId, Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>>,
+    er_relationship_form_subscriptions: BTreeMap<TabId, Vec<Subscription>>,
+    /// 关系面板宽度（按 tab，可拖动左缘调整）。
+    er_relationship_panel_width: BTreeMap<TabId, f32>,
+    /// 关系面板拖动起点（全局拖动，无 tab_id 语义，参照 sidebar 模式）。
+    er_relationship_panel_resize_start: Option<SidebarResizeStart>,
+    er_relationship_delete_pending: BTreeMap<TabId, (String, u64)>,
     // Redis 连接级概览（版本/内存/CPU）的定期刷新任务与进行中的单次拉取任务
     redis_overview_refresh_task: Option<Task<()>>,
     redis_overview_refresh_tasks: BTreeMap<u64, Task<()>>,

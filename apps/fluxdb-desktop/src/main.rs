@@ -173,6 +173,7 @@ include!("main_parts/er/canvas.rs");
 include!("main_parts/er/scene.rs");
 include!("main_parts/er/node.rs");
 include!("main_parts/er/interaction.rs");
+include!("main_parts/er/export.rs");
 include!("main_parts/redis_detail.rs");
 include!("main_parts/json_editor.rs");
 include!("main_parts/json_component.rs");

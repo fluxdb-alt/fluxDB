@@ -874,6 +874,8 @@ fn sqlite_foreign_keys_with_cancel(
                     ref_schema: None,
                     ref_table: row.try_get("table").map_err(sqlite_error)?,
                     ref_column: row.try_get("to").map_err(sqlite_error)?,
+                    columns: Vec::new(),
+                    ref_columns: Vec::new(),
                 })
             })
             .collect()

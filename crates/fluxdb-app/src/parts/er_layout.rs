@@ -315,20 +315,33 @@ mod er_layout_tests {
     use fluxdb_core::{ErForeignKeyEdge, ErTableNode};
 
     fn t(name: &str) -> ErTableNode {
+        let reference = fluxdb_core::ErTableRef {
+            database: String::new(),
+            schema: None,
+            name: name.to_string(),
+        };
         ErTableNode {
             name: name.to_string(),
+            reference: reference.clone(),
             comment: None,
             status: fluxdb_core::ErLoadStatus::Loaded,
             columns: vec![],
         }
     }
     fn e(from: &str, to: &str) -> ErForeignKeyEdge {
+        let mk = |n: &str| fluxdb_core::ErTableRef {
+            database: String::new(),
+            schema: None,
+            name: n.to_string(),
+        };
         ErForeignKeyEdge {
             name: "fk".into(),
             from_table: from.into(),
             from_column: "c".into(),
             to_table: to.into(),
             to_column: "id".into(),
+            from_reference: mk(from),
+            to_reference: mk(to),
         }
     }
 

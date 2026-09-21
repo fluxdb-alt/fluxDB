@@ -46,11 +46,16 @@ struct ErNodeMeta {
     /// 连通分量序号：UI 据此从统一主题调色板稳定取色；-1 为孤立表（外围）。
     color_idx: i32,
     status: ErLoadStatus,
+    /// 表注释（搜索命中注释、tooltip 展示完整说明用）。
+    comment: Option<String>,
     columns: Vec<NodeColumnDisplay>,
     /// 该表是否参与至少一条已加载关系（决定是否显示「分配色」）。
     has_edge: bool,
     /// 该表作为关系端点出现的字段列下标集合（用于隐藏字段汇总端口计数）。
     edge_columns: std::collections::BTreeSet<usize>,
+    /// 字段下标 → 关联目标展示串（`表.字段`），供隐藏字段汇总端口的定位菜单逐项列出
+    /// （§4.2：多字段列出字段及关联目标，单字段可直接定位）。
+    field_targets: std::collections::BTreeMap<usize, Vec<String>>,
 }
 
 /// 连线拓扑：端点表 + 字段列（全局列序；字段未加载/不存在时为 None → 汇总/待加载端口）。
@@ -154,12 +159,17 @@ fn build_er_scene(graph: &ErGraphData, layout: &ErLayoutResult) -> ErScene {
             idx,
             color_idx: color,
             status: table.status,
+            comment: table.comment.clone(),
             columns: cols,
             has_edge: false,
             edge_columns: std::collections::BTreeSet::new(),
+            field_targets: std::collections::BTreeMap::new(),
         });
     }
     // 回填外键列标记 + has_edge。
+    // 只把真正持有外键的 from 端列标为 FK（引用端字段自身持有外键约束）。
+    // 被引用的 to 端字段不是自身持有外键，仅当它也作为某条边的 from 端时才是 FK；
+    // 否则它通常是主键，应保留 key 图标而非 link 图标（§3.2、er-ui-redesign §4.2）。
     for e in &graph.edges {
         if let Some(&fi) = name_to_idx.get(e.from_table.as_str()) {
             if let Some(c) = nodes[fi]
@@ -172,19 +182,14 @@ fn build_er_scene(graph: &ErGraphData, layout: &ErLayoutResult) -> ErScene {
             nodes[fi].has_edge = true;
         }
         if let Some(&ti) = name_to_idx.get(e.to_table.as_str()) {
-            if let Some(c) = nodes[ti]
-                .columns
-                .iter_mut()
-                .find(|c| c.name == e.to_column)
-            {
-                c.foreign_key = true;
-            }
             nodes[ti].has_edge = true;
         }
     }
-    // 边拓扑（字段列序 -> 全局下标）+ 每表端点字段集合（供汇总端口计数）。
+    // 边拓扑（字段列序 -> 全局下标）+ 每表端点字段集合（供汇总端口计数 + 定位菜单）。
     let mut edges = Vec::new();
     let mut edge_cols: Vec<std::collections::BTreeSet<usize>> = vec![std::collections::BTreeSet::new(); nodes.len()];
+    let mut field_targets: Vec<std::collections::BTreeMap<usize, Vec<String>>> =
+        vec![std::collections::BTreeMap::new(); nodes.len()];
     for e in &graph.edges {
         let Some(&fi) = name_to_idx.get(e.from_table.as_str()) else {
             continue;
@@ -202,9 +207,17 @@ fn build_er_scene(graph: &ErGraphData, layout: &ErLayoutResult) -> ErScene {
             .position(|c| c.name == e.to_column);
         if let Some(c) = from_col {
             edge_cols[fi].insert(c);
+            field_targets[fi]
+                .entry(c)
+                .or_default()
+                .push(format!("{}.{}", nodes[ti].name, e.to_column));
         }
         if let Some(c) = to_col {
             edge_cols[ti].insert(c);
+            field_targets[ti]
+                .entry(c)
+                .or_default()
+                .push(format!("{}.{}", nodes[fi].name, e.from_column));
         }
         edges.push(ErEdgeTopo {
             from_idx: fi,
@@ -217,6 +230,7 @@ fn build_er_scene(graph: &ErGraphData, layout: &ErLayoutResult) -> ErScene {
     }
     for i in 0..nodes.len() {
         nodes[i].edge_columns = std::mem::take(&mut edge_cols[i]);
+        nodes[i].field_targets = std::mem::take(&mut field_targets[i]);
     }
     ErScene { nodes, edges }
 }
@@ -243,27 +257,70 @@ impl ErScene {
     }
 }
 
+/// 缩放安全范围（视图变换缩放，view-transform，§六.23-24）。
+/// 卡片仍以固定屏幕尺寸渲染（不 transform 文字），仅世界坐标乘 scale 做平移/命中/连线缩放。
+const ER_MIN_SCALE: f32 = 0.15;
+const ER_MAX_SCALE: f32 = 4.0;
+
 /// 视口。
 #[derive(Clone, Copy, Debug)]
 struct ErViewport {
     pan_x: f32,
     pan_y: f32,
+    /// 视图缩放：screen = pan + world * scale。
+    /// 卡片固定尺寸（宽 NODE_WIDTH、高按内容），仅在非 1 缩放时卡片会重叠/分散；
+    /// 路径与锚点按世界坐标统一乘 scale，命中与绘制共用同一变换。
+    scale: f32,
 }
 
 impl Default for ErViewport {
     fn default() -> Self {
-        Self { pan_x: 0.0, pan_y: 0.0 }
+        Self { pan_x: 0.0, pan_y: 0.0, scale: 1.0 }
     }
 }
 
 impl ErViewport {
+    /// 安全缩放（避免除零/越界）。
+    fn safe_scale(&self) -> f32 {
+        self.scale.clamp(ER_MIN_SCALE, ER_MAX_SCALE)
+    }
+
+    /// 屏幕坐标 → 世界坐标（需调用方先减画布原点）。
+    ///
+    /// 屏幕 → 世界逆变换即 `(screen - pan) / scale`；世界 → 屏幕（`pan + world*scale`）
+    /// 由各绘制层内联（paint 需另加画布原点，与命中逆变换保持一致）。
+    fn to_world_x(&self, sx: f32) -> f32 {
+        (sx - self.pan_x) / self.safe_scale()
+    }
+
+    fn to_world_y(&self, sy: f32) -> f32 {
+        (sy - self.pan_y) / self.safe_scale()
+    }
+
+    /// 世界坐标下当前可视范围（含 overscan）。
     fn visible_world_bounds(&self, canvas_w: f32, canvas_h: f32) -> (f32, f32, f32, f32) {
+        let sc = self.safe_scale();
         (
-            -self.pan_x - OVERSCAN,
-            -self.pan_y - OVERSCAN,
-            -self.pan_x + canvas_w + OVERSCAN,
-            -self.pan_y + canvas_h + OVERSCAN,
+            -self.pan_x / sc - OVERSCAN,
+            -self.pan_y / sc - OVERSCAN,
+            (-self.pan_x + canvas_w) / sc + OVERSCAN,
+            (-self.pan_y + canvas_h) / sc + OVERSCAN,
         )
+    }
+
+    /// 以屏幕 `anchor` 为锚点缩放 `factor`：锚点下的世界点保持静止（§六.24）。
+    /// 仅调整 scale 与 pan；pan 是屏幕偏移，independent of scale。
+    fn zoom_around(&mut self, anchor_screen: (f32, f32), factor: f32) {
+        let old = self.safe_scale();
+        let new = (old * factor).clamp(ER_MIN_SCALE, ER_MAX_SCALE);
+        if (new - old).abs() < f32::EPSILON {
+            return;
+        }
+        let wx = self.to_world_x(anchor_screen.0);
+        let wy = self.to_world_y(anchor_screen.1);
+        self.scale = new;
+        self.pan_x = anchor_screen.0 - wx * new;
+        self.pan_y = anchor_screen.1 - wy * new;
     }
 }
 

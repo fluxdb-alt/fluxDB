@@ -8,6 +8,11 @@ mod tests {
     fn er_table(name: &str, columns: usize) -> fluxdb_core::ErTableNode {
         fluxdb_core::ErTableNode {
             name: name.to_string(),
+            reference: fluxdb_core::ErTableRef {
+                database: String::new(),
+                schema: None,
+                name: name.to_string(),
+            },
             comment: None,
             status: fluxdb_core::ErLoadStatus::Loaded,
             columns: (0..columns)
@@ -22,12 +27,19 @@ mod tests {
     }
 
     fn er_edge(from: &str, fcol: &str, to: &str, tcol: &str) -> fluxdb_core::ErForeignKeyEdge {
+        let mk = |n: &str| fluxdb_core::ErTableRef {
+            database: String::new(),
+            schema: None,
+            name: n.to_string(),
+        };
         fluxdb_core::ErForeignKeyEdge {
             name: "fk".into(),
             from_table: from.into(),
             from_column: fcol.into(),
             to_table: to.into(),
             to_column: tcol.into(),
+            from_reference: mk(from),
+            to_reference: mk(to),
         }
     }
 
@@ -68,13 +80,46 @@ mod tests {
         // 字段级端口：接 c2/c1（非首字段），不误接其他行。
         assert_eq!(scene.edges[0].from_column, Some(2));
         assert_eq!(scene.edges[0].to_column, Some(1));
-        // 外键标记回填到真实列。
+        // 外键标记只标在真正持有外键的 from(c2) 端；被引用端 customers.c1 不是自身 FK。
         assert!(scene.nodes[0].columns[2].foreign_key);
-        assert!(scene.nodes[1].columns[1].foreign_key);
+        assert!(!scene.nodes[1].columns[1].foreign_key, "被引用字段不是外键");
         assert!(!scene.nodes[0].columns[0].foreign_key);
-        // 端点字段集合（汇总计数用）。
+        // 端点字段集合（汇总计数用）两端都算。
         assert!(scene.nodes[0].edge_columns.contains(&2));
         assert!(scene.nodes[1].edge_columns.contains(&1));
+    }
+
+    #[test]
+    fn er_fk_flag_only_on_holder_not_referenced() {
+        // customers.c0 既被引用（引用它的 orders.c5），本身又持有对 other.c0 的外键 → 标 FK。
+        // 纯被引用的 products.c0 不持有外键 → 不标 FK（与 PK 区分：key 图标而非 link）。
+        let tables = vec![
+            er_table("orders", 6),
+            er_table("customers", 4),
+            er_table("products", 2),
+        ];
+        let edges = vec![
+            er_edge("orders", "c5", "customers", "c0"),   // customers.c0 被引用
+            er_edge("customers", "c0", "products", "c0"), // customers.c0 也持有外键 → FK
+        ];
+        let graph = fluxdb_core::ErGraphData {
+            tables: tables.clone(),
+            edges: edges.clone(),
+            relation_status: fluxdb_core::ErLoadStatus::Loaded,
+        };
+        let scene = build_er_scene(&graph, &loaded_layout(&tables, &edges));
+        let orders = scene.nodes[0].columns.iter().position(|c| c.name == "c5").unwrap();
+        let cust_c0 = scene.nodes[1].columns.iter().position(|c| c.name == "c0").unwrap();
+        let prod_c0 = scene.nodes[2].columns.iter().position(|c| c.name == "c0").unwrap();
+        // orders.c5 持有外键 → FK。
+        assert!(scene.nodes[0].columns[orders].foreign_key);
+        // customers.c0 是引用端(持有外键) → FK。
+        assert!(scene.nodes[1].columns[cust_c0].foreign_key);
+        // products.c0 只被引用、自身不持有外键 → 不是 FK。
+        assert!(
+            !scene.nodes[2].columns[prod_c0].foreign_key,
+            "仅被引用的字段不是外键"
+        );
     }
 
     #[test]
@@ -151,6 +196,28 @@ mod tests {
     }
 
     #[test]
+    fn er_hidden_field_precise_scroll_centers_target() {
+        // n=12、可视 8 行：滚到字段下标 10 应精确把它送入可视区（非仅滚到最底）。
+        // 居中滚动 = 10*22 - 4*22 + 11 = 143；越界上限 = (12-8)*22 = 88 → clamp 到 88。
+        // 验证目标字段进入可视区：visible_row_range(12, target) 应覆盖行 10。
+        let target = hidden_field_scroll(10, 12);
+        let (r0, r1) = visible_row_range(12, target);
+        assert!(r0 <= 10 && 10 <= r1, "定位后目标字段必须进入可视区：target={target} rows={r0}..{r1}");
+        assert_eq!(target, 88.0, "越界应被 clamp 到最大滚动");
+
+        // 字段 0：居中滚动为负 → clamp 到 0，行 0 在可视区顶部。
+        let target0 = hidden_field_scroll(0, 12);
+        assert_eq!(target0, 0.0);
+        let (r0, _) = visible_row_range(12, target0);
+        assert_eq!(r0, 0);
+
+        // 中段字段（如 5）：居中滚动为 5*22 - 4*22 + 11 = 33，行 5 进入可视区。
+        let target5 = hidden_field_scroll(5, 12);
+        let (r0, r1) = visible_row_range(12, target5);
+        assert!(r0 <= 5 && 5 <= r1, "中段字段定位也应进入可视区：{r0}..{r1}");
+    }
+
+    #[test]
     fn er_anchor_pending_and_missing_do_not_misattach() {
         let mut tables = vec![er_table("a", 3), er_table("b", 3)];
         // b 未加载字段。
@@ -222,7 +289,7 @@ mod tests {
         positions.insert("b".to_string(), (-400.0, -600.0));
         // pan 平移到负区使负坐标表进入视口。
         let env = env_for(&scene, positions.clone());
-        let vp = ErViewport { pan_x: 1400.0, pan_y: 1000.0 };
+        let vp = ErViewport { pan_x: 1400.0, pan_y: 1000.0, scale: 1.0 };
         let frame = scene.materialize(&env, vp, 800.0, 600.0);
         let visible_names: Vec<&str> = frame
             .visible_nodes
@@ -232,7 +299,7 @@ mod tests {
         assert!(visible_names.contains(&"a") && visible_names.contains(&"b"), "负坐标表应可见：{visible_names:?}");
         // 反向 pan（原点附近视口）不再命中负区表。
         let env2 = env_for(&scene, positions.clone());
-        let frame2 = scene.materialize(&env2, ErViewport { pan_x: 0.0, pan_y: 0.0 }, 800.0, 600.0);
+        let frame2 = scene.materialize(&env2, ErViewport { pan_x: 0.0, pan_y: 0.0, scale: 1.0 }, 800.0, 600.0);
         assert!(frame2.visible_nodes.is_empty(), "视口在正区不应命中负坐标表");
     }
 
@@ -257,13 +324,204 @@ mod tests {
         let env = env_for(&scene, positions);
         // 视口放在两端卡片之间（中段）：两端都出视口。
         let _ = scene.materialize(&env, ErViewport::default(), 1200.0, 800.0);
-        let vp = ErViewport { pan_x: -(mid_x - 400.0), pan_y: -(t000_y - 300.0) };
+        let vp = ErViewport { pan_x: -(mid_x - 400.0), pan_y: -(t000_y - 300.0), scale: 1.0 };
         let frame_mid = scene.materialize(&env, vp, 800.0, 600.0);
         let hit = frame_mid
             .edge_views
             .iter()
             .any(|e| e.desc.contains("t000") && e.desc.contains("t039"));
         assert!(hit, "两端屏外但路径经视口的边必须保留");
+    }
+
+    #[test]
+    fn er_zoom_transform_roundtrip_and_anchor_stable() {
+        // 世界↔屏幕一致（视图变换缩放，§六.23-24）：to_screen 与 to_world 互为逆。
+        let vp = ErViewport { pan_x: 123.0, pan_y: -45.0, scale: 2.0 };
+        let wx = 310.5;
+        let wy = -77.0;
+        // 世界→屏幕（画布原点另加）；屏幕→世界 /scale。两者互为逆。
+        let sx = vp.pan_x + wx * vp.safe_scale();
+        let sy = vp.pan_y + wy * vp.safe_scale();
+        assert!((vp.to_world_x(sx) - wx).abs() < 1e-4);
+        assert!((vp.to_world_y(sy) - wy).abs() < 1e-4);
+        assert!((sx - (123.0 + wx * 2.0)).abs() < 1e-4, "screen = pan + world*scale");
+
+        // zoom_around 使锚点下世界点保持静止。
+        let mut z = ErViewport { pan_x: 80.0, pan_y: 60.0, scale: 1.0 };
+        let anchor = (400.0, 300.0);
+        let w_before = (z.to_world_x(anchor.0), z.to_world_y(anchor.1));
+        z.zoom_around(anchor, 1.5);
+        let w_after = (z.to_world_x(anchor.0), z.to_world_y(anchor.1));
+        assert!((w_before.0 - w_after.0).abs() < 1e-3, "锚点世界 x 保持：{:?}→{:?}", w_before, w_after);
+        assert!((w_before.1 - w_after.1).abs() < 1e-3);
+        assert!((z.scale - 1.5).abs() < 1e-3);
+
+        // 缩放范围钳制。
+        let mut big = ErViewport { pan_x: 0.0, pan_y: 0.0, scale: 1.0 };
+        big.zoom_around((0.0, 0.0), 1000.0);
+        assert!((big.scale - ER_MAX_SCALE).abs() < 1e-3);
+    }
+
+    #[test]
+    fn er_cardinality_option_roundtrip() {
+        // 用户选 1:N → 生成 left_to_right.max=Many/right_to_left.max=One，basis=UserAssertion；
+        // 反向能还原到同一选项 id。
+        for id in ["1_1", "1_n", "n_1", "n_n"] {
+            let card = er_option_id_to_cardinality(id);
+            assert_eq!(er_cardinality_to_option_id(&card), id, "{id} 应往返一致");
+            assert_eq!(
+                card.basis,
+                fluxdb_core::ErCardinalityBasis::UserAssertion,
+                "{id} 由用户声明，非 unknown"
+            );
+        }
+        // 未知：双向 Unknown + basis Unknown，映射回 unknown。
+        let unknown_card = er_option_id_to_cardinality("unknown");
+        assert_eq!(unknown_card.basis, fluxdb_core::ErCardinalityBasis::Unknown);
+        assert_eq!(er_cardinality_to_option_id(&unknown_card), "unknown");
+        // 已有数据 max 为 Zero（0..1）也归 1_1，Unknown 任一向归 unknown。
+        let zero = fluxdb_core::ErMatchCardinality {
+            left_to_right: fluxdb_core::ErCardinality {
+                min: fluxdb_core::ErCardinalityBound::Unknown,
+                max: fluxdb_core::ErCardinalityBound::Zero,
+            },
+            right_to_left: fluxdb_core::ErCardinality {
+                min: fluxdb_core::ErCardinalityBound::Unknown,
+                max: fluxdb_core::ErCardinalityBound::One,
+            },
+            basis: fluxdb_core::ErCardinalityBasis::Unknown,
+        };
+        assert_eq!(er_cardinality_to_option_id(&zero), "1_1");
+        let unknown_max = fluxdb_core::ErMatchCardinality {
+            left_to_right: fluxdb_core::ErCardinality {
+                min: fluxdb_core::ErCardinalityBound::Unknown,
+                max: fluxdb_core::ErCardinalityBound::Unknown,
+            },
+            right_to_left: fluxdb_core::ErCardinality {
+                min: fluxdb_core::ErCardinalityBound::Unknown,
+                max: fluxdb_core::ErCardinalityBound::Many,
+            },
+            basis: fluxdb_core::ErCardinalityBasis::Unknown,
+        };
+        assert_eq!(er_cardinality_to_option_id(&unknown_max), "unknown");
+    }
+
+    #[test]
+    fn er_zoom_out_reveals_more_nodes_in_materialize() {
+        // 缩小（world 下可视范围更大）应命中更多节点，且节点视图屏幕位置随 scale 缩放。
+        let tables: Vec<_> = (0..30).map(|i| er_table(&format!("t{i:02}"), 3)).collect();
+        let graph = fluxdb_core::ErGraphData {
+            tables: tables.clone(),
+            edges: vec![],
+            relation_status: fluxdb_core::ErLoadStatus::Loaded,
+        };
+        let layout = loaded_layout(&tables, &[]);
+        let scene = build_er_scene(&graph, &layout);
+        let mut positions = BTreeMap::new();
+        for t in &tables {
+            if let Some(&(x, y, _)) = layout.get(&t.name) {
+                positions.insert(t.name.clone(), (x, y));
+            }
+        }
+        let env = env_for(&scene, positions.clone());
+        let vp1 = ErViewport { pan_x: 0.0, pan_y: 0.0, scale: 1.0 };
+        let frame1 = scene.materialize(&env, vp1, 800.0, 600.0);
+        let vp_small = ErViewport { pan_x: 0.0, pan_y: 0.0, scale: 0.25 };
+        let frame_small = scene.materialize(&env, vp_small, 800.0, 600.0);
+        assert!(
+            frame_small.visible_nodes.len() > frame1.visible_nodes.len(),
+            "缩小应显示更多节点：{} vs {}",
+            frame_small.visible_nodes.len(),
+            frame1.visible_nodes.len()
+        );
+        // 节点视图坐标保持世界坐标（未被 paint 期 scale 反写）；缩放是绘制期变换，不改布局几何。
+        let n0 = frame_small.node_views.iter().find(|v| v.name == "t00").expect("t00 可见");
+        let world_x = positions["t00"].0;
+        assert!((n0.x - world_x).abs() < 1e-3, "materialize 不改写节点世界坐标");
+    }
+
+    #[test]
+    fn er_search_text_matches_name_and_comment_case_insensitive() {
+        // 名称匹配（忽略大小写）。
+        assert!(er_search_text_matches("Orders", None, "orders"));
+        assert!(er_search_text_matches("ORDERS", None, "order"));
+        // 注释匹配。
+        assert!(er_search_text_matches("t001", Some("用户订单表"), "订单"));
+        // 不匹配。
+        assert!(!er_search_text_matches("orders", None, "customer"));
+        assert!(!er_search_text_matches("orders", Some("订单表"), "客户"));
+    }
+
+    #[test]
+    fn er_group_subset_keeps_only_schema_and_internal_edges() {
+        let mk = |name: &str, schema: Option<&str>| fluxdb_core::ErTableNode {
+            name: match schema {
+                Some(s) => format!("{s}.{name}"),
+                None => name.to_string(),
+            },
+            reference: fluxdb_core::ErTableRef {
+                database: "db".to_string(),
+                schema: schema.map(str::to_string),
+                name: name.to_string(),
+            },
+            comment: None,
+            status: fluxdb_core::ErLoadStatus::Loaded,
+            columns: Vec::new(),
+        };
+        let edge = |from_schema: Option<&str>, from: &str, to_schema: Option<&str>, to: &str| {
+            let display = |s: Option<&str>, n: &str| match s {
+                Some(s) => format!("{s}.{n}"),
+                None => n.to_string(),
+            };
+            fluxdb_core::ErForeignKeyEdge {
+                name: "fk".to_string(),
+                from_table: display(from_schema, from),
+                from_column: "a".to_string(),
+                to_table: display(to_schema, to),
+                to_column: "b".to_string(),
+                from_reference: fluxdb_core::ErTableRef {
+                    database: "db".into(),
+                    schema: from_schema.map(str::to_string),
+                    name: from.into(),
+                },
+                to_reference: fluxdb_core::ErTableRef {
+                    database: "db".into(),
+                    schema: to_schema.map(str::to_string),
+                    name: to.into(),
+                },
+            }
+        };
+        let graph = fluxdb_core::ErGraphData {
+            tables: vec![
+                mk("orders", Some("sales")),
+                mk("customers", Some("sales")),
+                mk("audit", Some("log")),
+                mk("orphan", None),
+            ],
+            edges: vec![
+                edge(Some("sales"), "orders", Some("sales"), "customers"),
+                edge(Some("sales"), "orders", Some("log"), "audit"),
+                edge(Some("log"), "audit", None, "orphan"),
+            ],
+            relation_status: fluxdb_core::ErLoadStatus::Loaded,
+        };
+        // 进入 sales 组：仅 sales 表 + 两端都在组内的边（跨 log 的边被滤掉）。
+        let sales = er_group_subset_graph(&graph, Some("sales"));
+        let mut names: Vec<&str> = sales.tables.iter().map(|t| t.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["sales.customers", "sales.orders"]);
+        assert_eq!(sales.edges.len(), 1, "仅保留组内两端边：{:?}", {
+            let d: Vec<_> = sales.edges.iter().map(|e| format!("{}→{}", e.from_table, e.to_table)).collect();
+            d
+        });
+        assert!(
+            !sales.edges.iter().any(|e| e.to_table == "log.audit"),
+            "跨组边不能进入下级 JOIN"
+        );
+        // 返回全部：原样。
+        let all = er_group_subset_graph(&graph, None);
+        assert_eq!(all.tables.len(), 4);
+        assert_eq!(all.edges.len(), 3);
     }
 
     #[test]
@@ -411,6 +669,63 @@ mod tests {
         assert!((h - 764.0).abs() < 1.0);
     }
 
+
+    #[test]
+    fn er_canvas_overlay_wrapper_must_be_flex_container() {
+        // 回归：搜索/小地图/导出 overlay 的包裹层 `div().relative().flex_1().min_h_0()`
+        // 必须自身是 flex（flex_col），否则它包裹的 flex_1 子（er_canvas_view）在 block
+        // 布局下高度塌陷 → 探针测 0、不建场景 → 整画布空白。
+        use taffy::{AvailableSpace, Display, FlexDirection, Size, TaffyTree};
+        let model = |with_flex: bool| -> f32 {
+            let mut t: TaffyTree<()> = TaffyTree::new();
+            let root = t
+                .new_leaf(taffy::Style {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    size: Size {
+                        width: taffy::Dimension::length(1200.0),
+                        height: taffy::Dimension::length(800.0),
+                    },
+                    ..Default::default()
+                })
+                .unwrap();
+            // er_diagram_content：flex_col。
+            let content = t
+                .new_leaf(taffy_style(Display::Flex, FlexDirection::Column, true))
+                .unwrap();
+            // overlay 包裹层：flex_1 + relative；修复后是 flex_col，bug 时是 block。
+            let wrapper = t
+                .new_leaf(taffy_style(
+                    if with_flex { Display::Flex } else { Display::Block },
+                    FlexDirection::Column,
+                    true,
+                ))
+                .unwrap();
+            // er_canvas_view：flex_1 + min_h_0 + flex_col。须填满包裹层。
+            let canvas = t
+                .new_leaf(taffy_style(Display::Flex, FlexDirection::Column, true))
+                .unwrap();
+            t.add_child(root, content).unwrap();
+            t.add_child(content, wrapper).unwrap();
+            t.add_child(wrapper, canvas).unwrap();
+            t.compute_layout(
+                root,
+                Size {
+                    width: AvailableSpace::Definite(1200.0),
+                    height: AvailableSpace::Definite(800.0),
+                },
+            )
+            .unwrap();
+            t.layout(canvas).unwrap().size.height
+        };
+        let flexed = model(true);
+        assert!((flexed - 800.0).abs() < 1.0, "包裹层为 flex 时画布应填满：{flexed}");
+        let blocked = model(false);
+        assert!(
+            blocked <= 0.0,
+            "对照：包裹层为 block 时 flex_1 子塌陷为 0（保证测试能抓到回归），实际 {blocked}"
+        );
+    }
 
     #[test]
     fn mysql_ddl_highlight_query_maps_to_ddl_viewer_colors() {

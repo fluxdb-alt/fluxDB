@@ -6,11 +6,15 @@ mod credential;
 mod sqlite;
 
 use fluxdb_core::{
-    ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot, ConnectionConfig, ConnectionId, Error,
-    ErrorKind, MysqlConnectionProfile, MysqlTransportLayer, PostgresConnectionProfile,
-    PostgresTransportLayer, QueryRollbackSnapshot, RedisConnectionProfile, Result, RoutineRef,
-    SavedQuery, SecretRef, Settings, SidebarLayout, TableRef, TriggerRef,
+    ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot, ConnectionConfig, ConnectionId,
+    ErRelationship, Error, ErrorKind, MysqlConnectionProfile, MysqlTransportLayer,
+    PostgresConnectionProfile, PostgresTransportLayer, QueryRollbackSnapshot,
+    RedisConnectionProfile, Result, RoutineRef, SavedQuery, SecretRef, Settings, SidebarLayout,
+    TableRef, TriggerRef,
 };
+
+/// ER 逻辑关系目录的 kv key 前缀：`er_rel:{scope}` 存该作用域的 `Vec<ErRelationship>`。
+pub const ER_REL_KEY_PREFIX: &str = "er_rel:";
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 const PLAINTEXT_PASSWORD_OPTION: &str = "password";
@@ -327,6 +331,51 @@ impl FileStorage {
     pub fn save_saved_queries(&self, queries: &[SavedQuery]) -> Result<()> {
         let conn = self.open_sqlite()?;
         sqlite::put_json(&conn, sqlite::KEY_SAVED_QUERIES, &queries.to_vec())
+    }
+
+    /// 读取所有 ER 作用域的视图状态（按 scope key → 状态），用于重开/重启恢复
+    /// 分组、固定与坐标（§十/er-design §5.7 ErView 持久化）。缺失返回空。
+    pub fn load_er_view_states(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, ErViewScopeState>> {
+        let conn = self.open_sqlite()?;
+        Ok(
+            sqlite::get_json::<std::collections::BTreeMap<String, ErViewScopeState>>(
+                &conn,
+                sqlite::KEY_ER_VIEWS,
+            )?
+            .unwrap_or_default(),
+        )
+    }
+
+    /// 全量写回 ER 作用域视图状态（幂等 upsert，JSON 化存 kv）。
+    pub fn save_er_view_states(
+        &self,
+        states: &std::collections::BTreeMap<String, ErViewScopeState>,
+    ) -> Result<()> {
+        let conn = self.open_sqlite()?;
+        sqlite::put_json(&conn, sqlite::KEY_ER_VIEWS, states)
+    }
+
+    /// 读取某 ER 作用域的本地逻辑关系目录（§5 D1-D9，§7）。缺失返回空。
+    pub fn load_er_relationships(&self, scope_key: &str) -> Result<Vec<ErRelationship>> {
+        let conn = self.open_sqlite()?;
+        sqlite::get_json::<Vec<ErRelationship>>(&conn, &format!("{ER_REL_KEY_PREFIX}{scope_key}"))
+            .map(|v| v.unwrap_or_default())
+    }
+
+    /// 全量写回某 ER 作用域的本地逻辑关系目录（幂等 upsert）。
+    pub fn save_er_relationships(
+        &self,
+        scope_key: &str,
+        relationships: &[ErRelationship],
+    ) -> Result<()> {
+        let conn = self.open_sqlite()?;
+        sqlite::put_json(
+            &conn,
+            &format!("{ER_REL_KEY_PREFIX}{scope_key}"),
+            &relationships.to_vec(),
+        )
     }
 
     pub fn load_query_history(&self) -> Result<Vec<QueryHistoryRecord>> {
@@ -882,6 +931,18 @@ struct CompletionIndexHeader {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CompletionIndexTables {
     tables: Vec<TableRef>,
+}
+
+/// 单个 ER 作用域的视图状态（§十/§5.7）：分组、固定表、坐标。与关系模型分离——
+/// 只存视图层，不为每个局部图复制关系目录。坐标是逻辑像素（f32），finite，无 NaN。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ErViewScopeState {
+    /// 当前分组（schema 过滤）；None=全部。
+    pub group: Option<String>,
+    /// 手动拖动过（固定）的表展示名。
+    pub pinned: Vec<String>,
+    /// 各表世界坐标（展示名, x, y）。仅存已定位表，缺失表重开按布局回退。
+    pub positions: Vec<(String, f32, f32)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1508,6 +1569,99 @@ mod tests {
         storage.save_saved_queries(&queries).unwrap();
 
         assert_eq!(storage.load_saved_queries().unwrap(), queries);
+    }
+
+    #[test]
+    fn er_view_states_roundtrip_across_instances() {
+        let dir = unique_temp_dir();
+        let storage = FileStorage::new(&dir);
+        let scope = "1:demo:customers".to_string();
+        let mut states = std::collections::BTreeMap::new();
+        states.insert(
+            scope.clone(),
+            ErViewScopeState {
+                group: Some("public".to_string()),
+                pinned: vec!["orders".to_string()],
+                positions: vec![
+                    ("customers".to_string(), 10.0, 20.0),
+                    ("orders".to_string(), 300.0, 20.0),
+                ],
+            },
+        );
+        storage.save_er_view_states(&states).unwrap();
+
+        // 新实例（模拟重启）读回一致。
+        let reloaded = FileStorage::new(&dir).load_er_view_states().unwrap();
+        assert_eq!(reloaded.get(&scope), states.get(&scope));
+    }
+
+    #[test]
+    fn er_relationships_roundtrip_per_scope() {
+        use fluxdb_core::{
+            ErCardinality, ErCardinalityBasis, ErCardinalityBound, ErColumnPair, ErEnforcementKind,
+            ErFilterOp, ErLiteral, ErMatchCardinality, ErRelationSide, ErRelationship,
+            ErRelationshipEnforcement, ErRelationshipOrigin, ErRelationshipReview,
+            ErRequiredFilter, ErReviewState, ErValidity, ErValidityState,
+        };
+        let dir = unique_temp_dir();
+        let storage = FileStorage::new(&dir);
+        let rel = ErRelationship {
+            id: "r1".into(),
+            revision: 1,
+            left_entity: "e-orders".into(),
+            right_entity: "e-customers".into(),
+            role: "order_customer".into(),
+            column_pairs: vec![ErColumnPair {
+                left_column: "orders-customer_id".into(),
+                right_column: "customers-id".into(),
+            }],
+            required_filters: vec![ErRequiredFilter {
+                side: ErRelationSide::Right,
+                column_id: "customers-is_deleted".into(),
+                op: ErFilterOp::Eq,
+                literal: ErLiteral::Int(0),
+            }],
+            match_cardinality: ErMatchCardinality {
+                left_to_right: ErCardinality {
+                    min: ErCardinalityBound::Zero,
+                    max: ErCardinalityBound::One,
+                },
+                right_to_left: ErCardinality {
+                    min: ErCardinalityBound::Zero,
+                    max: ErCardinalityBound::Many,
+                },
+                basis: ErCardinalityBasis::UserAssertion,
+            },
+            origin: ErRelationshipOrigin::User,
+            review: ErRelationshipReview {
+                state: ErReviewState::Confirmed,
+                confirmed_revision: Some(1),
+                confirmed_by: Some("alice".into()),
+            },
+            enforcement: ErRelationshipEnforcement {
+                kind: ErEnforcementKind::None,
+                constraint_ref: None,
+                enforced: None,
+            },
+            validity: ErValidity {
+                state: ErValidityState::Current,
+                reason: None,
+            },
+            description: Some("订单归属于客户".into()),
+            evidence_refs: vec!["ev1".into()],
+        };
+        storage
+            .save_er_relationships("conn:db:", &[rel.clone()])
+            .unwrap();
+        // 同一作用域读回一致；跨作用域不串数据。
+        let loaded = storage.load_er_relationships("conn:db:").unwrap();
+        assert_eq!(loaded, vec![rel]);
+        assert!(
+            storage
+                .load_er_relationships("conn:other:")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

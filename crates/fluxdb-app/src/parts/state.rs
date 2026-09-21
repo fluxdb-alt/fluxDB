@@ -218,12 +218,14 @@ pub struct BackupListState {
 /// `schema` 为 None 表示整库范围（MySQL/SQLite 单库、PG 全部 schema）。
 /// `center_table` 为 Some 时表示「当前表关联 ER」：以该表为中心默认 1 跳绘制邻域；
 /// 为 None 时是整库 ER。
+/// 中心表用结构化身份（含 schema，PG 跨 schema 同名表不误配，含点标识符安全），
+/// 不再用裸表名或按 `.` 拆展示名。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ErDiagramState {
     pub connection_id: ConnectionId,
     pub database: String,
     pub schema: Option<String>,
-    pub center_table: Option<String>,
+    pub center_table: Option<fluxdb_core::ErTableRef>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1282,6 +1284,13 @@ pub enum AppCommand {
     OpenBackupList(ObjectPath),
     /// 打开某数据库的 ER 关系图 tab（画布原型；Path 定位到库/表所在连接与 schema）。
     OpenErDiagram(ObjectPath),
+    /// ER 逻辑关系目录操作；实际文件读写由桌面端后台任务调用 dispatch。
+    LoadErRelationships { scope_key: String },
+    CreateErRelationship { scope_key: String, relationship: ErRelationship },
+    UpdateErRelationship { scope_key: String, relationship: ErRelationship, expected_revision: u64 },
+    ConfirmErRelationship { scope_key: String, id: String, expected_revision: u64, by: String },
+    RejectErRelationship { scope_key: String, id: String, expected_revision: u64 },
+    DeleteErRelationship { scope_key: String, id: String, expected_revision: u64 },
     CopyTable {
         object: ObjectPath,
         new_name: String,
@@ -2333,6 +2342,9 @@ pub enum AppCommand {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppEvent {
+    ErRelationshipsLoaded { scope_key: String, relationships: Vec<ErRelationship> },
+    ErRelationshipChanged { scope_key: String, relationship: ErRelationship },
+    ErRelationshipDeleted { scope_key: String, id: String },
     BackupPrepared(BackupRequest),
     BackupCompleted(BackupManifest),
     RestorePrepared { request: RestoreRequest, plan: RestorePlan },
@@ -2587,7 +2599,7 @@ struct CompletionTriggersKey {
     schema: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AppController {
     state: AppState,
     next_connection_id: u64,
@@ -2596,6 +2608,9 @@ pub struct AppController {
     completion_cache: Arc<Mutex<CompletionCache>>,
     completion_index: Arc<Mutex<CompletionIndex>>,
     completion_index_storage: Option<fluxdb_storage::FileStorage>,
+    /// ER 逻辑关系服务按作用域复用；生命周期由应用层管理，UI 不直接持有文件 store。
+    er_model_storage: Option<fluxdb_storage::FileStorage>,
+    er_model_services: Arc<Mutex<BTreeMap<String, Arc<ErModelService>>>>,
     /// T071/F004：可关闭的轻量个性化（recency/frequency）。默认关闭，
     /// 关闭时排序与确定性基线一致。只记匿名 label，不记完整 SQL/敏感值。
     recency: Arc<Mutex<RecencyFrequency>>,

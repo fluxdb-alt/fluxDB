@@ -23,15 +23,14 @@ struct ErRelationKey {
     schema: Option<String>,
 }
 
-/// 字段缓存键：带足连接、连接修订、database、schema、table 身份；
-/// PG 跨 schema 同名表不串数据，连接变更不误用旧连接结果。
+/// 字段缓存键：带足连接、连接修订与结构化表身份（database + schema + 裸名）。
+/// 用 `ErTableRef` 而非展示名拆分，跨 schema 同名表、以及含 `.` 等合法字符的标识符
+/// 都能被唯一区分，不从展示名反推 schema/表名（er-design §5.2 身份与名称分离）。
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct ErColumnKey {
     connection_id: ConnectionId,
     conn_rev: u64,
-    database: String,
-    schema: Option<String>,
-    table: String,
+    reference: ErTableRef,
 }
 
 /// ER 元数据共享缓存（controller 持有，跨标签复用）。
@@ -47,6 +46,8 @@ pub struct ErCatalogCache {
     columns: BTreeMap<ErColumnKey, Vec<ErColumn>>,
     column_status: BTreeMap<ErColumnKey, ErLoadStatus>,
     columns_inflight: BTreeSet<ErColumnKey>,
+    /// 进行中字段加载的取消旗标：key -> 该次在飞读取的取消信号（关闭/停止时置位）。
+    columns_cancel: BTreeMap<ErColumnKey, ErCancelFlag>,
 }
 
 impl Default for ErCatalogCache {
@@ -59,6 +60,7 @@ impl Default for ErCatalogCache {
             columns: BTreeMap::new(),
             column_status: BTreeMap::new(),
             columns_inflight: BTreeSet::new(),
+            columns_cancel: BTreeMap::new(),
         }
     }
 }
@@ -88,6 +90,7 @@ impl ErCatalogCache {
         self.columns.retain(|k, _| k.connection_id != connection_id);
         self.column_status.retain(|k, _| k.connection_id != connection_id);
         self.columns_inflight.retain(|k| k.connection_id != connection_id);
+        self.columns_cancel.retain(|k, _| k.connection_id != connection_id);
     }
 
     /// 仅保留该连接的“当前修订”缓存（修订自增即旧修订键作废并清理）。
@@ -104,6 +107,8 @@ impl ErCatalogCache {
             .retain(|k, _| k.connection_id != connection_id || k.conn_rev == keep.0);
         self.columns_inflight
             .retain(|k| k.connection_id != connection_id || k.conn_rev == keep.0);
+        self.columns_cancel
+            .retain(|k, _| k.connection_id != connection_id || k.conn_rev == keep.0);
     }
 
     fn relation_key(&self, database: &str, schema: Option<&str>, connection_id: ConnectionId) -> ErRelationKey {
@@ -115,19 +120,11 @@ impl ErCatalogCache {
         }
     }
 
-    fn column_key(
-        &self,
-        database: &str,
-        schema: Option<&str>,
-        table: &str,
-        connection_id: ConnectionId,
-    ) -> ErColumnKey {
+    fn column_key(&self, reference: &ErTableRef, connection_id: ConnectionId) -> ErColumnKey {
         ErColumnKey {
             connection_id,
             conn_rev: self.revision(connection_id),
-            database: database.to_string(),
-            schema: schema.map(str::to_string),
-            table: table.to_string(),
+            reference: reference.clone(),
         }
     }
 }
@@ -138,6 +135,12 @@ pub struct ErRelationSnapshot {
     pub edges: Vec<ErForeignKeyEdge>,
     pub status: ErLoadStatus,
 }
+
+/// 一次进行中加载的取消信号：桌面端「关闭标签 / 停止加载」时置位，加载线程据此
+/// 在逐表之间停止后续工作，并在完成时丢弃该次结果（不写入缓存）。驱动是阻塞式
+/// 单次调用时无法即时中断，但能停止默认逐表循环的后续工作并丢弃过期结果。
+/// 同一 key 的多个并发加载方共享同一旗标，任一置位即整体取消。
+type ErCancelFlag = Arc<AtomicBool>;
 
 /// 字段按需加载的一次结果：每表列 + 状态。
 #[derive(Debug)]
@@ -188,15 +191,97 @@ impl AppController {
 
     /// 阶段 2：按需读取指定表字段。只请求缺失（未缓存/未在飞）的表；
     /// 已缓存表直接返回不重复查询。按方言批量读取（MySQL/PG 单查询，SQLite 逐表）。
+    /// `tables` 为结构化身份（ErTableRef），缓存键与结果归并都据此进行，不从展示名反推
+    /// schema/表名（PG 跨 schema 同名表与含点标识符不串表、不漏字段）。
     pub fn er_columns_for_tables(
+        &self,
+        config: &ConnectionConfig,
+        tables: &[ErTableRef],
+    ) -> fluxdb_core::Result<ErColumnBatch> {
+        let connector = connector_for(config)?;
+        er_columns_core(&self.er_catalog, config, tables, connector.as_ref())
+    }
+
+    /// 仅作废指定表（结构化身份）的 Failed 字段缓存（无数据库读取，可在 UI 线程调用）。
+    /// 保留其它表的成功/在飞结果；在飞表不处理（避免并发竞争）。
+    pub fn er_columns_invalidate_failed(
+        &self,
+        config: &ConnectionConfig,
+        tables: &[ErTableRef],
+    ) {
+        let mut guard = self.er_catalog.lock().unwrap();
+        for t in tables {
+            let key = guard.column_key(t, config.id);
+            if guard.column_status.get(&key) == Some(&ErLoadStatus::Failed)
+                && !guard.columns_inflight.contains(&key)
+            {
+                guard.column_status.remove(&key);
+            }
+        }
+    }
+
+    /// 取消指定范围的进行中字段加载：置位在飞读取的取消旗标，默认逐表读取会在两表之间
+    /// 停止后续工作，完成时丢弃该次结果并不写入缓存。只影响 in-flight 请求，已缓存结果不动。
+    /// 阻塞式驱动单次调用无法即时中断（如实保留），但能停止多表循环后续工作并丢弃过期结果。
+    /// `tables` 为 None 时取消该连接/数据库范围内全部在飞读取。
+    pub fn er_columns_cancel(
+        &self,
+        config: &ConnectionConfig,
+        database: &str,
+        tables: Option<&[ErTableRef]>,
+    ) {
+        let guard = self.er_catalog.lock().unwrap();
+        for (key, flag) in guard.columns_cancel.iter() {
+            if key.connection_id != config.id || key.reference.database != database {
+                continue;
+            }
+            if let Some(tables) = tables
+                && !tables.contains(&key.reference)
+            {
+                continue;
+            }
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// 字段重试：作废指定表的 Failed 缓存后再真正重新读取。既不每帧自动重试，
+    /// 也不清空成功缓存；仅在用户显式触发重试时调用。对“加载中”或成功表无影响。
+    pub fn er_columns_retry(
+        &self,
+        config: &ConnectionConfig,
+        tables: &[ErTableRef],
+    ) -> fluxdb_core::Result<ErColumnBatch> {
+        let connector = connector_for(config)?;
+        er_columns_retry_core(&self.er_catalog, config, tables, connector.as_ref())
+    }
+
+    /// 仅作废某范围 Failed 的关系缓存（无数据库读取，可在 UI 线程调用）。
+    pub fn er_relations_invalidate_failed(
         &self,
         config: &ConnectionConfig,
         database: &str,
         schema: Option<&str>,
-        tables: &[String],
-    ) -> fluxdb_core::Result<ErColumnBatch> {
+    ) {
+        let mut guard = self.er_catalog.lock().unwrap();
+        let key = guard.relation_key(database, schema, config.id);
+        if guard.relation_status.get(&key) == Some(&ErLoadStatus::Failed)
+            && !guard.relations_inflight.contains(&key)
+        {
+            guard.relation_status.remove(&key);
+            guard.relations.remove(&key);
+        }
+    }
+
+    /// 关系索引重试：作废 Failed 的关系缓存后再真正重新读取整范围边。
+    /// 仅用户显式重试时调用，不每帧自动重试；成功/在飞状态不动。
+    pub fn er_relations_retry(
+        &self,
+        config: &ConnectionConfig,
+        database: &str,
+        schema: Option<&str>,
+    ) -> fluxdb_core::Result<ErRelationSnapshot> {
         let connector = connector_for(config)?;
-        er_columns_core(&self.er_catalog, config, database, schema, tables, connector.as_ref())
+        er_relations_retry_core(&self.er_catalog, config, database, schema, connector.as_ref())
     }
 }
 
@@ -209,13 +294,12 @@ pub fn er_relations_core(
     schema: Option<&str>,
     connector: &dyn Connector,
 ) -> fluxdb_core::Result<ErRelationSnapshot> {
+    // 单次加锁内完成「命中缓存判定 + 登记 inflight」，杜绝检查与登记分开加锁时
+    // 两个并发调用都判定为可加载、各自读取数据库的竞争窗口。
     let key = {
-        let guard = cache.lock().unwrap();
-        guard.relation_key(database, schema, config.id)
-    };
-    // 已缓存且 Loaded / Failed：直接复用（Failed 保留，避免每帧重试震铃；由用户刷新决定）。
-    {
-        let guard = cache.lock().unwrap();
+        let mut guard = cache.lock().unwrap();
+        let key = guard.relation_key(database, schema, config.id);
+        // 已缓存且 Loaded / Failed：直接复用（Failed 保留，避免每帧重试震铃；由用户刷新决定）。
         if let Some(status) = guard.relation_status.get(&key) {
             match status {
                 ErLoadStatus::Loaded | ErLoadStatus::Failed => {
@@ -234,13 +318,11 @@ pub fn er_relations_core(
                 status: ErLoadStatus::Loading,
             });
         }
-    }
-    // 本调用成为加载者：标记 inflight，锁外执行 DB 读取。
-    {
-        let mut guard = cache.lock().unwrap();
+        // 本调用成为加载者：标记 inflight（与检查同锁，原子判定），锁外执行 DB 读取。
         guard.relations_inflight.insert(key.clone());
         guard.relation_status.insert(key.clone(), ErLoadStatus::Loading);
-    }
+        key
+    };
     // 锁外做网络/DB 读取。
     let result = load_er_relations_from_db_with_connector(connector, config, Some(database), schema);
     let mut guard = cache.lock().unwrap();
@@ -270,126 +352,149 @@ pub fn er_relations_core(
 
 /// 字段按需读取核心（可注入 connector 便于测试）。逻辑与
 /// `AppController::er_columns_for_tables` 相同，缓存经 `cache` 传入。
+/// 把缺失表按 schema 分组，调用连接器的逐 schema 批量读取，返回 (reference, columns)。
+/// 一个 schema 一次调用；PG 多 schema / 含点表名据此按真实 schema 查，避免裸名跨 schema 歧义。
+fn read_columns_by_schema(
+    database: &str,
+    refs: &[ErTableRef],
+    should_cancel: &dyn Fn() -> bool,
+    connector: &dyn Connector,
+) -> fluxdb_core::Result<Vec<(ErTableRef, Vec<ErColumn>)>> {
+    let mut by_schema: BTreeMap<Option<String>, Vec<&ErTableRef>> = BTreeMap::new();
+    for r in refs {
+        by_schema.entry(r.schema.clone()).or_default().push(r);
+    }
+    let mut out = Vec::new();
+    for (schema, group) in by_schema {
+        let bare: Vec<String> = group.iter().map(|r| r.name.clone()).collect();
+        let columns = connector.list_completion_columns_for_tables_with_cancel(
+            Some(database),
+            schema.as_deref(),
+            &bare,
+            should_cancel,
+        )?;
+        // 按「裸表名 + 声明 schema」归并到对应结构化身份（结果自带真实 schema，据此对齐）。
+        let mut by_ref: BTreeMap<ErTableRef, Vec<ErColumn>> = BTreeMap::new();
+        for col in columns {
+            // 用调用方本批 ref 的 (schema, name) 精确对齐；连接器返回列自带 schema 用于校验。
+            let want = group.iter().find(|r| &r.name == &col.table);
+            let Some(r) = want else {
+                continue; // 不属于本批请求的表列，忽略（不串表）。
+            };
+            by_ref.entry((*r).clone()).or_default().push(ErColumn {
+                name: col.name,
+                type_name: col.type_name,
+                primary_key: col.primary_key,
+                nullable: col.nullable,
+            });
+        }
+        out.extend(by_ref);
+    }
+    Ok(out)
+}
+
 pub fn er_columns_core(
     cache: &Mutex<ErCatalogCache>,
     config: &ConnectionConfig,
-    database: &str,
-    schema: Option<&str>,
-    tables: &[String],
+    tables: &[ErTableRef],
     connector: &dyn Connector,
 ) -> fluxdb_core::Result<ErColumnBatch> {
     if tables.is_empty() {
         return Ok(ErColumnBatch { tables: Vec::new() });
     }
-    // 锁内过滤：只留「未加载且未在飞」的表；已缓存命中直接取回。
-    // `tables` 使用展示名（与 ErTableNode.name 对齐：PG 为 `schema.table`，其余裸名）。
-    // 缓存键用每表推导的 schema（PG 从展示名取；其余用作用域 schema）保证跨 schema 不串。
-    let keys: Vec<ErColumnKey> = {
-        let guard = cache.lock().unwrap();
-        tables
-            .iter()
-            .map(|t| {
-                let (per_table_schema, _) = er_split_display(config.kind, t, schema);
-                guard.column_key(database, per_table_schema.as_deref(), t, config.id)
-            })
-            .collect()
-    };
+    // `tables` 为结构化身份（ErTableRef）；缓存键、结果归并都据此进行，不从展示名反推
+    // schema/表名（跨 schema 同名、含点标识符不串表、不漏字段）。
+    //
+    // 单次加锁内完成「命中缓存判定 + 登记 inflight + 取/建取消旗标」，杜绝检查与登记
+    // 分开加锁时两个并发调用都判定为缺失、各自发起重复读取的竞争窗口。
     let mut missing: Vec<ErColumnKey> = Vec::new();
+    let mut missing_cancel: Vec<ErCancelFlag> = Vec::new();
     let mut cached: Vec<(String, Vec<ErColumn>, ErLoadStatus)> = Vec::new();
     {
-        let guard = cache.lock().unwrap();
-        for (t, key) in tables.iter().zip(keys.iter()) {
-            match guard.column_status.get(key) {
+        let mut guard = cache.lock().unwrap();
+        for t in tables {
+            let key = guard.column_key(t, config.id);
+            match guard.column_status.get(&key) {
                 Some(ErLoadStatus::Loaded) => {
                     cached.push((
-                        t.clone(),
-                        guard.columns.get(key).cloned().unwrap_or_default(),
+                        t.display(),
+                        guard.columns.get(&key).cloned().unwrap_or_default(),
                         ErLoadStatus::Loaded,
                     ));
                 }
                 Some(ErLoadStatus::Failed) => {
-                    cached.push((t.clone(), Vec::new(), ErLoadStatus::Failed));
+                    cached.push((t.display(), Vec::new(), ErLoadStatus::Failed));
                 }
                 Some(ErLoadStatus::NotLoaded) | Some(ErLoadStatus::Loading) | None
-                    if guard.columns_inflight.contains(key) =>
+                    if guard.columns_inflight.contains(&key) =>
                 {
                     // 已在飞（其它视图/前一轮）：标记 Loading，本轮不重复发起。
-                    cached.push((t.clone(), Vec::new(), ErLoadStatus::Loading));
+                    cached.push((t.display(), Vec::new(), ErLoadStatus::Loading));
                 }
-                Some(ErLoadStatus::NotLoaded) | None => {
+                Some(ErLoadStatus::NotLoaded) | None | Some(ErLoadStatus::Loading) => {
+                    // 缺失（含 Loading 但未在飞=可重试）：记账并登记 inflight，取该 key 现有
+                    // 取消旗标（若已有在飞方共享同一旗标），否则新建。
+                    let cancel = guard
+                        .columns_cancel
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+                    guard.columns_inflight.insert(key.clone());
+                    guard.column_status.insert(key.clone(), ErLoadStatus::Loading);
+                    guard.columns_cancel.insert(key.clone(), cancel.clone());
                     missing.push(key.clone());
-                }
-                Some(ErLoadStatus::Loading) => {
-                    // 单表仅缺字段且未在飞：也应发起读取（Loading 但不在飞表示可重试）。
-                    missing.push(key.clone());
+                    missing_cancel.push(cancel);
                 }
             }
         }
     }
-    // 标记待读表为 inflight，锁外批量读取。
+    // 锁外批量读取（去抖合并由调用方做）。
     if !missing.is_empty() {
-        {
-            let mut guard = cache.lock().unwrap();
-            for k in &missing {
-                guard.columns_inflight.insert(k.clone());
-                guard.column_status.insert(k.clone(), ErLoadStatus::Loading);
-            }
-        }
         let rev_at_start = {
             let guard = cache.lock().unwrap();
             guard.revision(config.id)
         };
-        // 收集待读表的裸表名发给连接器（PG 展示名 `schema.table` 需拆出裸名）；
-        // 结果按 display 名归并（见读回映射）。
-        let raw: Vec<String> = missing
-            .iter()
-            .map(|k| er_split_display(config.kind, &k.table, schema).1)
-            .collect();
+        let missing_refs: Vec<ErTableRef> = missing.iter().map(|k| k.reference.clone()).collect();
+        // 取消旗标：连接器默认逐表循环在两张表之间读取它；任一表被取消即停止后续工作。
+        let flags_for_cancel = missing_cancel.clone();
+        let should_cancel = move || flags_for_cancel.iter().any(|c| c.load(Ordering::Relaxed));
         // 结束态记录：每表 Loaded / Failed；已加载缓存表也并入返回，便于调用方一次合并。
         let mut result: Vec<(String, Vec<ErColumn>, ErLoadStatus)> = cached;
-        match connector.list_completion_columns_for_tables_with_cancel(
-            Some(database),
-            schema,
-            &raw,
-            &|| false,
-        ) {
-            Ok(columns) => {
-                // 按 display 名分组列（与 ErTableNode.name 对齐：PG schema.table，其余裸名）。
-                let mut by_display: BTreeMap<String, Vec<ErColumn>> = BTreeMap::new();
-                for col in columns {
-                    let display = if config.kind == DatabaseKind::Postgres {
-                        match (&col.schema, col.table.as_str()) {
-                            (Some(s), name) => format!("{s}.{name}"),
-                            (None, name) => name.to_string(),
-                        }
-                    } else {
-                        col.table.clone()
-                    };
-                    by_display.entry(display).or_default().push(ErColumn {
-                        name: col.name,
-                        type_name: col.type_name,
-                        primary_key: col.primary_key,
-                        nullable: col.nullable,
-                    });
-                }
+        let database = missing_refs[0].database.clone();
+        let load =
+            read_columns_by_schema(&database, &missing_refs, &should_cancel, connector);
+        match load {
+            Ok(by_ref) => {
+                let mut by_display: BTreeMap<String, Vec<ErColumn>> = by_ref
+                    .into_iter()
+                    .map(|(r, cols)| (r.display(), cols))
+                    .collect();
                 let mut guard = cache.lock().unwrap();
                 let rev_now = guard.revision(config.id);
                 for k in &missing {
                     guard.columns_inflight.remove(k);
-                    // 修订变化 → 丢弃该批结果（旧连接不可复用）。
-                    if rev_now != rev_at_start || rev_now != k.conn_rev {
-                        guard.column_status.remove(k);
+                    let cancelled = guard
+                        .columns_cancel
+                        .get(&k)
+                        .map(|c| c.load(Ordering::Relaxed))
+                        .unwrap_or(false);
+                    guard.columns_cancel.remove(&k);
+                    // 被取消：丢弃该表结果并清状态（调用方将保持未读，其后重新请求）。
+                    // 修订变化：丢弃该批结果（旧连接不可复用）。
+                    if cancelled || rev_now != rev_at_start || rev_now != k.conn_rev {
+                        guard.column_status.remove(&k);
                         continue;
                     }
-                    if let Some(cols) = by_display.remove(&k.table) {
+                    let display = k.reference.display();
+                    if let Some(cols) = by_display.remove(&display) {
                         guard.columns.insert(k.clone(), cols.clone());
                         guard.column_status.insert(k.clone(), ErLoadStatus::Loaded);
-                        result.push((k.table.clone(), cols, ErLoadStatus::Loaded));
+                        result.push((display, cols, ErLoadStatus::Loaded));
                     } else {
                         // 没有该表列：视为该表无字段（空 ≠ 未读），标记 Loaded。
                         guard.columns.insert(k.clone(), Vec::new());
                         guard.column_status.insert(k.clone(), ErLoadStatus::Loaded);
-                        result.push((k.table.clone(), Vec::new(), ErLoadStatus::Loaded));
+                        result.push((display, Vec::new(), ErLoadStatus::Loaded));
                     }
                 }
             }
@@ -398,12 +503,23 @@ pub fn er_columns_core(
                 let rev_now = guard.revision(config.id);
                 for k in &missing {
                     guard.columns_inflight.remove(k);
+                    let cancelled = guard
+                        .columns_cancel
+                        .get(&k)
+                        .map(|c| c.load(Ordering::Relaxed))
+                        .unwrap_or(false);
+                    guard.columns_cancel.remove(&k);
+                    if cancelled {
+                        // 被取消：不标记 Failed，保留未读供后续重试。
+                        guard.column_status.remove(&k);
+                        continue;
+                    }
                     if rev_now != rev_at_start || rev_now != k.conn_rev {
-                        guard.column_status.remove(k);
+                        guard.column_status.remove(&k);
                         continue;
                     }
                     guard.column_status.insert(k.clone(), ErLoadStatus::Failed);
-                    result.push((k.table.clone(), Vec::new(), ErLoadStatus::Failed));
+                    result.push((k.reference.display(), Vec::new(), ErLoadStatus::Failed));
                 }
             }
         }
@@ -416,24 +532,49 @@ pub fn er_columns_core(
     }
 }
 
-/// 由展示表名拆出「(每表 schema, 裸表名)」。
-/// PG 展示名为 `schema.table`（er_service 拼接），拆最后一个 '.'；无 '.' 视为无 schema。
-/// 其余方言展示名即裸名，schema 沿用作用域参数。
-fn er_split_display(
-    kind: DatabaseKind,
-    display: &str,
-    scope_schema: Option<&str>,
-) -> (Option<String>, String) {
-    if kind == DatabaseKind::Postgres {
-        match display.rsplit_once('.') {
-            Some((s, bare)) if !s.is_empty() && !bare.is_empty() => {
-                (Some(s.to_string()), bare.to_string())
-            }
-            _ => (None, display.to_string()),
-        }
-    } else {
-        (scope_schema.map(str::to_string), display.to_string())
+/// 字段重试核心（可注入 cache+connector 便于测试）：作废 Failed 后重新读取。
+pub fn er_columns_retry_core(
+    cache: &Mutex<ErCatalogCache>,
+    config: &ConnectionConfig,
+    tables: &[ErTableRef],
+    connector: &dyn Connector,
+) -> fluxdb_core::Result<ErColumnBatch> {
+    if tables.is_empty() {
+        return Ok(ErColumnBatch { tables: Vec::new() });
     }
+    {
+        let mut guard = cache.lock().unwrap();
+        for t in tables {
+            let key = guard.column_key(t, config.id);
+            if guard.column_status.get(&key) == Some(&ErLoadStatus::Failed)
+                && !guard.columns_inflight.contains(&key)
+            {
+                guard.column_status.remove(&key);
+            }
+        }
+    }
+    er_columns_core(cache, config, tables, connector)
+}
+
+/// 关系重试核心（可注入 cache+connector 便于测试）：作废 Failed 后重新读取。
+pub fn er_relations_retry_core(
+    cache: &Mutex<ErCatalogCache>,
+    config: &ConnectionConfig,
+    database: &str,
+    schema: Option<&str>,
+    connector: &dyn Connector,
+) -> fluxdb_core::Result<ErRelationSnapshot> {
+    {
+        let mut guard = cache.lock().unwrap();
+        let key = guard.relation_key(database, schema, config.id);
+        if guard.relation_status.get(&key) == Some(&ErLoadStatus::Failed)
+            && !guard.relations_inflight.contains(&key)
+        {
+            guard.relation_status.remove(&key);
+            guard.relations.remove(&key);
+        }
+    }
+    er_relations_core(cache, config, database, schema, connector)
 }
 
 /// 用注入 connector 读取整库关系边（供 er_relations_core 测试注入）。

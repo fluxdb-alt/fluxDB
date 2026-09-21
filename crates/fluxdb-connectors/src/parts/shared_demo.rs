@@ -161,6 +161,8 @@ fn mock_completion_foreign_keys(table: &str) -> Vec<ForeignKeyInfo> {
             ref_schema: None,
             ref_table: "ProductCategory".to_string(),
             ref_column: "id".to_string(),
+            columns: Vec::new(),
+            ref_columns: Vec::new(),
         }],
         // Order 的表连接：product_id + customer_id 独立 FK。
         "Order" | "order" => vec![
@@ -170,6 +172,8 @@ fn mock_completion_foreign_keys(table: &str) -> Vec<ForeignKeyInfo> {
                 ref_schema: None,
                 ref_table: "Product".to_string(),
                 ref_column: "id".to_string(),
+                columns: Vec::new(),
+                ref_columns: Vec::new(),
             },
             ForeignKeyInfo {
                 name: "fk_order_customer".to_string(),
@@ -177,6 +181,8 @@ fn mock_completion_foreign_keys(table: &str) -> Vec<ForeignKeyInfo> {
                 ref_schema: None,
                 ref_table: "Customer".to_string(),
                 ref_column: "id".to_string(),
+                columns: Vec::new(),
+                ref_columns: Vec::new(),
             },
         ],
         _ => Vec::new(),

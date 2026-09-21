@@ -563,6 +563,56 @@ impl NavicatMain {
 
     fn apply_app_event(&mut self, event: &AppEvent, cx: &mut Context<Self>) {
         match event {
+            AppEvent::ErRelationshipsLoaded {
+                scope_key,
+                relationships,
+            } => {
+                let tab_ids = self
+                    .er_relationship_scope_keys
+                    .iter()
+                    .filter_map(|(tab_id, key)| (key == scope_key).then_some(*tab_id))
+                    .collect::<Vec<_>>();
+                for tab_id in tab_ids {
+                    self.er_relationships.insert(tab_id, relationships.clone());
+                    self.er_relationship_errors.remove(&tab_id);
+                    self.sync_er_local_relationship_edges(tab_id);
+                }
+            }
+            AppEvent::ErRelationshipChanged {
+                scope_key,
+                relationship,
+            } => {
+                let tab_ids = self
+                    .er_relationship_scope_keys
+                    .iter()
+                    .filter_map(|(tab_id, key)| (key == scope_key).then_some(*tab_id))
+                    .collect::<Vec<_>>();
+                for tab_id in tab_ids {
+                    let rows = self.er_relationships.entry(tab_id).or_default();
+                    if let Some(existing) = rows.iter_mut().find(|row| row.id == relationship.id) {
+                        *existing = relationship.clone();
+                    } else {
+                        rows.push(relationship.clone());
+                    }
+                    rows.sort_by(|a, b| a.role.cmp(&b.role).then_with(|| a.id.cmp(&b.id)));
+                    self.er_relationship_errors.remove(&tab_id);
+                    self.sync_er_local_relationship_edges(tab_id);
+                }
+            }
+            AppEvent::ErRelationshipDeleted { scope_key, id } => {
+                let tab_ids = self
+                    .er_relationship_scope_keys
+                    .iter()
+                    .filter_map(|(tab_id, key)| (key == scope_key).then_some(*tab_id))
+                    .collect::<Vec<_>>();
+                for tab_id in tab_ids {
+                    if let Some(rows) = self.er_relationships.get_mut(&tab_id) {
+                        rows.retain(|row| row.id != *id);
+                    }
+                    self.er_relationship_errors.remove(&tab_id);
+                    self.sync_er_local_relationship_edges(tab_id);
+                }
+            }
             AppEvent::DataLoaded(tab_id, page) => {
                 if self.is_redis_data_tab(*tab_id) {
                     self.redis_key_folder_visible_cache.remove(tab_id);
@@ -759,6 +809,32 @@ impl NavicatMain {
                 self.data_sort_draft_rules.remove(tab_id);
                 self.redis_data_refresh_times.remove(tab_id);
                 // ER 图缓存与进行中任务随标签关闭一并回收，避免残留旧图/后台线程。
+                // 关闭前持久化该 ER 作用域的视图状态（分组/固定/坐标，§十）。
+                if self.er_scope_keys.contains_key(tab_id) {
+                    // 取消该作用域仍在进行的字段加载（停止多表循环后续工作并丢弃过期结果，
+                    // §二.5）。作用域由关闭标签的 ErDiagramState 提供；专属 ER 标签每作用域唯一，
+                    // 同作用域不会再有其他标签消费这些在飞请求。
+                    let er_scope = self
+                        .controller
+                        .state()
+                        .tabs
+                        .iter()
+                        .find(|t| t.id == *tab_id)
+                        .and_then(|t| match &t.kind {
+                            TabKind::ErDiagram(er) => Some(er.clone()),
+                            _ => None,
+                        });
+                    if let Some(er) = er_scope
+                        && let Some(config) = self
+                            .controller
+                            .connection_configs()
+                            .into_iter()
+                            .find(|c| c.id == er.connection_id)
+                    {
+                        self.controller.er_columns_cancel(&config, &er.database, None);
+                    }
+                    self.er_save_view_state(*tab_id);
+                }
                 self.er_graphs.remove(tab_id);
                 self.er_full_tables.remove(tab_id);
                 self.er_errors.remove(tab_id);
@@ -789,6 +865,49 @@ impl NavicatMain {
                 self.er_viewports.remove(tab_id);
                 self.er_scenes.remove(tab_id);
                 self.er_canvas_sizes.remove(tab_id);
+                self.er_canvas_origins.remove(tab_id);
+                self.er_all_edges.remove(tab_id);
+                self.er_center_refs.remove(tab_id);
+                self.er_field_highlights.remove(tab_id);
+                self.er_last_updated.remove(tab_id);
+                self.er_refreshing.remove(tab_id);
+                self.er_search_input.remove(tab_id);
+                self.er_search_subs.remove(tab_id);
+                self.er_search_query.remove(tab_id);
+                self.er_search_sel.remove(tab_id);
+                self.er_group.remove(tab_id);
+                self.er_group_built.remove(tab_id);
+                self.er_minimap_rect.remove(tab_id);
+                self.er_export_open.remove(tab_id);
+                self.er_last_import.remove(tab_id);
+                self.er_view_restored.remove(tab_id);
+                self.er_scope_keys.remove(tab_id);
+                self.er_relationship_scope_keys.remove(tab_id);
+                self.er_relationships.remove(tab_id);
+                self.er_relationship_loading.remove(tab_id);
+                self.er_relationship_tasks.remove(tab_id);
+                self.er_relationship_errors.remove(tab_id);
+                self.er_relationship_panel_open.remove(tab_id);
+                self.er_relationship_form_open.remove(tab_id);
+                self.er_relationship_form_editing.remove(tab_id);
+                self.er_relationship_form_role_inputs.remove(tab_id);
+                self.er_relationship_form_description_inputs.remove(tab_id);
+                self.er_relationship_form_left_tables.remove(tab_id);
+                self.er_relationship_form_right_tables.remove(tab_id);
+                self.er_relationship_form_pairs.remove(tab_id);
+                self.er_relationship_form_filters.remove(tab_id);
+                self.er_relationship_form_cardinality.remove(tab_id);
+                self.er_relationship_form_subscriptions.remove(tab_id);
+                self.er_relationship_panel_width.remove(tab_id);
+                if self
+                    .er_relationship_panel_resize_start
+                    .as_ref()
+                    .is_some_and(|_| self.er_relationship_scope_keys.contains_key(tab_id))
+                {
+                    // 拖动起点跟随最靠后的 ER 标签；简单起见关闭时清空。
+                    self.er_relationship_panel_resize_start = None;
+                }
+                self.er_relationship_delete_pending.remove(tab_id);
                 if self
                     .er_viewport_drag
                     .as_ref()

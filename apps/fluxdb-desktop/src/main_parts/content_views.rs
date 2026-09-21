@@ -137,7 +137,7 @@ fn content(
             let TabKind::ErDiagram(er) = &tab.kind else {
                 unreachable!();
             };
-            er_diagram_content(tab.id, er, this, colors, cx)
+            er_diagram_content(tab.id, er, this, window, colors, cx)
         }
         Some(tab) if matches!(tab.kind, TabKind::UserAdmin(_)) => {
             let TabKind::UserAdmin(admin) = &tab.kind else {

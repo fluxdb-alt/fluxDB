@@ -129,6 +129,8 @@ fn mysql_foreign_keys_with_cancel(
                     .filter(|value| !value.is_empty()),
                     ref_table: row.try_get("referenced_table_name").map_err(mysql_error)?,
                     ref_column: row.try_get("referenced_column_name").map_err(mysql_error)?,
+                    columns: Vec::new(),
+                    ref_columns: Vec::new(),
                 })
             })
             .collect()
@@ -219,6 +221,8 @@ fn mysql_foreign_keys_for_tables(
                     .filter(|value| !value.is_empty()),
                     ref_table: row.try_get("referenced_table_name").map_err(mysql_error)?,
                     ref_column: row.try_get("referenced_column_name").map_err(mysql_error)?,
+                    columns: Vec::new(),
+                    ref_columns: Vec::new(),
                 },
             ));
         }

@@ -1517,6 +1517,8 @@
             ref_schema: None,
             ref_table: "customers".to_string(),
             ref_column: "id".to_string(),
+            columns: Vec::new(),
+            ref_columns: Vec::new(),
         }];
         let items = fk_join_completion_items("o", &foreign_keys, DatabaseKind::MySql, "");
         assert_eq!(items.len(), 1);
@@ -1537,6 +1539,8 @@
             ref_schema: None,
             ref_table: "customers".to_string(),
             ref_column: "id".to_string(),
+            columns: Vec::new(),
+            ref_columns: Vec::new(),
         }];
         let items = fk_join_completion_items("o", &foreign_keys, DatabaseKind::MySql, "ord");
         assert!(items.is_empty());
@@ -1553,6 +1557,8 @@
                 ref_schema: None,
                 ref_table: "accounts".into(),
                 ref_column: "tenant_id".into(),
+                columns: Vec::new(),
+                ref_columns: Vec::new(),
             },
             ForeignKeyInfo {
                 name: "fk_pair".into(),
@@ -1560,6 +1566,8 @@
                 ref_schema: None,
                 ref_table: "accounts".into(),
                 ref_column: "id".into(),
+                columns: Vec::new(),
+                ref_columns: Vec::new(),
             },
         ];
         let items = fk_join_completion_items("o", &foreign_keys, DatabaseKind::MySql, "");
@@ -1582,6 +1590,8 @@
                 ref_schema: None,
                 ref_table: "order".to_string(),     // 保留字表
                 ref_column: "id".to_string(),
+                columns: Vec::new(),
+                ref_columns: Vec::new(),
             },
             ForeignKeyInfo {
                 name: "fk_order_ref".to_string(),
@@ -1589,6 +1599,8 @@
                 ref_schema: None,
                 ref_table: "order".to_string(),
                 ref_column: "detail id".to_string(), // 特殊字符列
+                columns: Vec::new(),
+                ref_columns: Vec::new(),
             },
         ];
         // root 别名也是保留字（如 `group`），须引号；schema 限定参考表逐段引号。
@@ -1614,6 +1626,8 @@
             ref_schema: Some("select".to_string()), // 保留字 schema
             ref_table: "order".to_string(),
             ref_column: "id".to_string(),
+            columns: Vec::new(),
+            ref_columns: Vec::new(),
         }];
         let items = fk_join_completion_items("a", &schemed, DatabaseKind::MySql, "");
         assert_eq!(

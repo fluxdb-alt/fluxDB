@@ -14,6 +14,7 @@ fn field_row(
     table: &str,
     col: &NodeColumnDisplay,
     is_last_visible: bool,
+    highlighted: bool,
     card_color: gpui::Rgba,
     colors: UiColors,
 ) -> Stateful<Div> {
@@ -48,7 +49,8 @@ fn field_row(
         .items_center()
         .gap(px(6.))
         .text_size(px(11.))
-        .hover(|s| s.bg(colors.hover))
+        .when(highlighted, |d| d.bg(colors.hover))
+        .when(!highlighted, |d| d.hover(|s| s.bg(colors.hover)))
         .id(format!("er-field-{}-{}-{}", tab_id.0, table, col.name))
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx));
     // 行间极淡分隔线（最后一行不画，避免压页脚边框）。
@@ -99,6 +101,7 @@ fn er_field_area(
     tab_id: TabId,
     meta: &ErNodeMeta,
     nv: &ErNodeView,
+    highlight: Option<&str>,
     card_color: gpui::Rgba,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
@@ -147,13 +150,14 @@ fn er_field_area(
         let top = FIELD_PAD_Y / 2.0 + i as f32 * NODE_FIELD_ROW - scroll;
         let col = &meta.columns[i];
         let is_last_visible = i == vis1;
+        let highlighted = highlight == Some(col.name.as_str());
         rows = rows.child(
             div()
                 .absolute()
                 .left_0()
                 .right_0()
                 .top(px(top))
-                .child(field_row(tab_id, &table, col, is_last_visible, card_color, colors)),
+                .child(field_row(tab_id, &table, col, is_last_visible, highlighted, card_color, colors)),
         );
     }
     body = body.child(rows);
@@ -199,6 +203,7 @@ fn node_view(
     nv: &ErNodeView,
     expandable: bool,
     viewport: ErViewport,
+    highlight: Option<&str>,
     card_color: gpui::Rgba,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
@@ -207,8 +212,8 @@ fn node_view(
     // 选中轮廓约 2px：用边框颜色 + 外描边（不改变内容布局）。
     let mut node = div()
         .absolute()
-        .left(px(nv.x + viewport.pan_x))
-        .top(px(nv.y + viewport.pan_y))
+        .left(px(nv.x * viewport.safe_scale() + viewport.pan_x))
+        .top(px(nv.y * viewport.safe_scale() + viewport.pan_y))
         .w(px(NODE_WIDTH))
         .h(px(nv.height))
         .rounded(colors.radius)
@@ -302,11 +307,19 @@ fn node_view(
                             .entry(tab_id)
                             .or_default()
                             .insert(expand_table.clone());
-                        this.er_graphs.remove(&tab_id);
-                        this.er_scenes.remove(&tab_id);
-                        this.er_relation_tasks.remove(&tab_id);
-                        this.er_errors.remove(&tab_id);
-                        this.er_load_tasks.remove(&tab_id);
+                        // 同步重算邻域：保留人工坐标/固定，不撕空图；中心身份缺失时回退触发读取。
+                        let recomputed = this
+                            .er_center_refs
+                            .get(&tab_id)
+                            .cloned()
+                            .map(|center| recompute_local_er_from_center(tab_id, &center, this, cx))
+                            .unwrap_or(false);
+                        if !recomputed {
+                            this.er_graphs.remove(&tab_id);
+                            this.er_scenes.remove(&tab_id);
+                            this.er_relation_tasks.remove(&tab_id);
+                            this.er_errors.remove(&tab_id);
+                        }
                         cx.notify();
                     }),
                 )
@@ -329,7 +342,7 @@ fn node_view(
                         .child("暂无可见字段"),
                 );
             } else {
-                let (area, is_long) = er_field_area(tab_id, meta, nv, card_color, colors, cx);
+                let (area, is_long) = er_field_area(tab_id, meta, nv, highlight, card_color, colors, cx);
                 node = node.child(area);
                 if is_long {
                     let n = meta.columns.len();
@@ -397,10 +410,11 @@ fn node_view(
                                         if let Some(t) = graph.tables.iter_mut().find(|t| t.name == retry_table) {
                                             if t.status == ErLoadStatus::Failed {
                                                 t.status = ErLoadStatus::NotLoaded;
+                                                // 用结构化身份入队请求；结果归并也按身份，不从展示名反推。
                                                 this.er_pending_columns
                                                     .entry(tab_id)
                                                     .or_default()
-                                                    .insert(retry_table.clone());
+                                                    .insert(t.reference.clone());
                                             }
                                         }
                                     }
@@ -436,9 +450,21 @@ fn scroll_focused_fields(tab_id: TabId, this: &mut NavicatMain, delta_px: f32) {
     *e = (*e + delta_px).clamp(0.0, max_scroll);
 }
 
-/// 定位隐藏字段：滚动该表让隐藏的关系字段回到可视区。
-/// `to_top=true` 滚到顶（露出上方隐藏字段），否则滚到底（露出下方隐藏字段）。
-fn reveal_hidden_fields(tab_id: TabId, this: &mut NavicatMain, table: &str, to_top: bool) {
+/// 计算把 `field_idx` 精确送入可视区（尽量居中、不越界）的目标滚动偏移（px）。
+/// 与「滚到最顶/最底」不同：定位应让目标行进入可见区并尽量居中（§4.2）。
+fn hidden_field_scroll(field_idx: usize, ncols: usize) -> f32 {
+    let max_scroll = (ncols.saturating_sub(MAX_FIELD_ROWS) as f32 * NODE_FIELD_ROW).max(0.0);
+    let center_scroll = field_idx as f32 * NODE_FIELD_ROW
+        - (MAX_FIELD_ROWS as f32 / 2.0) * NODE_FIELD_ROW
+        + NODE_FIELD_ROW / 2.0;
+    center_scroll.clamp(0.0, max_scroll)
+}
+
+/// 定位隐藏字段：若该方向确实有隐藏的关系字段，则滚动该表让目标字段**精确进入可视区**
+/// （居中，非仅滚到最顶/最底），并高亮该字段行（§4.2）。
+/// `to_top=true` 处理上方隐藏字段，`to_bottom=true` 处理下方隐藏字段。
+/// 无对应方向字段时不做任何滚动。
+fn reveal_hidden_fields(tab_id: TabId, this: &mut NavicatMain, table: &str, to_top: bool, to_bottom: bool) {
     let Some(graph) = this.er_graphs.get(&tab_id) else {
         return;
     };
@@ -446,9 +472,31 @@ fn reveal_hidden_fields(tab_id: TabId, this: &mut NavicatMain, table: &str, to_t
         return;
     };
     let n = t.columns.len();
-    if n <= MAX_FIELD_ROWS {
+    if n == 0 || n <= MAX_FIELD_ROWS {
         return;
     }
-    let target = if to_top { 0.0 } else { (n - MAX_FIELD_ROWS) as f32 * NODE_FIELD_ROW };
+    // 找出该方向上「隐藏且有关联」的字段在下标集合。无字段时不动。
+    // 端点字段集合（edge_columns）存在 scene，这里从图列 + 状态推导：直接取可见区间边界外的列。
+    let current_scroll = this.er_node_scroll_px.get(&(tab_id, table.to_string())).copied().unwrap_or(0.0);
+    let (row0, row1) = visible_row_range(n, current_scroll);
+    let candidates: Vec<usize> = (0..n)
+        .filter(|&ci| {
+            if to_top {
+                ci < row0
+            } else if to_bottom {
+                ci > row1
+            } else {
+                false
+            }
+        })
+        .collect();
+    let Some(&field_idx) = candidates.first() else {
+        return; // 该方向没有隐藏字段
+    };
+    // 精确滚动到目标字段（尽量居中，但不越界）：目标行进入可视区即满足定位要求。
+    let target = hidden_field_scroll(field_idx, n);
     this.er_node_scroll_px.insert((tab_id, table.to_string()), target);
+    // 记录高亮字段（渲染时该行高亮；空白/Esc/其它交互后清除）。
+    this.er_field_highlights
+        .insert(tab_id, (table.to_string(), t.columns[field_idx].name.clone()));
 }

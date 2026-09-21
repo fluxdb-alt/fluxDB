@@ -415,6 +415,8 @@ SELECT $1, f();";
                 ref_schema: Some("app".to_string()),
                 ref_table: "teams".to_string(),
                 ref_column: "id".to_string(),
+                columns: Vec::new(),
+                ref_columns: Vec::new(),
             }],
             vec![TriggerInfo {
                 name: "users_bu".to_string(),
