@@ -34,9 +34,18 @@ fn now_local_time_display() -> String {
     format!("{h:02}:{m:02}:{s:02} UTC")
 }
 
-/// 关系面板可拖宽范围（px）。
-const ER_REL_PANEL_MIN_W: f32 = 280.0;
-const ER_REL_PANEL_MAX_W: f32 = 560.0;
+/// 关系面板可拖宽范围（px，GPUI 逻辑像素）。
+const ER_REL_PANEL_MIN_W: f32 = 320.0;
+const ER_REL_PANEL_MAX_W: f32 = 800.0;
+/// 默认宽度（打开时）；若可用空间更小则退而用之。
+const ER_REL_PANEL_DEFAULT_W: f32 = 560.0;
+
+/// 把关系面板宽度约束到 [min, min(max, 可用宽)]；窗口缩小时随之收缩，不超出界面。
+fn clamp_er_rel_panel_width(width: f32, available_w: f32) -> f32 {
+    let max = ER_REL_PANEL_MAX_W.min(available_w.max(ER_REL_PANEL_MIN_W));
+    let min = ER_REL_PANEL_MIN_W.min(available_w.max(1.0));
+    width.clamp(min, max)
+}
 
 impl NavicatMain {
     /// 将本地逻辑关系投影为画布边；物理外键仍来自 metadata，不执行 DDL。
@@ -1593,13 +1602,13 @@ fn er_relationship_panel(
         this.ensure_er_relationship_form_controls(tab_id, window, cx);
     }
     let close_tab = tab_id;
-    // 面板宽度可拖动（左缘），按 tab 记忆。
-    let panel_width = this
-        .er_relationship_panel_width
-        .get(&tab_id)
-        .copied()
-        .unwrap_or(360.0)
-        .clamp(ER_REL_PANEL_MIN_W, ER_REL_PANEL_MAX_W);
+    // 面板宽度可拖动（左缘），按 tab 记忆。默认 560，受 ER 内容区可用宽度约束：
+    // 可用空间小（窄窗）则收缩，大窗口允许拖宽到 MAX（约 800）。
+    let available_w = this.er_canvas_sizes.get(&tab_id).copied().unwrap_or((960.0, 640.0)).0;
+    let panel_width = clamp_er_rel_panel_width(
+        this.er_relationship_panel_width.get(&tab_id).copied().unwrap_or(ER_REL_PANEL_DEFAULT_W),
+        available_w,
+    );
     let mut panel = div()
         .absolute()
         .top(px(0.))
@@ -1622,12 +1631,17 @@ fn er_relationship_panel(
             .border_b_1()
             .border_color(colors.border_soft)
             .child(
+                // 表单打开时统一标题为「新建本地逻辑关系」，避免内层重复标题。
                 div()
                     .flex_1()
                     .text_size(px(13.))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(colors.text)
-                    .child("本地逻辑关系"),
+                    .child(if this.er_relationship_form_open.contains(&tab_id) {
+                        "新建本地逻辑关系"
+                    } else {
+                        "本地逻辑关系"
+                    }),
             )
             .child(
                 Button::new(("er-rel-new", tab_id.0))
@@ -1656,6 +1670,8 @@ fn er_relationship_panel(
                     .tooltip("关闭关系面板")
                     .child(app_icon(AppIcon::Close, 15., colors.muted))
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        // 关闭面板：清理拖拽起点，避免下次打开残留旧状态。
+                        this.er_relationship_panel_resize_start = None;
                         this.er_relationship_panel_open.remove(&close_tab);
                         cx.notify();
                     })),
@@ -1663,7 +1679,14 @@ fn er_relationship_panel(
     );
 
     if this.er_relationship_form_open.contains(&tab_id) {
-        panel = panel.child(er_relationship_form(tab_id, this, colors, cx));
+        // 表单内容可滚动：默认打开时把提交区推出视口外也能滚到，底部操作始终可达。
+        panel = panel.child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .child(er_relationship_form(tab_id, this, colors, cx)),
+        );
     }
 
     if loading {
@@ -1941,7 +1964,7 @@ fn er_relationship_panel(
         panel = panel.child(list);
     }
     // 左缘拖宽手柄：作为最后一个 child（渲染在最上层，不被内容覆盖；绘制与命中一致）。
-    panel = panel.child(er_rel_panel_resize_handle(tab_id, panel_width, colors, cx));
+    panel = panel.child(er_rel_panel_resize_handle(tab_id, panel_width, available_w, colors, cx));
     panel
 }
 
@@ -2030,6 +2053,7 @@ fn er_equal_icon(colors: UiColors) -> Div {
 fn er_rel_panel_resize_handle(
     tab_id: TabId,
     panel_width: f32,
+    available_w: f32,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> impl gpui::IntoElement {
@@ -2053,17 +2077,26 @@ fn er_rel_panel_resize_handle(
                 cx.stop_propagation();
             }),
         )
-        .on_drag(SidebarResizeDrag, |drag, _, _, cx| {
+        // 独立拖拽类型：连接栏仅监听 SidebarResizeDrag，二者不再互相抢占。
+        .on_drag(ErRelationshipResizeDrag, |drag, _, _, cx| {
             cx.stop_propagation();
             cx.new(|_| drag.clone())
         })
         .on_drag_move(cx.listener(
-            move |this, event: &gpui::DragMoveEvent<SidebarResizeDrag>, _, cx| {
+            move |this, event: &gpui::DragMoveEvent<ErRelationshipResizeDrag>, _, cx| {
                 cx.stop_propagation();
+                // 松开（结束帧 p1 为 None / 无左键按下）→ 清理拖拽状态。
+                if event.event.pressed_button != Some(MouseButton::Left) {
+                    this.er_relationship_panel_resize_start = None;
+                    cx.notify();
+                    return;
+                }
                 if let Some(start) = this.er_relationship_panel_resize_start {
-                    // 手柄在面板左缘：向右拖使得面板变窄（delta 为负向加大宽度）。
-                    let delta = start.x - f32::from(event.event.position.x);
-                    let width = (start.width + delta).clamp(ER_REL_PANEL_MIN_W, ER_REL_PANEL_MAX_W);
+                    // 手柄在面板左缘：新宽度 = 起始宽度 + 起始X - 当前X（左拖变宽）。
+                    let width = clamp_er_rel_panel_width(
+                        start.width + (start.x - f32::from(event.event.position.x)),
+                        available_w,
+                    );
                     this.er_relationship_panel_width
                         .entry(tab_id)
                         .and_modify(|w| *w = width)
@@ -2072,7 +2105,13 @@ fn er_rel_panel_resize_handle(
                 }
             },
         ))
-        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                this.er_relationship_panel_resize_start = None;
+                cx.stop_propagation();
+            }),
+        )
 }
 
 fn er_relationship_pair_label(
@@ -2188,54 +2227,22 @@ fn er_relationship_form(
         .get(&tab_id)
         .and_then(|s| s.read(cx).selected_value().cloned())
         .unwrap_or_else(|| "unknown".into());
-    // 表单容器：减弱灰底/边框，用分节分隔。
+    // 左右表是否都选定：未选时字段选择器禁用并提示，不用硬编码默认表/字段掩盖空状态。
+    let has_both_tables = left_name.is_some() && right_name.is_some();
+    // 表单直接铺在面板内（面板 header 已承担标题与关闭，不重复卡片）；外层滚动由面板内
+    // 的包裹层承担（见 er_relationship_panel），保证底部操作区始终可达。
     let mut form = div()
-        .mx(px(10.))
-        .my(px(8.))
         .p(px(16.))
-        .rounded_md()
-        .border_1()
-        .border_color(colors.border_soft)
         .flex()
         .flex_col();
 
-    // 标题 + 说明 + 关闭。
-    let close_tab = tab_id;
+    // 弱化说明（标题在面板 header）。
     form = form.child(
         div()
-            .flex()
-            .items_start()
-            .justify_between()
-            .gap(px(12.))
-            .mb(px(14.))
-            .child(
-                div()
-                    .flex_col()
-                    .gap(px(4.))
-                    .child(
-                        div()
-                            .text_size(px(15.))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(colors.text)
-                            .child("新建本地逻辑关系"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(colors.muted)
-                            .child("连接两张表的字段，描述它们之间的业务关系。"),
-                    ),
-            )
-            .child(
-                Button::new(("er-rel-form-close", tab_id.0))
-                    .ghost()
-                    .child(app_icon(AppIcon::Close, 15., colors.muted))
-                    .tooltip("关闭")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.er_relationship_form_open.remove(&close_tab);
-                        cx.notify();
-                    })),
-            ),
+            .mb(px(12.))
+            .text_size(px(11.))
+            .text_color(colors.muted)
+            .child("连接两张表的字段，描述它们之间的业务关系。"),
     );
 
     // 基础信息分节：左表/右表并排，角色/说明独占一行。
@@ -2249,13 +2256,13 @@ fn er_relationship_form(
                 div()
                     .flex_1()
                     .min_w(px(180.))
-                    .child(er_form_field("左表", false, Select::new(&left_table).small().search_placeholder("选择左表"), colors)),
+                    .child(er_form_field("左表", false, Select::new(&left_table).small().placeholder("选择左表").search_placeholder("搜索表"), colors)),
             )
             .child(
                 div()
                     .flex_1()
                     .min_w(px(180.))
-                    .child(er_form_field("右表", false, Select::new(&right_table).small().search_placeholder("选择右表"), colors)),
+                    .child(er_form_field("右表", false, Select::new(&right_table).small().placeholder("选择右表").search_placeholder("搜索表"), colors)),
             ),
     );
     basic = basic.child(er_form_field(
@@ -2275,7 +2282,7 @@ fn er_relationship_form(
     // 关联字段分节：标题 + 基数下拉 + 添加配对；方向文案 + 表头 + 每对（序号/左/等号/右/删除）。
     let mut assoc_head = div().flex().items_center().gap(px(8.));
     assoc_head = assoc_head.child(
-        div().w(px(120.)).child(Select::new(&cardinality).small()),
+        div().w(px(130.)).child(Select::new(&cardinality).small().placeholder("选择基数")),
     );
     let add_pair_tab = tab_id;
     assoc_head = assoc_head.child(
@@ -2347,9 +2354,21 @@ fn er_relationship_form(
                         .text_color(colors.muted)
                         .child(format!("{}", index + 1)),
                 )
-                .child(div().flex_1().min_w_0().child(Select::new(&left).small().search_placeholder("左字段")))
+                .child(div().flex_1().min_w_0().child(
+                    Select::new(&left)
+                        .small()
+                        .placeholder(if has_both_tables { "选择字段" } else { "请先选择左表" })
+                        .search_placeholder("搜索字段")
+                        .disabled(!has_both_tables),
+                ))
                 .child(er_equal_icon(colors))
-                .child(div().flex_1().min_w_0().child(Select::new(&right).small().search_placeholder("右字段")))
+                .child(div().flex_1().min_w_0().child(
+                    Select::new(&right)
+                        .small()
+                        .placeholder(if has_both_tables { "选择字段" } else { "请先选择右表" })
+                        .search_placeholder("搜索字段")
+                        .disabled(!has_both_tables),
+                ))
                 .child(
                     Button::new(format!("er-rel-del-pair-{}-{}", tab_id.0, index))
                         .ghost()
@@ -2403,9 +2422,15 @@ fn er_relationship_form(
                 .flex()
                 .items_center()
                 .gap(px(6.))
-                .child(div().w(px(58.)).flex_shrink_0().child(Select::new(&side).small()))
-                .child(div().flex_1().min_w_0().child(Select::new(&column).small().search_placeholder("字段")))
-                .child(div().w(px(80.)).flex_shrink_0().child(Select::new(&op).small()))
+                .child(div().w(px(58.)).flex_shrink_0().child(Select::new(&side).small().placeholder("端点")))
+                .child(div().flex_1().min_w_0().child(
+                    Select::new(&column)
+                        .small()
+                        .placeholder(if has_both_tables { "选择字段" } else { "请先选择表" })
+                        .search_placeholder("搜索字段")
+                        .disabled(!has_both_tables),
+                ))
+                .child(div().w(px(80.)).flex_shrink_0().child(Select::new(&op).small().placeholder("操作")))
                 .child(div().flex_1().min_w_0().child(Input::new(&literal).small())),
         );
     }

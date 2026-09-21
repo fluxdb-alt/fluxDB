@@ -363,6 +363,20 @@ mod tests {
     }
 
     #[test]
+    fn er_rel_panel_width_clamped_to_available_and_bounds() {
+        // 默认 560，大窗口可到 800；受可用宽约束；窄窗收缩、下界 320。
+        assert_eq!(clamp_er_rel_panel_width(560.0, 1200.0), 560.0);
+        assert_eq!(clamp_er_rel_panel_width(900.0, 1200.0), ER_REL_PANEL_MAX_W);
+        assert_eq!(clamp_er_rel_panel_width(500.0, 700.0), 500.0);
+        // 可用宽不足 → 收缩到可用（但不低于 MIN）。
+        assert_eq!(clamp_er_rel_panel_width(800.0, 400.0), 400.0);
+        // 过小拖动值 → 钳制到下界。
+        assert_eq!(clamp_er_rel_panel_width(10.0, 1200.0), ER_REL_PANEL_MIN_W);
+        // 超最大值 → 钳制到 MAX（受可用约束）。
+        assert_eq!(clamp_er_rel_panel_width(5000.0, 1200.0), ER_REL_PANEL_MAX_W);
+    }
+
+    #[test]
     fn er_logical_rel_id_extracts_id_from_logic_edge_name() {
         // 逻辑边名 `logic:{id}:{idx}`（画布投影）与 `logic:{id}`（邻域）都提取到 id；
         // 物理外键名与复合展开的 `logic:{id}:{col}` 不误提取错段。

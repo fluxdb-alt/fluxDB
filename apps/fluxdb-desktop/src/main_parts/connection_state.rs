@@ -41,6 +41,17 @@ impl Render for SidebarResizeDrag {
     }
 }
 
+/// ER 关系面板拖拽类型：独立于连接栏的 `SidebarResizeDrag`。连接栏的 `on_drag_move`
+/// 无条件 stop_propagation，若不隔离，关系面板的同类型拖拽事件会被连接栏抢走。
+#[derive(Clone)]
+struct ErRelationshipResizeDrag;
+
+impl Render for ErRelationshipResizeDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
 #[derive(Clone)]
 struct DataFilterPanelResizeDrag;
 

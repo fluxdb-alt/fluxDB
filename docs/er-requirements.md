@@ -241,3 +241,9 @@
 - 面板拖宽手柄加宽至 10px + hover/active 反馈。
 - 验证：`cargo test -p fluxdb-desktop` 433 全通过；fmt + `cargo check --workspace` 干净；macOS `cargo build` 通过、`cargo run` 到单实例守卫（表单拖宽/交互需人工确认）。
 
+## 本轮新增（拖拽根因修复 + 布局/宽度）
+- **拖拽根因**：连接栏 `connection_browser_resize_handle` 的 `on_drag_move` 无条件 `stop_propagation()`，且关系面板此前与连接栏共用 `SidebarResizeDrag` 类型 → 连接栏在 Capture 阶段抢走同类型拖拽事件，关系面板手柄拖不动。修：为关系面板新增独立拖拽类型 `ErRelationshipResizeDrag`（connection_state.rs），不再与连接栏互相抢占；补齐起点记录/持续更新/手柄内外松手清理（`on_mouse_up` 清 `er_relationship_panel_resize_start`）、面板关闭清理。
+- **宽度**：默认 560 逻辑像素，拖宽上限 800，受 ER 内容区可用宽约束（`clamp_er_rel_panel_width`，窄窗收缩、下界 320、按 tab 记忆、窗口缩小重约束）；拖宽公式 = 起始宽度 + 起始 X - 当前 X。
+- **布局**：去掉「外层面板 + 内层大卡片重复标题/关闭」，表单直接铺在面板内（面板 header 在表单打开时标题切为「新建本地逻辑关系」并承担关闭）；去掉表单内自标题/自关闭/大卡片边框，改为弱化说明行 + 分节分隔；左右表并排默认各半、窄宽退单列；控件占位改中文（`Select.placeholder` 控制未选中、`search_placeholder` 控制搜索框，两者分别设置）；未选表时字段/条件字段选择器禁用并提示「请先选择表」；附加条件空态紧凑带辅助说明；表单内容外层滚动、底部取消/创建始终可达。
+- 验证：`cargo test -p fluxdb-desktop` 434 全通过（新增 `er_rel_panel_width_clamped_to_available_and_bounds`）；fmt + `cargo check --workspace` 干净；macOS `cargo build` 通过、`cargo run` 启动到主窗口（拖拽/布局交互需人工确认）。
+
