@@ -26,7 +26,7 @@
 
 | # | 需求 | 来源 | 实现位置 | 状态 | 缺口/依赖/验证 |
 |---|------|------|----------|------|----------------|
-| D1 | 四层分离：结构快照 / 逻辑关系目录 / 图形视图 / Agent 投影 | core `er_relationship.rs` + storage `er_rel:{scope}` + app `er_model_service.rs` | 部分实现 | 逻辑关系目录、图形视图、按作用域 service 已接入；结构快照解析未做；Agent 投影按范围约束暂缓 |
+| D1 | 四层分离：结构快照 / 逻辑关系目录 / 图形视图 / Agent 投影 | core `er_relationship.rs` + storage `er_rel:{scope}`/`er_snapshot:{scope}` + app `er_model_service.rs`+`er_snapshot_from_tables` | 部分实现 | 逻辑关系目录、图形视图、按作用域 service 已接入；结构快照解析（`er_snapshot_from_tables` 由已加载表/列建快照，结构化身份、跳过未加载、无稳定标识如实留空）+ 持久化（storage `er_snapshot:{scope}` 读写）已落地并测；desktop 自动重绑/待处理项 UI 未接；Agent 投影按范围约束暂缓 |
 | D2 | 关系含精确字段配对、required_filters、角色(对内唯一)、双向基数+依据、来源、确认、约束、有效、证据 | core `ErRelationship`（er_relationship.rs）+ desktop `er/canvas.rs` | 部分实现 | 模型和新建/编辑表单已接入；required_filters 支持结构化常量条件；绑定校验反馈仍待补 |
 | D3 | 逻辑关系仅存本地；Agent 只能提议，用户确认后进入一般 JOIN 候选；不执行 DDL | ErModelService + `AppCommand/AppEvent` ER 命令 | 部分实现 | 本地 CRUD/确认/拒绝/删除/编辑均不执行 DDL；Agent 提议入口按范围约束暂缓 |
 | D4 | 首版支持单列/复合等值 AND、字面量常驻谓词、自关联、桥表多对多；复杂谓词只记录 | core `column_pairs` + structured `ErRequiredFilter`/`ErLiteral` + 新建/编辑表单 | 待人工验收 | 单列/复合配对和结构化常量条件已可编辑；自关联/桥表可表达；基数选择（1:1/1:N/N:1/N:N/未知，basis=UserAssertion）已入表单并可编辑 |
@@ -139,7 +139,7 @@
 
 | # | 需求 | 实现位置 | 状态 | 缺口 |
 |---|------|----------|------|------|
-| 1 | 保存结构快照/本地关系/证据/视图/坐标/固定/分组/视口 | 无 | 未实现 | 依赖 D1-D9 |
+| 1 | 保存结构快照/本地关系/证据/视图/坐标/固定/分组/视口 | storage `er_rel:{scope}`+`er_snapshot:{scope}`+`er_views` | 部分实现 | 本地关系、结构快照、视图状态（分组/坐标/固定）已持久化；证据、视口缩放持久化未做；重启恢复已有 |
 | 2 | 再次打开/重启后恢复 | 无 | 未实现 | |
 | 3 | 视图与关系模型分离，不复制独立目录 | 无 | 未实现 | |
 | 4 | 数据版本/迁移/原子写入/失败恢复/损坏处理 | 无 | 未实现 | |
@@ -178,7 +178,7 @@
 6. 导入导出、ER 查询、Agent/MCP
 7. 回归、性能、文档、人工验收
 
-> 当前进度：已完成关系服务按作用域复用、后台 AppCommand/AppEvent CRUD/确认/拒绝/删除、关系列表面板、非模态新建/编辑表单（含复合字段配对和结构化常量条件）及本地逻辑边同步；字段缓存改为结构化身份、并发去重/取消链路、逻辑关系邻域与有效性过滤、ER JSON 导入解析/校验/差异预览已落地。仍未做：结构快照解析/重绑 UI（rebind 算法已测但未接入刷新，缺 DB 稳定标识 + 快照持久化）、导入「应用」编排、关系查询服务；Agent/MCP 按范围约束暂缓，后续统一规划；桌面视觉与交互仍需人工验收。
+> 当前进度：已完成关系服务按作用域复用、后台 AppCommand/AppEvent CRUD/确认/拒绝/删除、关系列表面板、非模态新建/编辑表单（含复合字段配对/结构化常量条件/基数）及本地逻辑边同步；字段缓存结构化身份、并发去重/取消、逻辑关系邻域与有效性过滤、ER JSON 导入解析/校验/差异、结构快照解析+持久化（`er_snapshot:{scope}`）已落地。仍未做：desktop 自动重绑/待处理项 UI（`rebind_entity`+`rebind_report` 算法已测，快照已可采集/存储，但未接到桌面刷新流程——缺连接器稳定标识，只走限定名/列名重绑）、导入「应用」编排、关系查询服务；Agent/MCP 按范围约束暂缓，后续统一规划；桌面视觉与交互仍需人工验收。
 
 ## 本轮新增（逻辑关系编辑闭环）
 - 应用层：`AppController` 持有按 scope 缓存的 `ErModelService`，启动时注入 `FileStorage`；新增 `Load/Create/Update/Confirm/Reject/DeleteErRelationship` 命令及对应事件，桌面端通过后台 `Task` 调用。

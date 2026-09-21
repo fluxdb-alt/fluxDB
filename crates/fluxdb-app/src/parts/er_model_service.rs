@@ -377,6 +377,46 @@ fn rebase_endpoint(
     }
 }
 
+/// 由结构化表身份生成实体稳定 ID（与 desktop `er_entity_id` 同规则，供快照/重绑身份对齐）。
+fn er_snapshot_entity_id(reference: &fluxdb_core::ErTableRef) -> String {
+    format!(
+        "{}:{}:{}",
+        reference.database,
+        reference.schema.as_deref().unwrap_or_default(),
+        reference.name
+    )
+}
+
+/// 由列身份生成列 ID（`实体ID::列名`）。
+fn er_snapshot_column_id(reference: &fluxdb_core::ErTableRef, column: &str) -> String {
+    format!("{}::{column}", er_snapshot_entity_id(reference))
+}
+
+/// 由已加载的表节点（含字段，如字段按需加载后的 `ErTableNode`）构建结构快照
+/// （§5.2/D1「结构快照解析」）：实体限定名 + 列名，无稳定对象标识（连接器未暴露时如实留空，
+/// 不伪造稳定身份，重绑走 §5.2 第 2/3/4 步：限定名→列名→unresolved）。
+/// 跨 schema 同名、含点标识符都按 `ErTableRef` 结构化身份生成稳定 entity_id/column_id。
+pub fn er_snapshot_from_tables(tables: &[fluxdb_core::ErTableNode]) -> Vec<fluxdb_core::ErRebindEntity> {
+    tables
+        .iter()
+        .filter(|t| t.status != fluxdb_core::ErLoadStatus::NotLoaded)
+        .map(|t| fluxdb_core::ErRebindEntity {
+            entity_id: er_snapshot_entity_id(&t.reference),
+            qualified_name: t.reference.display(),
+            stable_id: None,
+            columns: t
+                .columns
+                .iter()
+                .map(|c| fluxdb_core::ErRebindColumn {
+                    column_id: er_snapshot_column_id(&t.reference, &c.name),
+                    name: c.name.clone(),
+                    stable_id: None,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 
 #[cfg(test)]
 mod er_model_service_tests {
@@ -830,5 +870,53 @@ mod er_model_service_tests {
         let all = svc.list().unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].review.state, ErReviewState::Rejected);
+    }
+
+    #[test]
+    fn snapshot_from_tables_keeps_structured_identity_and_skips_not_loaded() {
+        let mk = |schema: Option<&str>, name: &str, status: fluxdb_core::ErLoadStatus, cols: Vec<(&str, bool)>| {
+            let reference = fluxdb_core::ErTableRef {
+                database: "db".into(),
+                schema: schema.map(str::to_string),
+                name: name.into(),
+            };
+            fluxdb_core::ErTableNode {
+                name: reference.display(),
+                reference,
+                comment: None,
+                status,
+                columns: cols
+                    .into_iter()
+                    .map(|(n, pk)| fluxdb_core::ErColumn {
+                        name: n.into(),
+                        type_name: Some("text".into()),
+                        primary_key: pk,
+                        nullable: false,
+                    })
+                    .collect(),
+            }
+        };
+        let tables = vec![
+            // 含点表名 + 跨 schema 同名，结构化身份不串。
+            mk(Some("s"), "my.table", fluxdb_core::ErLoadStatus::Loaded, vec![("id", true)]),
+            mk(None, "orders", fluxdb_core::ErLoadStatus::Loaded, vec![("id", true), ("customer_id", false)]),
+            // 未加载（字段 NotLoaded）→ 不入快照（避免「未读」当「无字段」）。
+            mk(None, "pending", fluxdb_core::ErLoadStatus::NotLoaded, vec![]),
+        ];
+        let snap = er_snapshot_from_tables(&tables);
+        assert_eq!(snap.len(), 2, "未加载表不入快照");
+        // 含点表名：entity_id 用完整身份（db:s:my.table），qualified_name 为 `s.my.table`。
+        let dotted = snap
+            .iter()
+            .find(|e| e.entity_id == "db:s:my.table")
+            .expect("含点表名快照存在");
+        assert_eq!(dotted.qualified_name, "s.my.table");
+        assert_eq!(dotted.columns[0].column_id, "db:s:my.table::id");
+        assert_eq!(dotted.columns[0].name, "id");
+        // orders 列齐全。
+        let orders = snap.iter().find(|e| e.entity_id == "db::orders").unwrap();
+        assert_eq!(orders.columns.len(), 2);
+        // 无稳定标识时如实为空（不伪造）。
+        assert!(snap.iter().all(|e| e.stable_id.is_none()));
     }
 }

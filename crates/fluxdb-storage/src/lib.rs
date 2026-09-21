@@ -7,7 +7,7 @@ mod sqlite;
 
 use fluxdb_core::{
     ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot, ConnectionConfig, ConnectionId,
-    ErRelationship, Error, ErrorKind, MysqlConnectionProfile, MysqlTransportLayer,
+    ErRebindEntity, ErRelationship, Error, ErrorKind, MysqlConnectionProfile, MysqlTransportLayer,
     PostgresConnectionProfile, PostgresTransportLayer, QueryRollbackSnapshot,
     RedisConnectionProfile, Result, RoutineRef, SavedQuery, SecretRef, Settings, SidebarLayout,
     TableRef, TriggerRef,
@@ -15,6 +15,9 @@ use fluxdb_core::{
 
 /// ER 逻辑关系目录的 kv key 前缀：`er_rel:{scope}` 存该作用域的 `Vec<ErRelationship>`。
 pub const ER_REL_KEY_PREFIX: &str = "er_rel:";
+/// ER 结构快照 kv key 前缀：`er_snapshot:{scope}` 存该作用域的 `Vec<ErRebindEntity>`。
+/// 供结构刷新重绑比对（§5.2/§二.4）。
+pub const ER_SNAPSHOT_KEY_PREFIX: &str = "er_snapshot:";
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 const PLAINTEXT_PASSWORD_OPTION: &str = "password";
@@ -375,6 +378,30 @@ impl FileStorage {
             &conn,
             &format!("{ER_REL_KEY_PREFIX}{scope_key}"),
             &relationships.to_vec(),
+        )
+    }
+
+    /// 读取某 ER 作用域的结构快照（§5.2 刷新重绑用）；缺失返回空。
+    pub fn load_er_structure_snapshot(&self, scope_key: &str) -> Result<Vec<ErRebindEntity>> {
+        let conn = self.open_sqlite()?;
+        sqlite::get_json::<Vec<ErRebindEntity>>(
+            &conn,
+            &format!("{ER_SNAPSHOT_KEY_PREFIX}{scope_key}"),
+        )
+        .map(|v| v.unwrap_or_default())
+    }
+
+    /// 全量写回某 ER 作用域的结构快照（幂等 upsert；连接变更/换库按 scope key 分隔，不串）。
+    pub fn save_er_structure_snapshot(
+        &self,
+        scope_key: &str,
+        entities: &[ErRebindEntity],
+    ) -> Result<()> {
+        let conn = self.open_sqlite()?;
+        sqlite::put_json(
+            &conn,
+            &format!("{ER_SNAPSHOT_KEY_PREFIX}{scope_key}"),
+            &entities.to_vec(),
         )
     }
 
@@ -1659,6 +1686,55 @@ mod tests {
         assert!(
             storage
                 .load_er_relationships("conn:other:")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn structure_snapshot_roundtrip_per_scope() {
+        use fluxdb_core::ErRebindColumn;
+        let storage = FileStorage::new(unique_temp_dir());
+        let entities = vec![
+            fluxdb_core::ErRebindEntity {
+                entity_id: "db:pub:orders".into(),
+                qualified_name: "public.orders".into(),
+                stable_id: None, // 无稳定对象标识，只按限定名/列名重绑（§5.2 第2/3/4步）。
+                columns: vec![ErRebindColumn {
+                    column_id: "db:pub:orders::id".into(),
+                    name: "id".into(),
+                    stable_id: None,
+                }],
+            },
+            fluxdb_core::ErRebindEntity {
+                entity_id: "db:pub:customers".into(),
+                qualified_name: "public.customers".into(),
+                stable_id: None,
+                columns: vec![
+                    ErRebindColumn {
+                        column_id: "db:pub:customers::id".into(),
+                        name: "id".into(),
+                        stable_id: None,
+                    },
+                    ErRebindColumn {
+                        column_id: "db:pub:customers::is_deleted".into(),
+                        name: "is_deleted".into(),
+                        stable_id: None,
+                    },
+                ],
+            },
+        ];
+        // 同一作用域读回一致；跨作用域不串。
+        storage
+            .save_er_structure_snapshot("conn:db:", &entities)
+            .unwrap();
+        assert_eq!(
+            storage.load_er_structure_snapshot("conn:db:").unwrap(),
+            entities
+        );
+        assert!(
+            storage
+                .load_er_structure_snapshot("conn:other:")
                 .unwrap()
                 .is_empty()
         );
