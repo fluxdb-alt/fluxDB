@@ -524,7 +524,7 @@ fn new_connection_modal(
                                             "TiDB",
                                             DatabaseKind::TiDb,
                                             kind,
-                                            true,
+                                            editing,
                                             colors,
                                             cx,
                                         ))
