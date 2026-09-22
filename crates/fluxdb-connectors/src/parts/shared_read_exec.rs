@@ -55,7 +55,11 @@ async fn mysql_run_statement_cancellable(
                 },
             }
         } else {
-            let outcome = sqlx::query(statement)
+            // 非结果集语句（DDL/命令）走文本协议（raw_sql），不走 COM_STMT_PREPARE：
+            // 部分 MySQL 兼容服务端（如 TiDB/OceanBase 等对部分 DDL）会在预编译协议下
+            // 报 1295 "This command is not supported in the prepared statement protocol yet"，
+            // 同一 SQL 用文本协议执行则正常。语句均为无绑定参数的字面 SQL，raw_sql 安全。
+            let outcome = sqlx::raw_sql(statement)
                 .execute(&mut *connection)
                 .await
                 .map(|result| MySqlStatementOutcome {
