@@ -579,6 +579,7 @@ fn data_editor_content(
     let value_search = this.data_filter_value_search.clone();
     let value_search_loading = this.data_filter_value_search_loading_until.is_some();
     let data_filter_value_input = this.data_filter_value_input.clone();
+    let data_filter_batch_input = this.data_filter_batch_input.clone();
     let local_filter_value_input = this.local_filter_value_input.clone();
     let local_filter_search_input = this.local_filter_search_input.clone();
     let local_filter_popover = this.local_filter_popover.clone();
@@ -1000,8 +1001,10 @@ fn data_editor_content(
                 popover,
                 data_filter_value_input,
                 data_filter_search_input,
+                data_filter_batch_input,
                 value_search.as_str(),
                 value_search_loading,
+                this.data_filter_value_draft.as_ref(),
                 colors,
                 cx,
             ));

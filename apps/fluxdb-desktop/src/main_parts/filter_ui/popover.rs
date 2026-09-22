@@ -6,8 +6,10 @@ fn data_filter_popover_layer(
     popover: DataFilterPopover,
     value_input: Entity<InputState>,
     search_input: Entity<InputState>,
+    batch_input: Entity<InputState>,
     value_search: &str,
     value_search_loading: bool,
+    value_draft: Option<&DataFilterValueDraft>,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -25,9 +27,6 @@ fn data_filter_popover_layer(
     let selected_operator = rule
         .map(|rule| rule.operator)
         .unwrap_or(DataFilterOperator::Contains);
-    let selected_values = rule
-        .map(|rule| rule.values.iter().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
     let recommended_values = data_filter_recommended_values(page, selected_field, value_search);
 
     let menu = match popover.kind {
@@ -54,9 +53,11 @@ fn data_filter_popover_layer(
             tab_id,
             rule_index,
             recommended_values,
-            selected_values.as_slice(),
+            value_draft,
             value_input,
             search_input,
+            batch_input,
+            value_search,
             value_search_loading,
             DATA_FILTER_POPOVER_TOP,
             colors,
@@ -101,7 +102,11 @@ fn data_filter_popover_layer(
         })
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(|this, _, _, cx| {
+            cx.listener(move |this, _, _, cx| {
+                // 外部点击关闭弹层：值弹层同时丢弃未确认草稿，避免下次误用。
+                if matches!(popover.kind, DataFilterPopoverKind::Value) {
+                    this.data_filter_value_draft = None;
+                }
                 this.data_filter_popover = None;
                 this.sync_table_hover_overlay_block(cx);
                 cx.stop_propagation();
@@ -984,38 +989,96 @@ fn data_sort_menu_separator(colors: UiColors) -> Div {
 fn data_filter_value_menu(
     tab_id: TabId,
     rule_index: usize,
-    values: Vec<String>,
-    selected_values: &[String],
+    recommended_values: Vec<String>,
+    draft: Option<&DataFilterValueDraft>,
     value_input: Entity<InputState>,
     search_input: Entity<InputState>,
+    batch_input: Entity<InputState>,
+    search: &str,
     search_loading: bool,
     top: f32,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let selected = selected_values.iter().cloned().collect::<BTreeSet<_>>();
-    let mut list = div().h(px(156.)).overflow_y_scrollbar().flex().flex_col();
+    let draft = draft.filter(|d| d.tab_id == tab_id && d.rule_index == rule_index);
+    let selected = draft.map(|draft| draft.values.clone()).unwrap_or_default();
+    let field_label = draft
+        .map(|draft| draft.field.clone())
+        .filter(|field| !field.is_empty())
+        .unwrap_or_else(|| "筛选值".to_string());
+    let selected_count = selected.len();
 
-    for value in values {
-        let checked = selected.contains(&value);
-        let value_for_click = value.clone();
-        list = list.child(
-            data_filter_value_item(value, checked, colors).on_mouse_down(
+    div()
+        .absolute()
+        .w(px(520.))
+        .max_h(px(560.))
+        .rounded(colors.radius_lg)
+        .border_1()
+        .border_color(colors.border)
+        .bg(colors.panel_bg)
+        .shadow(vec![box_shadow(
+            0.,
+            8.,
+            20.,
+            0.,
+            hsla(0., 0., 0., if colors.is_dark { 0.45 } else { 0.18 }),
+        )])
+        .top(px(top))
+        .left(px(150.))
+        .flex()
+        .flex_col()
+        .occlude()
+        .on_mouse_move(|_, _, cx| cx.stop_propagation())
+        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .key_context("DataFilterValueMenu")
+        .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
+            this.cancel_data_filter_value(cx);
+            cx.stop_propagation();
+        }))
+        .child(data_filter_value_header(field_label, colors, cx)
+            .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
-                    this.toggle_data_filter_value(tab_id, rule_index, value_for_click.clone(), cx);
+                    this.cancel_data_filter_value(cx);
                     cx.stop_propagation();
                 }),
-            ),
-        );
-    }
-
-    data_filter_menu_surface(360., 320., colors)
-        .top(px(top))
-        .left(px(168.))
+            ))
+        // 已选区
         .child(
             div()
-                .h(px(50.))
+                .px_2()
+                .pt_2()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .px_1()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(colors.text)
+                                .child(format!("已选 {selected_count} 个值")),
+                        )
+                        .child(
+                            data_filter_value_clear_button(colors).on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.clear_data_filter_values(tab_id, cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                        ),
+                )
+                .child(data_filter_selected_values_tags(tab_id, &selected, colors, cx)),
+        )
+        // 手动输入区
+        .child(
+            div()
                 .px_2()
                 .pt_2()
                 .flex()
@@ -1026,11 +1089,11 @@ fn data_filter_value_menu(
                         .text_size(px(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
-                        .child("值:"),
+                        .child("输入值"),
                 )
                 .child(
                     div()
-                        .h(px(26.))
+                        .h(px(28.))
                         .rounded(colors.radius)
                         .border_1()
                         .border_color(colors.border)
@@ -1038,8 +1101,95 @@ fn data_filter_value_menu(
                         .px_2()
                         .flex()
                         .items_center()
+                        .gap_1()
                         .child(
                             Input::new(&value_input)
+                                .appearance(false)
+                                .focus_bordered(false)
+                                .w_full()
+                                .h_full()
+                                .text_size(px(13.)),
+                        )
+                        .child(
+                            data_filter_value_small_button("添加", colors).on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.add_data_filter_manual_value(tab_id, cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                        ),
+                )
+                .child(
+                    div()
+                        .px_1()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(11.))
+                                .text_color(colors.muted)
+                                .child("重复值自动去重"),
+                        )
+                        .child(
+                            data_filter_batch_toggle(&draft
+                                .map(|draft| draft.batch_open)
+                                .unwrap_or(false), colors).on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.toggle_data_filter_batch(tab_id, cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                        ),
+                ),
+        )
+        .when(
+            draft.is_some_and(|draft| draft.batch_open),
+            |this| this.child(
+                data_filter_batch_paste_section(
+                    tab_id,
+                    draft.unwrap(),
+                    batch_input.clone(),
+                    colors,
+                    cx,
+                ),
+            ),
+        )
+        // 建议值区
+        .child(
+            div()
+                .px_2()
+                .pt_2()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .px_1()
+                        .pb_1()
+                        .text_size(px(12.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(colors.text)
+                        .child("建议值"),
+                )
+                .child(
+                    div()
+                        .h(px(28.))
+                        .rounded(colors.radius)
+                        .border_1()
+                        .border_color(colors.border)
+                        .bg(colors.input_bg)
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().opacity(if search_loading { 0.35 } else { 1. }).child(
+                            app_icon(AppIcon::Search, 14., colors.muted),
+                        ))
+                        .child(
+                            Input::new(&search_input)
                                 .appearance(false)
                                 .focus_bordered(false)
                                 .w_full()
@@ -1049,70 +1199,396 @@ fn data_filter_value_menu(
                 ),
         )
         .child(
-            div()
-                .h(px(36.))
-                .px_2()
-                .flex()
-                .items_center()
-                .text_size(px(12.))
-                .text_color(colors.text)
-                .child("建议值:"),
+            data_filter_suggested_values_list(
+                tab_id,
+                rule_index,
+                &recommended_values,
+                &selected,
+                search,
+                &colors,
+                cx,
+            ),
         )
-        .child(list)
+        // 底部按钮
         .child(
             div()
-                .h(px(34.))
+                .h(px(44.))
                 .border_t_1()
                 .border_color(colors.border_soft)
                 .px_2()
                 .flex()
                 .items_center()
-                .gap_2()
-                .child(if search_loading {
-                    loading_spinner(14.).into_any_element()
-                } else {
-                    app_icon(AppIcon::Search, 14., colors.muted)
-                })
+                .justify_between()
                 .child(
-                    Input::new(&search_input)
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors.muted)
+                        .child(format!("已选 {selected_count} 个值")),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            data_filter_dialog_button("取消", false, colors).on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.cancel_data_filter_value(cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                        )
+                        .child(
+                            data_filter_dialog_button("确定", true, colors).on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.apply_data_filter_value_draft(tab_id, cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                        ),
+                ),
+        )
+}
+
+fn data_filter_value_header(label: String, colors: UiColors, _cx: &mut Context<NavicatMain>) -> Div {
+    div()
+        .h(px(40.))
+        .border_b_1()
+        .border_color(colors.border_soft)
+        .px_3()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .text_size(px(14.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(colors.text)
+                .child("编辑筛选值"),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .max_w(px(200.))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_size(px(12.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(0x006bd6))
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .size(px(20.))
+                        .rounded(colors.radius)
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .hover(move |style| style.bg(colors.hover))
+                        .child(app_icon(AppIcon::Close, 14., colors.muted)),
+                ),
+        )
+}
+
+fn data_filter_value_clear_button(colors: UiColors) -> Div {
+    div()
+        .h(px(20.))
+        .px_2()
+        .rounded(colors.radius)
+        .text_size(px(11.))
+        .text_color(colors.muted)
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .hover(move |style| style.bg(colors.hover))
+        .child("清空")
+}
+
+fn data_filter_value_small_button(label: &'static str, colors: UiColors) -> Div {
+    div()
+        .h(px(20.))
+        .px_2()
+        .rounded(colors.radius)
+        .border_1()
+        .border_color(colors.border)
+        .bg(colors.panel_alt)
+        .text_size(px(12.))
+        .text_color(colors.text)
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .hover(move |style| style.bg(colors.hover))
+        .child(label)
+}
+
+fn data_filter_batch_toggle(open: &bool, colors: UiColors) -> Div {
+    let open = *open;
+    div()
+        .h(px(20.))
+        .px_2()
+        .rounded(colors.radius)
+        .text_size(px(11.))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(rgb(0x006bd6))
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .gap_1()
+        .hover(move |style| style.bg(colors.hover))
+        .child(app_icon(if open { AppIcon::ChevronUp } else { AppIcon::ChevronDown }, 12., rgb(0x006bd6)))
+        .child(if open { "收起批量粘贴" } else { "批量粘贴" })
+}
+
+/// 已选值标签区：短值横向排列自动换行，UUID 等长值截断并提示查看；数量多时限制高度滚动。
+fn data_filter_selected_values_tags(
+    tab_id: TabId,
+    selected: &BTreeSet<String>,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let mut wrap = div()
+        .max_h(px(96.))
+        .overflow_y_scrollbar()
+        .px_1()
+        .py_1()
+        .flex()
+        .flex_wrap()
+        .gap_1();
+
+    if selected.is_empty() {
+        wrap = wrap.child(
+            div()
+                .h(px(24.))
+                .px_1()
+                .flex()
+                .items_center()
+                .text_size(px(12.))
+                .text_color(colors.muted)
+                .child("暂无已选值"),
+        );
+    }
+
+    for (index, value) in selected.iter().enumerate() {
+        let value_for_remove = value.clone();
+        let shown = if value.chars().count() > 24 {
+            let mut shortened: String = value.chars().take(24).collect();
+            shortened.push('…');
+            shortened
+        } else {
+            value.clone()
+        };
+        let title = value.clone();
+        // 长值（如 UUID）截断后显示省略号，悬停可查看完整值；id 需同列表内唯一，
+        // 用序号保证唯一（截断后不同的长值可能得到相同前缀）。
+        let label = div()
+            .id(("data-filter-value-tag", index))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
+            .text_size(px(12.))
+            .text_color(colors.text)
+            .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
+            .child(shown);
+        wrap = wrap.child(
+            div()
+                .h(px(22.))
+                .max_w(px(220.))
+                .rounded_full()
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.panel_alt)
+                .px_2()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(label)
+                .child(
+                    div()
+                        .size(px(16.))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .hover(move |style| style.bg(colors.hover))
+                        .child(app_icon(AppIcon::Close, 11., colors.muted))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                this.remove_data_filter_value(tab_id, value_for_remove.clone(), cx);
+                                cx.stop_propagation();
+                            }),
+                        ),
+                ),
+        );
+    }
+    // overflow_y_scrollbar 返回 Scrollable<Div>，包一层普通 div 以返回 Div。
+    div().child(wrap)
+}
+
+/// 批量粘贴区：分隔方式选择 + 多行文本框 + 待添加统计 + 添加到已选。
+fn data_filter_batch_paste_section(
+    tab_id: TabId,
+    draft: &DataFilterValueDraft,
+    batch_input: Entity<InputState>,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let current_separator = draft.batch_separator;
+    let (added_preview, dup_count, _ignored_empty) =
+        filter_batch_values_to_add(&draft.batch_text, draft.batch_separator, &draft.values);
+    let new_count = added_preview.len();
+    let mut separators = div().flex().items_center().gap_1();
+    for separator in [BatchSeparator::Newline, BatchSeparator::Comma, BatchSeparator::Tab] {
+        let selected = separator == current_separator;
+        separators = separators.child(
+            div()
+                .h(px(20.))
+                .px_2()
+                .rounded(colors.radius)
+                .bg(if selected {
+                    rgb(0x1677ff)
+                } else {
+                    colors.panel_alt
+                })
+                .text_size(px(11.))
+                .text_color(if selected { rgb(0xffffff) } else { colors.text })
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .hover(move |style| style.bg(if selected { rgb(0x1677ff) } else { colors.hover }))
+                .child(separator.label())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        this.set_data_filter_batch_separator(tab_id, separator, cx);
+                        cx.stop_propagation();
+                    }),
+                ),
+        );
+    }
+
+    div()
+        .px_3()
+        .pt_2()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(colors.text)
+                        .child("批量粘贴"),
+                )
+                .child(separators),
+        )
+        .child(
+            div()
+                .h(px(72.))
+                .rounded(colors.radius)
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.input_bg)
+                .p_2()
+                .child(
+                    Input::new(&batch_input)
                         .appearance(false)
                         .focus_bordered(false)
                         .w_full()
                         .h_full()
-                        .text_size(px(13.)),
+                        .text_size(px(12.)),
                 ),
         )
         .child(
             div()
-                .h(px(42.))
-                .border_t_1()
-                .border_color(colors.border_soft)
-                .px_2()
                 .flex()
                 .items_center()
-                .justify_end()
                 .gap_2()
                 .child(
-                    data_filter_dialog_button("确定", true, colors).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.data_filter_popover = None;
-                            this.sync_table_hover_overlay_block(cx);
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    ),
+                    div()
+                        .flex_1()
+                        .text_size(px(11.))
+                        .text_color(colors.muted)
+                        .child(format!("忽略空行，自动去重。待添加 {new_count} 个新值，重复 {dup_count} 个")),
                 )
                 .child(
-                    data_filter_dialog_button("取消", false, colors).on_mouse_down(
+                    data_filter_value_small_button("添加到已选", colors).on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {
-                            this.data_filter_popover = None;
-                            this.sync_table_hover_overlay_block(cx);
+                            this.add_data_filter_batch_values(tab_id, cx);
                             cx.stop_propagation();
-                            cx.notify();
                         }),
                     ),
                 ),
         )
+        .pb_2()
+}
+
+/// 建议值复选框列表：勾选状态与草稿已选值实时同步；搜索只过滤建议值，不改已选。
+///
+/// 每条用稳定的 ElementId（以值本身为键），和表格行一样让 item 状态化：
+/// hover 变色只在当前行局部重绘，不重建整棵值弹层。不使用虚拟列表——它对
+/// 几十行的小列表会因滚动回收行导致 hover 命中/状态错乱（悬停不显示、滚动才出现）。
+fn data_filter_suggested_values_list(
+    tab_id: TabId,
+    rule_index: usize,
+    values: &[String],
+    selected: &BTreeSet<String>,
+    search: &str,
+    colors: &UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let mut list = div()
+        .max_h(px(150.))
+        .overflow_y_scrollbar()
+        .flex()
+        .flex_col();
+
+    if values.is_empty() {
+        list = list.child(data_filter_menu_empty_item(
+            if search.trim().is_empty() {
+                "没有建议值"
+            } else {
+                "没有匹配值"
+            },
+            *colors,
+        ));
+    } else {
+        for value in values {
+            let checked = selected.contains(value);
+            let value_for_click = value.clone();
+            let item_id = value.clone();
+            list = list.child(
+                data_filter_value_item(value.clone(), checked, *colors)
+                    .id(item_id)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.toggle_data_filter_value(
+                                tab_id,
+                                rule_index,
+                                value_for_click.clone(),
+                                cx,
+                            );
+                            cx.stop_propagation();
+                        }),
+                    ),
+            );
+        }
+    }
+    // overflow_y_scrollbar 返回 Scrollable<Div>，包一层普通 div 以返回 Div。
+    div().child(list)
 }

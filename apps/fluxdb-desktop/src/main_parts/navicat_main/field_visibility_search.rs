@@ -408,26 +408,9 @@ impl NavicatMain {
 
     fn update_data_filter_manual_value(&mut self, value: String, cx: &mut Context<Self>) {
         self.data_filter_value_input_text = value.clone();
-        let Some(popover) = self.data_filter_popover else {
-            cx.notify();
-            return;
-        };
-        if popover.kind != DataFilterPopoverKind::Value {
-            cx.notify();
-            return;
-        }
-
-        let value = value.trim().to_string();
-        let rule_index = popover.rule_index.unwrap_or(0);
-        if let Some(rule) = self
-            .data_filter_draft_rules
-            .get_mut(&popover.tab_id)
-            .and_then(|rules| rules.get_mut(rule_index))
-        {
-            rule.values.clear();
-            if !value.is_empty() {
-                rule.values.insert(value);
-            }
+        // 输入只进草稿，不直接改条件；「添加」或「确定」才把值并入已选列表。
+        if let Some(draft) = self.data_filter_value_draft.as_mut() {
+            draft.input = value;
         }
         cx.notify();
     }

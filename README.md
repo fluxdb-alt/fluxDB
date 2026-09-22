@@ -1,173 +1,168 @@
-# FluxDB — 跨平台数据库管理客户端（Rust + GPUI）
+# FluxDB — 跨平台数据库客户端与 SQL 编辑器
 
-**[English](./README.en.md) | 简体中文**
+**基于 Rust + GPUI 的开源数据库管理工具（Database GUI），支持 macOS、Windows 和 Linux。**
 
-![Rust](https://img.shields.io/badge/Rust-edition%202024-orange)
-![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue)
-![macOS](https://img.shields.io/badge/macOS-supported-brightgreen)
-![Windows](https://img.shields.io/badge/Windows-supported-brightgreen)
-![Linux](https://img.shields.io/badge/Linux-supported-brightgreen)
-![UI Framework](https://img.shields.io/badge/UI-GPUI-blue)
-![Databases](https://img.shields.io/badge/Databases-MySQL%20%7C%20PostgreSQL%20%7C%20SQLite%20%7C%20Redis-green)
+在一个原生桌面应用中连接 MySQL、TiDB、PostgreSQL、SQLite 和 Redis，完成 SQL 查询、数据编辑、表结构管理与键值操作。无论是 MySQL / PostgreSQL 图形化管理、SQLite 数据库浏览，还是 Redis 可视化管理，都可以在同一个工作区中完成。
 
-## 早期阶段说明
+**简体中文 | [English](./README.en.md)**
 
-> 本项目处于早期阶段，还在积极开发中，尚未经历大量真实场景测试，可能存在各种 bug。当前已提供 macOS、Windows 和 Linux 的安装包。
->
-> 本项目**完全由 AI 生成**，人工角色是**需求定义与验收**：提出目标、审阅差异、运行测试、目验 UI 效果。
+[![Release](https://img.shields.io/github/v/release/fluxdb-alt/fluxDB)](https://github.com/fluxdb-alt/fluxDB/releases/latest)
+[![CI](https://github.com/fluxdb-alt/fluxDB/actions/workflows/ci.yml/badge.svg)](https://github.com/fluxdb-alt/fluxDB/actions/workflows/ci.yml)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue)](./LICENSE)
+![Platforms](https://img.shields.io/badge/平台-macOS%20%7C%20Windows%20%7C%20Linux-blue)
 
+[下载安装](#下载安装) · [功能特性](#功能特性) · [操作手册](./docs/user-guide.md) · [参与贡献](#参与贡献) · [支持与赞助](#支持与赞助)
 
-## 快速开始
+![FluxDB 主界面](docs/screenshots/home_page.png)
 
-> 当前稳定发布版本为 [v0.1.5](https://github.com/fluxdb-alt/fluxDB/releases/tag/v0.1.5)，提供 macOS、Windows 和 Linux 安装包。
+> FluxDB 仍处于早期开发阶段，功能与兼容性正在持续完善，尚未经过广泛的真实场景验证。操作重要数据前，请先做好备份。
 
-详细使用说明请参阅：[FluxDB 操作手册](./docs/user-guide.md)。
+## 功能特性
 
-### 从源码运行
+- **多数据库管理**：统一管理连接，在侧边栏浏览数据库、Schema、表和 Redis 键。
+- **SQL 编辑器**：语法高亮、代码折叠、关键字与表列补全、SQL 格式化和查询历史。
+- **数据浏览与编辑**：分页浏览、筛选数据、编辑并回写结果，支持数据导出与 SQL 文件执行。
+- **表结构管理**：查看列信息和 DDL，创建、修改数据表。
+- **Redis 工作台**：浏览与编辑键值，查看键详情，通过内嵌终端执行命令。
+- **原生桌面体验**：使用 Rust + GPUI 构建，无 WebView 渲染依赖，提供明暗主题。
 
-前置：安装 [Rust 工具链](https://rustup.rs)（edition 2024，建议使用较新 nightly 或 stable Rust）。
+### 数据库支持
 
-项目地址：[https://github.com/fluxdb-alt/fluxDB](https://github.com/fluxdb-alt/fluxDB)
+各数据库的功能范围有所不同，具体操作见[操作手册](./docs/user-guide.md)。
+
+| 数据库 | 主要能力 |
+| --- | --- |
+| MySQL / TiDB | 连接管理、SQL 查询、表结构管理、数据编辑、导出与备份 |
+| PostgreSQL | SQL 查询、Schema 与对象浏览、表结构管理、数据编辑、用户与角色权限管理、原生客户端工具 |
+| SQLite | 本地数据库连接、SQL 查询、表结构浏览与数据编辑 |
+| Redis | 连接总览、键值浏览与编辑、工作台与命令终端 |
+
+### 界面预览
+
+| SQL 编辑器 | 数据浏览与编辑 |
+| :---: | :---: |
+| ![SQL 编辑器](docs/screenshots/sql_editor_adapter.png) | ![数据浏览与编辑](docs/screenshots/mysql_data_table_ui.png) |
+
+| 表结构管理 | Redis 键值详情 |
+| :---: | :---: |
+| ![表结构管理](docs/screenshots/mysql_table_info.png) | ![Redis 键值详情](docs/screenshots/redis_detail.png) |
+
+## 下载安装
+
+前往 **[最新版本下载页](https://github.com/fluxdb-alt/fluxDB/releases/latest)**，在 Assets 中选择对应平台的安装包。版本变化与更新说明见 [Releases](https://github.com/fluxdb-alt/fluxDB/releases)。
+
+| 平台 | 架构 | 安装包 |
+| --- | --- | --- |
+| macOS | Apple Silicon（ARM64） | `FluxDB-<版本>-macos-arm64.dmg` |
+| macOS | Intel（x64） | `FluxDB-<版本>-macos-x64.dmg` |
+| Windows | x64 | `FluxDB-<版本>-windows-x64-setup.exe` |
+| Linux | x64 | `fluxdb_<版本>_amd64.deb` |
+
+- **macOS**：打开 DMG，将应用拖入「应用程序」。当前应用采用 ad-hoc 签名，尚未公证；首次打开若被系统拦截，确认下载来源后，可在「系统设置 → 隐私与安全性」中允许打开。
+- **Windows**：运行安装器，按提示完成安装，可选择创建桌面快捷方式。
+- **Linux**：面向 Ubuntu 22.04/24.04 等 Debian 系发行版，支持 X11 / Wayland 图形桌面。下载后在所在目录执行 `sudo apt install ./fluxdb_<版本>_amd64.deb`，将 `<版本>` 替换为实际版本号。
+
+发布包附带 `.sha256` 校验文件。Windows ARM64、Linux ARM64、AppImage、Flatpak 和 Snap 暂未提供；更多发行版与硬件环境的兼容性仍需持续验证。
+
+安装后，点击「添加连接」，选择数据库类型，填写连接信息并测试连接，即可开始使用。详细步骤见[操作手册](./docs/user-guide.md)（当前以 macOS 界面和快捷键为例）。
+
+## 从源码运行
+
+### 环境要求
+
+安装最新稳定版 [Rust 工具链](https://rustup.rs)（项目使用 Rust edition 2024），并准备对应平台的原生构建工具：
+
+| 平台 | 构建依赖 |
+| --- | --- |
+| macOS | Xcode Command Line Tools，可通过 `xcode-select --install` 安装 |
+| Windows | Visual Studio Build Tools 的 C++ 桌面开发工具与 Windows SDK，使用 MSVC 工具链；release 构建需要 SDK 中的 `fxc.exe` |
+| Linux | C/C++ 编译器、pkg-config、CMake、Clang，以及 OpenSSL、字体、X11 / Wayland 等开发库，完整清单见 [CI 配置](./.github/workflows/ci.yml) |
+
+### 启动应用
 
 ```bash
 git clone https://github.com/fluxdb-alt/fluxDB.git
 cd fluxDB
-
-# 运行桌面端
-cargo run -p fluxdb-desktop
+cargo run --locked -p fluxdb-desktop
 ```
 
-### 打包 macOS 应用
+首次编译需要下载并构建依赖，耗时较长。
 
-使用仓库自带的打包脚本生成自包含 `.app` 与 DMG：
+### 构建与打包
+
+```bash
+cargo build --locked --release -p fluxdb-desktop
+```
+
+macOS 可使用仓库脚本生成包含动态库的 `.app` 和 `.dmg`：
 
 ```bash
 ./scripts/package-macos.sh
 ```
 
-脚本会构建 release 版本、内嵌 Homebrew 动态库、ad-hoc 签名，并生成 `.dmg`（可用 `PROFILE=debug`、`CREATE_DMG=0` 等环境变量调整）。
+脚本支持 `PROFILE=debug`、`CREATE_DMG=0` 等选项，详见[打包脚本](./scripts/package-macos.sh)。Windows 安装器与 Linux DEB 的构建步骤见[发布工作流](./.github/workflows/release.yml)。
 
-> 生成的 bundle 为 ad-hoc 签名、未公证，分发给他人时可能触发 Gatekeeper 拦截，需右键「打开」或用 `xattr -dr com.apple.quarantine` 放行。
+## 参与贡献
 
-### Windows / Linux 发布包
+欢迎报告问题、提出建议、改进文档和提交代码。
 
-从 [v0.1.5 Release](https://github.com/fluxdb-alt/fluxDB/releases/tag/v0.1.5) 下载对应平台的安装包：
+- **报告 Bug**：先搜索[已有 Issues](https://github.com/fluxdb-alt/fluxDB/issues)，提交时注明应用版本、操作系统与架构、数据库类型与版本、复现步骤、预期和实际结果；可附脱敏后的日志或截图。
+- **提出建议**：在 [Issues](https://github.com/fluxdb-alt/fluxDB/issues) 中描述使用场景和希望解决的问题。较大改动建议先讨论方案。
+- **提交代码**：Fork 仓库并创建分支，保持修改聚焦，在 Pull Request 中说明改动原因与验证结果。开发约定见 [AGENTS.md](./AGENTS.md)，界面改动另请参阅 [UI 样式规范](./docs/ui-style.md)。
 
-- **Windows x64**：`FluxDB-0.1.5-windows-x64-setup.exe`。安装器支持创建开始菜单和可选桌面快捷方式；应用使用 GUI 子系统启动，不会额外弹出控制台窗口。
-- **Linux x64**：`fluxdb_0.1.5_amd64.deb`，适用于 Ubuntu 22.04/24.04 等 Debian 系发行版，安装后提供桌面启动项和应用图标。
-- **macOS**：`FluxDB-0.1.5-macos-arm64.dmg`（Apple Silicon）或 `FluxDB-0.1.5-macos-x64.dmg`（Intel）。
+Rust 修改提交前运行：
 
-所有发布包均提供对应的 `.sha256` 校验文件。Windows 当前支持 x64；Linux 首版支持 x64、X11/Wayland 图形桌面。Windows ARM64、Linux ARM64、AppImage、Flatpak 和 Snap 暂不在发布范围内。
-
-## 项目简介
-
-FluxDB 是一个开源的**跨平台数据库管理客户端 / 数据库 GUI 工具**，基于 **Rust + GPUI** 构建的原生桌面应用。内置 **SQL 编辑器**、表结构管理、数据浏览与编辑等一整套能力，通过统一连接器层同时支持 **MySQL、PostgreSQL、SQLite、Redis**。无论你在找数据库管理工具、SQL 编辑器，还是 Rust 桌面应用参考，FluxDB 都值得一看。
-
-### 核心能力
-
-- **多数据库连接**：通过统一的连接器层（`fluxdb-connectors`）支持 **MySQL、PostgreSQL、SQLite、Redis** 四类数据源，一套交互面对四种后端。
-- **SQL 编辑器内核**（`fluxdb-editor-core`）：独立、与业务解耦的通用编辑器，内置语法高亮、代码折叠、Inlay/Block 渲染、BlockMap/DisplayMap 分层文本模型。
-- **智能补全**：关键字/表/列级 SQL 补全，文档面板与语义对齐；
-- **表结构管理**：Schema 浏览、列信息面板、DDL 编辑器、创建表（含外键）、表对象悬浮预览卡。
-- **数据编辑**：查询结果可编辑回写、mock 数据生成、SQL 格式化、查询历史、工作台历史、用户管理、终端内嵌 Redis。
-
-### 界面预览
-
-| 主界面 |
-| :---: |
-| ![主界面](docs/screenshots/home_page.png) |
-
-| SQL 编辑器 | 数据结果编辑 |
-| :---: | :---: |
-| ![SQL 编辑器](docs/screenshots/sql_editor_adapter.png) | ![数据结果编辑](docs/screenshots/mysql_data_table_ui.png) |
-
-| 表结构 / Schema | Redis 键值浏览 |
-| :---: | :---: |
-| ![表结构](docs/screenshots/mysql_table_info.png) | ![Redis 键值](docs/screenshots/redis_detail.png) |
-
-### 架构分层
-
-```
-apps/fluxdb-desktop          桌面入口（GPUI 应用、内容视图、编辑器组件）
-├─ crates/fluxdb-app         应用层：查询、补全、表信息、数据编辑、Redis 命令等业务聚合
-├─ crates/fluxdb-core        核心层：连接、连接器、数据分页、终端、用户/工作台
-├─ crates/fluxdb-connectors  连接器层：common / mock / mysql / postgres / sqlite / redis
-├─ crates/fluxdb-editor-core 通用编辑器内核（语法、折叠、Inlay/Block、文本模型）
-├─ crates/fluxdb-editor-language  编辑器语言适配器协议
-└─ crates/fluxdb-storage     存储层
+```bash
+cargo fmt --all -- --check
+cargo check --workspace --locked
+cargo test --workspace --locked
 ```
 
-设计要点：
+部分数据库集成测试需要对应的数据库服务，请在 PR 中说明测试环境与未验证范围。UI 行为修改还需启动应用验证主窗口及相关交互。
 
-- 纯 Rust 前后端一体（无 WebView 渲染依赖）。
-- 编辑器内核与业务严格解耦，独立可测。
-- 连接器抽象统一，新增数据源只需实现一组 trait。
+### 项目结构
 
-### 技术栈
+| 目录 | 职责 |
+| --- | --- |
+| `apps/fluxdb-desktop` | GPUI 桌面界面与交互 |
+| `crates/fluxdb-app` | 应用状态与业务编排 |
+| `crates/fluxdb-core` | 领域模型、错误类型与连接器接口 |
+| `crates/fluxdb-connectors` | 各数据库连接与操作实现 |
+| `crates/fluxdb-storage` | 配置与连接持久化 |
+| `crates/fluxdb-editor-core` | 通用编辑器内核 |
+| `crates/fluxdb-editor-language` | 编辑器语言适配协议 |
 
-| 层 | 技术 |
-|----|------|
-| 语言 | Rust |
-| UI 框架 | GPUI |
-| 连接器 | MySQL / PostgreSQL / SQLite / Redis（ioredis 适配） |
-| 测试 | fluxdb-app / fluxdb-desktop 双测试套件 |
+本项目代码由 AI 生成，人工负责需求定义与验收，包括审阅变更、运行测试和检查界面效果。
 
-## 当前阶段完成度
+## 路线图
 
-### 已完成
+- [ ] 完善尚未完整接入的设置项。
+- [ ] 扩大 Windows / Linux 的发行版与硬件兼容性验证。
+- [ ] 接入 MongoDB，支持集合浏览与文档编辑。
+- [ ] 支持界面国际化与多语言切换。
+- [ ] 探索自然语言转 SQL、补全增强与查询结果解释等 AI 功能。
 
-- **MySQL**：连接管理、SQL 编辑器与补全、表结构浏览与管理（建表/改表/DDL）、数据浏览与编辑回写、SQL 文件执行、数据导出、备份列表。
-- **PostgreSQL**：连接管理、SQL 编辑器与补全、Schema 与对象浏览、表结构管理、数据浏览与编辑回写、用户与角色权限管理、原生客户端工具。
-- **SQLite**：与 MySQL 同套交互的基础能力。
-- **Redis**：连接总览、键值浏览与编辑、工作台、终端内嵌命令。
+以上为规划方向，尚未完成的功能不代表当前版本已经支持。
 
+## 支持与赞助
 
+如果 FluxDB 对你有帮助，欢迎给项目一个 Star，向朋友推荐，或通过反馈问题、完善文档和贡献代码参与维护。
 
-### 承诺
+也欢迎通过以下方式赞助，支持持续开发和 AI 工具费用。感谢每一份支持！
 
-- 会**积极修复反馈的 bug**。
-- 会**慢慢扩展更多数据库支持**，连接器层已按可插拔抽象设计，新增数据源只需实现一组 trait。
-
-## 后期规划
-
-- [x] **接入 MySQL**：连接管理、SQL 编辑器与补全、表结构浏览与管理、数据浏览与编辑回写等。
-- [x] **接入 PostgreSQL**：连接管理、Schema 与对象浏览、SQL 编辑器与补全、表结构管理、数据浏览与编辑回写等。
-- [x] **接入 Redis**：连接总览、键值浏览与编辑、工作台、终端内嵌命令。
-- [ ] **设置项真正生效**：部分设置配置尚未真实接入，逐步让各项偏好设置完整生效。
-- [x] **支持 Windows / Linux 平台**：已完成 Windows x64 安装器和 Linux x64 DEB 的打包、桌面集成与 CI 构建；Windows/Linux 仍需持续补充更多发行版和硬件环境验证。
-- [ ] **接入 MongoDB**：基于现有连接器抽象新增 NoSQL 数据源，支持集合浏览、文档查看与编辑。
-- [ ] **多语言支持**：为界面与应用内容接入国际化（i18n），支持中英文等多语言切换。
-- [ ] **AI 接入**：引入大模型能力，探索自然语言转 SQL、智能补全增强与查询结果智能解释等场景。
+| 支付宝 | 微信 |
+| :---: | :---: |
+| <img src="docs/sponsor/alipay.png" alt="支付宝赞助二维码" width="220"> | <img src="docs/sponsor/wechat.png" alt="微信赞助二维码" width="220"> |
 
 ## 致谢
 
-本项目站在以下开源工作的肩上，**致以最诚挚的感谢**：
+感谢以下开源项目提供的基础能力与设计参考：
 
-- **[zed](https://github.com/zed-industries/zed)** —— GPUI 生态的源头。其组件树、编辑器与性能调优实践是我们的活教材，本项目编辑器内核与 UI 分层方案直接借鉴其工程化思路。
-- **[gpui-kit](https://github.com/longbridge/gpui-kit)** —— 补充 gpui 欠缺的基础组件（输入框、弹窗、控件库），显著加速 UI 开发并提升交互完备度。
-- **[dbx](https://github.com/t8y2/dbx)** —— 多数据库抽象与连接管理提供重要参考模型。
-- **[RedisInsight](https://github.com/RedisInsight/RedisInsight)** —— Redis 可视化客户端的事实标准，本项目的 Redis 详情、键值浏览与 ioredis 复用均受其架构启发。
+- [Zed](https://github.com/zed-industries/zed)：GPUI 生态、编辑器与原生桌面应用架构。
+- [GPUI Component / gpui-kit](https://github.com/longbridge/gpui-kit)：输入框、弹窗等基础 UI 组件。
+- [dbx](https://github.com/t8y2/dbx)：多数据库抽象与连接管理设计参考。
+- [RedisInsight](https://github.com/RedisInsight/RedisInsight)：Redis 可视化交互设计参考。
 
-没有这些优秀项目，FluxDB 不会以这么高的起点诞生。
+## 许可证
 
-## License
-
-FluxDB 采用 [GPL-3.0](./LICENSE) 开源协议。
-
-## 支持与赞助 🍵
-
-> 喜欢 FluxDB？来杯咖啡、奶茶，或者捐点 AI token 给作者续命——每一条代码注释、每一次提交，背后都是它。
-
-如果 FluxDB 对你有帮助，欢迎支持作者。你的每一份赞助都是持续维护与迭代的动力：
-
-- ☕ **支持开发一小时的咖啡**
-- 🧋 **深夜调 bug 的奶茶**
-- 🤖 **驱动下一次"再让它写一个功能"的 AI token**
-
-哪怕是一杯奶茶，也能让作者含泪多修一个 bug。扫一扫，感谢有你：
-
-**支付宝** | **微信**
-:---: | :---:
-![支付宝](docs/sponsor/alipay.png) | ![微信](docs/sponsor/wechat.png)
-
-> 图片待补充：将二维码分别放到 `docs/sponsor/alipay.png` 与 `docs/sponsor/wechat.png`。
+FluxDB 采用 [GNU GPL v3.0 或更新版本](./LICENSE) 开源许可证。

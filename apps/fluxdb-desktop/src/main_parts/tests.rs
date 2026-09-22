@@ -4199,3 +4199,113 @@ fn postgres_form_validation_uses_profile_rules() {
         "启用 SSH 但缺主机应被拒绝"
     );
 }
+
+    #[test]
+    fn filter_batch_paste_split_trim_dedup_rules() {
+        // 每行一个值：忽略空行，保留字符串内部有意义的空格/引号/逗号。
+        let selected = BTreeSet::new();
+        let (added, dup, empty) = filter_batch_values_to_add(
+            "BasicDentalAI\n\nCTCrossSectionRecognition\n \"with space\" \n1,2\n",
+            BatchSeparator::Newline,
+            &selected,
+        );
+        assert_eq!(
+            added,
+            vec![
+                "BasicDentalAI".to_string(),
+                "CTCrossSectionRecognition".to_string(),
+                "\"with space\"".to_string(),
+                "1,2".to_string(),
+            ]
+        );
+        assert_eq!(dup, 0);
+        assert_eq!(empty, 2);
+
+        // 逗号分隔：按逗号拆分，不含引号/转义语义。
+        let (added, _, _) = filter_batch_values_to_add("a,b, c ", BatchSeparator::Comma, &BTreeSet::new());
+        assert_eq!(added, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+
+        // 制表符分隔。
+        let (added, _, _) = filter_batch_values_to_add("x\ty\tz", BatchSeparator::Tab, &BTreeSet::new());
+        assert_eq!(added, vec!["x".to_string(), "y".to_string(), "z".to_string()]);
+
+        // 已选值去重：同一值已在草稿中则计入重复，不重复添加。
+        let selected = ["BasicDentalAI"].into_iter().map(str::to_string).collect::<BTreeSet<_>>();
+        let (added, dup, _) = filter_batch_values_to_add(
+            "BasicDentalAI\nCTRegistration",
+            BatchSeparator::Newline,
+            &selected,
+        );
+        assert_eq!(added, vec!["CTRegistration".to_string()]);
+        assert_eq!(dup, 1);
+    }
+
+    #[test]
+    fn field_switch_clears_old_values() {
+        // 复现：biz_id 选两个 UUID 后切到 task_source_type，旧值必须被清空。
+        let rule = DataFilterRule {
+            enabled: true,
+            field: Some("biz_id".to_string()),
+            operator: DataFilterOperator::InList,
+            values: ["67badd76-bb98-5146-b835-6610c2a6ca93", "c859d4ba-902c-546d-87df-ee34994fe382"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            grouped: false,
+        };
+        let (rule, had_values) = data_filter_rule_after_field_switch("task_source_type".to_string(), rule);
+        assert!(had_values, "切换前应检测到存在旧值");
+        assert_eq!(rule.field.as_deref(), Some("task_source_type"));
+        assert!(rule.values.is_empty(), "切换字段后旧值必须清空");
+
+        // 无值字段切换不报「已清空」（had_values 为 false），但值仍为空。
+        let rule = DataFilterRule {
+            enabled: true,
+            field: Some("a".to_string()),
+            operator: DataFilterOperator::InList,
+            values: BTreeSet::new(),
+            grouped: false,
+        };
+        let (rule, had_values) = data_filter_rule_after_field_switch("b".to_string(), rule);
+        assert!(!had_values);
+        assert!(rule.values.is_empty());
+    }
+
+    #[test]
+    fn operator_switch_value_morphology() {
+        // IN ↔ NOT IN 保留已有列表。
+        let rule = DataFilterRule {
+            enabled: true,
+            field: Some("tag".to_string()),
+            operator: DataFilterOperator::InList,
+            values: ["a".to_string(), "b".to_string()].into_iter().collect(),
+            grouped: false,
+        };
+        let rule = data_filter_rule_after_operator_switch(DataFilterOperator::NotInList, rule);
+        assert_eq!(
+            rule.values.into_iter().collect::<Vec<_>>(),
+            vec!["a".to_string(), "b".to_string()]
+        );
+
+        // 切到单值/区间/无值运算符时清空旧列表，防止错误参与查询。
+        let rule = DataFilterRule {
+            enabled: true,
+            field: Some("tag".to_string()),
+            operator: DataFilterOperator::InList,
+            values: ["a".to_string(), "b".to_string()].into_iter().collect(),
+            grouped: false,
+        };
+        let rule = data_filter_rule_after_operator_switch(DataFilterOperator::Eq, rule);
+        assert!(rule.values.is_empty());
+        assert_eq!(rule.operator, DataFilterOperator::Eq);
+
+        let rule = DataFilterRule {
+            enabled: true,
+            field: Some("tag".to_string()),
+            operator: DataFilterOperator::NotInList,
+            values: ["a".to_string()].into_iter().collect(),
+            grouped: false,
+        };
+        let rule = data_filter_rule_after_operator_switch(DataFilterOperator::IsNull, rule);
+        assert!(rule.values.is_empty());
+    }
