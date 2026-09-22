@@ -1731,7 +1731,17 @@ fn er_relationship_panel(
         .border_l_1()
         .border_color(colors.border_soft)
         .bg(colors.panel_bg)
-        .shadow_lg();
+        .shadow_lg()
+        // 拦截面板区域内鼠标按下/松开，避免穿透到下方画布触发平移/拖动（面板是兄弟浮层，
+        // 若不消费按下，按住移动会带动底下 ER 画布）。内部控件在子层先命中，不受此影响。
+        .on_mouse_down(
+            MouseButton::Left,
+            |_, _, cx| cx.stop_propagation(),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            |_, _, cx| cx.stop_propagation(),
+        );
 
     panel = panel.child(
         div()

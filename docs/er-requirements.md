@@ -259,3 +259,8 @@
 - 修复：app 增 `er_columns_invalidate`（作废指定表全部字段缓存，含 Loaded/在飞/取消旗标）与 `er_relations_invalidate`（作废某作用域全部关系索引缓存），刷新时按当前 tab 表清字段 + 当前作用域清关系，使重读真实数据库。连接修订不变（不动其它作用域/tab）。新增删列重读回归。
 - 验证：app 507 / desktop 436 / storage 35 全通过；fmt + workspace 干净；macOS 启动到单实例守卫（删列→刷新需人工确认）。
 
+## 本轮新增（面板鼠标事件隔离：抽屉内拖动不再带动画布）
+- 根因：关系面板是画布「后置兄弟」浮层，自身不消费鼠标按下 → 面板内按住鼠标移动会穿透带动下方 ER 画布平移/拖动。
+- 修复：`er_relationship_panel` 根 div 增 `on_mouse_down`/`on_mouse_up` `stop_propagation` 拦截，面板区域内按下不再传给画布（画布不平移）；内部控件（按钮/输入/选择器/列表滚动/拖宽手柄）在子层先命中，不受影响。
+- 验证：desktop 436 全通过；fmt + workspace 干净；macOS 启动到单实例守卫（面板内拖动需人工确认不再带动画布）。
+
