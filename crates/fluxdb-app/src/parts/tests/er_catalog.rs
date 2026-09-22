@@ -197,6 +197,45 @@ fn columns_only_request_given_tables() {
     assert_eq!(*reads.borrow(), vec!["orders".to_string()], "只请求 orders");
 }
 
+// 4) 手动刷新作废全部字段缓存：外部删列后，er_columns_invalidate 使下次请求真正重读，
+//    旧字段不残留（区别于只作废 Failed 的 _failed 变体）。
+#[test]
+fn columns_invalidate_all_forces_reread_after_external_drop() {
+    // 首次：两列。
+    let mut cols = BTreeMap::from([(
+        "orders".to_string(),
+        vec![("id".to_string(), true), ("to_drop".to_string(), false)],
+    )]);
+    let (mut conn, reads, _) = RecordingConnector::new(DatabaseKind::Sqlite, cols.clone(), Vec::new());
+    let cache = Mutex::new(ErCatalogCache::default());
+    let config = fake_config(DatabaseKind::Sqlite);
+    let tables = vec![mk_ref("db", None, "orders")];
+
+    let b1 = er_columns_core(&cache, &config, &tables, &conn).unwrap();
+    assert_eq!(b1.tables[0].1.len(), 2);
+    assert_eq!(reads.borrow().len(), 1);
+
+    // 复用缓存不重读。
+    er_columns_core(&cache, &config, &tables, &conn).unwrap();
+    assert_eq!(reads.borrow().len(), 1);
+
+    // 数据库外部删掉 to_drop 列：作废全部字段缓存（与 AppController::er_columns_invalidate
+    // 相同的清理）后重新读取，返回只剩一列，旧列不残留。
+    cols.get_mut("orders").unwrap().remove(1);
+    conn.columns = cols;
+    {
+        let mut g = cache.lock().unwrap();
+        let key = g.column_key(&tables[0], config.id);
+        g.columns.remove(&key);
+        g.column_status.remove(&key);
+        g.columns_inflight.remove(&key);
+    }
+    let b2 = er_columns_core(&cache, &config, &tables, &conn).unwrap();
+    assert_eq!(reads.borrow().len(), 2, "作废后必须重读");
+    assert_eq!(b2.tables[0].1.len(), 1, "已删除的 to_drop 列不得残留");
+    assert_eq!(b2.tables[0].1[0].name, "id");
+}
+
 // 3) 重复需求合并；已缓存字段不重复读取。
 #[test]
 fn columns_cached_no_second_read() {

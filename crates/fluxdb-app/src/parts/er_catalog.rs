@@ -220,6 +220,23 @@ impl AppController {
         }
     }
 
+    /// 手动刷新：作废指定表（结构化身份）的**全部**字段缓存（含 Loaded 与在飞），使下次
+    /// 按需加载真正重读数据库（外部删列/改列后旧字段不残留）。连接修订不变（不动其它 tab）。
+    pub fn er_columns_invalidate(
+        &self,
+        config: &ConnectionConfig,
+        tables: &[ErTableRef],
+    ) {
+        let mut guard = self.er_catalog.lock().unwrap();
+        for t in tables {
+            let key = guard.column_key(t, config.id);
+            guard.columns.remove(&key);
+            guard.column_status.remove(&key);
+            guard.columns_inflight.remove(&key);
+            guard.columns_cancel.remove(&key);
+        }
+    }
+
     /// 取消指定范围的进行中字段加载：置位在飞读取的取消旗标，默认逐表读取会在两表之间
     /// 停止后续工作，完成时丢弃该次结果并不写入缓存。只影响 in-flight 请求，已缓存结果不动。
     /// 阻塞式驱动单次调用无法即时中断（如实保留），但能停止多表循环后续工作并丢弃过期结果。
@@ -270,6 +287,21 @@ impl AppController {
             guard.relation_status.remove(&key);
             guard.relations.remove(&key);
         }
+    }
+
+    /// 手动刷新：作废某作用域的**全部**关系索引缓存（含 Loaded 与在飞），使下次读取真正
+    /// 重读数据库（外部加/删外键后旧连线不残留）。连接修订不变（不动其它范围/tab）。
+    pub fn er_relations_invalidate(
+        &self,
+        config: &ConnectionConfig,
+        database: &str,
+        schema: Option<&str>,
+    ) {
+        let mut guard = self.er_catalog.lock().unwrap();
+        let key = guard.relation_key(database, schema, config.id);
+        guard.relations.remove(&key);
+        guard.relation_status.remove(&key);
+        guard.relations_inflight.remove(&key);
     }
 
     /// 关系索引重试：作废 Failed 的关系缓存后再真正重新读取整范围边。

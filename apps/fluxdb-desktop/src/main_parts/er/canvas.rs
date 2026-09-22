@@ -3386,7 +3386,29 @@ fn er_toolbar(
                     return;
                 }
                 this.er_refreshing.insert(refresh_tab);
-                // 清表目录与关系缓存使重读；保留 er_graphs 当前可用图、er_scene_positions/视口/固定。
+                // 作废 app 层字段 + 关系缓存，使刷新真正重读数据库（外部删列/改列/外键变化
+                // 不残留旧结构与旧连线）。保留 er_graphs 当前可用图、坐标/视口/固定。
+                if let Some(config) = this
+                    .controller
+                    .connection_configs()
+                    .into_iter()
+                    .find(|c| c.id == refresh_er.connection_id)
+                {
+                    let refs: Vec<fluxdb_core::ErTableRef> = this
+                        .er_full_tables
+                        .get(&refresh_tab)
+                        .map(|t| t.iter().map(|n| n.reference.clone()).collect())
+                        .unwrap_or_default();
+                    if !refs.is_empty() {
+                        this.controller.er_columns_invalidate(&config, &refs);
+                    }
+                    this.controller.er_relations_invalidate(
+                        &config,
+                        &refresh_er.database,
+                        refresh_er.schema.as_deref(),
+                    );
+                }
+                // 清表目录与关系缓存使重读。
                 this.er_full_tables.remove(&refresh_tab);
                 this.er_all_edges.remove(&refresh_tab);
                 this.er_relation_tasks.remove(&refresh_tab);

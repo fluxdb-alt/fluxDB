@@ -109,7 +109,7 @@
 | 4 | 冷启动局部图优先中心表 | 部分 | 部分实现 | |
 | 5 | 同范围请求合并、并发去重、消费者订阅 | er_catalog inflight | 自动验证通过 | 检查与 inflight 登记合并为单次加锁（并发去重回测：8 线程合并为 1 次读库）；新增逐 key 取消旗标，关闭标签/停止时置位，逐表读取中间停止、完成丢弃过期结果 |
 | 6 | 限制并发，不无界每表任务 | 部分 | 部分实现 | |
-| 7 | 手动刷新/配置化缓存过期/DDL 失效合并 | 手动刷新已实现 | 部分实现 | 缓存过期/DDL 未做 |
+| 7 | 手动刷新/配置化缓存过期/DDL 失效合并 | 手动刷新已实现 + `er_columns_invalidate`/`er_relations_invalidate` | 部分实现 | 手动刷新现在真正重读：作废该作用域全部字段缓存（含 Loaded/在飞）与关系索引缓存，外部删列/改列/外键变化不残留；缓存过期/DDL 自动失效合并未做 |
 | 8 | 更新保留有效图/视口/人工布局/本地关系 | 部分 | 部分实现 | |
 | 9 | 停止/继续有效；关闭最后消费者取消 | `er_columns_cancel` + TabClosed | 部分实现 | 关闭 ER 标签：取消该作用域在飞字段加载（置位旗标→逐表停止→丢弃结果，丢弃不写缓存）；阻塞式单次驱动调用无法即时中断（如实保留） |
 | 10 | generation/连接修订/作用域校验覆盖所有异步写回 | 部分 | 部分实现 | 需复核 |
@@ -253,4 +253,9 @@
 - desktop：`er_rebind_scan` —— 字段加载后比对上一次持久化快照，按 `rebind_entity` 四步产出 unresolved/同名重建需确认/缺列待处理项（`er_rebind_pending`），并落新快照供下次刷新比对；关系面板顶部横幅展示待处理项（人工重绑 = 编辑关系）。`er_snapshot_entities_from`/`er_rel_columns_side` 回归。
 - 一致性：desktop 与 app 的 entity/column ID 规则一致（`db:schema:name` / `...::col`），快照/关系/画布同 identity。
 - 验证：storage 35 / app 506 / desktop 436 全通过；fmt + `cargo check --workspace` 干净；macOS `cargo build` 通过、`cargo run` 到单实例守卫（重绑待处理横幅需人工确认）。
+
+## 本轮新增（手动刷新真正重读：删列后字段/连线不残留）
+- 根因：手动刷新此前只清 desktop 侧表目录/关系缓存，app 层 `ErCatalogCache` 的字段（`er_columns`）与关系（`er_relations`）Loaded 缓存未作废 → 刷新后按需加载命中旧缓存，已删除字段/外键连线残留。
+- 修复：app 增 `er_columns_invalidate`（作废指定表全部字段缓存，含 Loaded/在飞/取消旗标）与 `er_relations_invalidate`（作废某作用域全部关系索引缓存），刷新时按当前 tab 表清字段 + 当前作用域清关系，使重读真实数据库。连接修订不变（不动其它作用域/tab）。新增删列重读回归。
+- 验证：app 507 / desktop 436 / storage 35 全通过；fmt + workspace 干净；macOS 启动到单实例守卫（删列→刷新需人工确认）。
 
