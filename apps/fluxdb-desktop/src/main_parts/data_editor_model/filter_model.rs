@@ -24,6 +24,112 @@ struct DataFilterRule {
     grouped: bool,
 }
 
+/// 值编辑器草稿：打开「值」弹层时从条件快照初始化；「确定」才写回条件。
+/// 字段切换、异步建议值请求返回都会校验 `field` 是否仍是本草稿目标字段，
+/// 避免旧字段的选择或请求结果覆盖新字段。
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DataFilterValueDraft {
+    tab_id: TabId,
+    rule_index: usize,
+    /// 打开弹层时的目标字段快照，用于字段切换后的身份/竞态校验。
+    field: String,
+    /// 打开弹层时的运算符快照，用于确认时校验值形态兼容性。
+    operator: DataFilterOperator,
+    values: BTreeSet<String>,
+    /// 单值输入框文案（保留用户正在输入、尚未提交的文本）。
+    input: String,
+    /// 批量粘贴区是否展开。
+    batch_open: bool,
+    /// 批量粘贴区多行文本内容。
+    batch_text: String,
+    /// 批量粘贴分隔方式。
+    batch_separator: BatchSeparator,
+}
+
+/// 批量粘贴的分隔方式。默认每行一个值；明确选择时才按逗号/制表符拆分，
+/// 不假装支持完整 CSV 引号规则。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum BatchSeparator {
+    #[default]
+    Newline,
+    Comma,
+    Tab,
+}
+
+impl BatchSeparator {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Newline => "每行一个值",
+            Self::Comma => "逗号分隔",
+            Self::Tab => "制表符分隔",
+        }
+    }
+}
+
+/// 按选定的分隔方式切分批量粘贴文本。
+///
+/// 规则必须明确：默认每行一个值；明确选择时才按逗号/制表符拆分。
+/// 这里不做完整 CSV 引号解析（不伪装支持带引号/转义的 CSV），
+/// 只保留原始片段，交由调用方做 trim 去空与去重。
+fn split_filter_batch_text(text: &str, separator: BatchSeparator) -> Vec<&str> {
+    match separator {
+        BatchSeparator::Newline => text.split('\n').collect(),
+        BatchSeparator::Comma => text.split(',').collect(),
+        BatchSeparator::Tab => text.split('\t').collect(),
+    }
+}
+
+/// 从批量片段解析出的待添加值：trim、忽略空行，纯逻辑便于单测。
+fn filter_batch_values_to_add(text: &str, separator: BatchSeparator, selected: &BTreeSet<String>) -> (Vec<String>, usize, usize) {
+    let mut added = Vec::new();
+    let mut duplicated = 0usize;
+    let mut ignored_empty = 0usize;
+    for part in split_filter_batch_text(text, separator) {
+        let trimmed = part.trim();
+        // 忽略空行；保留字符串中有意义的内部空格/引号/逗号，不擅自改写。
+        if trimmed.is_empty() {
+            ignored_empty += 1;
+            continue;
+        }
+        let value = trimmed.to_string();
+        if selected.contains(&value) {
+            duplicated += 1;
+        } else {
+            added.push(value);
+        }
+    }
+    (added, duplicated, ignored_empty)
+}
+
+/// 切换字段后清空旧字段值：旧字段的值对本新字段不再有意义（状态残留根因修复）。
+/// 返回 (新规则, 是否曾有过旧值)。
+fn data_filter_rule_after_field_switch(
+    field: String,
+    mut rule: DataFilterRule,
+) -> (DataFilterRule, bool) {
+    rule.field = Some(field);
+    let had_values = !rule.values.is_empty();
+    rule.values.clear();
+    (rule, had_values)
+}
+
+/// IN ↔ NOT IN 可保留已有列表；切到单值/区间/无值运算符时清空旧列表，
+/// 以免旧列表以错误的 OR 组合参与查询。
+fn data_filter_rule_after_operator_switch(
+    operator: DataFilterOperator,
+    mut rule: DataFilterRule,
+) -> DataFilterRule {
+    let is_list = matches!(
+        operator,
+        DataFilterOperator::InList | DataFilterOperator::NotInList
+    );
+    if !is_list {
+        rule.values.clear();
+    }
+    rule.operator = operator;
+    rule
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DataSortRule {
     enabled: bool,

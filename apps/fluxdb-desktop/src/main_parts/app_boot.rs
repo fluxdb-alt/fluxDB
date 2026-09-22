@@ -295,6 +295,11 @@ fn main() {
                             cx.new(|cx| InputState::new(window, cx).placeholder("搜索"));
                         let data_filter_value_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("输入筛选值"));
+                        let data_filter_batch_input = cx.new(|cx| {
+                            InputState::new(window, cx)
+                                .multi_line(true)
+                                .placeholder("粘贴多个值，每行一个……")
+                        });
                         let local_filter_value_input =
                             cx.new(|cx| InputState::new(window, cx).placeholder("输入筛选值"));
                         let local_filter_search_input =
@@ -2141,6 +2146,26 @@ fn main() {
                                         cx,
                                     );
                                 }
+                                // Enter 提交当前输入值（连续输入）。中文输入法组合确认阶段的
+                                // Enter 由 Input 内部消费为标记文本提交，不会触发 PressEnter，
+                                // 因此不会在组合输入时误添加。
+                                if matches!(event, InputEvent::PressEnter { .. }) {
+                                    let value = input.read(cx).value().to_string();
+                                    this.update_data_filter_manual_value(value, cx);
+                                    this.add_data_filter_manual_value(TabId(0), cx);
+                                    cx.stop_propagation();
+                                }
+                            },
+                        );
+                        let data_filter_batch_input_subscription = cx.subscribe(
+                            &data_filter_batch_input,
+                            |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+                                if matches!(event, InputEvent::Change) {
+                                    if let Some(draft) = this.data_filter_value_draft.as_mut() {
+                                        draft.batch_text = input.read(cx).value().to_string();
+                                        cx.notify();
+                                    }
+                                }
                             },
                         );
                         let local_filter_value_input_subscription = cx.subscribe(
@@ -2277,6 +2302,9 @@ fn main() {
                             data_filter_value_input,
                             _data_filter_value_input_subscription:
                                 data_filter_value_input_subscription,
+                            data_filter_batch_input,
+                            _data_filter_batch_input_subscription:
+                                data_filter_batch_input_subscription,
                             local_filter_value_input,
                             _local_filter_value_input_subscription:
                                 local_filter_value_input_subscription,
@@ -2880,6 +2908,7 @@ fn main() {
                             data_filter_value_search: String::new(),
                             data_filter_value_search_loading_until: None,
                             data_filter_value_search_task: None,
+                            data_filter_value_draft: None,
                             data_filter_applying_tabs: BTreeSet::new(),
                             _data_filter_apply_tasks: BTreeMap::new(),
                             app_message: None,
