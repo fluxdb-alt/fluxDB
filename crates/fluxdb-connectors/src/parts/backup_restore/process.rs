@@ -278,13 +278,31 @@ mod process_tests {
 
     #[test]
     fn failure_includes_sanitized_client_diagnostics() {
-        let mut command = Command::new("sh");
-        command.arg("-c").arg("echo \"mysqldump: Couldn't execute test\" >&2; exit 2");
+        // Windows 无 /bin/sh，用 cmd /C 生成等价的失败子进程（写 stderr + 退出码 2），
+        // 保证诊断路径在 Windows 与 Unix 均可验证。
+        #[cfg(windows)]
+        let command = {
+            let mut c = Command::new("cmd");
+            c.arg("/C")
+                .arg("echo \"mysqldump: Couldn't execute test\" 1>&2 & exit /b 2");
+            c
+        };
+        #[cfg(not(windows))]
+        let command = {
+            let mut c = Command::new("sh");
+            c.arg("-c")
+                .arg("echo \"mysqldump: Couldn't execute test\" >&2; exit 2");
+            c
+        };
         let cancel = AtomicBool::new(false);
 
         let error = run_client(command, &cancel, &mut |_| {})
             .expect_err("非零退出必须失败");
 
+        // Unix 与 Windows 的 ExitStatus 文本前缀不同：exit status / exit code。
+        #[cfg(windows)]
+        assert!(error.message.contains("exit code: 2"));
+        #[cfg(not(windows))]
         assert!(error.message.contains("exit status: 2"));
         assert!(error.message.contains("Couldn't execute test"));
     }
