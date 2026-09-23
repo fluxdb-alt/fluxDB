@@ -82,6 +82,30 @@ fn connection_menu_separator(colors: UiColors) -> Div {
     div().h(px(1.)).mx_1().my_1().bg(colors.border_soft)
 }
 
+// 一级菜单（p_1 容器）内二级子菜单的顶部定位：
+// 顶部内边距 4px + 宿主项之前的菜单项各 26px + 分隔符各 9px（1px 线 + 上下 my_1 各 4px）。
+// items_before / separators_before 必须与各菜单渲染函数中宿主项（如"管理组/导出/筛选"）
+// 之前的实际项顺序保持一致，否则子菜单与宿主项错位。
+fn context_submenu_top(items_before: f32, separators_before: f32) -> Pixels {
+    px(4. + items_before * 26. + separators_before * 9.)
+}
+
+// 二级子菜单顶部视口收敛：desired_top 为相对一级菜单的理想偏移（对齐宿主项），
+// 当子菜单底部（menu_y + top + height）超出视口时向上收回，保证完整可见。
+fn context_submenu_clamped_top(
+    menu_y: Pixels,
+    desired_top: f32,
+    height: f32,
+    window: &Window,
+) -> Pixels {
+    let margin = 8.;
+    let viewport_height = f32::from(window.viewport_size().height);
+    let menu_y = f32::from(menu_y);
+    let min_top = margin - menu_y;
+    let max_top = viewport_height - menu_y - height - margin;
+    px(desired_top.clamp(min_top.min(max_top), max_top.max(min_top)))
+}
+
 fn menu_surface_bg(colors: UiColors) -> gpui::Rgba {
     if colors.is_dark {
         rgb(0x181b20)

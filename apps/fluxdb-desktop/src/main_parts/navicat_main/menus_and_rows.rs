@@ -12,9 +12,28 @@ impl NavicatMain {
         if self.pending_rename_table_folder.is_some() {
             self.confirm_rename_table_folder(cx);
         }
+        // 连接菜单此前未做视口收敛，右键底部连接时菜单会超出窗口（与表菜单同类问题）。
+        // 注意：项数需与 connection_menu.rs 的 connection_context_menu 渲染保持一致：
+        // Redis 少 3 项（用户与权限/执行 SQL 文件/新建数据库/选择显示数据库中的非 Redis 项），
+        // 已分组多 1 项（取消分组）。
+        let state = self.controller.state();
+        let connection = state
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == connection_id);
+        let is_redis = connection
+            .is_some_and(|connection| connection.config.kind == DatabaseKind::Redis);
+        let grouped = state.sidebar_layout.is_connection_grouped(connection_id);
+        let items = if is_redis { 8. } else { 11. } + i32::from(grouped) as f32;
+        let clamped_position = clamp_context_menu_position(
+            position,
+            230.,
+            connection_menu_height(items, 2.),
+            window,
+        );
         self.connection_context_menu = Some(ConnectionContextMenu {
             connection_id,
-            position,
+            position: clamped_position,
             show_group_submenu: false,
         });
         self.database_context_menu = None;
@@ -1225,13 +1244,24 @@ fn data_row_context_menu_height(menu: &DataRowContextMenu) -> f32 {
     context_menu_height(items, separators)
 }
 
+// 连接菜单容器高度：菜单项高 32px（connection_menu_item 的 h(px(32.))），
+// 分隔符 9px（1px 线 + 上下各 4px my_1），容器 p_2 上下共 16px。
+fn connection_menu_height(items: f32, separators: f32) -> f32 {
+    items * 32. + separators * 9. + 16.
+}
+
+// 注意：菜单项/分隔符数量必须与 context_menus.rs 中对应渲染函数保持一致，
+// 少算会导致菜单底部（如"删除表/清空表"）被视口裁切。
 fn table_context_menu_height() -> f32 {
-    context_menu_height(14., 3.)
+    // table_context_menu：15 个菜单项 + 3 个分隔符
+    context_menu_height(15., 3.)
 }
 
 fn data_cell_context_menu_height(menu: &DataCellContextMenu) -> f32 {
-    let mut items = 11.;
-    let mut separators = 5.;
+    // data_cell_context_menu：基础 10 个菜单项 + 4 个分隔符；
+    // 选中复制/选中导出各追加 1 项，任一存在时追加 1 个分隔符。
+    let mut items = 10.;
+    let mut separators = 4.;
     if menu.selection_copy_label.is_some() {
         items += 1.;
         separators += 1.;
@@ -1243,6 +1273,9 @@ fn data_cell_context_menu_height(menu: &DataCellContextMenu) -> f32 {
     context_menu_height(items, separators)
 }
 
+// 菜单容器高度 = 菜单项 + 分隔符 + 内边距。
+// 菜单项高 26px（table_inert_menu_item 的 h(px(26.))）；
+// 分隔符实际占 9px（1px 线 + 上下各 4px my_1）；容器 p_1 上下共 8px。
 fn context_menu_height(items: f32, separators: f32) -> f32 {
-    items * 26. + separators * 5. + 8.
+    items * 26. + separators * 9. + 8.
 }

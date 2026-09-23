@@ -7,9 +7,23 @@ fn data_cell_filter_submenu(
     menu_for_gt: DataCellContextMenu,
     menu_for_remove_filter: DataCellContextMenu,
     colors: UiColors,
+    window: &Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    data_cell_submenu_shell(px(154.), colors)
+    // "筛选"前有 6 个基础菜单项（选中复制/导出各追加 1 项）+ 3 个分隔符（任一选中项存在再 +1）；
+    // 子菜单 7 项 + 1 分隔符，贴底时向上收回。
+    let has_selection = menu_for_eq.selection_copy_label.is_some()
+        || menu_for_eq.selection_export_label.is_some();
+    let items_before = 6.
+        + i32::from(menu_for_eq.selection_copy_label.is_some()) as f32
+        + i32::from(menu_for_eq.selection_export_label.is_some()) as f32;
+    let separators_before = 3. + i32::from(has_selection) as f32;
+    let desired_top = f32::from(context_submenu_top(items_before, separators_before));
+    let height = 7. * 26. + 9. + 8.;
+    data_cell_submenu_shell(
+        context_submenu_clamped_top(menu_for_eq.position.y, desired_top, height, window),
+        colors,
+    )
         .child(
             data_cell_menu_item("字段 = 值", AppIcon::Filter, true, colors).on_mouse_down(
                 MouseButton::Left,
@@ -85,9 +99,23 @@ fn data_cell_sort_submenu(
     menu_for_desc: DataCellContextMenu,
     menu_for_remove_sort: DataCellContextMenu,
     colors: UiColors,
+    window: &Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    data_cell_submenu_shell(px(180.), colors)
+    // "排序"前有 7 个基础菜单项（含"筛选"，选中复制/导出各追加 1 项）+ 4 个分隔符（任一选中项存在再 +1）；
+    // 子菜单 3 项，贴底时向上收回。
+    let has_selection = menu_for_asc.selection_copy_label.is_some()
+        || menu_for_asc.selection_export_label.is_some();
+    let items_before = 7.
+        + i32::from(menu_for_asc.selection_copy_label.is_some()) as f32
+        + i32::from(menu_for_asc.selection_export_label.is_some()) as f32;
+    let separators_before = 4. + i32::from(has_selection) as f32;
+    let desired_top = f32::from(context_submenu_top(items_before, separators_before));
+    let height = 3. * 26. + 8.;
+    data_cell_submenu_shell(
+        context_submenu_clamped_top(menu_for_asc.position.y, desired_top, height, window),
+        colors,
+    )
         .child(
             data_cell_menu_item("升序排序", AppIcon::List, true, colors).on_mouse_down(
                 MouseButton::Left,

@@ -290,6 +290,7 @@ fn table_context_menu(
     table_folders: &BTreeMap<String, Vec<String>>,
     table_folder_assignments: &BTreeMap<String, (String, String)>,
     colors: UiColors,
+    window: &Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let pin_label = if pinned_tables.contains(&table_tree_key(&menu.object_path)) {
@@ -437,6 +438,7 @@ fn table_context_menu(
                 table_folders,
                 table_folder_assignments,
                 colors,
+                window,
                 cx,
             ))
         })
@@ -449,7 +451,7 @@ fn table_context_menu(
             cx,
         ))
         .when(menu.submenu == Some(TableContextSubmenu::Export), |this| {
-            this.child(table_export_submenu(&menu, colors, cx))
+            this.child(table_export_submenu(&menu, colors, window, cx))
         })
         .child(data_cell_menu_separator(colors))
         .child(table_menu_item(
@@ -475,9 +477,16 @@ fn table_context_menu(
 fn table_export_submenu(
     menu: &TableContextMenu,
     colors: UiColors,
+    window: &Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    table_submenu_shell(px(274.), colors)
+    // "导出"是第 13 项（其前有 12 个菜单项 + 2 个分隔符）；子菜单 2 项，贴底时向上收回
+    let desired_top = f32::from(context_submenu_top(12., 2.));
+    let height = 2. * 26. + 8.;
+    table_submenu_shell(
+        context_submenu_clamped_top(menu.position.y, desired_top, height, window),
+        colors,
+    )
         .child(table_inert_menu_item(
             "导出数据库",
             AppIcon::Database,
@@ -499,13 +508,24 @@ fn table_manage_group_submenu(
     table_folders: &BTreeMap<String, Vec<String>>,
     table_folder_assignments: &BTreeMap<String, (String, String)>,
     colors: UiColors,
+    window: &Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let parent_key = table_folder_parent_key_for_object(&menu.object_path);
     let folders = sorted_table_folders_for_parent(table_folders, &parent_key);
     let table_key = table_tree_key(&menu.object_path);
     let in_group = table_folder_assignments.contains_key(&table_key);
-    let mut submenu = table_submenu_shell(px(248.), colors);
+    // "管理组"是第 12 项（其前有 11 个菜单项 + 2 个分隔符）；
+    // 分组数量不定，子菜单贴底时按实际高度向上收回，避免超出视口。
+    let desired_top = f32::from(context_submenu_top(11., 2.));
+    let submenu_items = if in_group { 1. } else { 0. }
+        + if folders.is_empty() { 1. } else { folders.len() as f32 };
+    let submenu_separators = if in_group { 1. } else { 0. };
+    let submenu_height = 8. + submenu_items * 26. + submenu_separators * 9.;
+    let mut submenu = table_submenu_shell(
+        context_submenu_clamped_top(menu.position.y, desired_top, submenu_height, window),
+        colors,
+    );
     if in_group {
         submenu = submenu.child(table_submenu_action_item(
             "移出组",
@@ -686,6 +706,7 @@ fn table_inert_menu_item(
 fn data_cell_context_menu(
     menu: DataCellContextMenu,
     colors: UiColors,
+    window: &Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let can_modify = !data_type_is_binary(menu.type_name.as_str());
@@ -903,6 +924,7 @@ fn data_cell_context_menu(
                     menu_for_gt,
                     menu_for_remove_filter,
                     colors,
+                    window,
                     cx,
                 ))
             },
@@ -921,6 +943,7 @@ fn data_cell_context_menu(
                 menu_for_desc,
                 menu_for_remove_sort,
                 colors,
+                window,
                 cx,
             ))
         })

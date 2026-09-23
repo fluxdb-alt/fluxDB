@@ -444,8 +444,9 @@ fn data_row_copy_submenu(
     };
     let height = if menu.row_object_available { 5. } else { 2. } * 26. + 8.;
 
+    // "复制"前有 1 个菜单项（行详情）+ 1 个分隔符
     data_row_submenu_shell(
-        data_row_submenu_top(&menu, 34., height, window),
+        data_row_submenu_top(&menu, f32::from(context_submenu_top(1., 1.)), height, window),
         data_row_submenu_left(&menu, width, window),
         px(width),
         colors,
@@ -523,7 +524,12 @@ fn data_row_export_submenu(
             markdown_label.as_str(),
         ])
     };
-    let desired_top = if menu.rows_editable { 148. } else { 68. };
+    // "导出"前：可编辑时 5 个菜单项 + 3 个分隔符；只读时 2 个菜单项 + 2 个分隔符
+    let desired_top = if menu.rows_editable {
+        f32::from(context_submenu_top(5., 3.))
+    } else {
+        f32::from(context_submenu_top(2., 2.))
+    };
     let height = if menu.row_object_available { 4. } else { 3. } * 26. + 8.;
 
     data_row_submenu_shell(
@@ -570,12 +576,7 @@ fn data_row_submenu_top(
     height: f32,
     window: &Window,
 ) -> Pixels {
-    let margin = 8.;
-    let viewport_height = f32::from(window.viewport_size().height);
-    let menu_y = f32::from(menu.position.y);
-    let min_top = margin - menu_y;
-    let max_top = viewport_height - menu_y - height - margin;
-    px(desired_top.clamp(min_top.min(max_top), max_top.max(min_top)))
+    context_submenu_clamped_top(menu.position.y, desired_top, height, window)
 }
 
 fn data_row_submenu_left(menu: &DataRowContextMenu, width: f32, window: &Window) -> Pixels {

@@ -273,6 +273,7 @@ impl Render for NavicatMain {
                     &self.table_folders,
                     &self.table_folder_assignments,
                     colors,
+                    window,
                     cx,
                 ))
             })
@@ -292,7 +293,7 @@ impl Render for NavicatMain {
                 ))
             })
             .when_some(self.data_cell_context_menu.clone(), |this, menu| {
-                this.child(data_cell_context_menu(menu, colors, cx))
+                this.child(data_cell_context_menu(menu, colors, window, cx))
             })
             .when_some(self.data_row_context_menu.clone(), |this, menu| {
                 this.child(data_row_context_menu(menu, &state, window, colors, cx))
