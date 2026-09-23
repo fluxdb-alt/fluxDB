@@ -199,6 +199,7 @@
                 rows: None,
                 modified_at: None,
                 comment: None,
+                stable: None,
             }),
         );
         controller.state.connections[0].objects.push(ObjectSummary {
@@ -212,6 +213,7 @@
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         });
         controller.completion_index.lock().unwrap().insert_tables(
             ConnectionId(1),
@@ -312,6 +314,7 @@
                 nullable: true,
                 primary_key: false,
                 comment: None,
+                stable: None,
             }],
             DatabaseKind::Postgres,
         );
@@ -368,6 +371,7 @@
                     nullable: true,
                     primary_key: false,
                     comment: Some("金额".to_string()),
+                    stable: None,
                 }],
                 DatabaseKind::Postgres,
             );
@@ -690,6 +694,7 @@
             nullable: false,
             primary_key: true,
             comment: Some("主键标识".into()),
+            stable: None,
         };
         let documentation = column_completion_documentation(&column).expect("应有文档提示");
         assert!(documentation.contains("类型：integer"), "{documentation}");
@@ -3797,6 +3802,7 @@
                     nullable: false,
                     primary_key: true,
                     comment: None,
+                    stable: None,
                 }],
                 DatabaseKind::Postgres,
             );
@@ -4915,6 +4921,7 @@
                 nullable: false,
                 primary_key: false,
                 comment: None,
+                stable: None,
             }],
             DatabaseKind::Sqlite,
         );
@@ -4965,6 +4972,7 @@
                     nullable: true,
                     primary_key: false,
                     comment: None,
+                    stable: None,
                 },
                 CompletionColumn {
                     table: "Product".to_string(),
@@ -4975,6 +4983,7 @@
                     nullable: false,
                     primary_key: false,
                     comment: None,
+                    stable: None,
                 },
                 CompletionColumn {
                     table: "Product".to_string(),
@@ -4985,6 +4994,7 @@
                     nullable: true,
                     primary_key: false,
                     comment: None,
+                    stable: None,
                 },
             ],
             "name",

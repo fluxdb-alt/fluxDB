@@ -138,6 +138,7 @@ fn sqlite_list_objects(
                 rows: None,
                 modified_at: None,
                 comment: None,
+                stable: None,
             });
         }
 

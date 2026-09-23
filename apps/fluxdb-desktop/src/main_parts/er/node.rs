@@ -17,6 +17,7 @@ fn field_row(
     highlighted: bool,
     card_color: gpui::Rgba,
     colors: UiColors,
+    cx: &mut Context<NavicatMain>,
 ) -> Stateful<Div> {
     // 图标：主键 key 优先；仅外键 link；tooltip 写明两者。普通字段不放装饰性圆点。
     let icon = if col.primary {
@@ -84,7 +85,7 @@ fn field_row(
     });
     // 类型列：82px 右对齐、弱于字段名；未知类型用「—」不伪造。
     let type_text = col.type_name.clone().unwrap_or_else(|| "—".to_string());
-    row.child(
+    let mut row = row.child(
         div()
             .w(px(82.))
             .flex_shrink_0()
@@ -93,7 +94,39 @@ fn field_row(
             .text_ellipsis()
             .text_color(colors.muted)
             .child(type_text),
-    )
+    );
+    // 悬停字段行上报：画布端口层据此浮现该行左/右端口圆点（§手动连线）。
+    // 离开时只清自己的记录，避免相邻行 hover 交替时把新行清掉。
+    let hov_table = table.to_string();
+    let hov_col = col.name.clone();
+    row = row.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+        let key = (hov_table.clone(), hov_col.clone());
+        let changed = {
+            let mut canvas = this.er_canvas.borrow_mut();
+            let before = canvas.er_row_hover.get(&tab_id).cloned().flatten();
+            let after = if *hovered {
+                Some(key.clone())
+            } else if before.as_ref() == Some(&key) {
+                None
+            } else {
+                before.clone()
+            };
+            let changed = before != after;
+            match after {
+                Some(v) => {
+                    canvas.er_row_hover.insert(tab_id, Some(v));
+                }
+                None => {
+                    canvas.er_row_hover.remove(&tab_id);
+                }
+            }
+            changed
+        };
+        if changed {
+            cx.notify();
+        }
+    }));
+    row
 }
 
 /// 字段区：固定高度视口（min(N,8)×22），像素滚动 + 虚拟行 + 滚动条。
@@ -128,14 +161,17 @@ fn er_field_area(
                 ScrollDelta::Lines(p) => p.y * NODE_FIELD_ROW,
                 ScrollDelta::Pixels(p) => p.y.as_f32(),
             };
-            let e = this
+            let mut canvas = this.er_canvas.borrow_mut();
+            let e = canvas
                 .er_node_scroll_px
                 .entry((tab_id, scroll_table.clone()))
                 .or_insert(0.0);
             let before = *e;
             *e = (*e + delta).clamp(0.0, max_scroll);
             // 滚动到顶/底后不再更新状态，避免无效重绘（§4.3 前一轮约定保留）。
-            if *e != before {
+            let changed = *e != before;
+            drop(canvas);
+            if changed {
                 cx.notify();
             }
         }));
@@ -157,7 +193,7 @@ fn er_field_area(
                 .left_0()
                 .right_0()
                 .top(px(top))
-                .child(field_row(tab_id, &table, col, is_last_visible, highlighted, card_color, colors)),
+                .child(field_row(tab_id, &table, col, is_last_visible, highlighted, card_color, colors, cx)),
         );
     }
     body = body.child(rows);
@@ -176,7 +212,7 @@ fn er_field_area(
             .bg(colors.border)
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &gpui::MouseDownEvent, _, cx| {
                 cx.stop_propagation();
-                this.er_scroll_drag = Some((tab_id, thumb_table.clone()));
+                this.er_canvas.borrow_mut().er_scroll_drag = Some((tab_id, thumb_table.clone()));
                 cx.notify();
             }));
         body = body.child(
@@ -209,12 +245,13 @@ fn node_view(
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let name = meta.name.clone();
+    let collapsed = viewport.safe_scale() < ER_COLLAPSE_SCALE;
     // 选中轮廓约 2px：用边框颜色 + 外描边（不改变内容布局）。
     let mut node = div()
         .absolute()
         .left(px(nv.x * viewport.safe_scale() + viewport.pan_x))
         .top(px(nv.y * viewport.safe_scale() + viewport.pan_y))
-        .w(px(NODE_WIDTH))
+        .w(px(nv.width))
         .h(px(nv.height))
         .rounded(colors.radius)
         .border_1()
@@ -226,23 +263,27 @@ fn node_view(
         .flex_col();
 
     // 顶部 4px 色带：贴合顶部圆角，按连通分量取色，不覆盖标题。
+    // 折叠态弱化为半透明强调线（避免窄卡片上突兀的粗色条），选中时仍用实色。
     node = node.child(
         div()
             .absolute()
             .top_0()
             .left_0()
             .right_0()
-            .h(px(ACCENT_BAR))
-            .bg(card_color),
+            .h(px(if collapsed { 2.0 } else { ACCENT_BAR }))
+            .bg(if collapsed && !nv.selected { card_color.alpha(0.45) } else { card_color }),
     );
 
-    // 表头 30px：图标 14 + 名称 12 semibold +（局部 ER）展开按钮。
+    // 表头：图标 16 + 名称 12 semibold +（局部 ER）展开按钮。
+    // 折叠态横向内边距收窄、名称 http 截断，贴合紧凑宽度（不产生大片空白）。
     let drag_name = name.clone();
     let tip_name = name.clone();
+    let header_h = if collapsed { card_collapsed_height() - if collapsed { 2.0 } else { ACCENT_BAR } } else { NODE_HEADER };
+    let header_mt = if collapsed { 2.0 } else { ACCENT_BAR };
     let mut header = div()
-        .h(px(NODE_HEADER))
-        .mt(px(ACCENT_BAR))
-        .pl(px(10.))
+        .h(px(header_h))
+        .mt(px(header_mt))
+        .pl(px(if collapsed { 8.0 } else { 10.0 }))
         .pr(px(6.))
         .flex()
         .items_center()
@@ -254,12 +295,11 @@ fn node_view(
             cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
                 // 拖动候选：interaction 的 move/up 按 4px 阈值判定拖动或选择（§7）。
-                let (ox, oy) = this
-                    .er_scene_positions
+                let (ox, oy) = this.er_canvas.borrow_mut().er_scene_positions
                     .get(&tab_id)
                     .and_then(|m| m.get(&drag_name).copied())
                     .unwrap_or((0.0, 0.0));
-                this.er_node_drag = Some((
+                this.er_canvas.borrow_mut().er_node_drag = Some((
                     tab_id,
                     drag_name.clone(),
                     f32::from(event.position.x),
@@ -273,20 +313,20 @@ fn node_view(
         )
         .id(format!("er-node-header-{}-{}", tab_id.0, name.clone()))
         .tooltip(move |window, cx| Tooltip::new(tip_name.clone()).build(window, cx))
-        .child(app_icon(AppIcon::Table, 14., card_color))
+        .child(app_icon(AppIcon::Table, if collapsed { 16. } else { 14. }, card_color))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .overflow_hidden()
                 .text_ellipsis()
-                .text_size(px(12.))
+                .text_size(px(if collapsed { 13. } else { 12. }))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(name.clone()),
         );
 
-    if expandable {
+    if expandable && !collapsed {
         let expand_table = name.clone();
         header = header.child(
             div()
@@ -326,7 +366,38 @@ fn node_view(
                 .child(app_icon(AppIcon::Maximize, 14., colors.muted)),
         );
     }
+    // 折叠态：表名后内嵌关联字段计数（含义明确、不遮挡连线、随表头拖动/选择）。
+    if collapsed {
+        let edge_n = meta.edge_columns.len();
+        if edge_n > 0 {
+            header = header.child(
+                div()
+                    .h(px(16.))
+                    .px(px(5.))
+                    .flex()
+                    .items_center()
+                    .gap(px(3.))
+                    .flex_shrink_0()
+                    .rounded(colors.radius)
+                    .bg(colors.panel_bg)
+                    .border_1()
+                    .border_color(colors.border_soft)
+                    .id(format!("er-edgecount-{}-{}", tab_id.0, name.clone()))
+                    .text_size(px(10.))
+                    .text_color(colors.muted)
+                    .tooltip(move |window, cx| Tooltip::new(format!("{edge_n} 个关联字段")).build(window, cx))
+                    .child(app_icon(AppIcon::Link, 10., colors.muted))
+                    .child(format!("{edge_n}")),
+            );
+        }
+    }
     node = node.child(header);
+
+    // 缩小折叠（§六.26）：只渲染色带+表头（紧凑节点）；关联字段计数已内嵌表头；
+    // 字段滚动状态保留（放大恢复）。
+    if collapsed {
+        return node;
+    }
 
     match meta.status {
         ErLoadStatus::Loaded => {
@@ -432,7 +503,7 @@ fn node_view(
 
 /// 键盘滚动：滚动「当前选中表」的字段列表（PageUp/PageDown/↑/↓）。
 fn scroll_focused_fields(tab_id: TabId, this: &mut NavicatMain, delta_px: f32) {
-    let Some(name) = this.er_selected_table.get(&tab_id).cloned().flatten() else {
+    let Some(name) = this.er_canvas.borrow().er_selected_table.get(&tab_id).cloned().flatten() else {
         return;
     };
     let Some(graph) = this.er_graphs.get(&tab_id) else {
@@ -446,7 +517,8 @@ fn scroll_focused_fields(tab_id: TabId, this: &mut NavicatMain, delta_px: f32) {
         return;
     }
     let max_scroll = (n - MAX_FIELD_ROWS) as f32 * NODE_FIELD_ROW;
-    let e = this.er_node_scroll_px.entry((tab_id, name)).or_insert(0.0);
+    let mut canvas = this.er_canvas.borrow_mut();
+    let e = canvas.er_node_scroll_px.entry((tab_id, name)).or_insert(0.0);
     *e = (*e + delta_px).clamp(0.0, max_scroll);
 }
 
@@ -477,7 +549,7 @@ fn reveal_hidden_fields(tab_id: TabId, this: &mut NavicatMain, table: &str, to_t
     }
     // 找出该方向上「隐藏且有关联」的字段在下标集合。无字段时不动。
     // 端点字段集合（edge_columns）存在 scene，这里从图列 + 状态推导：直接取可见区间边界外的列。
-    let current_scroll = this.er_node_scroll_px.get(&(tab_id, table.to_string())).copied().unwrap_or(0.0);
+    let current_scroll = this.er_canvas.borrow().er_node_scroll_px.get(&(tab_id, table.to_string())).copied().unwrap_or(0.0);
     let (row0, row1) = visible_row_range(n, current_scroll);
     let candidates: Vec<usize> = (0..n)
         .filter(|&ci| {
@@ -495,8 +567,8 @@ fn reveal_hidden_fields(tab_id: TabId, this: &mut NavicatMain, table: &str, to_t
     };
     // 精确滚动到目标字段（尽量居中，但不越界）：目标行进入可视区即满足定位要求。
     let target = hidden_field_scroll(field_idx, n);
-    this.er_node_scroll_px.insert((tab_id, table.to_string()), target);
+    this.er_canvas.borrow_mut().er_node_scroll_px.insert((tab_id, table.to_string()), target);
     // 记录高亮字段（渲染时该行高亮；空白/Esc/其它交互后清除）。
-    this.er_field_highlights
+    this.er_canvas.borrow_mut().er_field_highlights
         .insert(tab_id, (table.to_string(), t.columns[field_idx].name.clone()));
 }

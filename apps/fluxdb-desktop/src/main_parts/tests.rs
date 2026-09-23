@@ -14,6 +14,7 @@ mod tests {
                 name: name.to_string(),
             },
             comment: None,
+            stable: None,
             status: fluxdb_core::ErLoadStatus::Loaded,
             columns: (0..columns)
                 .map(|i| fluxdb_core::ErColumn {
@@ -21,6 +22,7 @@ mod tests {
                     type_name: Some(format!("T{i}")),
                     primary_key: i == 0,
                     nullable: false,
+                    stable: None,
                 })
                 .collect(),
         }
@@ -63,6 +65,27 @@ mod tests {
         // 未加载/失败也给出稳定高度（骨架/状态行）。
         assert!(card_height(ErLoadStatus::NotLoaded, 0) > NODE_HEADER + ACCENT_BAR);
         assert!(card_height(ErLoadStatus::Failed, 0) > NODE_HEADER + ACCENT_BAR);
+    }
+
+    #[test]
+    fn er_column_loading_state_is_rechecked() {
+        assert!(er_column_status_needs_request(ErLoadStatus::NotLoaded));
+        assert!(
+            er_column_status_needs_request(ErLoadStatus::Loading),
+            "共享缓存中的在飞请求完成后，当前 ER tab 必须继续复查"
+        );
+        assert!(!er_column_status_needs_request(ErLoadStatus::Loaded));
+        assert!(!er_column_status_needs_request(ErLoadStatus::Failed));
+    }
+
+    #[test]
+    fn er_column_flush_waits_for_active_batch_and_resumes_when_idle() {
+        assert!(should_schedule_er_column_flush(true, false));
+        assert!(
+            !should_schedule_er_column_flush(true, true),
+            "新可见表应排队，不能覆盖正在回填的字段任务"
+        );
+        assert!(!should_schedule_er_column_flush(false, false));
     }
 
     #[test]
@@ -135,11 +158,11 @@ mod tests {
         positions.insert("a".to_string(), (100.0, 200.0));
         positions.insert("b".to_string(), (600.0, 200.0));
         let mut env = env_for(&scene, positions.clone());
-        let views = scene.node_views(&env);
+        let views = scene.node_views(&env, 1.0);
         let va = &views[0];
 
         // 滚动 0：c5 可见（0..7 行区间），锚点在行 5 中心。
-        let a5 = resolve_anchor(&scene.nodes[0], va, Some(5), true);
+        let a5 = resolve_anchor(&scene.nodes[0], va, Some(5), true, 1.0);
         assert_eq!(a5.kind, ErAnchorKind::Field);
         let expected_y = 200.0 + field_viewport_offset() + FIELD_PAD_Y / 2.0 + 5.0 * NODE_FIELD_ROW + NODE_FIELD_ROW / 2.0;
         assert!((a5.y - expected_y).abs() < 0.01);
@@ -148,33 +171,33 @@ mod tests {
 
         // 滚动一整行（22px）：c5 仍在区间（4..11），y 上移一行。
         env.scrolls[0] = NODE_FIELD_ROW;
-        let views = scene.node_views(&env);
+        let views = scene.node_views(&env, 1.0);
         let va = &views[0];
-        let a5b = resolve_anchor(&scene.nodes[0], va, Some(5), true);
+        let a5b = resolve_anchor(&scene.nodes[0], va, Some(5), true, 1.0);
         assert!((a5b.y - (expected_y - NODE_FIELD_ROW)).abs() < 0.01);
 
         // 滚动半行（11px）：锚点随滚动平滑移动半行。
         env.scrolls[0] = NODE_FIELD_ROW / 2.0;
-        let views = scene.node_views(&env);
+        let views = scene.node_views(&env, 1.0);
         let va = &views[0];
-        let a5c = resolve_anchor(&scene.nodes[0], va, Some(5), true);
+        let a5c = resolve_anchor(&scene.nodes[0], va, Some(5), true, 1.0);
         assert!((a5c.y - (expected_y - NODE_FIELD_ROW / 2.0)).abs() < 0.01);
 
         // 滚动 6 行（row6..13 截到 row6..11）：c6 在区间内仍可见（字段端口）；
         // 早先的 c1 已滚出上沿 → 上汇总端口；不误接当前可见首行。
         env.scrolls[0] = 6.0 * NODE_FIELD_ROW;
-        let views = scene.node_views(&env);
+        let views = scene.node_views(&env, 1.0);
         let va = &views[0];
-        let a6 = resolve_anchor(&scene.nodes[0], va, Some(6), true);
+        let a6 = resolve_anchor(&scene.nodes[0], va, Some(6), true, 1.0);
         assert_eq!(a6.kind, ErAnchorKind::Field);
-        let a1 = resolve_anchor(&scene.nodes[0], va, Some(1), true);
+        let a1 = resolve_anchor(&scene.nodes[0], va, Some(1), true, 1.0);
         assert_eq!(a1.kind, ErAnchorKind::SummaryTop);
 
         // 重新滚回顶部：c1 恢复真实字段端口（不再汇总）。
         env.scrolls[0] = 0.0;
-        let views = scene.node_views(&env);
+        let views = scene.node_views(&env, 1.0);
         let va = &views[0];
-        assert_eq!(resolve_anchor(&scene.nodes[0], va, Some(1), true).kind, ErAnchorKind::Field);
+        assert_eq!(resolve_anchor(&scene.nodes[0], va, Some(1), true, 1.0).kind, ErAnchorKind::Field);
     }
 
     #[test]
@@ -234,12 +257,12 @@ mod tests {
         positions.insert("a".to_string(), (0.0, 0.0));
         positions.insert("b".to_string(), (500.0, 0.0));
         let env = env_for(&scene, positions);
-        let views = scene.node_views(&env);
+        let views = scene.node_views(&env, 1.0);
         // a 加载后找不到 c99 → Missing（表头端口 + tooltip 说明），不得接到近似字段。
-        let am = resolve_anchor(&scene.nodes[0], &views[0], scene.edges[0].from_column, true);
+        let am = resolve_anchor(&scene.nodes[0], &views[0], scene.edges[0].from_column, true, 1.0);
         assert_eq!(am.kind, ErAnchorKind::Missing);
         // b 未加载 → Pending（「字段待加载」汇总端口，临时状态）。
-        let bp = resolve_anchor(&scene.nodes[1], &views[1], scene.edges[0].to_column, false);
+        let bp = resolve_anchor(&scene.nodes[1], &views[1], scene.edges[0].to_column, false, 1.0);
         assert_eq!(bp.kind, ErAnchorKind::Pending);
         // 端口都在表头高度（明显区别于字段行中心）。
         assert!((am.y - (am_y_base(views[0].y))).abs() < 0.01);
@@ -272,6 +295,205 @@ mod tests {
             assert!(len > 1.0, "自关联折线不能退化为零长度");
         }
         assert_ne!(frame.edge_views[0].points, frame.edge_views[1].points, "并行边通道错开");
+    }
+
+    #[test]
+    fn er_route_cache_reuses_routes_and_ignores_pan() {
+        // 路由缓存：同 (坐标/滚动/缩放) 下重复物化与平移视口都返回相同折线（命中缓存）；
+        // 滚动端点字段后折线随锚点移动（指纹变化 → 重路由）。a 表 >8 列使滚动可生效。
+        let tables = vec![er_table("a", 12), er_table("b", 6)];
+        let graph = fluxdb_core::ErGraphData {
+            tables: tables.clone(),
+            edges: vec![er_edge("a", "c1", "b", "c2")],
+            relation_status: fluxdb_core::ErLoadStatus::Loaded,
+        };
+        let scene = build_er_scene(&graph, &loaded_layout(&tables, &graph.edges));
+        let mut positions = BTreeMap::new();
+        positions.insert("a".to_string(), (40.0, 40.0));
+        positions.insert("b".to_string(), (500.0, 40.0));
+        let env = env_for(&scene, positions);
+        let vp = ErViewport { pan_x: 0.0, pan_y: 0.0, scale: 1.0 };
+        let frame1 = scene.materialize(&env, vp, 1200.0, 800.0);
+        // 第二次物化（缓存命中）结果与首次一致。
+        let frame2 = scene.materialize(&env, vp, 1200.0, 800.0);
+        let p1: Vec<Vec<(f32, f32)>> = frame1.edge_views.iter().map(|e| e.points.clone()).collect();
+        let p2: Vec<Vec<(f32, f32)>> = frame2.edge_views.iter().map(|e| e.points.clone()).collect();
+        assert_eq!(p1, p2, "缓存命中帧折线不变");
+        // pan 不入键：平移后折线点值不变（pan 是绘制期变换）。
+        let vp_pan = ErViewport { pan_x: 120.0, pan_y: -40.0, scale: 1.0 };
+        let frame_pan = scene.materialize(&env, vp_pan, 1200.0, 800.0);
+        let p_pan: Vec<Vec<(f32, f32)>> = frame_pan.edge_views.iter().map(|e| e.points.clone()).collect();
+        assert_eq!(p1, p_pan, "pan 不应改变折线点值");
+        // 滚动端点表：锚点 y 变 → 指纹变化 → 重路由，折线随动。
+        let mut env_s = env_for(&scene, {
+            let mut m = BTreeMap::new();
+            m.insert("a".to_string(), (40.0, 40.0));
+            m.insert("b".to_string(), (500.0, 40.0));
+            m
+        });
+        env_s.scrolls[0] = 2.0 * NODE_FIELD_ROW;
+        let frame_s = scene.materialize(&env_s, vp, 1200.0, 800.0);
+        let p_s: Vec<Vec<(f32, f32)>> = frame_s.edge_views.iter().map(|e| e.points.clone()).collect();
+        assert_ne!(p1, p_s, "端点滚动后折线应重路由");
+    }
+
+    #[test]
+    fn er_zoom_collapse_hides_details_below_threshold() {
+        // §六.26：低于折叠阈值卡片高度收缩为色带+表头，端口退到折叠卡片底边；
+        // 恢复缩放后高度与字段端口还原（滚动状态不丢）。
+        let tables = vec![er_table("a", 12), er_table("b", 12)];
+        let graph = fluxdb_core::ErGraphData {
+            tables: tables.clone(),
+            edges: vec![er_edge("a", "c1", "b", "c2")],
+            relation_status: fluxdb_core::ErLoadStatus::Loaded,
+        };
+        let scene = build_er_scene(&graph, &loaded_layout(&tables, &graph.edges));
+        let mut positions = BTreeMap::new();
+        positions.insert("a".to_string(), (40.0, 40.0));
+        positions.insert("b".to_string(), (500.0, 40.0));
+        let mut env = env_for(&scene, positions);
+        env.scrolls[0] = NODE_FIELD_ROW; // 滚动状态：折叠/展开间应保留语义
+        let vp_full = ErViewport { pan_x: 0.0, pan_y: 0.0, scale: 1.0 };
+        let vp_small = ErViewport { pan_x: 0.0, pan_y: 0.0, scale: ER_COLLAPSE_SCALE / 2.0 };
+
+        let views_small = scene.node_views(&env, vp_small.safe_scale());
+        assert!(
+            (views_small[0].height - card_collapsed_height()).abs() < 1e-3,
+            "折叠态卡片高度 = 色带+表头"
+        );
+        // 折叠态端口：不管字段是否可见，都退到折叠卡片底边（SummaryBottom 标记）。
+        let a = resolve_anchor(&scene.nodes[0], &views_small[0], Some(1), true, vp_small.safe_scale());
+        assert_eq!(a.kind, ErAnchorKind::SummaryBottom);
+        let expect_y = 40.0 + card_collapsed_height() / vp_small.safe_scale();
+        assert!((a.y - expect_y).abs() < 1e-2, "折叠端口在卡片底边");
+
+        let frame_small = scene.materialize(&env, vp_small, 1200.0, 800.0);
+        // 折叠帧连线端点也在底边（路由消费同一锚点）。
+        let ev = frame_small.edge_views.first().expect("折叠帧仍有连线");
+        assert!(
+            (ev.from_anchor.y - expect_y).abs() < 1e-2,
+            "折叠帧连线端点在底边"
+        );
+
+        // 放大恢复：高度还原为完整卡片，滚动保留，字段端口回到真实行。
+        let views_full = scene.node_views(&env, vp_full.safe_scale());
+        assert!(
+            (views_full[0].height - card_height(ErLoadStatus::Loaded, 12)).abs() < 1e-3,
+            "放大后高度还原"
+        );
+        let a_full = resolve_anchor(&scene.nodes[0], &views_full[0], Some(1), true, vp_full.safe_scale());
+        assert_eq!(a_full.kind, ErAnchorKind::Field, "放大后恢复字段端口");
+    }
+
+    // —— 手动连线（字段端口拖拽）几何：hover 命中 / 吸附侧别 / 端点解析 ——
+
+    fn link_views(scene: &ErScene) -> Vec<ErNodeView> {
+        let mut positions = BTreeMap::new();
+        positions.insert("a".to_string(), (40.0, 40.0));
+        // b 放到足够远：验证「卡片外同高度」不会误命中相邻表。
+        positions.insert("b".to_string(), (900.0, 40.0));
+        let env = env_for(scene, positions);
+        scene.node_views(&env, 1.0)
+    }
+
+    #[test]
+    fn er_field_row_at_hits_only_visible_rows_inside_card() {
+        let tables = vec![er_table("a", 12), er_table("b", 3)];
+        let graph = fluxdb_core::ErGraphData {
+            tables: tables.clone(),
+            edges: vec![],
+            relation_status: fluxdb_core::ErLoadStatus::Loaded,
+        };
+        let scene = build_er_scene(&graph, &loaded_layout(&tables, &graph.edges));
+        let views = link_views(&scene);
+        // 字段区首行中心（与 resolve_anchor 同一几何）。
+        let first = resolve_anchor(&scene.nodes[0], &views[0], Some(0), false, 1.0);
+        let hit = field_row_at(&views, &scene.nodes, first.x + 10.0, first.y, 1.0);
+        assert_eq!(hit, Some(("a".to_string(), "c0".to_string())), "行内任意 x 都命中该行");
+        // 卡片横向范围外：同一 y 不应命中（防误吸附到旁边表）。
+        assert_eq!(field_row_at(&views, &scene.nodes, first.x - 20.0, first.y, 1.0), None);
+        assert_eq!(field_row_at(&views, &scene.nodes, first.x + 400.0, first.y, 1.0), None);
+        // 字段区之外（长表页脚/卡片底边）不命中：12 字段卡片可视 8 行，其后是页脚。
+        let footer_y = views[0].y + card_height(ErLoadStatus::Loaded, 12) - 8.0;
+        assert_eq!(field_row_at(&views, &scene.nodes, first.x + 10.0, footer_y, 1.0), None);
+    }
+
+    #[test]
+    fn er_nearest_port_side_faces_cursor() {
+        let tables = vec![er_table("a", 3)];
+        let graph = fluxdb_core::ErGraphData {
+            tables: tables.clone(),
+            edges: vec![],
+            relation_status: fluxdb_core::ErLoadStatus::Loaded,
+        };
+        let scene = build_er_scene(&graph, &loaded_layout(&tables, &graph.edges));
+        let views = link_views(&scene);
+        let v = &views[0];
+        let l = v.x;
+        let r = v.x + v.width;
+        let mid = (l + r) / 2.0;
+        assert_eq!(nearest_port_side(&views, "a", 1.0, l - 5.0), ErPortSide::Left);
+        assert_eq!(nearest_port_side(&views, "a", 1.0, mid - 1.0), ErPortSide::Left);
+        assert_eq!(nearest_port_side(&views, "a", 1.0, mid + 1.0), ErPortSide::Right);
+        assert_eq!(nearest_port_side(&views, "a", 1.0, r + 5.0), ErPortSide::Right);
+    }
+
+    #[test]
+    fn er_node_at_hits_card_body_only() {
+        // 拖到表头/页脚（非字段行）时仍需确定目标表；卡片外的点不应命中。
+        let tables = vec![er_table("a", 3), er_table("b", 3)];
+        let graph = fluxdb_core::ErGraphData {
+            tables: tables.clone(),
+            edges: vec![],
+            relation_status: fluxdb_core::ErLoadStatus::Loaded,
+        };
+        let scene = build_er_scene(&graph, &loaded_layout(&tables, &graph.edges));
+        let views = link_views(&scene);
+        let b = views.iter().find(|v| v.name == "b").unwrap();
+        // 卡片内靠近表头处命中 b。
+        assert_eq!(
+            node_at(&views, b.x + 10.0, b.y + 2.0, 1.0),
+            Some("b".to_string())
+        );
+        // 卡片外（左/上/右/下）不命中。
+        assert_eq!(node_at(&views, b.x - 20.0, b.y + 10.0, 1.0), None);
+        assert_eq!(node_at(&views, b.x + 10.0, b.y - 20.0, 1.0), None);
+        assert_eq!(node_at(&views, b.x + b.width + 20.0, b.y + 10.0, 1.0), None);
+        assert_eq!(
+            node_at(&views, b.x + 10.0, b.y + b.height + 20.0, 1.0),
+            None
+        );
+    }
+
+    #[test]
+    fn er_resolve_field_port_matches_anchor_and_hides_scrolled_rows() {
+        let tables = vec![er_table("a", 12)];
+        let graph = fluxdb_core::ErGraphData {
+            tables: tables.clone(),
+            edges: vec![],
+            relation_status: fluxdb_core::ErLoadStatus::Loaded,
+        };
+        let scene = build_er_scene(&graph, &loaded_layout(&tables, &graph.edges));
+        let views = link_views(&scene);
+        // 左/右端口 y 与 resolve_anchor 的字段行中心一致；x 在卡片左/右缘。
+        let a = resolve_anchor(&scene.nodes[0], &views[0], Some(2), true, 1.0);
+        let (rx, ry) = resolve_field_port(&views, &scene.nodes, "a", "c2", ErPortSide::Right, 1.0)
+            .expect("可见字段行端口应可解析");
+        assert!((rx - a.x).abs() < 1e-3 && (ry - a.y).abs() < 1e-3, "右端口与锚点重合");
+        let (lx, ly) = resolve_field_port(&views, &scene.nodes, "a", "c2", ErPortSide::Left, 1.0)
+            .expect("左端口应可解析");
+        assert!((lx - views[0].x).abs() < 1e-3, "左端口在卡片左缘");
+        assert!((ly - a.y).abs() < 1e-3);
+        // 滚动隐藏行解析不到（不伪造端口）。
+        assert_eq!(
+            resolve_field_port(&views, &scene.nodes, "a", "c11", ErPortSide::Right, 1.0),
+            None
+        );
+        // 缩放 < 折叠阈值：无字段级端口。
+        assert_eq!(
+            resolve_field_port(&views, &scene.nodes, "a", "c2", ErPortSide::Right, ER_COLLAPSE_SCALE / 2.0),
+            None
+        );
     }
 
     #[test]
@@ -360,6 +582,92 @@ mod tests {
         let mut big = ErViewport { pan_x: 0.0, pan_y: 0.0, scale: 1.0 };
         big.zoom_around((0.0, 0.0), 1000.0);
         assert!((big.scale - ER_MAX_SCALE).abs() < 1e-3);
+    }
+
+    /// 复现线上重叠缺陷：`public.*` 被用户拖动固定后，后加入图的 `er_demo.*`
+    /// （新 schema 的表）由自动落位必须避开固定表，而不是照抄布局原点压上去（§6.2/§6.3）。
+    /// 同时验证固定表坐标在这次落位中保持不动。
+    #[test]
+    fn er_auto_place_avoids_pinned_tables_across_schemas() {
+        let mk = |schema: &str, name: &str| {
+            let display = format!("{schema}.{name}");
+            fluxdb_core::ErTableNode {
+                name: display.clone(),
+                reference: fluxdb_core::ErTableRef {
+                    database: "postgres".into(),
+                    schema: Some(schema.into()),
+                    name: name.into(),
+                },
+                comment: None,
+                stable: Some(1),
+                status: ErLoadStatus::Loaded,
+                columns: vec![],
+            }
+        };
+        let tables = vec![
+            mk("er_demo", "customers"),
+            mk("er_demo", "orders"),
+            mk("public", "customers"),
+            mk("public", "orders"),
+        ];
+        let sizes: BTreeMap<String, (f32, f32)> = tables
+            .iter()
+            .map(|t| (t.name.clone(), (NODE_WIDTH, card_height(t.status, t.columns.len()))))
+            .collect();
+        // 用户手拖后的位置（取自真实持久化状态），这些固定表必须原样保留。
+        let mut positions: BTreeMap<String, (f32, f32)> = BTreeMap::new();
+        positions.insert("public.customers".into(), (55.61, 104.32));
+        positions.insert("public.orders".into(), (420.74, 19.89));
+
+        // 只有 er_demo.* 需要落位（缺坐标）。
+        let layout = er_relation_layout(&tables, &[]);
+        let movable: BTreeSet<String> =
+            BTreeSet::from(["er_demo.customers".to_string(), "er_demo.orders".to_string()]);
+        let candidates: ErLayoutResult = layout
+            .iter()
+            .filter(|(n, _)| movable.contains(*n))
+            .map(|(n, &(x, y, c))| (n.clone(), (x, y, c)))
+            .collect();
+        let blockers: Vec<fluxdb_app::ErRect> = positions
+            .iter()
+            .map(|(n, &(x, y))| {
+                let (w, h) = sizes[n];
+                fluxdb_app::ErRect { x, y, w, h }
+            })
+            .collect();
+        let placed = er_place_avoiding_overlaps(
+            &candidates,
+            &sizes,
+            &blockers,
+            fluxdb_app::ER_PLACE_GAP,
+            fluxdb_app::ER_PLACE_MAX_RINGS,
+        );
+
+        // 固定表坐标没有被改动：它们不在返回结果里。
+        assert!(!placed.contains_key("public.customers"));
+        assert!(!placed.contains_key("public.orders"));
+
+        // 全部四张表两两不相交（含固定表）。
+        let mut all: Vec<(String, fluxdb_app::ErRect)> = placed
+            .iter()
+            .map(|(n, &(x, y, _))| {
+                let (w, h) = sizes[n];
+                (n.clone(), fluxdb_app::ErRect { x, y, w, h })
+            })
+            .collect();
+        for (n, &(x, y)) in &positions {
+            let (w, h) = sizes[n];
+            all.push((n.clone(), fluxdb_app::ErRect { x, y, w, h }));
+        }
+        for i in 0..all.len() {
+            for j in i + 1..all.len() {
+                assert!(
+                    !all[i].1.intersects(all[j].1),
+                    "{} 与 {} 重叠: {:?} / {:?}",
+                    all[i].0, all[j].0, all[i].1, all[j].1
+                );
+            }
+        }
     }
 
     #[test]
@@ -459,6 +767,17 @@ mod tests {
             er_rel_columns_side(&rel, fluxdb_core::ErRelationSide::Right),
             vec!["a1".to_string(), "b1".to_string(), "r_dup".to_string()]
         );
+        let mut loaded = er_table("orders", 1);
+        loaded.reference.database = "db".into();
+        loaded.reference.schema = Some("pub".into());
+        let mut pending = er_table("customers", 0);
+        pending.reference.database = "db".into();
+        pending.reference.schema = Some("pub".into());
+        pending.status = fluxdb_core::ErLoadStatus::NotLoaded;
+        assert!(!er_rebind_relation_ready(&rel, &[loaded.clone(), pending.clone()]));
+        pending.status = fluxdb_core::ErLoadStatus::Loaded;
+        assert!(er_rebind_relation_ready(&rel, &[loaded, pending]));
+        assert!(er_rebind_relation_ready(&rel, &[]), "删表应立即判定失联");
     }
 
     #[test]
@@ -472,6 +791,7 @@ mod tests {
                     name: name.into(),
                 },
                 comment: None,
+                stable: None,
                 status,
                 columns: cols
                     .into_iter()
@@ -480,6 +800,7 @@ mod tests {
                         type_name: Some("text".into()),
                         primary_key: false,
                         nullable: false,
+                        stable: None,
                     })
                     .collect(),
             }
@@ -495,6 +816,161 @@ mod tests {
         assert_eq!(dotted.qualified_name, "s.my.table");
         assert_eq!(dotted.columns[0].column_id, "db:s:my.table::id");
         assert!(snap.iter().all(|e| e.stable_id.is_none()), "无稳定标识如实留空");
+    }
+
+    #[test]
+    fn er_rebind_partial_snapshot_preserves_unloaded_columns_and_stable_identity() {
+        let mut old_table = er_table("orders", 2);
+        old_table.stable = Some(42);
+        let old = er_snapshot_entities_from(&[old_table]);
+        let mut renamed = er_table("sales_orders", 0);
+        renamed.stable = Some(42);
+        renamed.status = fluxdb_core::ErLoadStatus::Loading;
+        let mut ready = er_table("customers", 1);
+        ready.stable = Some(43);
+        let merged = er_rebind_merge_snapshot(&old, &[renamed.clone(), ready]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged.iter().find(|e| e.stable_id == Some(42)).unwrap(), &old[0]);
+        renamed.status = fluxdb_core::ErLoadStatus::Loaded;
+        renamed.columns = vec![fluxdb_core::ErColumn {
+            name: "id".into(), type_name: None, primary_key: true, nullable: false,
+            stable: None,
+        }];
+        let merged = er_rebind_merge_snapshot(&old, &[renamed]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].entity_id, "::sales_orders");
+        assert_eq!(merged[0].columns.len(), 1);
+        assert!(er_rebind_merge_snapshot(&old, &[]).is_empty(), "真正删表不沿用旧快照");
+    }
+
+    /// PG 表稳定标识（oid）经快照透传：`er_snapshot_entities_from` 把 ErTableNode.stable
+    /// 写入 ErRebindEntity.stable_id，供「改名但同对象」自动重绑（§5.2 第 1 步）。
+    #[test]
+    fn er_snapshot_entities_carries_table_stable_id() {
+        let mk = |name: &str, stable: Option<u64>| fluxdb_core::ErTableNode {
+            name: name.to_string(),
+            reference: fluxdb_core::ErTableRef {
+                database: "db".into(),
+                schema: Some("public".into()),
+                name: name.into(),
+            },
+            comment: None,
+            stable,
+            status: fluxdb_core::ErLoadStatus::Loaded,
+            columns: vec![fluxdb_core::ErColumn {
+                name: "id".into(),
+                type_name: Some("bigint".into()),
+                primary_key: true,
+                nullable: false,
+                stable: stable.map(|_| 1),
+            }],
+        };
+        let full = vec![mk("orders", Some(1001)), mk("customers", None)];
+        let snap = er_snapshot_entities_from(&full);
+        let orders = snap.iter().find(|e| e.entity_id == "db:public:orders").unwrap();
+        assert_eq!(orders.stable_id, Some(1001), "PG oid 应写入快照稳定标识");
+        assert_eq!(orders.columns[0].stable_id, Some(1), "PG attnum 应写入列稳定标识");
+        let customers = snap.iter().find(|e| e.entity_id == "db:public:customers").unwrap();
+        assert!(customers.stable_id.is_none(), "无稳定标识如实留空");
+    }
+
+    #[test]
+    fn er_custom_group_only_shows_members_and_internal_edges() {
+        let graph = fluxdb_core::ErGraphData {
+            tables: vec![er_table("a", 1), er_table("b", 1), er_table("c", 1)],
+            edges: vec![er_edge("a", "c0", "b", "c0"), er_edge("b", "c0", "c", "c0")],
+            relation_status: fluxdb_core::ErLoadStatus::Loaded,
+        };
+        let members = BTreeSet::from(["a".into(), "b".into()]);
+        let group = er_custom_group_subset_graph(&graph, Some(&members));
+        assert_eq!(group.tables.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!(group.edges.len(), 1);
+        assert_eq!(graph.tables.len(), 3, "切换分组不得改变原关系目录");
+        assert!(er_custom_group_subset_graph(&graph, None).tables.is_empty());
+    }
+
+    /// 刷新后坐标/固定按稳定标识继承「改名但同对象」表，并剔除真删表死键——
+    /// 否则表名变化后画布位置漂移/重叠（Bug 2 回归）。
+    #[test]
+    fn er_rebind_remap_positions_carries_rename_by_stable_and_drops_dead() {
+        // 旧快照：public.orders(oid 1001) 曾有坐标(10,20)且固定；public.gone(oid 55) 有坐标。
+        let old_snap = vec![
+            fluxdb_core::ErRebindEntity {
+                entity_id: "db:public:orders".into(),
+                qualified_name: "public.orders".into(),
+                stable_id: Some(1001),
+                columns: vec![],
+            },
+            fluxdb_core::ErRebindEntity {
+                entity_id: "db:public:gone".into(),
+                qualified_name: "public.gone".into(),
+                stable_id: Some(55),
+                columns: vec![],
+            },
+        ];
+        let mk = |name: &str, stable: Option<u64>| fluxdb_core::ErTableNode {
+            name: name.to_string(),
+            reference: fluxdb_core::ErTableRef {
+                database: "db".into(),
+                schema: Some("public".into()),
+                name: name.into(),
+            },
+            comment: None,
+            stable,
+            status: fluxdb_core::ErLoadStatus::Loaded,
+            columns: vec![],
+        };
+        // 新图：orders 改名 sales_orders（oid 1001 不变）；gone 已删；新增 fresh(oid 77)。
+        let new_tables = vec![
+            mk("public.sales_orders", Some(1001)),
+            mk("public.fresh", Some(77)),
+        ];
+        let mut old_positions = std::collections::BTreeMap::new();
+        old_positions.insert("public.orders".to_string(), (10.0, 20.0));
+        old_positions.insert("public.gone".to_string(), (500.0, 500.0));
+        let mut old_pinned = std::collections::BTreeSet::new();
+        old_pinned.insert("public.orders".to_string());
+
+        let (new_pos, new_pin) = er_rebind_remap_positions_pure(&old_snap, &new_tables, &old_positions, &old_pinned);
+        // 改名同对象：坐标/固定平移到新名（不漂移、不重叠回退）。
+        assert_eq!(new_pos.get("public.sales_orders"), Some(&(10.0, 20.0)), "改名表应继承坐标");
+        assert!(new_pin.contains("public.sales_orders"), "改名表应继承固定");
+        // 真删表：死键剔除。
+        assert!(!new_pos.contains_key("public.gone"), "真删表坐标应剔除");
+        // 新表 fresh 无旧坐标：不含（由布局回退），不误设。
+        assert!(!new_pos.contains_key("public.fresh"));
+        // 旧名键不再残留。
+        assert!(!new_pos.contains_key("public.orders"));
+    }
+
+    /// 无稳定标识（MySQL/SQLite）改名的坐标不搬（靠名字匹配不上 → 死键剔除，不猜）。
+    #[test]
+    fn er_rebind_remap_positions_no_stable_rename_is_dropped() {
+        let old_snap = vec![fluxdb_core::ErRebindEntity {
+            entity_id: "db:orders".into(),
+            qualified_name: "orders".into(),
+            stable_id: None,
+            columns: vec![],
+        }];
+        let mk = |name: &str| fluxdb_core::ErTableNode {
+            name: name.to_string(),
+            reference: fluxdb_core::ErTableRef {
+                database: "db".into(),
+                schema: None,
+                name: name.into(),
+            },
+            comment: None,
+            stable: None,
+            status: fluxdb_core::ErLoadStatus::Loaded,
+            columns: vec![],
+        };
+        let new_tables = vec![mk("sales_orders")];
+        let mut old_positions = std::collections::BTreeMap::new();
+        old_positions.insert("orders".to_string(), (10.0, 20.0));
+        let old_pinned = std::collections::BTreeSet::new();
+        let (new_pos, _) = er_rebind_remap_positions_pure(&old_snap, &new_tables, &old_positions, &old_pinned);
+        assert!(!new_pos.contains_key("orders"), "无稳定标识改名不应搬坐标");
+        assert!(!new_pos.contains_key("sales_orders"), "不应凭空猜新名");
     }
 
     #[test]
@@ -600,6 +1076,7 @@ mod tests {
                 name: name.to_string(),
             },
             comment: None,
+            stable: None,
             status: fluxdb_core::ErLoadStatus::Loaded,
             columns: Vec::new(),
         };
@@ -4161,6 +4638,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             },
             rows: None,
             comment: None,
+            stable: None,
             modified_at: None,
         });
 
@@ -4212,6 +4690,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                     },
                     rows: None,
                     comment: None,
+                    stable: None,
                     modified_at: None,
                 },
                 ObjectSummary {
@@ -4224,6 +4703,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                     },
                     rows: None,
                     comment: None,
+                    stable: None,
                     modified_at: None,
                 },
             ],
@@ -4835,6 +5315,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
             },
             rows: None,
             comment: None,
+            stable: None,
             modified_at: None,
         };
         let connection = ConnectionState {
@@ -4917,6 +5398,127 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         assert!(empty.columns.is_empty());
     }
 
+    // —— 打开 ER 默认展示区域：首次自动适配居中（用户复现：打开时只见局部、图偏左上）——
+
+    /// `fit_viewport_to_bbox` 必须把整个 bbox 放进画布可见区（含边距），且 bbox 中心对齐画布中心。
+    #[test]
+    fn er_fit_viewport_contains_whole_bbox_centered() {
+        // 用真实 er_demo 布局范围：x=[64,1588] y=[64,534]（六表）。
+        let (min_x, min_y, max_x, max_y) = (64.0f32, 64.0f32, 1588.0f32, 534.0f32);
+        let (cw, ch) = (1200.0f32, 620.0f32);
+        let vp = fit_viewport_to_bbox(min_x, min_y, max_x, max_y, cw, ch);
+        let (wx0, wy0, wx1, wy1) = vp.visible_world_bounds(cw, ch);
+        // 可见区必须完整覆盖 bbox（不是只覆盖左上角）。
+        assert!(wx0 <= min_x && wx1 >= max_x, "可见区未覆盖整图宽：[{wx0},{wx1}] vs [{min_x},{max_x}]");
+        assert!(wy0 <= min_y && wy1 >= max_y, "可见区未覆盖整图高：[{wy0},{wy1}] vs [{min_y},{max_y}]");
+        // bbox 中心应落在画布中心（平移量 = 中心对齐）。
+        let world_cx = (min_x + max_x) / 2.0;
+        let world_cy = (min_y + max_y) / 2.0;
+        let screen_cx = vp.pan_x + world_cx * vp.scale;
+        let screen_cy = vp.pan_y + world_cy * vp.scale;
+        assert!((screen_cx - cw / 2.0).abs() < 0.5, "世界中心未对齐画布中心 x：{screen_cx} vs {}", cw / 2.0);
+        assert!((screen_cy - ch / 2.0).abs() < 0.5, "世界中心未对齐画布中心 y：{screen_cy} vs {}", ch / 2.0);
+    }
+
+    /// 首页不能把 pan 清零：自由坐标可能在视口之外（截图中会只剩卡片底边）。
+    #[test]
+    fn er_home_restores_readable_view_for_offset_layout() {
+        let (min_x, min_y, max_x, max_y) = (-320.0, -500.0, 1320.0, 420.0);
+        let (cw, ch) = (1200.0, 620.0);
+        let vp = fit_viewport_to_bbox_with_floor(
+            min_x, min_y, max_x, max_y, cw, ch, ER_COLLAPSE_SCALE,
+        );
+        let center_x = (min_x + max_x) * 0.5 * vp.scale + vp.pan_x;
+        let center_y = (min_y + max_y) * 0.5 * vp.scale + vp.pan_y;
+        assert!((center_x - cw * 0.5).abs() < 0.5);
+        assert!((center_y - ch * 0.5).abs() < 0.5);
+        assert!(vp.pan_y > 0.0, "负世界坐标不能用零平移充当起点");
+        assert!(vp.scale >= ER_COLLAPSE_SCALE);
+    }
+
+    /// 小图不放大（scale 上限 1.0）；超大图不缩到不可用（下限 ER_MIN_SCALE）。
+    #[test]
+    fn er_fit_viewport_scale_bounds() {
+        // 小图：适配后应保持 1.0（不放大）。
+        let small = fit_viewport_to_bbox(0.0, 0.0, 100.0, 80.0, 1200.0, 620.0);
+        assert!((small.scale - 1.0).abs() < 1e-6, "小图不应放大：{}", small.scale);
+        // 超大图：缩放受 ER_MIN_SCALE 下限保护。
+        let huge = fit_viewport_to_bbox(0.0, 0.0, 100_000.0, 100_000.0, 1200.0, 620.0);
+        assert!(huge.scale >= ER_MIN_SCALE - 1e-6, "缩放突破下限：{}", huge.scale);
+    }
+
+    /// 首次打开的可读性下限：大库（千表级）自动适配不得缩到 ER_COLLAPSE_SCALE 之下，
+    /// 否则成排卡片互相覆盖不可读；小库适配缩放 ≥ 下限时行为不变（保持完整居中）。
+    #[test]
+    fn er_first_show_fit_floors_scale_to_legible() {
+        let (cw, ch) = (1200.0f32, 620.0f32);
+        // 大库：宽高各 10 万世界单位的包围盒（模拟 1844 表稀疏布局的极端 bbox）。
+        let big = fit_viewport_to_bbox_with_floor(0.0, 0.0, 100_000.0, 100_000.0, cw, ch, ER_COLLAPSE_SCALE);
+        // 缩放被抬到可读下限，而不是任由其跌到 ER_MIN_SCALE(15%)。
+        assert!(
+            (big.scale - ER_COLLAPSE_SCALE).abs() < 1e-6,
+            "大库首次打开缩放应压到可读下限 {}，实际 {}",
+            ER_COLLAPSE_SCALE,
+            big.scale
+        );
+        // 首次打开缩放必须显著高于不可用的 ER_MIN_SCALE。
+        assert!(
+            big.scale > ER_MIN_SCALE * 1.5,
+            "首次打开缩放仍接近不可用下限：{}",
+            big.scale
+        );
+        // 图中心仍对齐画布中心（居中语义不变）。
+        let screen_cx = big.pan_x + 50_000.0 * big.scale;
+        assert!((screen_cx - cw / 2.0).abs() < 0.5, "大库首次打开未居中 x：{screen_cx}");
+        // 大库整图不能塞进一屏（bbox 远大于可视区）→ 可控读区展示中心，非全缩不可读。
+        assert!(
+            big.pan_x + 100_000.0 * big.scale > cw * 10.0,
+            "大库首次打开不应把整图挤进一屏"
+        );
+
+        // 小库：适配缩放 ≥ 下限 → 首次打开完整居中，行为与大库区分、不被下限破坏。
+        let small = fit_viewport_to_bbox_with_floor(0.0, 0.0, 100.0, 80.0, cw, ch, ER_COLLAPSE_SCALE);
+        assert!((small.scale - 1.0).abs() < 1e-6, "小库首次打开不应被下限影响：{}", small.scale);
+        // 显式「适配」仍可全缩（工具栏显式触发，允许到 ER_MIN_SCALE），与首次打开策略分开。
+        let explicit = fit_viewport_to_bbox(0.0, 0.0, 100_000.0, 100_000.0, cw, ch);
+        assert!((explicit.scale - ER_MIN_SCALE).abs() < 1e-6, "显式适配应可全缩到下限：{}", explicit.scale);
+    }
+
+    /// 用户已交互过 / 布局未落定时，首次自动适配不应改视口（尊重手动视口与临时排列）。
+    #[test]
+    fn er_fit_once_respects_interaction_and_pending_layout() {
+        let tables = vec![er_table("a", 3), er_table("b", 3)];
+        let edges = vec![er_edge("a", "c1", "b", "c1")];
+        let graph = fluxdb_core::ErGraphData {
+            tables: tables.clone(),
+            edges: edges.clone(),
+            relation_status: fluxdb_core::ErLoadStatus::Loaded,
+        };
+        let scene = build_er_scene(&graph, &loaded_layout(&tables, &edges));
+        let mut positions = BTreeMap::new();
+        for t in &tables {
+            if let Some(&(x, y, _)) = er_relation_layout(&tables, &edges).get(&t.name) {
+                positions.insert(t.name.clone(), (x, y));
+            }
+        }
+        // 直接用纯函数模拟：落定 + 已交互 → 不覆盖既有视口。
+        let custom = ErViewport { pan_x: -123.0, pan_y: -45.0, scale: 0.77 };
+        let bbox = {
+            let mut min_x = f32::INFINITY; let mut min_y = f32::INFINITY;
+            let mut max_x = f32::NEG_INFINITY; let mut max_y = f32::NEG_INFINITY;
+            for m in &scene.nodes {
+                let (x, y) = positions[&m.name];
+                let h = card_height(m.status, m.columns.len());
+                min_x = min_x.min(x); min_y = min_y.min(y);
+                max_x = max_x.max(x + NODE_WIDTH); max_y = max_y.max(y + h);
+            }
+            (min_x, min_y, max_x, max_y)
+        };
+        let fitted = fit_viewport_to_bbox(bbox.0, bbox.1, bbox.2, bbox.3, 900.0, 500.0);
+        // 纯函数本身总是产出居中视口；是否应用由调用方的 er_fit_done/er_user_interacted 守卫决定。
+        assert!(fitted.scale != custom.scale || fitted.pan_x != custom.pan_x);
+    }
+
     // —— 关系画布默认布局与连线路由正确性（用户实际复现：默认重叠 + 线路穿卡）——
 
     /// 默认布局（er_relation_layout → build_er_scene → materialize）全套校验：
@@ -4976,6 +5578,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let mut customers = er_table("customers", 4);
         customers.columns[0] = fluxdb_core::ErColumn {
             name: "id".into(), type_name: Some("bigint".into()), primary_key: true, nullable: false,
+            stable: None,
         };
         let orders = er_table("orders", 8); // 含 refer 字段（自关联）
         let order_items = er_table("order_items", 6);
@@ -5019,6 +5622,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let mut customers = er_table("customers", 4);
         customers.columns[0] = fluxdb_core::ErColumn {
             name: "id".into(), type_name: Some("bigint".into()), primary_key: true, nullable: false,
+            stable: None,
         };
         let orders = er_table("orders", 8);
         let order_items = er_table("order_items", 6);
@@ -5155,6 +5759,7 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
         let mut customers = er_table("customers", 4);
         customers.columns[0] = fluxdb_core::ErColumn {
             name: "id".into(), type_name: Some("bigint".into()), primary_key: true, nullable: false,
+            stable: None,
         };
         let orders = er_table("orders", 8);
         let order_items = er_table("order_items", 6);
@@ -5393,3 +5998,13 @@ fn postgres_form_validation_uses_profile_rules() {
         "启用 SSH 但缺主机应被拒绝"
     );
 }
+
+// —— ER 导出对话框（er/toolbar.rs）导出格式→后缀映射纯逻辑 ——
+
+    #[test]
+    fn er_export_kind_extensions() {
+        assert_eq!(ErExportKind::Json.extension(), "json");
+        assert_eq!(ErExportKind::Dbml.extension(), "dbml");
+        assert_eq!(ErExportKind::Mermaid.extension(), "mmd");
+        assert_eq!(ErExportKind::Svg.extension(), "svg");
+    }

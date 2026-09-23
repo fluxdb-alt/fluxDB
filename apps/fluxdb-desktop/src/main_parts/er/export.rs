@@ -8,7 +8,7 @@
 // schema_version 校验，undo D1-D9 确认后才谈逻辑关系导入。有损项明确标注。
 
 /// 导出的 JSON schema 版本（升级时递增，导入按此兼容）。
-pub const ER_EXPORT_SCHEMA_VERSION: u32 = 1;
+pub const ER_EXPORT_SCHEMA_VERSION: u32 = 2;
 
 /// Mermaid erDiagram 导出：实体（列）+ 关系。
 /// ```
@@ -93,6 +93,7 @@ pub fn er_export_json(
     positions: &std::collections::BTreeMap<String, (f32, f32)>,
     pinned: &std::collections::BTreeSet<String>,
     connection_label: &str,
+    connection_id: u64,
     database: &str,
 ) -> String {
     let tables_json: Vec<String> = graph
@@ -139,10 +140,11 @@ pub fn er_export_json(
         })
         .collect();
     format!(
-        "{{\"format\":\"fluxdb-er\",\"schema_version\":{},\"exported_at\":{},\"connection\":{},\"database\":{},\"tables\":[{}],\"edges\":[{}]}}",
+        "{{\"format\":\"fluxdb-er\",\"schema_version\":{},\"exported_at\":{},\"connection\":{},\"connection_id\":{},\"database\":{},\"tables\":[{}],\"edges\":[{}]}}",
         ER_EXPORT_SCHEMA_VERSION,
         json_str(&er_now_utc()),
         json_str(connection_label),
+        connection_id,
         json_str(database),
         tables_json.join(","),
         edges_json.join(","),
@@ -345,6 +347,8 @@ pub struct ErImportReport {
     pub pinned: std::collections::BTreeSet<String>,
     /// 导入文件声明的 database（连接绑定校验用）。
     pub database: String,
+    /// v2 连接身份；旧版无此字段只可预览，不能应用到另一个连接。
+    pub connection_id: Option<u64>,
     /// 差异预览（相对当前图）：新增表、缺失表、未解析边（两端/列不在图内）。
     pub added_tables: Vec<String>,
     pub missing_tables: Vec<String>,
@@ -361,6 +365,9 @@ pub fn er_import_parse(
     current_graph: &fluxdb_core::ErGraphData,
     _current_database: &str,
 ) -> Result<ErImportReport, String> {
+    if json.len() > 16 * 1024 * 1024 {
+        return Err("ER JSON 超过 16 MiB 上限".into());
+    }
     let value: serde_json::Value =
         serde_json::from_str(json).map_err(|e| format!("JSON 解析失败：{e}"))?;
     let fmt = value
@@ -375,6 +382,10 @@ pub fn er_import_parse(
         return Err(format!(
             "不支持的 schema_version={version}（当前支持 ≤{ER_EXPORT_SCHEMA_VERSION}）"
         ));
+    }
+    let connection_id = value.get("connection_id").and_then(|v| v.as_u64());
+    if version >= 2 && connection_id.is_none() {
+        return Err("ER JSON 缺少连接身份，不能安全应用".into());
     }
     let database = value
         .get("database")
@@ -403,10 +414,13 @@ pub fn er_import_parse(
                         },
                         primary_key: c.get("pk").and_then(|v| v.as_bool()).unwrap_or(false),
                         nullable: c.get("nullable").and_then(|v| v.as_bool()).unwrap_or(false),
+                        stable: None,
                     });
                 }
             }
-            tables.insert(name.to_string(), cols);
+            if tables.insert(name.to_string(), cols).is_some() {
+                return Err(format!("ER JSON 包含重复表名：{name}"));
+            }
         }
     }
     // 解析边，并校验两端表/列引用存在（缺失记入 unresolved_edges，不静默丢弃）。
@@ -435,8 +449,12 @@ pub fn er_import_parse(
     if let Some(arr) = value.get("tables").and_then(|v| v.as_array()) {
         for t in arr {
             let Some(name) = t.get("name").and_then(|v| v.as_str()) else { continue; };
-            let x = t.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-            let y = t.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let x = t.get("x").and_then(|v| v.as_f64()).ok_or_else(|| format!("表 {name} 缺少有效 x 坐标"))?;
+            let y = t.get("y").and_then(|v| v.as_f64()).ok_or_else(|| format!("表 {name} 缺少有效 y 坐标"))?;
+            if !x.is_finite() || !y.is_finite() || x.abs() > 1e9 || y.abs() > 1e9 {
+                return Err(format!("表 {name} 坐标超出可用范围"));
+            }
+            let (x, y) = (x as f32, y as f32);
             positions.insert(name.to_string(), (x, y));
             if t.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false) {
                 pinned.insert(name.to_string());
@@ -456,6 +474,7 @@ pub fn er_import_parse(
         positions,
         pinned,
         database,
+        connection_id,
         added_tables,
         missing_tables,
         unresolved_edges,
@@ -466,6 +485,32 @@ pub fn er_import_parse(
 /// 不自动重绑另一连接。
 pub fn er_import_database_matches(report: &ErImportReport, current_database: &str) -> bool {
     report.database.is_empty() || report.database == current_database
+}
+
+/// 应用导入布局必须双重校验连接与库；旧版无身份只能预览，不能按名称猜接。
+pub fn er_import_scope_matches(report: &ErImportReport, connection_id: u64, database: &str) -> bool {
+    report.connection_id == Some(connection_id) && report.database == database
+}
+
+
+/// 导入仅改变当前图中同名表的位置/固定，未匹配的表与关系保持原状。
+pub fn er_import_layout_merge(
+    report: &ErImportReport,
+    graph: &fluxdb_core::ErGraphData,
+    current_positions: &std::collections::BTreeMap<String, (f32, f32)>,
+    current_pinned: &std::collections::BTreeSet<String>,
+) -> (std::collections::BTreeMap<String, (f32, f32)>, std::collections::BTreeSet<String>, usize) {
+    let mut positions = current_positions.clone();
+    let mut pinned = current_pinned.clone();
+    let mut count = 0;
+    for table in &graph.tables {
+        let Some(&position) = report.positions.get(&table.name) else { continue; };
+        positions.insert(table.name.clone(), position);
+        if report.pinned.contains(&table.name) { pinned.insert(table.name.clone()); }
+        else { pinned.remove(&table.name); }
+        count += 1;
+    }
+    (positions, pinned, count)
 }
 
 #[cfg(test)]
@@ -481,6 +526,7 @@ mod export_tests {
                 name: name.to_string(),
             },
             comment: None,
+            stable: None,
             status: fluxdb_core::ErLoadStatus::Loaded,
             columns: cols
                 .iter()
@@ -489,6 +535,7 @@ mod export_tests {
                     type_name: Some("bigint".to_string()),
                     primary_key: *pk,
                     nullable: *nullable,
+                    stable: None,
                 })
                 .collect(),
         };
@@ -534,8 +581,8 @@ mod export_tests {
             ("orders".to_string(), (300.0, 10.0)),
         ]);
         let pinned = std::collections::BTreeSet::from(["orders".to_string()]);
-        let s = er_export_json(&mk_graph(), &pos, &pinned, "conn", "db");
-        assert!(s.contains("\"schema_version\":1"));
+        let s = er_export_json(&mk_graph(), &pos, &pinned, "conn", 7, "db");
+        assert!(s.contains("\"schema_version\":2"));
         assert!(s.contains("\"pinned\":true"));
         // 每列独立对象，不把 PK/类型拼进列名。
         assert!(s.contains("\"columns\":[{\"name\":\"id\""));
@@ -561,7 +608,7 @@ mod export_tests {
             ("orders".to_string(), (300.0, 10.0)),
         ]);
         let pinned = std::collections::BTreeSet::from(["orders".to_string()]);
-        let s = er_export_json(&mk_graph(), &pos, &pinned, "conn", "db");
+        let s = er_export_json(&mk_graph(), &pos, &pinned, "conn", 7, "db");
         // 导入到空图（无当前结构），应完整还原表/列/边/坐标/固定，无未解析边。
         let empty = fluxdb_core::ErGraphData {
             tables: Vec::new(),
@@ -571,6 +618,9 @@ mod export_tests {
         let report = er_import_parse(&s, &empty, "db").expect("round-trip 可解析");
         assert_eq!(report.database, "db");
         assert!(er_import_database_matches(&report, "db"));
+        assert!(er_import_scope_matches(&report, 7, "db"));
+        assert!(!er_import_scope_matches(&report, 8, "db"));
+        assert!(!er_import_scope_matches(&report, 7, "other"));
         assert!(report.tables.contains_key("customers"));
         assert!(report.tables.contains_key("orders"));
         assert_eq!(report.tables["orders"].len(), 2);
@@ -580,6 +630,25 @@ mod export_tests {
         // 坐标/固定还原。
         assert_eq!(report.positions.get("orders"), Some(&(300.0_f32, 10.0_f32)));
         assert!(report.pinned.contains("orders"));
+    }
+
+    #[test]
+    fn apply_import_layout_only_updates_current_tables() {
+        let graph = mk_graph();
+        let exported = er_export_json(&graph, &std::collections::BTreeMap::from([
+            ("orders".into(), (400.0, 20.0)), ("ghost".into(), (1.0, 2.0)),
+        ]), &std::collections::BTreeSet::new(), "c", 7, "db");
+        let report = er_import_parse(&exported, &graph, "db").unwrap();
+        let existing = std::collections::BTreeMap::from([
+            ("orders".into(), (10.0, 10.0)), ("customers".into(), (50.0, 50.0)),
+        ]);
+        let pins = std::collections::BTreeSet::from(["orders".into(), "customers".into()]);
+        let (positions, pinned, count) = er_import_layout_merge(&report, &graph, &existing, &pins);
+        assert_eq!(count, 2);
+        assert_eq!(positions["orders"], (400.0, 20.0));
+        assert_eq!(positions["customers"], (0.0, 0.0));
+        assert!(!positions.contains_key("ghost"));
+        assert!(pinned.is_empty());
     }
 
     #[test]
@@ -600,6 +669,17 @@ mod export_tests {
         assert!(report.edges.is_empty());
         assert_eq!(report.unresolved_edges.len(), 1);
         assert!(report.unresolved_edges[0].contains("ghost_col"));
+        assert!(!er_import_scope_matches(&report, 7, "db"), "旧版仅预览，不按连接名猜接");
+    }
+
+    #[test]
+    fn import_rejects_duplicate_tables_invalid_coordinates_and_oversize() {
+        let graph = mk_graph();
+        let json = r#"{"format":"fluxdb-er","schema_version":2,"connection_id":7,"database":"db","tables":[{"name":"t","x":0,"y":0},{"name":"t","x":1,"y":1}]}"#;
+        assert!(er_import_parse(json, &graph, "db").unwrap_err().contains("重复"));
+        let json = r#"{"format":"fluxdb-er","schema_version":2,"connection_id":7,"database":"db","tables":[{"name":"t","x":1e100,"y":0}]}"#;
+        assert!(er_import_parse(json, &graph, "db").unwrap_err().contains("坐标"));
+        assert!(er_import_parse(&"x".repeat(16 * 1024 * 1024 + 1), &graph, "db").is_err());
     }
 
     #[test]

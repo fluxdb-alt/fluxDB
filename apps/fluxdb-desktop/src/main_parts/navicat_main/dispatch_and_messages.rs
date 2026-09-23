@@ -842,33 +842,50 @@ impl NavicatMain {
                 self.er_relation_tasks.remove(tab_id);
                 self.er_pending_columns.remove(tab_id);
                 self.er_column_debounce_tasks.remove(tab_id);
-                self.er_node_scroll_px
+                self.er_canvas.borrow_mut().er_node_scroll_px
                     .retain(|(task_tab_id, _), _| *task_tab_id != *tab_id);
-                self.er_selected_table.remove(tab_id);
-                if self
+                self.er_canvas.borrow_mut().er_selected_table.remove(tab_id);
+                let clear_er_scroll_drag = self
+                    .er_canvas
+                    .borrow()
                     .er_scroll_drag
                     .as_ref()
-                    .is_some_and(|(drag_tab, _)| *drag_tab == *tab_id)
+                    .is_some_and(|(drag_tab, _)| *drag_tab == *tab_id);
+                if clear_er_scroll_drag {
+                    self.er_canvas.borrow_mut().er_scroll_drag = None;
+                }
+                if self.er_canvas.borrow().er_node_drag.as_ref().is_some_and(|(drag_tab, ..)| *drag_tab == *tab_id) {
+                    self.er_canvas.borrow_mut().er_node_drag = None;
+                }
+                // 字段手动连线拖拽/悬停/本帧节点缓存均为 tab 级状态，随 tab 关闭回收。
+                if self
+                    .er_canvas
+                    .borrow()
+                    .er_link_drag
+                    .as_ref()
+                    .is_some_and(|d| d.tab == *tab_id)
                 {
-                    self.er_scroll_drag = None;
+                    self.er_canvas.borrow_mut().er_link_drag = None;
                 }
-                if self.er_node_drag.as_ref().is_some_and(|(drag_tab, ..)| *drag_tab == *tab_id) {
-                    self.er_node_drag = None;
-                }
-                self.er_scene_positions.remove(tab_id);
-                self.er_pinned.remove(tab_id);
+                self.er_canvas.borrow_mut().er_row_hover.remove(tab_id);
+                self.er_canvas.borrow_mut().er_port_hover.remove(tab_id);
+                self.er_canvas.borrow_mut().er_frame_nodes.remove(tab_id);
+                self.er_canvas.borrow_mut().er_scene_positions.remove(tab_id);
+                self.er_canvas.borrow_mut().er_pinned.remove(tab_id);
                 self.er_user_interacted.remove(tab_id);
                 self.er_layout_applied.remove(tab_id);
-                self.er_frame_edges.remove(tab_id);
+                self.er_auto_placed.remove(tab_id);
+                self.er_fit_done.remove(tab_id);
+                self.er_canvas.borrow_mut().er_frame_edges.remove(tab_id);
                 self.er_depths.remove(tab_id);
                 self.er_expanded.remove(tab_id);
-                self.er_viewports.remove(tab_id);
+                self.er_canvas.borrow_mut().er_viewports.remove(tab_id);
                 self.er_scenes.remove(tab_id);
-                self.er_canvas_sizes.remove(tab_id);
-                self.er_canvas_origins.remove(tab_id);
+                self.er_canvas.borrow_mut().er_canvas_sizes.remove(tab_id);
+                self.er_canvas.borrow_mut().er_canvas_origins.remove(tab_id);
                 self.er_all_edges.remove(tab_id);
                 self.er_center_refs.remove(tab_id);
-                self.er_field_highlights.remove(tab_id);
+                self.er_canvas.borrow_mut().er_field_highlights.remove(tab_id);
                 self.er_last_updated.remove(tab_id);
                 self.er_refreshing.remove(tab_id);
                 self.er_search_input.remove(tab_id);
@@ -876,11 +893,18 @@ impl NavicatMain {
                 self.er_search_query.remove(tab_id);
                 self.er_search_sel.remove(tab_id);
                 self.er_group.remove(tab_id);
+                self.er_custom_groups.remove(tab_id);
+                self.er_group_inputs.remove(tab_id);
                 self.er_group_built.remove(tab_id);
-                self.er_minimap_rect.remove(tab_id);
+                self.er_canvas.borrow_mut().er_minimap_rect.remove(tab_id);
                 self.er_export_open.remove(tab_id);
+                self.er_export_sel.remove(tab_id);
+                self.er_export_focus.remove(tab_id);
                 self.er_last_import.remove(tab_id);
                 self.er_view_restored.remove(tab_id);
+                self.er_view_save_failed.remove(tab_id);
+                self.er_previous_layout.remove(tab_id);
+                self.er_generation.remove(tab_id);
                 self.er_scope_keys.remove(tab_id);
                 self.er_relationship_scope_keys.remove(tab_id);
                 self.er_relationships.remove(tab_id);
@@ -888,6 +912,7 @@ impl NavicatMain {
                 self.er_relationship_tasks.remove(tab_id);
                 self.er_relationship_errors.remove(tab_id);
                 self.er_relationship_panel_open.remove(tab_id);
+                self.er_relationship_panel_focus.remove(tab_id);
                 self.er_relationship_form_open.remove(tab_id);
                 self.er_relationship_form_editing.remove(tab_id);
                 self.er_relationship_form_role_inputs.remove(tab_id);
@@ -901,6 +926,9 @@ impl NavicatMain {
                 self.er_relationship_panel_width.remove(tab_id);
                 self.er_relationship_panel_selected.remove(tab_id);
                 self.er_rebind_pending.remove(tab_id);
+                self.er_rebind_auto.remove(tab_id);
+                self.er_rebind_tasks.remove(tab_id);
+                self.er_rebuild_review_tasks.remove(tab_id);
                 if self
                     .er_relationship_panel_resize_start
                     .as_ref()
@@ -910,12 +938,15 @@ impl NavicatMain {
                     self.er_relationship_panel_resize_start = None;
                 }
                 self.er_relationship_delete_pending.remove(tab_id);
-                if self
+                self.er_relationship_delete_undo.remove(tab_id);
+                let clear_er_viewport_drag = self
+                    .er_canvas
+                    .borrow()
                     .er_viewport_drag
                     .as_ref()
-                    .is_some_and(|(drag_tab, _, _, _, _)| *drag_tab == *tab_id)
-                {
-                    self.er_viewport_drag = None;
+                    .is_some_and(|(drag_tab, _, _, _, _)| *drag_tab == *tab_id);
+                if clear_er_viewport_drag {
+                    self.er_canvas.borrow_mut().er_viewport_drag = None;
                 }
                 // Redis Key 列表展示模式 / 展开态 / 叶子选中 / hover 均为 tab 级状态，随 tab 关闭回收。
                 self.redis_key_list_modes.remove(tab_id);

@@ -224,6 +224,7 @@ mod table_info_tests {
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         }
     }
 

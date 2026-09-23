@@ -8,6 +8,10 @@
 // 同一 (连接修订, database, schema[, table]) 的进行中请求用 inflight 集合去重，
 // 避免重复 DB 往返。
 
+/// 共享缓存的完成态上限；在飞项不驱逐，完成后按最近使用顺序淘汰。
+const ER_COLUMN_CACHE_LIMIT: usize = 4096;
+const ER_RELATION_CACHE_LIMIT: usize = 64;
+
 /// 连接修订：每处理一次连接变更（connect / UpdateConnection / 删除）对该 ConnectionId
 /// 自增。缓存键带修订，旧连接结果天然失效，不误用同 ConnectionId 的旧图。
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -42,12 +46,16 @@ pub struct ErCatalogCache {
     relations: BTreeMap<ErRelationKey, Vec<ErForeignKeyEdge>>,
     relation_status: BTreeMap<ErRelationKey, ErLoadStatus>,
     relations_inflight: BTreeSet<ErRelationKey>,
+    relation_generations: BTreeMap<ErRelationKey, u64>,
     /// 字段缓存：表键 -> 已读取列（身份按原始规则保存，不统一转小写）。
     columns: BTreeMap<ErColumnKey, Vec<ErColumn>>,
     column_status: BTreeMap<ErColumnKey, ErLoadStatus>,
     columns_inflight: BTreeSet<ErColumnKey>,
     /// 进行中字段加载的取消旗标：key -> 该次在飞读取的取消信号（关闭/停止时置位）。
     columns_cancel: BTreeMap<ErColumnKey, ErCancelFlag>,
+    access_clock: u64,
+    column_access: BTreeMap<ErColumnKey, u64>,
+    relation_access: BTreeMap<ErRelationKey, u64>,
 }
 
 impl Default for ErCatalogCache {
@@ -57,10 +65,14 @@ impl Default for ErCatalogCache {
             relations: BTreeMap::new(),
             relation_status: BTreeMap::new(),
             relations_inflight: BTreeSet::new(),
+            relation_generations: BTreeMap::new(),
             columns: BTreeMap::new(),
             column_status: BTreeMap::new(),
             columns_inflight: BTreeSet::new(),
             columns_cancel: BTreeMap::new(),
+            access_clock: 0,
+            column_access: BTreeMap::new(),
+            relation_access: BTreeMap::new(),
         }
     }
 }
@@ -87,10 +99,13 @@ impl ErCatalogCache {
         self.relations.retain(|k, _| k.connection_id != connection_id);
         self.relation_status.retain(|k, _| k.connection_id != connection_id);
         self.relations_inflight.retain(|k| k.connection_id != connection_id);
+        self.relation_generations.retain(|k, _| k.connection_id != connection_id);
         self.columns.retain(|k, _| k.connection_id != connection_id);
         self.column_status.retain(|k, _| k.connection_id != connection_id);
         self.columns_inflight.retain(|k| k.connection_id != connection_id);
         self.columns_cancel.retain(|k, _| k.connection_id != connection_id);
+        self.column_access.retain(|k, _| k.connection_id != connection_id);
+        self.relation_access.retain(|k, _| k.connection_id != connection_id);
     }
 
     /// 仅保留该连接的“当前修订”缓存（修订自增即旧修订键作废并清理）。
@@ -101,6 +116,7 @@ impl ErCatalogCache {
             .retain(|k, _| k.connection_id != connection_id || k.conn_rev == keep.0);
         self.relations_inflight
             .retain(|k| k.connection_id != connection_id || k.conn_rev == keep.0);
+        self.relation_generations.retain(|k, _| k.connection_id != connection_id || k.conn_rev == keep.0);
         self.columns
             .retain(|k, _| k.connection_id != connection_id || k.conn_rev == keep.0);
         self.column_status
@@ -109,6 +125,40 @@ impl ErCatalogCache {
             .retain(|k| k.connection_id != connection_id || k.conn_rev == keep.0);
         self.columns_cancel
             .retain(|k, _| k.connection_id != connection_id || k.conn_rev == keep.0);
+        self.column_access.retain(|k, _| k.connection_id != connection_id || k.conn_rev == keep.0);
+        self.relation_access.retain(|k, _| k.connection_id != connection_id || k.conn_rev == keep.0);
+    }
+
+    fn touch_column(&mut self, key: &ErColumnKey) {
+        self.access_clock = self.access_clock.wrapping_add(1);
+        self.column_access.insert(key.clone(), self.access_clock);
+    }
+
+    fn touch_relation(&mut self, key: &ErRelationKey) {
+        self.access_clock = self.access_clock.wrapping_add(1);
+        self.relation_access.insert(key.clone(), self.access_clock);
+    }
+
+    fn prune_completed(&mut self, column_limit: usize, relation_limit: usize) {
+        while self.column_status.len() > column_limit {
+            let oldest = self.column_status.keys()
+                .filter(|key| !self.columns_inflight.contains(*key))
+                .min_by_key(|key| self.column_access.get(*key).copied().unwrap_or(0)).cloned();
+            let Some(key) = oldest else { break; };
+            self.column_status.remove(&key);
+            self.columns.remove(&key);
+            self.column_access.remove(&key);
+        }
+        while self.relation_status.len() > relation_limit {
+            let oldest = self.relation_status.keys()
+                .filter(|key| !self.relations_inflight.contains(*key))
+                .min_by_key(|key| self.relation_access.get(*key).copied().unwrap_or(0)).cloned();
+            let Some(key) = oldest else { break; };
+            self.relation_status.remove(&key);
+            self.relations.remove(&key);
+            self.relation_access.remove(&key);
+            self.relation_generations.remove(&key);
+        }
     }
 
     fn relation_key(&self, database: &str, schema: Option<&str>, connection_id: ConnectionId) -> ErRelationKey {
@@ -232,8 +282,11 @@ impl AppController {
             let key = guard.column_key(t, config.id);
             guard.columns.remove(&key);
             guard.column_status.remove(&key);
+            guard.column_access.remove(&key);
             guard.columns_inflight.remove(&key);
-            guard.columns_cancel.remove(&key);
+            if let Some(flag) = guard.columns_cancel.remove(&key) {
+                flag.store(true, Ordering::Relaxed);
+            }
         }
     }
 
@@ -302,6 +355,9 @@ impl AppController {
         guard.relations.remove(&key);
         guard.relation_status.remove(&key);
         guard.relations_inflight.remove(&key);
+        guard.relation_access.remove(&key);
+        let epoch = guard.relation_generations.entry(key).or_default();
+        *epoch = epoch.wrapping_add(1);
     }
 
     /// 关系索引重试：作废 Failed 的关系缓存后再真正重新读取整范围边。
@@ -328,17 +384,16 @@ pub fn er_relations_core(
 ) -> fluxdb_core::Result<ErRelationSnapshot> {
     // 单次加锁内完成「命中缓存判定 + 登记 inflight」，杜绝检查与登记分开加锁时
     // 两个并发调用都判定为可加载、各自读取数据库的竞争窗口。
-    let key = {
+    let (key, request_generation) = {
         let mut guard = cache.lock().unwrap();
         let key = guard.relation_key(database, schema, config.id);
         // 已缓存且 Loaded / Failed：直接复用（Failed 保留，避免每帧重试震铃；由用户刷新决定）。
-        if let Some(status) = guard.relation_status.get(&key) {
+        if let Some(status) = guard.relation_status.get(&key).copied() {
             match status {
                 ErLoadStatus::Loaded | ErLoadStatus::Failed => {
-                    return Ok(ErRelationSnapshot {
-                        edges: guard.relations.get(&key).cloned().unwrap_or_default(),
-                        status: *status,
-                    });
+                    let edges = guard.relations.get(&key).cloned().unwrap_or_default();
+                    guard.touch_relation(&key);
+                    return Ok(ErRelationSnapshot { edges, status });
                 }
                 _ => {}
             }
@@ -353,16 +408,22 @@ pub fn er_relations_core(
         // 本调用成为加载者：标记 inflight（与检查同锁，原子判定），锁外执行 DB 读取。
         guard.relations_inflight.insert(key.clone());
         guard.relation_status.insert(key.clone(), ErLoadStatus::Loading);
-        key
+        let generation = guard.relation_generations.get(&key).copied().unwrap_or(0);
+        (key, generation)
     };
     // 锁外做网络/DB 读取。
     let result = load_er_relations_from_db_with_connector(connector, config, Some(database), schema);
     let mut guard = cache.lock().unwrap();
+    if guard.relation_generations.get(&key).copied().unwrap_or(0) != request_generation {
+        return Ok(ErRelationSnapshot { edges: Vec::new(), status: ErLoadStatus::NotLoaded });
+    }
     guard.relations_inflight.remove(&key);
     match result {
         Ok(edges) if guard.revision(config.id) == key.conn_rev => {
             guard.relations.insert(key.clone(), edges.clone());
-            guard.relation_status.insert(key, ErLoadStatus::Loaded);
+            guard.relation_status.insert(key.clone(), ErLoadStatus::Loaded);
+            guard.touch_relation(&key);
+            guard.prune_completed(ER_COLUMN_CACHE_LIMIT, ER_RELATION_CACHE_LIMIT);
             Ok(ErRelationSnapshot {
                 edges,
                 status: ErLoadStatus::Loaded,
@@ -373,7 +434,9 @@ pub fn er_relations_core(
             status: ErLoadStatus::NotLoaded,
         }), // 修订已变：结果过期，丢弃。
         Err(_) => {
-            guard.relation_status.insert(key, ErLoadStatus::Failed);
+            guard.relation_status.insert(key.clone(), ErLoadStatus::Failed);
+            guard.touch_relation(&key);
+            guard.prune_completed(ER_COLUMN_CACHE_LIMIT, ER_RELATION_CACHE_LIMIT);
             Ok(ErRelationSnapshot {
                 edges: Vec::new(),
                 status: ErLoadStatus::Failed,
@@ -418,6 +481,7 @@ fn read_columns_by_schema(
                 type_name: col.type_name,
                 primary_key: col.primary_key,
                 nullable: col.nullable,
+                stable: col.stable,
             });
         }
         out.extend(by_ref);
@@ -446,15 +510,14 @@ pub fn er_columns_core(
         let mut guard = cache.lock().unwrap();
         for t in tables {
             let key = guard.column_key(t, config.id);
-            match guard.column_status.get(&key) {
+            match guard.column_status.get(&key).copied() {
                 Some(ErLoadStatus::Loaded) => {
-                    cached.push((
-                        t.display(),
-                        guard.columns.get(&key).cloned().unwrap_or_default(),
-                        ErLoadStatus::Loaded,
-                    ));
+                    let cols = guard.columns.get(&key).cloned().unwrap_or_default();
+                    guard.touch_column(&key);
+                    cached.push((t.display(), cols, ErLoadStatus::Loaded));
                 }
                 Some(ErLoadStatus::Failed) => {
+                    guard.touch_column(&key);
                     cached.push((t.display(), Vec::new(), ErLoadStatus::Failed));
                 }
                 Some(ErLoadStatus::NotLoaded) | Some(ErLoadStatus::Loading) | None
@@ -503,14 +566,13 @@ pub fn er_columns_core(
                     .collect();
                 let mut guard = cache.lock().unwrap();
                 let rev_now = guard.revision(config.id);
-                for k in &missing {
+                for (k, request_flag) in missing.iter().zip(&missing_cancel) {
+                    let current = guard.columns_cancel.get(k)
+                        .is_some_and(|flag| Arc::ptr_eq(flag, request_flag));
+                    if !current { continue; } // 刷新后同 key 的新请求不能被旧批次覆盖或移除。
                     guard.columns_inflight.remove(k);
-                    let cancelled = guard
-                        .columns_cancel
-                        .get(&k)
-                        .map(|c| c.load(Ordering::Relaxed))
-                        .unwrap_or(false);
-                    guard.columns_cancel.remove(&k);
+                    let cancelled = request_flag.load(Ordering::Relaxed);
+                    guard.columns_cancel.remove(k);
                     // 被取消：丢弃该表结果并清状态（调用方将保持未读，其后重新请求）。
                     // 修订变化：丢弃该批结果（旧连接不可复用）。
                     if cancelled || rev_now != rev_at_start || rev_now != k.conn_rev {
@@ -521,26 +583,28 @@ pub fn er_columns_core(
                     if let Some(cols) = by_display.remove(&display) {
                         guard.columns.insert(k.clone(), cols.clone());
                         guard.column_status.insert(k.clone(), ErLoadStatus::Loaded);
+                        guard.touch_column(k);
                         result.push((display, cols, ErLoadStatus::Loaded));
                     } else {
                         // 没有该表列：视为该表无字段（空 ≠ 未读），标记 Loaded。
                         guard.columns.insert(k.clone(), Vec::new());
                         guard.column_status.insert(k.clone(), ErLoadStatus::Loaded);
+                        guard.touch_column(k);
                         result.push((display, Vec::new(), ErLoadStatus::Loaded));
                     }
                 }
+                guard.prune_completed(ER_COLUMN_CACHE_LIMIT, ER_RELATION_CACHE_LIMIT);
             }
             Err(_) => {
                 let mut guard = cache.lock().unwrap();
                 let rev_now = guard.revision(config.id);
-                for k in &missing {
+                for (k, request_flag) in missing.iter().zip(&missing_cancel) {
+                    let current = guard.columns_cancel.get(k)
+                        .is_some_and(|flag| Arc::ptr_eq(flag, request_flag));
+                    if !current { continue; }
                     guard.columns_inflight.remove(k);
-                    let cancelled = guard
-                        .columns_cancel
-                        .get(&k)
-                        .map(|c| c.load(Ordering::Relaxed))
-                        .unwrap_or(false);
-                    guard.columns_cancel.remove(&k);
+                    let cancelled = request_flag.load(Ordering::Relaxed);
+                    guard.columns_cancel.remove(k);
                     if cancelled {
                         // 被取消：不标记 Failed，保留未读供后续重试。
                         guard.column_status.remove(&k);
@@ -551,8 +615,10 @@ pub fn er_columns_core(
                         continue;
                     }
                     guard.column_status.insert(k.clone(), ErLoadStatus::Failed);
+                    guard.touch_column(k);
                     result.push((k.reference.display(), Vec::new(), ErLoadStatus::Failed));
                 }
+                guard.prune_completed(ER_COLUMN_CACHE_LIMIT, ER_RELATION_CACHE_LIMIT);
             }
         }
         Ok(ErColumnBatch { tables: result })

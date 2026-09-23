@@ -146,6 +146,43 @@ mod er_rebind_tests {
     }
 
     #[test]
+    fn table_rename_same_object_auto_rebinds_entity_and_columns() {
+        // 表改名但对象未变（PG oid 不变）：稳定标识命中 → 实体自动重绑到新名，
+        // 列名未变 → 逐列按名重绑到新命名空间，全部 resolved 不 unresolved。
+        let old = ent("db:public:orders", "public.orders", Some(100), &[("id", None), ("customer_id", None)]);
+        // 新快照：表改名 orders → sales_orders，稳定标识仍是 100，列名不变。
+        let new = vec![ent(
+            "db:public:sales_orders",
+            "public.sales_orders",
+            Some(100),
+            &[("id", None), ("customer_id", None)],
+        )];
+        let out = rebind_entity(
+            &old,
+            &["db:public:orders-id".to_string(), "db:public:orders-customer_id".to_string()],
+            &new,
+        );
+        assert!(!out.entity_unresolved);
+        assert!(!out.entity_needs_review, "同对象改名不应需人工确认");
+        assert_eq!(out.matched_entity, Some("db:public:sales_orders".into()));
+        assert_eq!(out.columns.len(), 2);
+        assert_eq!(out.columns[0].new_column_id, Some("db:public:sales_orders-id".into()));
+        assert!(!out.columns[0].unresolved);
+        assert_eq!(out.columns[1].new_column_id, Some("db:public:sales_orders-customer_id".into()));
+    }
+
+    #[test]
+    fn no_stable_id_rename_is_unresolved_not_auto_bound() {
+        // 无稳定标识（MySQL/SQLite）表改名：旧名不在新快照 → entity_unresolved，
+        // 绝不按相似/位置自动接去别的表。
+        let old = ent("db:main:orders", "orders", None, &[("id", None)]);
+        let new = vec![ent("db:main:sales_orders", "sales_orders", None, &[("id", None)])];
+        let out = rebind_entity(&old, &["db:main:orders-id".to_string()], &new);
+        assert!(out.entity_unresolved, "无稳定标识改名应 unresolved，不自动绑");
+        assert_eq!(out.matched_entity, None);
+    }
+
+    #[test]
     fn stable_id_matches_directly() {
         let old = ent("old", "public.orders", Some(100), &[("tenant_id", Some(11))]);
         let new = vec![ent("new", "public.orders", Some(100), &[("tenant_id", Some(11))])];

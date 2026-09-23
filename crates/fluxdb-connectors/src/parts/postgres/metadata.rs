@@ -128,6 +128,7 @@ fn pg_list_schemas(
                 rows: None,
                 modified_at: None,
                 comment: None,
+                stable: None,
             });
         }
         Ok(objects)
@@ -138,6 +139,9 @@ fn pg_list_schemas(
 ///
 /// relkind 映射：`r`普通表/`f`外部表 → Table；`p`分区表 → Table；
 /// `v`视图/`m`物化视图 → View（模型无物化/分区专属 kind，统一归入 Table/View 树形仍可区分）。
+///
+/// 可见性：只返回当前账号有权访问的关系（属主，或持有表级/列级任一权限），
+/// 与 information_schema 口径一致——无权访问的表不进入对象树与 ER 目录，避免泄露结构。
 fn pg_list_relations(
     config: &ConnectionConfig,
     path: &ObjectPath,
@@ -154,10 +158,14 @@ fn pg_list_relations(
             .client
             .query(
                 "SELECT c.relname, c.relkind::text, c.reltuples::bigint, \
+                        c.oid::bigint AS oid, \
                         pg_catalog.obj_description(c.oid, 'pg_class') AS comment \
                  FROM pg_catalog.pg_class c \
                  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
                  WHERE n.nspname = $1 AND c.relkind IN ('r','p','f','v','m') \
+                   AND (pg_catalog.pg_has_role(c.relowner, 'USAGE') \
+                        OR pg_catalog.has_table_privilege(c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') \
+                        OR pg_catalog.has_any_column_privilege(c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')) \
                  ORDER BY c.relname",
                 &[&schema_name],
             )
@@ -168,7 +176,8 @@ fn pg_list_relations(
             let name: String = row.get(0);
             let relkind: String = row.get(1);
             let reltuples: i64 = row.get(2);
-            let comment: Option<String> = row.get(3);
+            let oid: i64 = row.get(3);
+            let comment: Option<String> = row.get(4);
             let kind = if matches!(relkind.as_str(), "v" | "m") {
                 ObjectKind::View
             } else {
@@ -186,6 +195,8 @@ fn pg_list_relations(
                 rows: (reltuples >= 0).then_some(reltuples as u64),
                 modified_at: None,
                 comment: comment.filter(|comment| !comment.trim().is_empty()),
+                // 表/视图稳定对象标识（PG pg_class.oid）：改名但同对象重绑的依据。
+                stable: Some(oid as u64),
             });
         }
         Ok(objects)

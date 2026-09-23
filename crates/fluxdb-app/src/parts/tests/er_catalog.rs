@@ -69,6 +69,7 @@ impl Connector for RecordingConnector {
                 rows: None,
                 modified_at: None,
                 comment: None,
+                stable: None,
             })
             .collect())
     }
@@ -97,6 +98,7 @@ impl Connector for RecordingConnector {
                 nullable: false,
                 primary_key: primary,
                 comment: None,
+                stable: None,
             })
             .collect())
     }
@@ -174,6 +176,168 @@ fn fake_config(kind: DatabaseKind) -> ConnectionConfig {
         mysql_profile: None,
         postgres_profile: None,
     }
+}
+
+#[test]
+fn er_catalog_cache_evicts_least_recent_completed_without_touching_inflight() {
+    let mut cache = ErCatalogCache::default();
+    let mk = |name: &str| cache.column_key(&mk_ref("db", None, name), ConnectionId(7));
+    let a = mk("a");
+    let b = mk("b");
+    let c = mk("c");
+    for key in [&a, &b, &c] {
+        cache.columns.insert(key.clone(), Vec::new());
+        cache.column_status.insert(key.clone(), ErLoadStatus::Loaded);
+        cache.touch_column(key);
+    }
+    cache.touch_column(&a);
+    cache.columns_inflight.insert(b.clone());
+    cache.prune_completed(2, 2);
+    assert!(!cache.columns.contains_key(&c), "最旧的非在飞项应淘汰");
+    assert!(cache.columns.contains_key(&a));
+    assert!(cache.columns.contains_key(&b));
+    assert_eq!(cache.column_status.len(), 2);
+
+    let rel = |schema: &str| cache.relation_key("db", Some(schema), ConnectionId(7));
+    let r1 = rel("first");
+    let r2 = rel("second");
+    for key in [&r1, &r2] {
+        cache.relations.insert(key.clone(), Vec::new());
+        cache.relation_status.insert(key.clone(), ErLoadStatus::Loaded);
+        cache.touch_relation(key);
+    }
+    cache.touch_relation(&r1);
+    cache.prune_completed(2, 1);
+    assert!(cache.relations.contains_key(&r1));
+    assert!(!cache.relations.contains_key(&r2));
+}
+
+/// 第一轮读取停在连接器内，刷新后新轮先完成，用于证明旧结果不会覆盖新缓存。
+struct ErInvalidateRaceConnector {
+    calls: std::sync::atomic::AtomicUsize,
+    entered: std::sync::atomic::AtomicBool,
+    release: (std::sync::Mutex<bool>, std::sync::Condvar),
+    block_relation: bool,
+}
+
+impl ErInvalidateRaceConnector {
+    fn new(block_relation: bool) -> Self {
+        Self {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            entered: std::sync::atomic::AtomicBool::new(false),
+            release: (std::sync::Mutex::new(false), std::sync::Condvar::new()),
+            block_relation,
+        }
+    }
+    fn wait_first(&self) {
+        for _ in 0..2000 {
+            if self.entered.load(std::sync::atomic::Ordering::SeqCst) { return; }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("第一轮读取未进入连接器");
+    }
+    fn unblock(&self) {
+        *self.release.0.lock().unwrap() = true;
+        self.release.1.notify_all();
+    }
+    fn read(&self) -> usize {
+        let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if n == 0 {
+            self.entered.store(true, std::sync::atomic::Ordering::SeqCst);
+            let guard = self.release.0.lock().unwrap();
+            drop(self.release.1.wait_while(guard, |open| !*open).unwrap());
+        }
+        n
+    }
+}
+
+impl Connector for ErInvalidateRaceConnector {
+    fn kind(&self) -> DatabaseKind { DatabaseKind::Sqlite }
+    fn test_connection(&self, _: &ConnectionConfig) -> fluxdb_core::Result<()> { Ok(()) }
+    fn list_objects(&self, _: Option<&ObjectPath>) -> fluxdb_core::Result<Vec<ObjectSummary>> {
+        if self.block_relation { self.read(); }
+        Ok(vec![ObjectSummary {
+            path: ObjectPath { connection_id: ConnectionId(7), database: Some("db".into()),
+                schema: None, name: "orders".into(), kind: ObjectKind::Table },
+            rows: None, modified_at: None, comment: None, stable: None,
+        }])
+    }
+    fn list_foreign_keys_for_tables(&self, _: Option<&str>, _: Option<&str>, _: &[String])
+        -> fluxdb_core::Result<Vec<(String, ForeignKeyInfo)>> { Ok(Vec::new()) }
+    fn list_completion_columns(&self, _: Option<&str>, _: Option<&str>, table: &str)
+        -> fluxdb_core::Result<Vec<CompletionColumn>> {
+        let n = if self.block_relation { 0 } else { self.read() };
+        Ok(vec![CompletionColumn {
+            database: Some("db".into()), schema: None, table: table.into(),
+            name: if n == 0 { "old" } else { "new" }.into(),
+            type_name: Some("text".into()), primary_key: false,
+            nullable: true, comment: None,
+            stable: None,
+        }])
+    }
+    fn load_data(&self, _: &ObjectPath, _: u64, _: u64, _: &[SortSpec], _: &[FilterSpec])
+        -> fluxdb_core::Result<DataPage> {
+        Ok(DataPage { columns: Vec::new(), rows: Vec::new(), offset: 0, limit: 0, has_more: false })
+    }
+    fn apply_changes(&self, _: &DataChangeSet) -> fluxdb_core::Result<AppliedChangeOutcome> {
+        Err(Error::new(ErrorKind::Unsupported, "fake"))
+    }
+    fn execute(&self, _: &QueryRequest) -> fluxdb_core::Result<QueryExecutionResult> {
+        Err(Error::new(ErrorKind::Unsupported, "fake"))
+    }
+
+}
+
+#[test]
+fn invalidated_column_batch_cannot_override_new_request() {
+    let connector = std::sync::Arc::new(ErInvalidateRaceConnector::new(false));
+    let cache = std::sync::Arc::new(Mutex::new(ErCatalogCache::default()));
+    let config = fake_config(DatabaseKind::Sqlite);
+    let table = mk_ref("db", None, "orders");
+    let old = {
+        let (cache, connector, config, table) = (cache.clone(), connector.clone(), config.clone(), table.clone());
+        std::thread::spawn(move || er_columns_core(&cache, &config, &[table], connector.as_ref()).unwrap())
+    };
+    connector.wait_first();
+    {
+        let mut guard = cache.lock().unwrap();
+        let key = guard.column_key(&table, config.id);
+        guard.columns.remove(&key);
+        guard.column_status.remove(&key);
+        guard.columns_inflight.remove(&key);
+        if let Some(flag) = guard.columns_cancel.remove(&key) { flag.store(true, std::sync::atomic::Ordering::SeqCst); }
+    }
+    let new = er_columns_core(&cache, &config, &[table.clone()], connector.as_ref()).unwrap();
+    assert_eq!(new.tables[0].1[0].name, "new");
+    connector.unblock();
+    let stale = old.join().unwrap();
+    assert!(!stale.tables.iter().any(|(_, cols, _)| cols.iter().any(|c| c.name == "old")));
+    let key = cache.lock().unwrap().column_key(&table, config.id);
+    assert_eq!(cache.lock().unwrap().columns[&key][0].name, "new");
+}
+
+#[test]
+fn invalidated_relation_batch_cannot_override_new_request() {
+    let connector = std::sync::Arc::new(ErInvalidateRaceConnector::new(true));
+    let cache = std::sync::Arc::new(Mutex::new(ErCatalogCache::default()));
+    let config = fake_config(DatabaseKind::Sqlite);
+    let old = {
+        let (cache, connector, config) = (cache.clone(), connector.clone(), config.clone());
+        std::thread::spawn(move || er_relations_core(&cache, &config, "db", None, connector.as_ref()).unwrap())
+    };
+    connector.wait_first();
+    {
+        let mut guard = cache.lock().unwrap();
+        let key = guard.relation_key("db", None, config.id);
+        guard.relations_inflight.remove(&key);
+        guard.relation_status.remove(&key);
+        *guard.relation_generations.entry(key).or_default() += 1;
+    }
+    assert_eq!(er_relations_core(&cache, &config, "db", None, connector.as_ref()).unwrap().status, ErLoadStatus::Loaded);
+    connector.unblock();
+    assert_eq!(old.join().unwrap().status, ErLoadStatus::NotLoaded);
+    let key = cache.lock().unwrap().relation_key("db", None, config.id);
+    assert_eq!(cache.lock().unwrap().relation_status[&key], ErLoadStatus::Loaded);
 }
 
 // 2) 首屏只加载请求的表字段：不向连接器请求未请求表。
@@ -343,8 +507,11 @@ fn column_retry_requeries_connector() {
 // 6c) 关系重试确实重新调用 Connector。
 #[test]
 fn relation_retry_requeries_connector() {
+    // 两端都须在目录中：关系组装只保留「两端可见」的边（不可见端的边被剔除），
+    // 故 fixture 需同时提供 a/b 两张表，避免边被一致性过滤掉而误判重试失败。
     let mut cols = BTreeMap::new();
     cols.insert("a".to_string(), vec![("id".to_string(), true)]);
+    cols.insert("b".to_string(), vec![("id".to_string(), true)]);
     let (mut conn, _, objects) = RecordingConnector::new(
         DatabaseKind::Sqlite,
         cols,
@@ -537,6 +704,7 @@ impl Connector for ThreadSafeRelConnector {
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         }])
     }
     fn list_foreign_keys_for_tables(
@@ -669,4 +837,28 @@ fn dotted_pg_table_name_keyed_by_structured_identity() {
     let b2 = er_columns_core(&cache, &config, &[dotted], &conn).unwrap();
     assert_eq!(reads.borrow().len(), 1, "含点表名二次请求命中缓存");
     assert_eq!(b2.tables[0].1[0].name, "id");
+}
+
+// 可见性一致性：外键指向「无权访问（不在可见目录）的表」时，该边必须被剔除——
+// 既不上画布，也不经导出/计数泄露被隐藏的表名。目录侧按权限过滤由 PG 元数据层负责，
+// 这里验证关系组装层的兜底一致性（不可见端 → 丢边）。
+#[test]
+fn relations_drop_edges_with_invisible_endpoint() {
+    // 目录只有 orders 可见；外键 orders → secret（secret 无权访问，不在目录里）。
+    let cols = BTreeMap::from([("orders".to_string(), vec![("id".to_string(), true)])]);
+    let (conn, _, _) = RecordingConnector::new(
+        DatabaseKind::Sqlite,
+        cols,
+        vec![("orders".to_string(), "secret".to_string())],
+    );
+    let cache = Mutex::new(ErCatalogCache::default());
+    let config = fake_config(DatabaseKind::Sqlite);
+
+    let snap = er_relations_core(&cache, &config, "db", None, &conn).unwrap();
+    assert_eq!(snap.status, ErLoadStatus::Loaded);
+    assert!(
+        snap.edges.is_empty(),
+        "被引用端不可见时不得保留悬空边（否则泄露隐藏表名）：{:?}",
+        snap.edges
+    );
 }

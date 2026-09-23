@@ -70,6 +70,8 @@ pub fn load_er_tables_in_background(
             name,
             reference,
             comment: summary.comment.clone(),
+            // PG 表稳定对象标识（pg_class.oid）；其余方言无公开稳定号 → None。
+            stable: summary.stable,
             // 字段尚未读取：空列表不代表「没有字段」。
             status: ErLoadStatus::NotLoaded,
             columns: Vec::new(),
@@ -109,6 +111,9 @@ pub fn load_er_relations_from_db_with(
     // 需要逐表读取外键的方言（PG）要有表路径/表名；先枚举一次以对齐节点名。
     let mut table_paths: Vec<ObjectPath> = Vec::new();
     let mut table_names: Vec<String> = Vec::new();
+    // 当前账号有权访问（可见）的表身份集合：目录已按权限过滤，这里回填同一口径，
+    // 用于剔除外键指向「无权访问的表」的悬空边，避免经 ER 导出/计数泄露被隐藏的表名。
+    let mut visible_refs: BTreeSet<ErTableRef> = BTreeSet::new();
     if config.kind == DatabaseKind::Postgres {
         let root = ObjectPath {
             connection_id: config.id,
@@ -131,6 +136,11 @@ pub fn load_er_relations_from_db_with(
                 if matches!(summary.path.kind, ObjectKind::Table) {
                     table_paths.push(summary.path.clone());
                     table_names.push(summary.path.name.clone());
+                    visible_refs.insert(ErTableRef {
+                        database: database.clone(),
+                        schema: summary.path.schema.clone(),
+                        name: summary.path.name.clone(),
+                    });
                 }
             }
         }
@@ -145,6 +155,11 @@ pub fn load_er_relations_from_db_with(
         for summary in connector.list_objects(Some(&root))? {
             if matches!(summary.path.kind, ObjectKind::Table) {
                 table_names.push(summary.path.name.clone());
+                visible_refs.insert(ErTableRef {
+                    database: database.clone(),
+                    schema: schema.map(str::to_string),
+                    name: summary.path.name.clone(),
+                });
             }
         }
     }
@@ -216,6 +231,11 @@ pub fn load_er_relations_from_db_with(
             });
         }
     }
+    // 一致性：只保留两端都在「可见表目录」内的边。被引用端若无权访问（例如 PG 中本表
+    // 外键指向当前账号不可见的表），该边既不参与画布也应从导出/计数中剔除，避免泄露隐藏表名。
+    edges.retain(|e| {
+        visible_refs.contains(&e.from_reference) && visible_refs.contains(&e.to_reference)
+    });
     edges.sort_by(|a, b| {
         (&a.from_reference, &a.from_column, &a.to_reference, &a.to_column)
             .cmp(&(&b.from_reference, &b.from_column, &b.to_reference, &b.to_column))
@@ -303,6 +323,7 @@ fn load_er_columns_for_tables_from_db(
             type_name: col.type_name,
             primary_key: col.primary_key,
             nullable: col.nullable,
+            stable: col.stable,
         });
     }
     Ok(by_display)

@@ -228,6 +228,40 @@ impl ErModelService {
         })
     }
 
+    /// 同对象改名/列重命名的机械重绑：一个事务内更新身份和确认修订。
+    /// 只允许端点与列身份变化，角色、谓词、基数、来源和审核状态等语义字段必须原样。
+    pub fn rebind_identity(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        mut replacement: ErRelationship,
+    ) -> Result<ErRelationship, ErModelError> {
+        self.update_inner(id, expected_revision, |current| {
+            if replacement.id != current.id
+                || replacement.role != current.role
+                || replacement.match_cardinality != current.match_cardinality
+                || replacement.origin != current.origin
+                || replacement.enforcement != current.enforcement
+                || replacement.validity != current.validity
+                || replacement.description != current.description
+                || replacement.evidence_refs != current.evidence_refs
+                || replacement.column_pairs.len() != current.column_pairs.len()
+                || replacement.required_filters.len() != current.required_filters.len()
+                || replacement.required_filters.iter().zip(&current.required_filters)
+                    .any(|(new, old)| new.side != old.side || new.op != old.op || new.literal != old.literal)
+            {
+                return Err(ErModelError::InvalidDefinition("自动重绑不得更改关系语义".into()));
+            }
+            replacement.revision = current.revision;
+            replacement.review = current.review.clone();
+            *current = replacement;
+            if current.review.state == ErReviewState::Confirmed {
+                current.review.confirmed_revision = Some(current.revision + 1);
+            }
+            Ok(())
+        })
+    }
+
     /// 人工确认（§6.3）：标记 confirmed 并记录当前 revision。
     pub fn confirm(
         &self,
@@ -236,6 +270,11 @@ impl ErModelService {
         by: &str,
     ) -> Result<ErRelationship, ErModelError> {
         self.update_inner(id, expected_revision, |r| {
+            if r.validity.state != fluxdb_core::ErValidityState::Current {
+                return Err(ErModelError::InvalidDefinition(
+                    "关系结构尚未解析，请修复端点与字段后再确认".into(),
+                ));
+            }
             r.review = ErRelationshipReview {
                 state: ErReviewState::Confirmed,
                 confirmed_revision: Some(r.revision + 1),
@@ -403,14 +442,15 @@ pub fn er_snapshot_from_tables(tables: &[fluxdb_core::ErTableNode]) -> Vec<fluxd
         .map(|t| fluxdb_core::ErRebindEntity {
             entity_id: er_snapshot_entity_id(&t.reference),
             qualified_name: t.reference.display(),
-            stable_id: None,
+            // PG 表稳定对象标识（pg_class.oid）；无公开稳定号时为 None（走限定名重绑）。
+            stable_id: t.stable,
             columns: t
                 .columns
                 .iter()
                 .map(|c| fluxdb_core::ErRebindColumn {
                     column_id: er_snapshot_column_id(&t.reference, &c.name),
                     name: c.name.clone(),
-                    stable_id: None,
+                    stable_id: c.stable,
                 })
                 .collect(),
         })
@@ -645,6 +685,56 @@ mod er_model_service_tests {
     }
 
     #[test]
+    fn identity_rebind_preserves_confirmation_atomically_and_rejects_semantic_edits() {
+        let svc = ErModelService::new("s", Box::new(MemStore::default()));
+        svc.create(base_rel()).unwrap();
+        let confirmed = svc.confirm("r1", 1, "alice").unwrap();
+        let mut renamed = confirmed.clone();
+        renamed.left_entity = "orders_renamed".into();
+        renamed.column_pairs[0].left_column = "orders_renamed-customer_id".into();
+        let rebound = svc.rebind_identity("r1", confirmed.revision, renamed).unwrap();
+        assert_eq!(rebound.revision, confirmed.revision + 1);
+        assert_eq!(rebound.review.state, ErReviewState::Confirmed);
+        assert_eq!(rebound.review.confirmed_revision, Some(rebound.revision));
+        assert_eq!(rebound.review.confirmed_by.as_deref(), Some("alice"));
+        assert_eq!(svc.list().unwrap()[0], rebound, "确认与身份重绑须一次写回");
+
+        let mut changed_semantics = rebound.clone();
+        changed_semantics.role = "different".into();
+        assert!(matches!(
+            svc.rebind_identity("r1", rebound.revision, changed_semantics),
+            Err(ErModelError::InvalidDefinition(_))
+        ));
+        assert_eq!(svc.list().unwrap()[0], rebound);
+    }
+
+    #[test]
+    fn missing_column_invalidation_is_persisted_and_not_a_join_candidate() {
+        let svc = ErModelService::new("s", Box::new(MemStore::default()));
+        svc.create(base_rel()).unwrap();
+        svc.confirm("r1", 1, "alice").unwrap();
+        let invalidated = svc.update("r1", 2, |rel| {
+            rel.validity.state = fluxdb_core::ErValidityState::Unresolved;
+            rel.validity.reason = Some("字段已不存在".into());
+            Ok(())
+        }).unwrap();
+        assert_eq!(invalidated.review.state, ErReviewState::Proposed);
+        assert_eq!(invalidated.validity.state, fluxdb_core::ErValidityState::Unresolved);
+        assert_eq!(svc.list().unwrap()[0], invalidated);
+        let ctx = ErUsageContext {
+            left_entity_present: true,
+            right_entity_present: true,
+            pairs_resolvable: false,
+            filters_resolvable: true,
+            coverage_incomplete: false,
+        };
+        assert!(!svc.usage("r1", &ctx).unwrap().join_candidate);
+        assert!(matches!(svc.confirm("r1", invalidated.revision, "alice"),
+            Err(ErModelError::InvalidDefinition(_))));
+        assert_eq!(svc.list().unwrap()[0], invalidated, "拒绝确认不得修改原关系");
+    }
+
+    #[test]
     fn join_plans_only_candidate_and_keeps_composite() {
         let svc = ErModelService::new("s", Box::new(MemStore::default()));
         let mut rel = base_rel();
@@ -815,6 +905,22 @@ mod er_model_service_tests {
     }
 
     #[test]
+    fn deleted_relationship_can_be_restored_only_as_unconfirmed() {
+        let svc = ErModelService::new("s", Box::new(MemStore::default()));
+        svc.create(base_rel()).unwrap();
+        let confirmed = svc.confirm("r1", 1, "alice").unwrap();
+        svc.delete("r1", confirmed.revision).unwrap();
+        let mut restored = confirmed;
+        restored.review.state = ErReviewState::Proposed;
+        restored.review.confirmed_revision = None;
+        restored.review.confirmed_by = None;
+        svc.create(restored).unwrap();
+        let row = &svc.list().unwrap()[0];
+        assert_eq!(row.review.state, ErReviewState::Proposed);
+        assert!(row.review.confirmed_revision.is_none());
+    }
+
+    #[test]
     fn delete_not_found_and_revision_conflict() {
         let store = MemStore::new();
         let svc = ErModelService::new("s", Box::new(store));
@@ -884,6 +990,7 @@ mod er_model_service_tests {
                 name: reference.display(),
                 reference,
                 comment: None,
+                stable: None,
                 status,
                 columns: cols
                     .into_iter()
@@ -892,6 +999,7 @@ mod er_model_service_tests {
                         type_name: Some("text".into()),
                         primary_key: pk,
                         nullable: false,
+                        stable: None,
                     })
                     .collect(),
             }

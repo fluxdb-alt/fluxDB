@@ -1288,6 +1288,8 @@ pub enum AppCommand {
     LoadErRelationships { scope_key: String },
     CreateErRelationship { scope_key: String, relationship: ErRelationship },
     UpdateErRelationship { scope_key: String, relationship: ErRelationship, expected_revision: u64 },
+    /// 仅结构身份机械重绑，服务层原子保留原确认；普通编辑仍走 Update 并失效确认。
+    RebindErRelationship { scope_key: String, relationship: ErRelationship, expected_revision: u64 },
     ConfirmErRelationship { scope_key: String, id: String, expected_revision: u64, by: String },
     RejectErRelationship { scope_key: String, id: String, expected_revision: u64 },
     DeleteErRelationship { scope_key: String, id: String, expected_revision: u64 },

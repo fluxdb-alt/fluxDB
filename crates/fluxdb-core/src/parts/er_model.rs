@@ -68,6 +68,9 @@ pub struct ErTableNode {
     /// 结构化身份：跨 schema 同名、含点标识符据此唯一匹配，不用字符串拆解。
     pub reference: ErTableRef,
     pub comment: Option<String>,
+    /// 数据库稳定对象标识（PG `pg_class.oid`）：改名但同对象可据此在结构刷新重绑中
+    /// 自动接回关系；MySQL/SQLite 无公开稳定号 → `None`（不伪造）。
+    pub stable: Option<u64>,
     /// 该表字段（列）加载状态；字段是否为空据此理解，不能当作「未读」。
     pub status: ErLoadStatus,
     pub columns: Vec<ErColumn>,
@@ -80,6 +83,8 @@ pub struct ErColumn {
     pub type_name: Option<String>,
     pub primary_key: bool,
     pub nullable: bool,
+    /// 列级稳定标识：PG attnum，仅在所属表稳定身份不变时用于自动重绑。
+    pub stable: Option<u64>,
 }
 
 /// 外键连线：已解析到两端表列引用，desktop 据此直接画线。

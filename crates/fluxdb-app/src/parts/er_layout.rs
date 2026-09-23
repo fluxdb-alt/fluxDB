@@ -309,6 +309,187 @@ fn tarjan_scc(
     sccs
 }
 
+// ---------------------------------------------------------------------------
+// 占用感知落位（er-ui-relationship-canvas.md §6.2/§6.3）
+//
+// `er_relation_layout` 只能看到“本次参与布局的表”，对画布上已有的坐标一无所知。
+// 于是新增表（例如新加 schema 的表）会照抄布局原点，直接压在用户已固定的表之上。
+// 本节的纯函数把“已占矩形”当作障碍，给出不重叠的落位结果，供 desktop 调用。
+// ---------------------------------------------------------------------------
+
+/// 相邻卡片（组）之间要求保留的最小通道间距。
+pub const ER_PLACE_GAP: f32 = 40.0;
+/// 螺旋搜索的最大环数：每环向外扩一个卡片步长，超出后走下方追加带。
+pub const ER_PLACE_MAX_RINGS: i32 = 32;
+
+/// 世界坐标下的卡片占位矩形（含边框）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ErRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl ErRect {
+    pub fn right(self) -> f32 {
+        self.x + self.w
+    }
+
+    pub fn bottom(self) -> f32 {
+        self.y + self.h
+    }
+
+    /// 与另一矩形是否相交；边相切不算相交。
+    pub fn intersects(self, other: ErRect) -> bool {
+        self.x < other.right()
+            && other.x < self.right()
+            && self.y < other.bottom()
+            && other.y < self.bottom()
+    }
+
+    /// 四周外扩 `gap`（用于保证卡片之间留有通道间距，而非刚刚相切）。
+    pub fn inflate(self, gap: f32) -> ErRect {
+        ErRect {
+            x: self.x - gap,
+            y: self.y - gap,
+            w: self.w + gap * 2.0,
+            h: self.h + gap * 2.0,
+        }
+    }
+}
+
+/// 把 `candidates` 的理想坐标调整为不与 `occupied` 已占矩形相交的落位结果。
+///
+/// 规则：
+/// - 同一连通分量（`ErLayoutResult` 的分量序号）整体刚性平移：组内相对位置与连线走向不变；
+///   分量之间没有边，因此刚性平移不会破坏任何关系。孤立表（分量 -1）各自独立落位，
+///   避免互不相干的表被捆成一个刚体。
+/// - 组从候选位置起由近及远螺旋搜索首个合法位置：最近优先 ≈「安排在邻居附近的空闲处」。
+/// - 优先选择不会把卡片推到负世界坐标的方向；确有需要时才允许负坐标。
+/// - 搜索有界（`max_rings`）；耗尽后退到所有占用矩形下方的追加带并告警，绝不静默重叠。
+/// - `occupied` 全程只读：已固定表的坐标永不被本函数修改（新增表让位于既有节点）。
+pub fn er_place_avoiding_overlaps(
+    candidates: &ErLayoutResult,
+    sizes: &std::collections::BTreeMap<String, (f32, f32)>,
+    occupied: &[ErRect],
+    gap: f32,
+    max_rings: i32,
+) -> ErLayoutResult {
+    let size_of = |name: &str| sizes.get(name).copied().unwrap_or((ER_CARD_W, ER_CARD_H_MAX));
+    let rect_at = |name: &str, x: f32, y: f32| {
+        let (w, h) = size_of(name);
+        ErRect { x, y, w, h }
+    };
+
+    // 分组：分量号 >= 0 按分量成组；孤立表（-1）按表名各自成组。
+    let mut groups: std::collections::BTreeMap<String, Vec<(String, (f32, f32, i32))>> =
+        std::collections::BTreeMap::new();
+    for (name, &(x, y, comp)) in candidates {
+        let key = if comp >= 0 {
+            format!("c{comp}")
+        } else {
+            format!("i{name}")
+        };
+        groups.entry(key).or_default().push((name.clone(), (x, y, comp)));
+    }
+
+    let mut blockers: Vec<ErRect> = occupied.to_vec();
+    let mut out = ErLayoutResult::new();
+    let mut keys: Vec<String> = groups.keys().cloned().collect();
+    keys.sort();
+
+    for key in keys {
+        let mut group = groups.remove(&key).unwrap_or_default();
+        group.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // 组内刚性平移：搜索步长取组内最大卡片尺寸 + 通道（按实际尺寸，不用最大包络，
+        // 否则新增表会被无谓地推远；调用方对未加载表已给出包络尺寸兜底）。
+        let mut step_x = 0.0f32;
+        let mut step_y = 0.0f32;
+        for (name, _) in &group {
+            let (w, h) = size_of(name);
+            step_x = step_x.max(w + gap);
+            step_y = step_y.max(h + gap);
+        }
+        if step_x <= 0.0 || step_y <= 0.0 {
+            step_x = ER_CARD_W + gap;
+            step_y = ER_CARD_H_MAX + gap;
+        }
+
+        // 偏移量是否让组内所有卡片保持非负世界坐标（优先方向，避免把新增表推到左上无限远处）。
+        let non_negative = |offset: (f32, f32)| {
+            group
+                .iter()
+                .all(|(_, (x, y, _))| x + offset.0 >= 0.0 && y + offset.1 >= 0.0)
+        };
+        // 组整体平移后是否与所有已占矩形保持 `gap` 通道间距。
+        let clear = |offset: (f32, f32)| {
+            group.iter().all(|(name, (x, y, _))| {
+                let probe = rect_at(name, x + offset.0, y + offset.1).inflate(gap);
+                blockers.iter().all(|b| !probe.intersects(*b))
+            })
+        };
+        // 环内候选偏移：确定性排序（同环内按距离、再按坐标），最近优先。
+        let ring_offsets = |ring: i32| {
+            let mut offsets: Vec<(i32, i32)> = Vec::new();
+            for dx in -ring..=ring {
+                for dy in -ring..=ring {
+                    if dx.abs().max(dy.abs()) == ring {
+                        offsets.push((dx, dy));
+                    }
+                }
+            }
+            offsets.sort_by_key(|(dx, dy)| (dx * dx + dy * dy, *dx, *dy));
+            offsets
+        };
+
+        let search = |require_non_negative: bool| -> Option<(f32, f32)> {
+            for ring in 0..=max_rings.max(0) {
+                for (dx, dy) in ring_offsets(ring) {
+                    let offset = (dx as f32 * step_x, dy as f32 * step_y);
+                    if require_non_negative && !non_negative(offset) {
+                        continue;
+                    }
+                    if clear(offset) {
+                        return Some(offset);
+                    }
+                }
+            }
+            None
+        };
+
+        // 两趟：先只找不越界的解，找不到才允许负坐标，仍找不到才退到下方追加带。
+        let offset = search(true).or_else(|| search(false)).unwrap_or_else(|| {
+            let bottom = blockers
+                .iter()
+                .map(|b| b.bottom())
+                .fold(f32::NEG_INFINITY, f32::max);
+            let min_y = group
+                .iter()
+                .map(|(_, (_, y, _))| *y)
+                .fold(f32::INFINITY, f32::min);
+            let target = if bottom.is_finite() { bottom + gap } else { 0.0 };
+            tracing::warn!(
+                group = %key,
+                tables = group.len(),
+                "ER 避让搜索超限，整体退到已占区域下方追加带"
+            );
+            (0.0, target - min_y)
+        });
+
+        let mut placed_rects: Vec<ErRect> = Vec::with_capacity(group.len());
+        for (name, (x, y, comp)) in group {
+            let (nx, ny) = (x + offset.0, y + offset.1);
+            placed_rects.push(rect_at(&name, nx, ny));
+            out.insert(name, (nx, ny, comp));
+        }
+        // 已落位组本身成为后续组的障碍（保证组间也不重叠）。
+        blockers.extend(placed_rects);
+    }
+    out
+}
+
 #[cfg(test)]
 mod er_layout_tests {
     use super::*;
@@ -324,6 +505,7 @@ mod er_layout_tests {
             name: name.to_string(),
             reference: reference.clone(),
             comment: None,
+            stable: None,
             status: fluxdb_core::ErLoadStatus::Loaded,
             columns: vec![],
         }
@@ -547,5 +729,161 @@ mod er_layout_tests {
         }
         let l = er_relation_layout(&tables, &edges);
         assert_eq!(l.len(), n, "万表无截断");
+    }
+
+    // ---- 占用感知落位（§6.2/§6.3）----
+
+    fn sizes_of(l: &ErLayoutResult, w: f32, h: f32) -> std::collections::BTreeMap<String, (f32, f32)> {
+        l.keys().map(|k| (k.clone(), (w, h))).collect()
+    }
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> ErRect {
+        ErRect { x, y, w, h }
+    }
+
+    /// 所有对内矩形（含外部已经落位的障碍）两两不相交。
+    fn assert_no_overlap_with(l: &ErLayoutResult, occupied: &[ErRect], w: f32, h: f32) {
+        let mut rects: Vec<(String, ErRect)> = l
+            .iter()
+            .map(|(n, &(x, y, _))| (n.clone(), rect(x, y, w, h)))
+            .collect();
+        for (i, o) in occupied.iter().enumerate() {
+            rects.push((format!("occupied-{i}"), *o));
+        }
+        for i in 0..rects.len() {
+            for j in i + 1..rects.len() {
+                assert!(
+                    !rects[i].1.intersects(rects[j].1),
+                    "{} 与 {} 重叠: {:?} / {:?}",
+                    rects[i].0, rects[j].0, rects[i].1, rects[j].1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn place_keeps_candidates_when_nothing_occupied() {
+        // 无障碍：完全保持候选坐标（不引入无谓位移）。
+        let cand: ErLayoutResult = [("a".to_string(), (64.0, 64.0, 0)), ("b".to_string(), (364.0, 64.0, 0))]
+            .into_iter()
+            .collect();
+        let sizes = sizes_of(&cand, ER_CARD_W, ER_CARD_H_MAX);
+        let out = er_place_avoiding_overlaps(&cand, &sizes, &[], ER_PLACE_GAP, ER_PLACE_MAX_RINGS);
+        for (name, &(x, y, c)) in &cand {
+            assert_eq!(out.get(name), Some(&(x, y, c)), "{name} 不应移动");
+        }
+    }
+
+    #[test]
+    fn place_moves_new_component_off_pinned_tables() {
+        // 复现线上场景：pinned 的 public.* 已被用户拖到中间，后加的 er_demo.* 不能压上去。
+        let pinned = [rect(55.61, 104.32, ER_CARD_W, 106.0), rect(420.74, 19.89, ER_CARD_W, 106.0)];
+        let cand: ErLayoutResult = [
+            ("er_demo.customers".to_string(), (64.0, 64.0, 0)),
+            ("er_demo.orders".to_string(), (364.0, 64.0, 0)),
+        ]
+        .into_iter()
+        .collect();
+        let sizes = sizes_of(&cand, ER_CARD_W, 106.0);
+        let out = er_place_avoiding_overlaps(&cand, &sizes, &pinned, ER_PLACE_GAP, ER_PLACE_MAX_RINGS);
+        assert_eq!(out.len(), 2, "两张表都要有坐标");
+        assert_no_overlap_with(&out, &pinned, ER_CARD_W, 106.0);
+        // 组件整体刚性平移：两表相对偏移不变（连线走向不被打断）。
+        let a = out["er_demo.customers"];
+        let b = out["er_demo.orders"];
+        assert!((b.0 - a.0 - 300.0).abs() < 1e-3, "组件内相对 x 偏移应保持");
+        assert_eq!(a.1, b.1, "组件内相对 y 偏移应保持");
+    }
+
+    #[test]
+    fn place_never_moves_occupied_rects() {
+        // 障碍只读：返回结果里不会出现对已占矩形的改写（本函数只产出 movable 的坐标）。
+        let occupied = [rect(0.0, 0.0, ER_CARD_W, ER_CARD_H_MAX)];
+        let cand: ErLayoutResult = [("late".to_string(), (0.0, 0.0, -1))].into_iter().collect();
+        let sizes = sizes_of(&cand, ER_CARD_W, ER_CARD_H_MAX);
+        let out = er_place_avoiding_overlaps(&cand, &sizes, &occupied, ER_PLACE_GAP, ER_PLACE_MAX_RINGS);
+        let placed = out["late"];
+        assert_ne!((placed.0, placed.1), (0.0, 0.0), "新表必须让位");
+        assert_no_overlap_with(&out, &occupied, ER_CARD_W, ER_CARD_H_MAX);
+    }
+
+    #[test]
+    fn place_keeps_cross_schema_same_name_distinct() {
+        // 跨 schema 同名表按展示名分别落位，互不串位、互不重叠。
+        let occupied = [rect(64.0, 64.0, ER_CARD_W, ER_CARD_H_MAX)];
+        let cand: ErLayoutResult = [
+            ("er_demo.orders".to_string(), (64.0, 64.0, -1)),
+            ("public.orders".to_string(), (364.0, 64.0, -1)),
+        ]
+        .into_iter()
+        .collect();
+        let sizes = sizes_of(&cand, ER_CARD_W, ER_CARD_H_MAX);
+        let out = er_place_avoiding_overlaps(&cand, &sizes, &occupied, ER_PLACE_GAP, ER_PLACE_MAX_RINGS);
+        assert_eq!(out.len(), 2);
+        assert_no_overlap_with(&out, &occupied, ER_CARD_W, ER_CARD_H_MAX);
+    }
+
+    #[test]
+    fn place_isolated_tables_reposition_independently() {
+        // 孤立表不是刚体：各自找最近空位，不会被捆成整块推远。
+        let occupied = [rect(64.0, 64.0, ER_CARD_W, ER_CARD_H_MAX)];
+        let cand: ErLayoutResult = [
+            ("iso_a".to_string(), (64.0, 64.0, -1)),
+            ("iso_b".to_string(), (400.0, 64.0, -1)),
+        ]
+        .into_iter()
+        .collect();
+        let sizes = sizes_of(&cand, ER_CARD_W, ER_CARD_H_MAX);
+        let out = er_place_avoiding_overlaps(&cand, &sizes, &occupied, ER_PLACE_GAP, ER_PLACE_MAX_RINGS);
+        assert_no_overlap_with(&out, &occupied, ER_CARD_W, ER_CARD_H_MAX);
+        // iso_b 本来就不冲突，不应被动移动。
+        assert_eq!(out["iso_b"], (400.0, 64.0, -1), "无冲突的表不应移动");
+    }
+
+    #[test]
+    fn place_deterministic() {
+        let occupied = [rect(55.0, 100.0, ER_CARD_W, 106.0)];
+        let cand: ErLayoutResult = [
+            ("a".to_string(), (64.0, 64.0, 0)),
+            ("b".to_string(), (364.0, 64.0, 0)),
+            ("z".to_string(), (64.0, 400.0, -1)),
+        ]
+        .into_iter()
+        .collect();
+        let sizes = sizes_of(&cand, ER_CARD_W, 120.0);
+        let first = er_place_avoiding_overlaps(&cand, &sizes, &occupied, ER_PLACE_GAP, ER_PLACE_MAX_RINGS);
+        for _ in 0..5 {
+            let again = er_place_avoiding_overlaps(&cand, &sizes, &occupied, ER_PLACE_GAP, ER_PLACE_MAX_RINGS);
+            assert_eq!(first, again, "落位必须确定性可复现");
+        }
+    }
+
+    #[test]
+    fn place_falls_back_below_when_budget_exhausted() {
+        // 环数为 0 时没有可用搜索方向，必须退到下方追加带而不是重叠或 panic。
+        let occupied = [rect(0.0, 0.0, ER_CARD_W, ER_CARD_H_MAX)];
+        let cand: ErLayoutResult = [("x".to_string(), (0.0, 0.0, -1))].into_iter().collect();
+        let sizes = sizes_of(&cand, ER_CARD_W, ER_CARD_H_MAX);
+        let out = er_place_avoiding_overlaps(&cand, &sizes, &occupied, ER_PLACE_GAP, 0);
+        assert_no_overlap_with(&out, &occupied, ER_CARD_W, ER_CARD_H_MAX);
+        assert!(out["x"].1 >= ER_CARD_H_MAX, "应退到障碍下方");
+    }
+
+    #[test]
+    fn place_respects_gap_between_cards() {
+        // 两个后加表之间也要留出通道间距，而不是刚好相切。
+        let cand: ErLayoutResult = [
+            ("a".to_string(), (64.0, 64.0, -1)),
+            ("b".to_string(), (64.0, 64.0, -1)),
+        ]
+        .into_iter()
+        .collect();
+        let sizes = sizes_of(&cand, ER_CARD_W, ER_CARD_H_MAX);
+        let out = er_place_avoiding_overlaps(&cand, &sizes, &[], ER_PLACE_GAP, ER_PLACE_MAX_RINGS);
+        let a = out["a"];
+        let b = out["b"];
+        let gap = (b.0 - a.0).abs().max((b.1 - a.1).abs());
+        assert!(gap >= ER_CARD_H_MAX, "同点候选必须被分开");
+        assert_no_overlap_with(&out, &[], ER_CARD_W, ER_CARD_H_MAX);
     }
 }

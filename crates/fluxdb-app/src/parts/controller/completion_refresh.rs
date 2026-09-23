@@ -238,6 +238,7 @@ mod completion_refresh_tests {
             nullable: true,
             primary_key: false,
             comment: None,
+            stable: None,
         };
         for database in ["main", "other"] {
             for table in ["Product", "product"] {
@@ -311,6 +312,7 @@ mod completion_refresh_tests {
                 nullable: true,
                 primary_key: false,
                 comment: None,
+                stable: None,
             }],
             DatabaseKind::Postgres,
         );

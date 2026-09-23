@@ -960,16 +960,30 @@ struct CompletionIndexTables {
     tables: Vec<TableRef>,
 }
 
-/// 单个 ER 作用域的视图状态（§十/§5.7）：分组、固定表、坐标。与关系模型分离——
+/// 单个 ER 作用域的视图状态（§十/§5.7）：分组、固定表、坐标、视口。与关系模型分离——
 /// 只存视图层，不为每个局部图复制关系目录。坐标是逻辑像素（f32），finite，无 NaN。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ErViewScopeState {
     /// 当前分组（schema 过滤）；None=全部。
     pub group: Option<String>,
+    /// 用户定义的业务分组：组名 -> 表展示名；旧视图文件缺失时兼容为空。
+    #[serde(default)]
+    pub custom_groups: std::collections::BTreeMap<String, Vec<String>>,
     /// 手动拖动过（固定）的表展示名。
     pub pinned: Vec<String>,
     /// 各表世界坐标（展示名, x, y）。仅存已定位表，缺失表重开按布局回退。
     pub positions: Vec<(String, f32, f32)>,
+    /// 视口（pan_x, pan_y, scale）；None=未保存过，打开时走首次适配。
+    /// 视图变换缩放下卡片固定屏幕尺寸，坐标乘 scale —— 保存原视口使重启后平移/缩放一致。
+    pub view_port: Option<ErViewportState>,
+}
+
+/// 序列化的视口状态：平移 + 缩放。独立于 desktop 的 `ErViewport`（本 crate 不依赖 UI 类型）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ErViewportState {
+    pub pan_x: f32,
+    pub pan_y: f32,
+    pub scale: f32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1608,11 +1622,20 @@ mod tests {
             scope.clone(),
             ErViewScopeState {
                 group: Some("public".to_string()),
+                custom_groups: std::collections::BTreeMap::from([(
+                    "核心业务".to_string(),
+                    vec!["orders".to_string()],
+                )]),
                 pinned: vec!["orders".to_string()],
                 positions: vec![
                     ("customers".to_string(), 10.0, 20.0),
                     ("orders".to_string(), 300.0, 20.0),
                 ],
+                view_port: Some(ErViewportState {
+                    pan_x: -123.5,
+                    pan_y: 88.25,
+                    scale: 0.65,
+                }),
             },
         );
         storage.save_er_view_states(&states).unwrap();
@@ -1620,6 +1643,14 @@ mod tests {
         // 新实例（模拟重启）读回一致。
         let reloaded = FileStorage::new(&dir).load_er_view_states().unwrap();
         assert_eq!(reloaded.get(&scope), states.get(&scope));
+    }
+
+    #[test]
+    fn er_view_state_legacy_without_custom_groups_still_loads() {
+        let legacy = r#"{"group":"public","pinned":[],"positions":[],"view_port":null}"#;
+        let state: ErViewScopeState = serde_json::from_str(legacy).unwrap();
+        assert!(state.custom_groups.is_empty());
+        assert_eq!(state.group.as_deref(), Some("public"));
     }
 
     #[test]

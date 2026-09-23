@@ -822,6 +822,14 @@ impl AppController {
                     .and_then(|service| service.update(&id, expected_revision, move |current| { *current = relationship; Ok(()) }).map_err(|error| UserFacingError { title: "ER 关系更新失败".into(), message: error.to_string(), detail: None, retryable: false }));
                 match result { Ok(relationship) => AppEvent::ErRelationshipChanged { scope_key, relationship }, Err(error) => AppEvent::Failed(error) }
             }
+            AppCommand::RebindErRelationship { scope_key, relationship, expected_revision } => {
+                let id = relationship.id.clone();
+                let result = self.er_model_service(scope_key.clone())
+                    .ok_or_else(|| UserFacingError { title: "ER 自动重绑失败".into(), message: "ER 存储尚未初始化".into(), detail: None, retryable: true })
+                    .and_then(|service| service.rebind_identity(&id, expected_revision, relationship)
+                        .map_err(|error| UserFacingError { title: "ER 自动重绑失败".into(), message: error.to_string(), detail: None, retryable: false }));
+                match result { Ok(relationship) => AppEvent::ErRelationshipChanged { scope_key, relationship }, Err(error) => AppEvent::Failed(error) }
+            }
             AppCommand::ConfirmErRelationship { scope_key, id, expected_revision, by } => {
                 let result = self.er_model_service(scope_key.clone())
                     .ok_or_else(|| UserFacingError { title: "ER 关系确认失败".into(), message: "ER 存储尚未初始化".into(), detail: None, retryable: true })

@@ -31,8 +31,8 @@ use fluxdb_app::{
     RedisWorkbenchState, TabId, TabKind, TabState, TabWorkspace, TableInfoState, TableInfoTab,
     UserAdminDetailTab, UserAdminState, compress_sql_text, copy_table_sql_preview_with_source_ddl,
     create_table_provider, drop_table_sql_preview, er_neighborhood_included_tables,
-    er_relation_layout, format_sql_text_for_dialect, rename_table_sql_preview,
-    truncate_table_sql_preview,
+    er_place_avoiding_overlaps, er_relation_layout, format_sql_text_for_dialect,
+    rename_table_sql_preview, truncate_table_sql_preview,
 };
 use fluxdb_core::{
     BinaryUpdatePayload, CellValue, Column as GdbColumn, CommandBulk, CommandExecutionItem,
@@ -170,6 +170,12 @@ include!("main_parts/create_table.rs");
 include!("main_parts/content_views.rs");
 include!("main_parts/backup_tab.rs");
 include!("main_parts/er/canvas.rs");
+include!("main_parts/er/model.rs");
+include!("main_parts/er/view_state.rs");
+include!("main_parts/er/form.rs");
+include!("main_parts/er/panel.rs");
+include!("main_parts/er/loading.rs");
+include!("main_parts/er/toolbar.rs");
 include!("main_parts/er/scene.rs");
 include!("main_parts/er/node.rs");
 include!("main_parts/er/interaction.rs");

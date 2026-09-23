@@ -1192,6 +1192,7 @@ fn connection_databases(connection: &ConnectionState, include_system: bool) -> V
                         rows: None,
                         modified_at: None,
                         comment: None,
+                        stable: None,
                     });
             }
             ObjectKind::Column | ObjectKind::Index => {}

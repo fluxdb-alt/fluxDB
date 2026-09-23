@@ -234,6 +234,44 @@ jobs:
       - name: Test storage/app/connectors
         run: cargo test --locked --target ${{ matrix.target }} -p fluxdb-storage -p fluxdb-app -p fluxdb-connectors
 
+      # ER 纯逻辑/导入/画布状态回归在三平台原生 runner 跑；GUI 视觉另行实机验收。
+      - name: Test ER graph on each platform
+        run: cargo test --locked --target ${{ matrix.target }} -p fluxdb-desktop -- er_
+
       - name: Test PTY child cleanup (Unix)
         if: runner.os != 'Windows'
         run: cargo test --locked --target ${{ matrix.target }} -p fluxdb-desktop -- terminal_reap_tests kill_child_tree_tests
+
+  # 独立临时 PG 服务执行 ER A/B/C：表改名/同名重建/删列。只操作进程专属 schema。
+  er-postgres-smoke:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: er_ci_test_only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ github.workspace }}
+          key: er-postgres-smoke
+      - name: Install native dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libssl-dev cmake
+      - name: Run real PostgreSQL ER regressions
+        env:
+          FLUXDB_PG_SMOKE: 127.0.0.1:${{ job.services.postgres.ports[5432] }}:postgres:er_ci_test_only:postgres
+        run: |
+          cargo test --locked -p fluxdb-app postgres_er_rebind_rename_rebuild_and_drop_column -- --nocapture
+          cargo test --locked -p fluxdb-app postgres_er_visibility_hides_unauthorized_tables -- --nocapture

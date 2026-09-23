@@ -895,6 +895,7 @@ mod sidebar_flatten_tests {
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         }
     }
 
@@ -910,6 +911,7 @@ mod sidebar_flatten_tests {
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         }
     }
 
@@ -926,6 +928,7 @@ mod sidebar_flatten_tests {
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         }
     }
 
@@ -1203,6 +1206,7 @@ mod sidebar_flatten_tests {
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         });
         assert_eq!(
             database_schemas(&pg, "appdb"),

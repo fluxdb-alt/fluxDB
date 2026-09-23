@@ -203,7 +203,7 @@ async fn pg_list_completion_columns_async(
                 EXISTS ( \
                   SELECT 1 FROM pg_catalog.pg_index i \
                   WHERE i.indrelid = c.oid AND i.indisprimary AND a.attnum = ANY(i.indkey) \
-                ) \
+                ), a.attnum::int4 \
          FROM pg_catalog.pg_class c \
          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
          JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid \
@@ -240,6 +240,7 @@ async fn pg_list_completion_columns_async(
             let not_null: bool = row.get(4);
             let comment: String = row.get(5);
             let primary_key: bool = row.get(6);
+            let attnum: i32 = row.get(7);
             Some(CompletionColumn {
                 database: Some(physical_db.to_string()),
                 schema: Some(schema),
@@ -249,6 +250,7 @@ async fn pg_list_completion_columns_async(
                 nullable: !not_null,
                 primary_key,
                 comment: (!comment.trim().is_empty()).then_some(comment),
+                stable: u64::try_from(attnum).ok(),
             })
         })
         .collect())
