@@ -481,17 +481,20 @@ fn pg_indexes_from_structure(structure: &TableStructure) -> Vec<IndexInfo> {
         .collect()
 }
 
-/// 外键 tab：多列外键按序位折叠为逗号拼接（兼容现有单列展示，不丢复合键序位）。
+/// 外键 tab：复合外键保留有序列对（`columns`/`ref_columns`），`column`/`ref_column` 仍
+/// 兼容单列展示（单列时即该列，复合时为首列占位，ER/约束身份按有序列对处理，§6.2）。
 fn pg_foreign_keys_from_structure(structure: &TableStructure) -> Vec<ForeignKeyInfo> {
     structure
         .foreign_keys
         .iter()
         .map(|fk| ForeignKeyInfo {
             name: fk.name.clone(),
-            column: fk.columns.join(", "),
+            column: fk.columns.first().cloned().unwrap_or_default(),
             ref_schema: fk.ref_schema.clone(),
             ref_table: fk.ref_table.clone(),
-            ref_column: fk.ref_columns.join(", "),
+            ref_column: fk.ref_columns.first().cloned().unwrap_or_default(),
+            columns: fk.columns.clone(),
+            ref_columns: fk.ref_columns.clone(),
         })
         .collect()
 }

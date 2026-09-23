@@ -168,6 +168,10 @@ fn tree_icon(glyph: &'static str) -> gpui::AnyElement {
         return app_icon(AppIcon::Save, 16., rgb(0x3b4048));
     }
 
+    if matches!(glyph, "er") {
+        return app_icon(AppIcon::Schema, 16., rgb(0x8b5cf6));
+    }
+
     if let Some(path) = tree_icon_path(glyph) {
         img(path).size(px(16.)).into_any_element()
     } else {
@@ -438,6 +442,9 @@ fn object_group_tree(
             // 新建备份入口保留在右键菜单；运行中任务在备份 tab 内展示。
             if group == ObjectGroup::Backup {
                 this.dispatch(AppCommand::OpenBackupList(database_path_for_open.clone()), cx);
+            } else if group == ObjectGroup::ErDiagram {
+                // ER 图节点单击：打开整库 ER 关系图 tab（画布原型），不展开子行。
+                this.dispatch(AppCommand::OpenErDiagram(database_path_for_open.clone()), cx);
             } else {
                 this.toggle_object_group_tree(
                     connection_id,
@@ -1032,7 +1039,9 @@ fn group_objects<'a>(
             ObjectGroup::Queries
             | ObjectGroup::Procedures
             | ObjectGroup::Functions
-            | ObjectGroup::Backup => false,
+            | ObjectGroup::Backup
+            // ER 图节点单击开 tab、不展开子行，故不从对象目录取行。
+            | ObjectGroup::ErDiagram => false,
         })
         .collect()
 }
@@ -1183,6 +1192,7 @@ fn connection_databases(connection: &ConnectionState, include_system: bool) -> V
                         rows: None,
                         modified_at: None,
                         comment: None,
+                        stable: None,
                     });
             }
             ObjectKind::Column | ObjectKind::Index => {}

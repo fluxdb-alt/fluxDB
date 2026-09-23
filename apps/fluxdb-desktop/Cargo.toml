@@ -70,3 +70,8 @@ icon = ["assets/app-icon.icns"]
 resources = ["assets"]
 category = "Developer Tool"
 short_description = "Desktop database client"
+
+[dev-dependencies]
+# ER 画布布局回归测试：复用 gpui 已锁定并编译的同一 taffy 0.13 引擎，模拟真实 div 树
+# 计算画布非零剩余高度（见 tests.rs::er_canvas_layout_fills_below_toolbar）。无需新增下载。
+taffy = "0.13"

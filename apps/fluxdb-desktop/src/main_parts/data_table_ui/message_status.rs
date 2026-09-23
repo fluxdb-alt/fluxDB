@@ -325,6 +325,7 @@ fn statusbar_active_connection_id(state: &AppState) -> Option<ConnectionId> {
         TabKind::CreateTable(create) => Some(create.connection_id),
         TabKind::UserAdmin(admin) => Some(admin.connection_id),
         TabKind::BackupList(list) => Some(list.connection_id),
+        TabKind::ErDiagram(er) => Some(er.connection_id),
         TabKind::Settings(_) => None,
     }
 }
@@ -398,6 +399,12 @@ fn statusbar_context(state: &AppState) -> Option<String> {
             list.connection_id,
             Some(&list.database),
             Some("备份列表"),
+        ),
+        TabKind::ErDiagram(er) => connection_statusbar_context(
+            state,
+            er.connection_id,
+            Some(&er.database),
+            Some("ER 关系图"),
         ),
         TabKind::Settings(_) => None,
     }

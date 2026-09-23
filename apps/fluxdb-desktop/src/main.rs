@@ -23,30 +23,32 @@ use fluxdb_app::{
     CreateTableForeignKey, CreateTableForeignKeyField, CreateTableIndex,
     CreateTableIndexColumnField, CreateTableIndexField, CreateTableOptionField,
     CreateTablePartitionField, CreateTableState, CreateTableTab, CreateTableTrigger,
-    CreateTableTriggerEvent, CreateTableTriggerField, DataEditorState, ForeignKeyCheckMode,
-    LoadState, ObjectListState, PgDraftAttrField, PgGrantEditOp, PgGrantObjectKind,
-    PgRoleDraftUiExt, PgRoleSaveStatus, QueryEditorState, QueryHistoryEntry, QueryHistoryKind,
-    QueryHistoryTransactionState, QueryOrigin, RedisAddKeyKind, RedisAddKeyRequest,
-    RedisConnectionOverview, RedisListDirection, RedisWorkbenchState, TabId, TabKind, TabState,
-    TabWorkspace, TableInfoState, TableInfoTab, UserAdminDetailTab, UserAdminState,
-    compress_sql_text, copy_table_sql_preview_with_source_ddl, create_table_provider,
-    drop_table_sql_preview, format_sql_text_for_dialect, rename_table_sql_preview,
-    truncate_table_sql_preview,
+    CreateTableTriggerEvent, CreateTableTriggerField, DataEditorState, ErDiagramState,
+    ErLayoutResult, ForeignKeyCheckMode, LoadState, ObjectListState, PgDraftAttrField,
+    PgGrantEditOp, PgGrantObjectKind, PgRoleDraftUiExt, PgRoleSaveStatus, QueryEditorState,
+    QueryHistoryEntry, QueryHistoryKind, QueryHistoryTransactionState, QueryOrigin,
+    RedisAddKeyKind, RedisAddKeyRequest, RedisConnectionOverview, RedisListDirection,
+    RedisWorkbenchState, TabId, TabKind, TabState, TabWorkspace, TableInfoState, TableInfoTab,
+    UserAdminDetailTab, UserAdminState, compress_sql_text, copy_table_sql_preview_with_source_ddl,
+    create_table_provider, drop_table_sql_preview, er_neighborhood_included_tables,
+    er_place_avoiding_overlaps, er_relation_layout, format_sql_text_for_dialect,
+    rename_table_sql_preview, truncate_table_sql_preview,
 };
 use fluxdb_core::{
     BinaryUpdatePayload, CellValue, Column as GdbColumn, CommandBulk, CommandExecutionItem,
     CommandExecutionStatus, CommandReply, CommandWorkbenchExecution, ConnectionConfig,
     ConnectionDraft, ConnectionGroupId, ConnectionId, CreateDatabaseRequest, CreatePrincipalInput,
     DATA_TABLE_PAGE_SIZE_CHOICES, DataChangeSet, DataExportPreview, DataPage, DatabaseKind,
-    DatabaseUserIdentity, Endpoint, FilterOp, FilterSpec, ForeignKeyInfo, IndexInfo, LogLevel,
-    ObjectKind, ObjectPath, ObjectSummary, PgGrantTargetLists, PgObjectGrantScope, PgPasswordOp,
-    PgRelationKind, PgRole, PgRoleChange, PgRoleDraft, PgRoleMembership, PgValidUntilOp,
-    PostgresSslMode, QueryExecutionOptions, QueryExecutionSummary, RedisHashFieldTtl,
-    RedisServerVersion, ResultsPlacement, Row, RowIdentity, SavedQuery, ScrollbarMode, Settings,
-    SidebarOrderEntry, SortDirection, SortSpec, Theme as AppTheme, TriggerInfo, UiDensity,
-    UserResourceLimits, WorkbenchHistoryItem, WorkbenchHistoryScope, WorkbenchHistoryStore,
-    data_table_page_size_max, database_user_admin_provider, role_memberships_from_grants,
-    sql_dialect, sqlite_attached_database_path, supports_database_user_admin,
+    DatabaseUserIdentity, Endpoint, ErGraphData, ErLoadStatus, FilterOp, FilterSpec,
+    ForeignKeyInfo, IndexInfo, LogLevel, ObjectKind, ObjectPath, ObjectSummary, PgGrantTargetLists,
+    PgObjectGrantScope, PgPasswordOp, PgRelationKind, PgRole, PgRoleChange, PgRoleDraft,
+    PgRoleMembership, PgValidUntilOp, PostgresSslMode, QueryExecutionOptions,
+    QueryExecutionSummary, RedisHashFieldTtl, RedisServerVersion, ResultsPlacement, Row,
+    RowIdentity, SavedQuery, ScrollbarMode, Settings, SidebarOrderEntry, SortDirection, SortSpec,
+    Theme as AppTheme, TriggerInfo, UiDensity, UserResourceLimits, WorkbenchHistoryItem,
+    WorkbenchHistoryScope, WorkbenchHistoryStore, data_table_page_size_max,
+    database_user_admin_provider, role_memberships_from_grants, sql_dialect,
+    sqlite_attached_database_path, supports_database_user_admin,
 };
 use fluxdb_storage::{
     FileStorage, QueryHistoryRecord, RedisKeySearchHistoryRecord, RedisWorkbenchHistoryRecord,
@@ -167,6 +169,17 @@ include!("main_parts/user_admin_privileges.rs");
 include!("main_parts/create_table.rs");
 include!("main_parts/content_views.rs");
 include!("main_parts/backup_tab.rs");
+include!("main_parts/er/canvas.rs");
+include!("main_parts/er/model.rs");
+include!("main_parts/er/view_state.rs");
+include!("main_parts/er/form.rs");
+include!("main_parts/er/panel.rs");
+include!("main_parts/er/loading.rs");
+include!("main_parts/er/toolbar.rs");
+include!("main_parts/er/scene.rs");
+include!("main_parts/er/node.rs");
+include!("main_parts/er/interaction.rs");
+include!("main_parts/er/export.rs");
 include!("main_parts/redis_detail.rs");
 include!("main_parts/json_editor.rs");
 include!("main_parts/json_component.rs");

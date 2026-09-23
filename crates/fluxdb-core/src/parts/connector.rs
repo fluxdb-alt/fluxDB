@@ -410,6 +410,33 @@ pub trait Connector {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持外键元数据"))
     }
 
+    /// 批量读取多张表的外键，返回 `(源表名, 外键)`；复合键每列占一行。
+    ///
+    /// 用于 ER 等需要整库关系拓扑的场景，避免逐表 N+1 连接。默认实现逐表调用
+    /// `list_foreign_keys`；方言可在单次目录查询内批量实现。
+    /// `database`/`schema` 用于限定范围（MySQL/SQLite 用 database，PG 用 schema）。
+    fn list_foreign_keys_for_tables(
+        &self,
+        database: Option<&str>,
+        schema: Option<&str>,
+        tables: &[String],
+    ) -> Result<Vec<(String, ForeignKeyInfo)>> {
+        let mut out = Vec::new();
+        for table in tables {
+            let path = ObjectPath {
+                connection_id: ConnectionId(0),
+                database: database.map(String::from),
+                schema: schema.map(String::from),
+                name: table.clone(),
+                kind: ObjectKind::Table,
+            };
+            for fk in self.list_foreign_keys(&path)? {
+                out.push((table.clone(), fk));
+            }
+        }
+        Ok(out)
+    }
+
     fn list_foreign_keys_with_cancel(
         &self,
         path: &ObjectPath,

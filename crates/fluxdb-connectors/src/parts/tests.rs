@@ -5051,9 +5051,12 @@ SELECT item_id, name FROM audit_log;"
         }];
         let fks = pg_foreign_keys_from_structure(&structure);
         assert_eq!(fks.len(), 1);
-        // 复合外键按序位折叠展示，不丢序、不出现笛卡尔积排列。
-        assert_eq!(fks[0].column, "a, b");
-        assert_eq!(fks[0].ref_column, "x, y");
+        // 复合外键：有序列对按原始序号保留（供 ER/约束身份用，§6.2），不再逗号拼接。
+        assert_eq!(fks[0].columns, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(fks[0].ref_columns, vec!["x".to_string(), "y".to_string()]);
+        // 扁平单列字段兼容旧展示：取首列。
+        assert_eq!(fks[0].column, "a");
+        assert_eq!(fks[0].ref_column, "x");
         assert_eq!(fks[0].ref_table, "t");
     }
 

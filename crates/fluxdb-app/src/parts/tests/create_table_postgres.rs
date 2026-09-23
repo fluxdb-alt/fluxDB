@@ -212,6 +212,7 @@ fn postgres_design_state() -> CreateTableState {
             nullable: false,
             primary_key: true,
             comment: None,
+            stable: None,
         },
         CompletionColumn {
             database: Some("appdb".to_string()),
@@ -222,6 +223,7 @@ fn postgres_design_state() -> CreateTableState {
             nullable: true,
             primary_key: false,
             comment: None,
+            stable: None,
         },
     ];
     let ddl = "CREATE TABLE \"sales\".\"orders\" (\n  \"id\" integer NOT NULL,\n  \"note\" text,\n  CONSTRAINT \"orders_pkey\" PRIMARY KEY (\"id\")\n);".to_string();

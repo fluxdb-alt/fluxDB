@@ -209,6 +209,7 @@ fn mysql_completion_columns_for_tables_with_cancel(
                     nullable: nullable.eq_ignore_ascii_case("YES"),
                     primary_key: key.eq_ignore_ascii_case("PRI"),
                     comment: row.try_get("column_comment").ok(),
+                    stable: None,
                 })
             })
             .collect()

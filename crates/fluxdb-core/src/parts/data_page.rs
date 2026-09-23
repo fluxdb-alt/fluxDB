@@ -33,6 +33,10 @@ pub struct ForeignKeyInfo {
     pub ref_schema: Option<String>,
     pub ref_table: String,
     pub ref_column: String,
+    /// 复合外键的有序列对（保持原始序号）；空则视为单列（column/ref_column）。
+    /// 供 ER/约束身份按完整有序配对处理复合外键，不靠展示名拼接（§6.2）。
+    pub columns: Vec<String>,
+    pub ref_columns: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

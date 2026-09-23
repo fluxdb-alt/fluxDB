@@ -77,6 +77,8 @@ struct UiColors {
     hover: gpui::Rgba,
     input_bg: gpui::Rgba,
     status_bg: gpui::Rgba,
+    /// ER 画布底色（与内容面板区分）：浅色略灰、暗色较深，表卡片在其上方略亮。
+    canvas_bg: gpui::Rgba,
     // 圆角风格：跟随 gpui-component theme.radius / radius_lg，按钮/输入框/面板共用。
     radius: gpui::Pixels,
     radius_lg: gpui::Pixels,
@@ -278,6 +280,7 @@ fn ui_colors(mode: ThemeMode) -> UiColors {
             hover: rgb(0x252b34),
             input_bg: rgb(0x111418),
             status_bg: rgb(0x15181c),
+            canvas_bg: rgb(0x0e1013),
             radius: px(6.),
             radius_lg: px(8.),
         }
@@ -298,6 +301,7 @@ fn ui_colors(mode: ThemeMode) -> UiColors {
             hover: rgb(0xe9edf3),
             input_bg: rgb(0xffffff),
             status_bg: rgb(0xf0f0f0),
+            canvas_bg: rgb(0xf0f1f4),
             radius: px(6.),
             radius_lg: px(8.),
         }
@@ -308,6 +312,8 @@ fn ui_colors(mode: ThemeMode) -> UiColors {
 enum AppIcon {
     Activity,
     AlignLeft,
+    ArrowDown,
+    ArrowUp,
     ArrowUpDown,
     Bot,
     Broadcast,
@@ -334,6 +340,8 @@ enum AppIcon {
     FolderUp,
     Github,
     Home,
+    Key,
+    Link,
     List,
     Maximize,
     Minus,
@@ -369,6 +377,8 @@ fn app_icon_path(icon: AppIcon) -> &'static str {
     match icon {
         AppIcon::Activity => "icons/activity.svg",
         AppIcon::AlignLeft => "icons/align-left.svg",
+        AppIcon::ArrowDown => "icons/arrow-down.svg",
+        AppIcon::ArrowUp => "icons/arrow-up.svg",
         AppIcon::ArrowUpDown => "icons/arrow-up-down.svg",
         AppIcon::Bot => "icons/bot.svg",
         AppIcon::Broadcast => "icons/broadcast.svg",
@@ -395,6 +405,8 @@ fn app_icon_path(icon: AppIcon) -> &'static str {
         AppIcon::FolderUp => "icons/folder-up.svg",
         AppIcon::Github => "icons/github.svg",
         AppIcon::Home => "icons/home.svg",
+        AppIcon::Key => "icons/key.svg",
+        AppIcon::Link => "icons/link.svg",
         AppIcon::List => "icons/list.svg",
         AppIcon::Maximize => "icons/maximize-2.svg",
         AppIcon::Minus => "icons/minus.svg",
@@ -442,6 +454,27 @@ fn app_icon_box(icon: AppIcon, box_size: f32, icon_size: f32, color: gpui::Rgba)
         .items_center()
         .justify_center()
         .child(app_icon(icon, icon_size, color))
+}
+
+/// ER 关系画布统一低饱和调色板（er-ui-relationship-canvas.md §3.3）：
+/// 蓝 / 青绿 / 紫 / 橙 / 玫红，明暗主题各一组，不按表名随机上色。
+fn er_palette(is_dark: bool) -> [gpui::Rgba; 5] {
+    if is_dark {
+        [rgb(0x5b7fbf), rgb(0x4f9a8b), rgb(0x8f6fbf), rgb(0xbf8f5b), rgb(0xbf5f7f)]
+    } else {
+        [rgb(0x6b8fc0), rgb(0x5aa392), rgb(0x9a7fc0), rgb(0xc09a6b), rgb(0xc07a8f)]
+    }
+}
+
+/// 按连通分量序号稳定取色；负序号（孤立表/关系未就绪）用默认蓝。
+/// 就绪后一次性分配，不随 pan/渲染顺序/新字段到达变色。
+fn er_component_color(colors: UiColors, component: i32) -> gpui::Rgba {
+    let palette = er_palette(colors.is_dark);
+    if component < 0 {
+        palette[0]
+    } else {
+        palette[(component as usize) % palette.len()]
+    }
 }
 
 actions!(

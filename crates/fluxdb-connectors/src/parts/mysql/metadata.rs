@@ -129,9 +129,104 @@ fn mysql_foreign_keys_with_cancel(
                     .filter(|value| !value.is_empty()),
                     ref_table: row.try_get("referenced_table_name").map_err(mysql_error)?,
                     ref_column: row.try_get("referenced_column_name").map_err(mysql_error)?,
+                    columns: Vec::new(),
+                    ref_columns: Vec::new(),
                 })
             })
             .collect()
+    })
+}
+
+/// 批量读取整个库的外键，返回 `(源表名, 外键)`；复合键每列占一行。
+/// 一次 connection 查全库，替代逐表 N+1，供 ER 等全库关系拓扑场景使用。
+/// `tables` 为空时返回全库 FK；非空时仅返回这些表的外键。
+fn mysql_foreign_keys_for_tables(
+    config: &ConnectionConfig,
+    database: &str,
+    tables: &[String],
+) -> fluxdb_core::Result<Vec<(String, ForeignKeyInfo)>> {
+    let options = mysql_connection_url(config)?
+        .parse::<MySqlConnectOptions>()
+        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
+
+    runtime.block_on(async {
+        let mut connection = options.connect().await.map_err(mysql_error)?;
+        let rows = if tables.is_empty() {
+            sqlx::query(
+                r#"
+                SELECT
+                    CAST(table_name AS CHAR) AS table_name,
+                    CAST(constraint_name AS CHAR) AS constraint_name,
+                    CAST(column_name AS CHAR) AS column_name,
+                    CAST(referenced_table_schema AS CHAR) AS referenced_table_schema,
+                    CAST(referenced_table_name AS CHAR) AS referenced_table_name,
+                    CAST(referenced_column_name AS CHAR) AS referenced_column_name
+                FROM information_schema.key_column_usage
+                WHERE table_schema = ?
+                  AND referenced_table_name IS NOT NULL
+                ORDER BY table_name, constraint_name, ordinal_position
+                "#,
+            )
+            .bind(database)
+            .fetch_all(&mut connection)
+            .await
+            .map_err(mysql_error)?
+        } else {
+            let mut placeholders = Vec::with_capacity(tables.len());
+            let mut values = Vec::with_capacity(tables.len() + 1);
+            values.push(database.to_string());
+            for _ in tables {
+                placeholders.push("?");
+            }
+            let table_list = placeholders.join(", ");
+            let sql = format!(
+                "SELECT
+                    CAST(table_name AS CHAR) AS table_name,
+                    CAST(constraint_name AS CHAR) AS constraint_name,
+                    CAST(column_name AS CHAR) AS column_name,
+                    CAST(referenced_table_schema AS CHAR) AS referenced_table_schema,
+                    CAST(referenced_table_name AS CHAR) AS referenced_table_name,
+                    CAST(referenced_column_name AS CHAR) AS referenced_column_name
+                 FROM information_schema.key_column_usage
+                 WHERE table_schema = ? AND table_name IN ({table_list})
+                   AND referenced_table_name IS NOT NULL
+                 ORDER BY table_name, constraint_name, ordinal_position"
+            );
+            let mut query = sqlx::query(&sql);
+            for v in values {
+                query = query.bind(v);
+            }
+            for t in tables {
+                query = query.bind(t);
+            }
+            query.fetch_all(&mut connection).await.map_err(mysql_error)?
+        };
+        connection.close().await.map_err(mysql_error)?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push((
+                row.try_get::<String, _>("table_name").map_err(mysql_error)?,
+                ForeignKeyInfo {
+                    name: row.try_get("constraint_name").map_err(mysql_error)?,
+                    column: row.try_get("column_name").map_err(mysql_error)?,
+                    ref_schema: Some(
+                        row.try_get::<String, _>("referenced_table_schema")
+                            .map_err(mysql_error)?,
+                    )
+                    .filter(|value| !value.is_empty()),
+                    ref_table: row.try_get("referenced_table_name").map_err(mysql_error)?,
+                    ref_column: row.try_get("referenced_column_name").map_err(mysql_error)?,
+                    columns: Vec::new(),
+                    ref_columns: Vec::new(),
+                },
+            ));
+        }
+        Ok(out)
     })
 }
 

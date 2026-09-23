@@ -219,6 +219,7 @@ impl AppController {
                         rows: None,
                         modified_at: None,
                         comment: None,
+                        stable: None,
                     });
                 }
                 // 新表的列/索引需要进入补全缓存：标记 scope 失效，后台刷新时重取表清单。

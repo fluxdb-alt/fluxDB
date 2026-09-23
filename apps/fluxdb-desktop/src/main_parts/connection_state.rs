@@ -41,6 +41,17 @@ impl Render for SidebarResizeDrag {
     }
 }
 
+/// ER 关系面板拖拽类型：独立于连接栏的 `SidebarResizeDrag`。连接栏的 `on_drag_move`
+/// 无条件 stop_propagation，若不隔离，关系面板的同类型拖拽事件会被连接栏抢走。
+#[derive(Clone)]
+struct ErRelationshipResizeDrag;
+
+impl Render for ErRelationshipResizeDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
 #[derive(Clone)]
 struct DataFilterPanelResizeDrag;
 
@@ -140,6 +151,8 @@ enum TableMenuAction {
     TogglePin,
     CopyName,
     ViewData,
+    /// 打开以当前表为中心 1 跳的关联 ER 关系图。
+    OpenErDiagram,
     Design,
     NewTable,
     Refresh,
@@ -194,16 +207,19 @@ enum ObjectGroup {
     Procedures,
     Functions,
     Backup,
+    /// ER 关系图（画布原型；单击打开整库 ER 标签页，不展开子行）。
+    ErDiagram,
 }
 
 impl ObjectGroup {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Tables,
         Self::Views,
         Self::Procedures,
         Self::Functions,
         Self::Queries,
         Self::Backup,
+        Self::ErDiagram,
     ];
 
     fn label(self) -> &'static str {
@@ -214,6 +230,7 @@ impl ObjectGroup {
             Self::Procedures => "存储过程",
             Self::Functions => "函数",
             Self::Backup => "备份",
+            Self::ErDiagram => "ER 图",
         }
     }
 
@@ -225,6 +242,7 @@ impl ObjectGroup {
             Self::Procedures => "procedures",
             Self::Functions => "functions",
             Self::Backup => "backup",
+            Self::ErDiagram => "er",
         }
     }
 
@@ -236,6 +254,7 @@ impl ObjectGroup {
             Self::Procedures => "procedures",
             Self::Functions => "functions",
             Self::Backup => "backup",
+            Self::ErDiagram => "er",
         }
     }
 }

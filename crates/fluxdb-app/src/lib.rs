@@ -26,7 +26,8 @@ use fluxdb_core::{
     CompletionTrigger, ConnectionConfig, ConnectionDraft, ConnectionGroup, ConnectionGroupId,
     ConnectionId, ConnectionOverview, Connector, CreateDatabaseRequest, DataChangeSet,
     DataExportPreview, DataPage, DatabaseKind, DatabasePrivilegeGrant, DatabaseUserIdentity,
-    Endpoint, Error, ErrorKind, FilterSpec, ForeignKeyInfo, IndexInfo, InsertTextFormat,
+    Endpoint, ErColumn, ErForeignKeyEdge, ErGraphData, ErLoadStatus, ErRelationship, ErTableNode,
+    ErTableRef, Error, ErrorKind, FilterSpec, ForeignKeyInfo, IndexInfo, InsertTextFormat,
     ObjectKind, ObjectPath, ObjectSummary, Pagination, PgEffectivePrivilege, PgGrantTargetLists,
     PgObjectGrantScope, PgObjectGrants, PgPasswordOp, PgRelationKind, PgRole, PgRoleChange,
     PgRoleDraft, PgRoleMembership, PgRoleSavePlan, PgValidUntilOp, PrivilegeScope,
@@ -85,6 +86,10 @@ include!("parts/query_history.rs");
 include!("parts/workbench_history.rs");
 include!("parts/query_result_edit.rs");
 include!("parts/tests.rs");
+include!("parts/er_service.rs");
+include!("parts/er_catalog.rs");
+include!("parts/er_layout.rs");
+include!("parts/er_model_service.rs");
 
 pub use fluxdb_connectors::{
     MySqlClientVersion, MySqlDumpInvocation, MySqlDumpOptions, mysql_client_version,

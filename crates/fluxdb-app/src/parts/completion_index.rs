@@ -993,6 +993,7 @@ fn indexed_column_to_completion(column: &IndexedColumnRef) -> CompletionColumn {
         nullable: column.source.nullable,
         primary_key: column.source.primary_key,
         comment: column.source.comment.clone(),
+        stable: None,
     }
 }
 

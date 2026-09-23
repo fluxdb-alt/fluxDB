@@ -391,6 +391,7 @@ SELECT $1, f();";
                 nullable: false,
                 primary_key: false,
                 comment: Some("邮箱".to_string()),
+                stable: None,
             }, CompletionColumn {
                 table: "users".to_string(),
                 database: None,
@@ -400,6 +401,7 @@ SELECT $1, f();";
                 nullable: true,
                 primary_key: false,
                 comment: None,
+                stable: None,
             }],
             vec![IndexInfo {
                 name: "users_email_idx".to_string(),
@@ -415,6 +417,8 @@ SELECT $1, f();";
                 ref_schema: Some("app".to_string()),
                 ref_table: "teams".to_string(),
                 ref_column: "id".to_string(),
+                columns: Vec::new(),
+                ref_columns: Vec::new(),
             }],
             vec![TriggerInfo {
                 name: "users_bu".to_string(),
@@ -460,6 +464,7 @@ SELECT $1, f();";
                     nullable: false,
                     primary_key: true,
                     comment: None,
+                    stable: None,
                 },
                 CompletionColumn {
                     table: "users".to_string(),
@@ -470,6 +475,7 @@ SELECT $1, f();";
                     nullable: true,
                     primary_key: false,
                     comment: None,
+                    stable: None,
                 },
             ],
             Vec::new(),
