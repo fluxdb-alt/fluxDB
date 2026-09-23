@@ -199,6 +199,7 @@
                 rows: None,
                 modified_at: None,
                 comment: None,
+                stable: None,
             }),
         );
         controller.state.connections[0].objects.push(ObjectSummary {
@@ -212,6 +213,7 @@
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         });
         controller.completion_index.lock().unwrap().insert_tables(
             ConnectionId(1),
@@ -312,6 +314,7 @@
                 nullable: true,
                 primary_key: false,
                 comment: None,
+                stable: None,
             }],
             DatabaseKind::Postgres,
         );
@@ -368,6 +371,7 @@
                     nullable: true,
                     primary_key: false,
                     comment: Some("金额".to_string()),
+                    stable: None,
                 }],
                 DatabaseKind::Postgres,
             );
@@ -690,6 +694,7 @@
             nullable: false,
             primary_key: true,
             comment: Some("主键标识".into()),
+            stable: None,
         };
         let documentation = column_completion_documentation(&column).expect("应有文档提示");
         assert!(documentation.contains("类型：integer"), "{documentation}");
@@ -1517,6 +1522,8 @@
             ref_schema: None,
             ref_table: "customers".to_string(),
             ref_column: "id".to_string(),
+            columns: Vec::new(),
+            ref_columns: Vec::new(),
         }];
         let items = fk_join_completion_items("o", &foreign_keys, DatabaseKind::MySql, "");
         assert_eq!(items.len(), 1);
@@ -1537,6 +1544,8 @@
             ref_schema: None,
             ref_table: "customers".to_string(),
             ref_column: "id".to_string(),
+            columns: Vec::new(),
+            ref_columns: Vec::new(),
         }];
         let items = fk_join_completion_items("o", &foreign_keys, DatabaseKind::MySql, "ord");
         assert!(items.is_empty());
@@ -1553,6 +1562,8 @@
                 ref_schema: None,
                 ref_table: "accounts".into(),
                 ref_column: "tenant_id".into(),
+                columns: Vec::new(),
+                ref_columns: Vec::new(),
             },
             ForeignKeyInfo {
                 name: "fk_pair".into(),
@@ -1560,6 +1571,8 @@
                 ref_schema: None,
                 ref_table: "accounts".into(),
                 ref_column: "id".into(),
+                columns: Vec::new(),
+                ref_columns: Vec::new(),
             },
         ];
         let items = fk_join_completion_items("o", &foreign_keys, DatabaseKind::MySql, "");
@@ -1582,6 +1595,8 @@
                 ref_schema: None,
                 ref_table: "order".to_string(),     // 保留字表
                 ref_column: "id".to_string(),
+                columns: Vec::new(),
+                ref_columns: Vec::new(),
             },
             ForeignKeyInfo {
                 name: "fk_order_ref".to_string(),
@@ -1589,6 +1604,8 @@
                 ref_schema: None,
                 ref_table: "order".to_string(),
                 ref_column: "detail id".to_string(), // 特殊字符列
+                columns: Vec::new(),
+                ref_columns: Vec::new(),
             },
         ];
         // root 别名也是保留字（如 `group`），须引号；schema 限定参考表逐段引号。
@@ -1614,6 +1631,8 @@
             ref_schema: Some("select".to_string()), // 保留字 schema
             ref_table: "order".to_string(),
             ref_column: "id".to_string(),
+            columns: Vec::new(),
+            ref_columns: Vec::new(),
         }];
         let items = fk_join_completion_items("a", &schemed, DatabaseKind::MySql, "");
         assert_eq!(
@@ -3783,6 +3802,7 @@
                     nullable: false,
                     primary_key: true,
                     comment: None,
+                    stable: None,
                 }],
                 DatabaseKind::Postgres,
             );
@@ -4901,6 +4921,7 @@
                 nullable: false,
                 primary_key: false,
                 comment: None,
+                stable: None,
             }],
             DatabaseKind::Sqlite,
         );
@@ -4951,6 +4972,7 @@
                     nullable: true,
                     primary_key: false,
                     comment: None,
+                    stable: None,
                 },
                 CompletionColumn {
                     table: "Product".to_string(),
@@ -4961,6 +4983,7 @@
                     nullable: false,
                     primary_key: false,
                     comment: None,
+                    stable: None,
                 },
                 CompletionColumn {
                     table: "Product".to_string(),
@@ -4971,6 +4994,7 @@
                     nullable: true,
                     primary_key: false,
                     comment: None,
+                    stable: None,
                 },
             ],
             "name",

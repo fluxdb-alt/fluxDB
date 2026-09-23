@@ -29,6 +29,7 @@ pub const KEY_QUERY_HISTORY: &str = "query_history";
 pub const KEY_REDIS_KEY_SEARCH_HISTORY: &str = "redis_key_search_history";
 pub const KEY_REDIS_WORKBENCH_HISTORY: &str = "redis_workbench_history";
 pub const KEY_BACKUP_RECORDS: &str = "backup_records";
+pub const KEY_ER_VIEWS: &str = "er_views";
 
 /// 将 rusqlite/serde_json 错误映射为 fluxdb 内部错误，对齐 lib.rs `storage_error`。
 fn sqlite_error(message: impl ToString) -> Error {

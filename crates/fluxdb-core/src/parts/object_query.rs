@@ -27,6 +27,10 @@ pub struct ObjectSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modified_at: Option<String>,
     pub comment: Option<String>,
+    /// 数据库稳定对象标识：PG 为 `pg_class.oid`（表/视图）。MySQL/SQLite 无公开稳定号，
+    /// 保持 `None`（不伪造）。用于 ER 结构刷新重绑：改名但同对象可据此自动接回关系。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stable: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -277,6 +281,8 @@ pub struct CompletionColumn {
     pub nullable: bool,
     pub primary_key: bool,
     pub comment: Option<String>,
+    /// ER 重绑使用的列身份：PostgreSQL 为 attnum，其他方言不伪造。
+    pub stable: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

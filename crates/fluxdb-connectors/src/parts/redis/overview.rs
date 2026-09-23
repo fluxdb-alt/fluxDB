@@ -73,6 +73,7 @@ fn redis_list_databases(
             rows,
             modified_at: None,
             comment: None,
+            stable: None,
         });
     }
     Ok(databases)

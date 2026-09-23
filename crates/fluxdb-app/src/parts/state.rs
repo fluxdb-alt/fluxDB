@@ -168,6 +168,10 @@ impl TabState {
                 connection_id: list.connection_id,
                 database: list.database.clone(),
             }),
+            TabKind::ErDiagram(er) => Some(TabWorkspace {
+                connection_id: er.connection_id,
+                database: er.database.clone(),
+            }),
             TabKind::Settings(settings) => settings.workspace.clone(),
         }
     }
@@ -197,6 +201,8 @@ pub enum TabKind {
     Settings(SettingsTabState),
     /// 数据库备份列表 tab（侧边栏「备份」节点单击打开，按库一个）。
     BackupList(BackupListState),
+    /// ER 关系图 tab（侧边栏「ER 图」节点单击打开，按库一个；画布原型）。
+    ErDiagram(ErDiagramState),
 }
 
 /// 备份列表 tab 的标识状态：仅记录连接 + 库；行数据由 UI 侧渲染时
@@ -205,6 +211,21 @@ pub enum TabKind {
 pub struct BackupListState {
     pub connection_id: ConnectionId,
     pub database: String,
+}
+
+/// ER 图 tab 的标识状态：仅记录连接 + 库 + 可选 schema + 可选中心表；图数据由
+/// desktop 侧后台加载并按 tab 缓存（与备份列表一样，controller 不持有行数据）。
+/// `schema` 为 None 表示整库范围（MySQL/SQLite 单库、PG 全部 schema）。
+/// `center_table` 为 Some 时表示「当前表关联 ER」：以该表为中心默认 1 跳绘制邻域；
+/// 为 None 时是整库 ER。
+/// 中心表用结构化身份（含 schema，PG 跨 schema 同名表不误配，含点标识符安全），
+/// 不再用裸表名或按 `.` 拆展示名。
+#[derive(Clone, Debug, PartialEq)]
+pub struct ErDiagramState {
+    pub connection_id: ConnectionId,
+    pub database: String,
+    pub schema: Option<String>,
+    pub center_table: Option<fluxdb_core::ErTableRef>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1261,6 +1282,17 @@ pub enum AppCommand {
     OpenDataEditor(ObjectPath),
     /// 打开某数据库的备份列表 tab（传入数据库 ObjectPath）。
     OpenBackupList(ObjectPath),
+    /// 打开某数据库的 ER 关系图 tab（画布原型；Path 定位到库/表所在连接与 schema）。
+    OpenErDiagram(ObjectPath),
+    /// ER 逻辑关系目录操作；实际文件读写由桌面端后台任务调用 dispatch。
+    LoadErRelationships { scope_key: String },
+    CreateErRelationship { scope_key: String, relationship: ErRelationship },
+    UpdateErRelationship { scope_key: String, relationship: ErRelationship, expected_revision: u64 },
+    /// 仅结构身份机械重绑，服务层原子保留原确认；普通编辑仍走 Update 并失效确认。
+    RebindErRelationship { scope_key: String, relationship: ErRelationship, expected_revision: u64 },
+    ConfirmErRelationship { scope_key: String, id: String, expected_revision: u64, by: String },
+    RejectErRelationship { scope_key: String, id: String, expected_revision: u64 },
+    DeleteErRelationship { scope_key: String, id: String, expected_revision: u64 },
     CopyTable {
         object: ObjectPath,
         new_name: String,
@@ -2312,6 +2344,9 @@ pub enum AppCommand {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppEvent {
+    ErRelationshipsLoaded { scope_key: String, relationships: Vec<ErRelationship> },
+    ErRelationshipChanged { scope_key: String, relationship: ErRelationship },
+    ErRelationshipDeleted { scope_key: String, id: String },
     BackupPrepared(BackupRequest),
     BackupCompleted(BackupManifest),
     RestorePrepared { request: RestoreRequest, plan: RestorePlan },
@@ -2566,7 +2601,7 @@ struct CompletionTriggersKey {
     schema: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AppController {
     state: AppState,
     next_connection_id: u64,
@@ -2575,6 +2610,9 @@ pub struct AppController {
     completion_cache: Arc<Mutex<CompletionCache>>,
     completion_index: Arc<Mutex<CompletionIndex>>,
     completion_index_storage: Option<fluxdb_storage::FileStorage>,
+    /// ER 逻辑关系服务按作用域复用；生命周期由应用层管理，UI 不直接持有文件 store。
+    er_model_storage: Option<fluxdb_storage::FileStorage>,
+    er_model_services: Arc<Mutex<BTreeMap<String, Arc<ErModelService>>>>,
     /// T071/F004：可关闭的轻量个性化（recency/frequency）。默认关闭，
     /// 关闭时排序与确定性基线一致。只记匿名 label，不记完整 SQL/敏感值。
     recency: Arc<Mutex<RecencyFrequency>>,
@@ -2583,4 +2621,8 @@ pub struct AppController {
     /// `AppState`：UI 线程与后台执行线程各持一份 `AppController` 副本，只有共享 `Arc`
     /// 才能让两边看到同一个标志。
     query_cancel_flags: Arc<Mutex<BTreeMap<TabId, Arc<std::sync::atomic::AtomicBool>>>>,
+    /// ER 元数据共享缓存（字段按需 + 关系索引 + 连接修订）。UI 线程与后台执行线程
+    /// 各持一份 `AppController` 副本，`Arc<Mutex>` 让两边共享同一缓存与并发协调。
+    /// 见 parts/er_catalog.rs。
+    er_catalog: Arc<Mutex<crate::ErCatalogCache>>,
 }

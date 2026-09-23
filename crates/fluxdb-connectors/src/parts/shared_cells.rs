@@ -47,6 +47,7 @@ fn database_object(connection_id: ConnectionId, database: &str) -> ObjectSummary
         rows: None,
         modified_at: None,
         comment: None,
+        stable: None,
     }
 }
 
@@ -126,6 +127,7 @@ fn columns_to_completion(
             nullable: column.nullable,
             primary_key: column.primary_key,
             comment: column.comment,
+            stable: None,
         })
         .collect()
 }

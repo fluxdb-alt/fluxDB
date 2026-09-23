@@ -364,6 +364,25 @@ impl Connector for MySqlConnector {
         mysql_foreign_keys(config, path)
     }
 
+    fn list_foreign_keys_for_tables(
+        &self,
+        database: Option<&str>,
+        _schema: Option<&str>,
+        tables: &[String],
+    ) -> fluxdb_core::Result<Vec<(String, ForeignKeyInfo)>> {
+        let config = self.config.as_ref().ok_or_else(|| {
+            Error::new(ErrorKind::Connection, "MySQL 外键读取需要连接配置上下文")
+        })?;
+        let database = database
+            .filter(|d| !d.is_empty())
+            .or_else(|| match &config.endpoint {
+                Endpoint::Tcp { database, .. } => database.as_deref(),
+                _ => None,
+            })
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "缺少数据库上下文"))?;
+        mysql_foreign_keys_for_tables(config, database, tables)
+    }
+
     fn list_foreign_keys_with_cancel(
         &self,
         path: &ObjectPath,

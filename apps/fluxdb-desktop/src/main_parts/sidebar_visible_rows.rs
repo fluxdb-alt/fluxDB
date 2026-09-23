@@ -912,6 +912,7 @@ mod sidebar_flatten_tests {
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         }
     }
 
@@ -927,6 +928,7 @@ mod sidebar_flatten_tests {
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         }
     }
 
@@ -943,6 +945,7 @@ mod sidebar_flatten_tests {
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         }
     }
 
@@ -1092,12 +1095,12 @@ mod sidebar_flatten_tests {
         assert_eq!(k[0], SidebarRowKind::Connection);
         assert_eq!(k[1], SidebarRowKind::Database);
         assert_eq!(rows[1].indent, 1);
-        // 6 个分组 + 表行；至少包含一个 ObjectGroup。
+        // 7 个分组（表/视图/存储过程/函数/查询/备份/ER 图）+ 表行；至少包含一个 ObjectGroup。
         let group_count = k
             .iter()
             .filter(|kind| **kind == SidebarRowKind::ObjectGroup)
             .count();
-        assert_eq!(group_count, 6);
+        assert_eq!(group_count, 7);
         assert!(k.contains(&SidebarRowKind::Table));
         // 有归档文件夹默认展开，应出现 TableFolder 行。
         assert!(k.contains(&SidebarRowKind::TableFolder));
@@ -1220,6 +1223,7 @@ mod sidebar_flatten_tests {
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         });
         assert_eq!(
             database_schemas(&pg, "appdb"),

@@ -148,6 +148,8 @@ impl AppController {
                         self.state.active_tab = self.state.tabs.last().map(|tab| tab.id);
                     }
                 }
+                // 连接配置变更：ER 元数据缓存按连接修订整体失效，避免旧连接结果复用。
+                self.er_bump_connection_revision(config.id);
                 self.state.last_error = None;
                 AppEvent::ConnectionUpdated(config)
             }
@@ -402,6 +404,8 @@ impl AppController {
                 }
                 self.state.last_error = None;
                 self.state.sidebar_layout.repair(&self.connection_configs());
+                // 连接删除：清空该连接 ER 缓存与修订，避免同 id 复用旧图。
+                self.er_invalidate_connection(connection_id);
 
                 AppEvent::ConnectionDeleted(connection_id)
             }
@@ -789,6 +793,105 @@ impl AppController {
                     kind: TabKind::BackupList(BackupListState {
                         connection_id,
                         database,
+                    }),
+                    dirty: false,
+                });
+                AppEvent::TabOpened(tab_id)
+            }
+            AppCommand::LoadErRelationships { scope_key } => {
+                let service = self.er_model_service(scope_key.clone()).ok_or_else(|| UserFacingError {
+                    title: "ER 关系加载失败".into(), message: "ER 存储尚未初始化".into(), detail: None, retryable: true,
+                });
+                match service.and_then(|service| service.list().map_err(|error| UserFacingError {
+                    title: "ER 关系加载失败".into(), message: error.to_string(), detail: None, retryable: true,
+                })) {
+                    Ok(relationships) => AppEvent::ErRelationshipsLoaded { scope_key, relationships },
+                    Err(error) => AppEvent::Failed(error),
+                }
+            }
+            AppCommand::CreateErRelationship { scope_key, relationship } => {
+                let result = self.er_model_service(scope_key.clone())
+                    .ok_or_else(|| UserFacingError { title: "ER 关系创建失败".into(), message: "ER 存储尚未初始化".into(), detail: None, retryable: true })
+                    .and_then(|service| service.create(relationship).map_err(|error| UserFacingError { title: "ER 关系创建失败".into(), message: error.to_string(), detail: None, retryable: false }));
+                match result { Ok(relationship) => AppEvent::ErRelationshipChanged { scope_key, relationship }, Err(error) => AppEvent::Failed(error) }
+            }
+            AppCommand::UpdateErRelationship { scope_key, relationship, expected_revision } => {
+                let id = relationship.id.clone();
+                let result = self.er_model_service(scope_key.clone())
+                    .ok_or_else(|| UserFacingError { title: "ER 关系更新失败".into(), message: "ER 存储尚未初始化".into(), detail: None, retryable: true })
+                    .and_then(|service| service.update(&id, expected_revision, move |current| { *current = relationship; Ok(()) }).map_err(|error| UserFacingError { title: "ER 关系更新失败".into(), message: error.to_string(), detail: None, retryable: false }));
+                match result { Ok(relationship) => AppEvent::ErRelationshipChanged { scope_key, relationship }, Err(error) => AppEvent::Failed(error) }
+            }
+            AppCommand::RebindErRelationship { scope_key, relationship, expected_revision } => {
+                let id = relationship.id.clone();
+                let result = self.er_model_service(scope_key.clone())
+                    .ok_or_else(|| UserFacingError { title: "ER 自动重绑失败".into(), message: "ER 存储尚未初始化".into(), detail: None, retryable: true })
+                    .and_then(|service| service.rebind_identity(&id, expected_revision, relationship)
+                        .map_err(|error| UserFacingError { title: "ER 自动重绑失败".into(), message: error.to_string(), detail: None, retryable: false }));
+                match result { Ok(relationship) => AppEvent::ErRelationshipChanged { scope_key, relationship }, Err(error) => AppEvent::Failed(error) }
+            }
+            AppCommand::ConfirmErRelationship { scope_key, id, expected_revision, by } => {
+                let result = self.er_model_service(scope_key.clone())
+                    .ok_or_else(|| UserFacingError { title: "ER 关系确认失败".into(), message: "ER 存储尚未初始化".into(), detail: None, retryable: true })
+                    .and_then(|service| service.confirm(&id, expected_revision, &by).map_err(|error| UserFacingError { title: "ER 关系确认失败".into(), message: error.to_string(), detail: None, retryable: false }));
+                match result { Ok(relationship) => AppEvent::ErRelationshipChanged { scope_key, relationship }, Err(error) => AppEvent::Failed(error) }
+            }
+            AppCommand::RejectErRelationship { scope_key, id, expected_revision } => {
+                let result = self.er_model_service(scope_key.clone())
+                    .ok_or_else(|| UserFacingError { title: "ER 关系拒绝失败".into(), message: "ER 存储尚未初始化".into(), detail: None, retryable: true })
+                    .and_then(|service| service.reject(&id, expected_revision).map_err(|error| UserFacingError { title: "ER 关系拒绝失败".into(), message: error.to_string(), detail: None, retryable: false }));
+                match result { Ok(relationship) => AppEvent::ErRelationshipChanged { scope_key, relationship }, Err(error) => AppEvent::Failed(error) }
+            }
+            AppCommand::DeleteErRelationship { scope_key, id, expected_revision } => {
+                let result = self.er_model_service(scope_key.clone())
+                    .ok_or_else(|| UserFacingError { title: "ER 关系删除失败".into(), message: "ER 存储尚未初始化".into(), detail: None, retryable: true })
+                    .and_then(|service| service.delete(&id, expected_revision).map_err(|error| UserFacingError { title: "ER 关系删除失败".into(), message: error.to_string(), detail: None, retryable: false }));
+                match result { Ok(()) => AppEvent::ErRelationshipDeleted { scope_key, id }, Err(error) => AppEvent::Failed(error) }
+            }
+            AppCommand::OpenErDiagram(path) => {
+                // 表级 path → 当前表关联 ER（以该表为中心 1 跳）；库/其它 → 整库 ER。
+                let database = path
+                    .database
+                    .clone()
+                    .unwrap_or_else(|| path.name.clone());
+                let schema = path.schema.clone();
+                // 中心表用结构化身份（schema + 裸名）：PG 跨 schema 与含点标识符都安全；
+                // 展示名由身份统一生成，匹配关系边不靠字符串拆解。
+                let center_table = (path.kind == ObjectKind::Table).then(|| fluxdb_core::ErTableRef {
+                    database: database.clone(),
+                    schema: schema.clone(),
+                    name: path.name.clone(),
+                });
+                let connection_id = path.connection_id;
+                // 按「连接+库+schema+中心表」去重：整库与当前表关联视图各自唯一。
+                if let Some(existing_tab_id) = self.state.tabs.iter().find_map(|tab| {
+                    if let TabKind::ErDiagram(er) = &tab.kind
+                        && er.connection_id == connection_id
+                        && er.database == database
+                        && er.schema == schema
+                        && er.center_table == center_table
+                    {
+                        return Some(tab.id);
+                    }
+                    None
+                }) {
+                    self.state.active_tab = Some(existing_tab_id);
+                    return AppEvent::TabActivated(existing_tab_id);
+                }
+
+                let tab_id = self.next_tab_id();
+                let title = match &center_table {
+                    Some(table) => format!("{} · 关联 ER", table.display()),
+                    None => format!("{database} · ER"),
+                };
+                self.push_tab(TabState {
+                    id: tab_id,
+                    title,
+                    kind: TabKind::ErDiagram(ErDiagramState {
+                        connection_id,
+                        database,
+                        schema,
+                        center_table,
                     }),
                     dirty: false,
                 });

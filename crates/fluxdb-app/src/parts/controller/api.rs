@@ -8,8 +8,11 @@ impl AppController {
             completion_cache: Arc::new(Mutex::new(CompletionCache::default())),
             completion_index: Arc::new(Mutex::new(CompletionIndex::default())),
             completion_index_storage: None,
+            er_model_storage: None,
+            er_model_services: Arc::new(Mutex::new(BTreeMap::new())),
             recency: Arc::new(Mutex::new(RecencyFrequency::new())),
             query_cancel_flags: Arc::new(Mutex::new(BTreeMap::new())),
+            er_catalog: Arc::new(Mutex::new(ErCatalogCache::default())),
         }
     }
 
@@ -67,6 +70,27 @@ impl AppController {
 
     pub fn set_completion_index_storage(&mut self, storage: fluxdb_storage::FileStorage) {
         self.completion_index_storage = Some(storage);
+    }
+
+    /// 注册 ER 关系目录的持久化存储。服务实例由应用层按 scope 惰性创建并复用。
+    pub fn set_er_model_storage(&mut self, storage: fluxdb_storage::FileStorage) {
+        self.er_model_storage = Some(storage);
+        self.er_model_services.lock().unwrap().clear();
+    }
+
+    pub fn er_model_service(&mut self, scope_key: impl Into<String>) -> Option<Arc<ErModelService>> {
+        let scope_key = scope_key.into();
+        let mut services = self.er_model_services.lock().unwrap();
+        if let Some(service) = services.get(&scope_key) {
+            return Some(service.clone());
+        }
+        let storage = self.er_model_storage.clone()?;
+        let service = Arc::new(ErModelService::new(
+            scope_key.clone(),
+            Box::new(FileErRelationshipStore::new(storage, scope_key.clone())),
+        ));
+        services.insert(scope_key, service.clone());
+        Some(service)
     }
 
     pub fn state(&self) -> &AppState {

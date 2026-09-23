@@ -756,6 +756,8 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
         TabKind::CreateTable(create) => TabKind::CreateTable(create.clone()),
         // 备份列表 tab 状态只有连接+库标识，行数据渲染时现扫磁盘，快照直接克隆。
         TabKind::BackupList(list) => TabKind::BackupList(list.clone()),
+        // ER 图 tab 状态只有连接+库+schema 标识，图数据在 desktop 侧缓存，快照直接克隆。
+        TabKind::ErDiagram(er) => TabKind::ErDiagram(er.clone()),
         // Redis CLI 状态本身很轻量，快照直接克隆即可（会话复用依赖 connection_id + database）。
         TabKind::RedisCli(cli) => TabKind::RedisCli(cli.clone()),
         // Redis Pub/Sub 状态很轻量（仅 connection_id + database），快照直接克隆。

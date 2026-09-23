@@ -514,6 +514,117 @@ struct PendingDeleteDatabase {
     database: String,
 }
 
+#[derive(Clone, Debug)]
+struct ErRelationshipSelectOption {
+    id: String,
+    label: String,
+}
+
+impl SelectItem for ErRelationshipSelectOption {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.label.clone().into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+}
+
+struct ErRelationshipPairControls {
+    left: Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>,
+    right: Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>,
+    left_options_key: String,
+    right_options_key: String,
+}
+
+/// 结构刷新重绑待处理项（§5.2/D9，供关系面板列出，人工重绑；不自动改关系）。
+/// `kind` 为可读描述，如「实体未找到」「同名重建需确认」「缺列: xxx」。
+#[derive(Clone, Debug, Default)]
+struct ErRebindPendingItem {
+    rel_id: String,
+    /// 端点描述（左表 / 右表）。
+    endpoint: String,
+    kind: String,
+}
+
+struct ErRelationshipFilterControls {
+    side: Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>,
+    column: Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>,
+    op: Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>,
+    literal: Entity<InputState>,
+    column_options_key: String,
+}
+
+/// ER 画布视图状态（§perf 8 画布实体隔离，阶段一）：平移/拖动/字段滚动等连续交互的
+/// 热路径状态经 `Rc<RefCell>` 共享（`NavicatMain.er_canvas`），app 各 handler 无需 cx
+/// 直改。阶段二（把画布渲染/通知下沉到独立实体）设计已定但需 GPUI 真机点验后再落地，
+/// 届时才引入实体层；当前仅 Rc 共享（避免阶段一在全仓警醒下铺开实体死代码）。
+/// 画布浮层所需的每帧只读数据（端口圆点/临时连线/画布原点）。
+/// 由 canvas.rs 从状态读出后传入 er_canvas_view，避免渲染函数直接持状态借用。
+struct ErCanvasOverlay {
+    /// 悬停字段行（用于浮现端口圆点）。
+    row_hover: Option<(String, String)>,
+    /// 悬停端口圆点（行→圆点过渡时不闪烁）。
+    port_hover: Option<(String, String)>,
+    /// 连线拖拽状态（临时线 + 源/目标端口高亮）。
+    link_drag: Option<ErLinkDrag>,
+}
+
+/// 字段手动连线拖拽状态（§手动连线）。
+/// 从字段端口圆点按下开始，移动到目标字段端口时吸附；释放到有效目标则打开关系表单并预填。
+#[derive(Clone, Debug)]
+struct ErLinkDrag {
+    tab: TabId,
+    from_table: String,
+    from_column: String,
+    from_side: ErPortSide,
+    /// 光标屏幕坐标（画布内）。
+    cursor: (f32, f32),
+    /// 当前吸附到的目标端口（表, 字段, 侧别）；未命中有效字段端口时为 None（跟手）。
+    target: Option<(String, String, ErPortSide)>,
+}
+
+struct ErCanvasShared {
+    // ER 画布视口（平移/缩放）：按 tab 隔离。
+    er_viewports: BTreeMap<TabId, ErViewport>,
+    // ER 画布拖动平移进行中：记录 (tab, 按下时光标, 按下时 pan)，用于拖动更新 pan。
+    er_viewport_drag: Option<(TabId, f32, f32, f32, f32)>,
+    // ER 画布可见区域尺寸（px）：由画布区 Element 回报，用于虚拟化可见性计算。
+    er_canvas_sizes: BTreeMap<TabId, (f32, f32)>,
+    // ER 画布区在窗口中的原点（px）：绘制/命中需统一画布原点偏移（§修复：命中遗漏原点）。
+    er_canvas_origins: BTreeMap<TabId, (f32, f32)>,
+    // ER 节点内字段纵向滚动偏移（px，按 tab+表名）。字段多时在节点内滚动。
+    er_node_scroll_px: BTreeMap<(TabId, String), f32>,
+    // ER 字段滚动条拖拽进行中：记录 (tab, 表名)。
+    er_scroll_drag: Option<(TabId, String)>,
+    // ER 画布当前选中的表（按 tab）：表头点击选择，相关连线高亮；空白/Esc 取消。
+    er_selected_table: BTreeMap<TabId, Option<String>>,
+    // ER 节点自由世界坐标（按 tab + 表名，稳定表身份，不依赖布局下标）。
+    // 场景只存拓扑；坐标在此可变（拖动/布局应用更新）。
+    er_scene_positions: BTreeMap<TabId, BTreeMap<String, (f32, f32)>>,
+    // 手动固定（拖动过）的表：关系布局/重排保留其坐标（§6.3）。
+    er_pinned: BTreeMap<TabId, BTreeSet<String>>,
+    // 节点拖动进行中：(tab, 表名, 按下光标 x/y, 原坐标 x/y, 是否已超阈值)。
+    // 未超阈值释放 = 选择；超阈值 = 拖动（§7）。
+    er_node_drag: Option<(TabId, String, f32, f32, f32, f32, bool)>,
+    // 字段手动连线拖拽进行中（§手动连线）。
+    er_link_drag: Option<ErLinkDrag>,
+    // 悬停的字段行（表, 字段）：用于浮现字段端口圆点。行与圆点分开记录，
+    // 光标从字段行移到圆点时不因行 hover 丢失而闪烁。
+    er_row_hover: BTreeMap<TabId, Option<(String, String)>>,
+    er_port_hover: BTreeMap<TabId, Option<(String, String)>>,
+    // 本帧可见节点视图缓存（供字段端口命中测试：拖动/释放时按真实几何反查字段行）。
+    er_frame_nodes: BTreeMap<TabId, Vec<ErNodeView>>,
+    // 本帧可见折线缓存（供空白点击的关系线命中，有界）。
+    er_frame_edges: BTreeMap<TabId, Vec<ErEdgeView>>,
+    // ER 隐藏字段定位后的高亮（按 tab → (表名, 字段名)）：从汇总端口定位到精确字段后高亮该行。
+    er_field_highlights: BTreeMap<TabId, (String, String)>,
+    // ER 小地图（§六.25）：小地图在窗口中的 (x,y,w,h)，供点击导航归一化换算（paint 回报）。
+    er_minimap_rect: BTreeMap<TabId, (f32, f32, f32, f32)>,
+}
+
 struct NavicatMain {
     focus_handle: FocusHandle,
     controller: AppController,
@@ -612,6 +723,119 @@ struct NavicatMain {
     redis_key_search_history_open: bool,
     redis_data_refresh_times: BTreeMap<TabId, Instant>,
     redis_refresh_time_task: Option<Task<()>>,
+    // ER 关系图画布数据：按 tab 缓存；首次打开自动后台加载（见 er/canvas.rs）。
+    er_graphs: BTreeMap<TabId, fluxdb_core::ErGraphData>,
+    // 整库表目录（阶段 1 读取）。当前表关联 ER 视图据此在关系就绪后扩展邻域；
+    // 整库视图直接用它作为展示集。
+    er_full_tables: BTreeMap<TabId, Vec<fluxdb_core::ErTableNode>>,
+    // ER 图加载失败的错误文案：有值则渲染错误+重试，而非空图。
+    er_errors: BTreeMap<TabId, String>,
+    // 进行中的 ER 加载任务；存在即「请求中」，避免渲染重复触发加载。
+    er_load_tasks: BTreeMap<TabId, Task<()>>,
+    er_generation: BTreeMap<TabId, u64>,
+    // ER 关系索引后台加载任务（按 tab，共享 app 层索引）。存在即请求中，避免重复发起。
+    er_relation_tasks: BTreeMap<TabId, Task<()>>,
+    // 当前表关联 ER 的展开深度（跳数）：按 tab 隔离，默认 1。
+    // 切换深度会清图缓存并重新加载 neighborhood（不在 tab 去重键内，同一表一个 tab）。
+    er_depths: BTreeMap<TabId, u8>,
+    // 单节点式展开：显式点过展开的表集合；这些表作为额外种子与中心同层扩 1 跳。
+    er_expanded: BTreeMap<TabId, BTreeSet<String>>,
+    // ER 画布视图状态：Rc 共享直改（§perf 8 画布实体隔离阶段一；实体层待阶段二按需引入）。
+    er_canvas: Rc<std::cell::RefCell<ErCanvasShared>>,
+    // ER 画布场景缓存（布局+连线端点预计算）：随图加载一次构建，渲染复用避免每帧重算。
+    er_scenes: BTreeMap<TabId, Rc<ErScene>>,
+    // 用户已操作画布（平移/拖动/选择/字段滚动）的 tab：关系就绪后不再自动重排。
+    er_user_interacted: BTreeSet<TabId>,
+    // 关系布局已应用过一次的 tab（首次关系就绪自动应用只此一次，§6.2）。
+    er_layout_applied: BTreeSet<TabId>,
+    // 自动落位（新增表/冲突表避让）已执行过一次的 tab：与用户是否已交互无关。
+    // 平移/缩放在关系就绪前也会置 er_user_interacted，若复用该标记会把重叠留在画布上。
+    er_auto_placed: BTreeSet<TabId>,
+    /// 首次显示已做过「自动适配居中」的 tab：只做一次，之后尊重用户视口（§六.23）。
+    er_fit_done: BTreeSet<TabId>,
+    // 本帧可见折线缓存（供空白点击的关系线命中，有界）。（已迁入 ErCanvasState）
+    // 最近一次就绪的「整范围」关系索引全边集（按 tab）：供局部 ER 深度切换/单节点展开
+    // 无需重新读库即可同步重算邻域，避免撕图后出现空画布，同时保留人工坐标（§修复 1）。
+    er_all_edges: BTreeMap<TabId, Vec<fluxdb_core::ErForeignKeyEdge>>,
+    // 局部 ER 中心表身份（按 tab）：单节点展开按钮需用它同步重算邻域（node.rs 无 ErDiagramState）。
+    er_center_refs: BTreeMap<TabId, fluxdb_core::ErTableRef>,
+    // ER 隐藏字段定位后的高亮（按 tab → (表名, 字段名)）：从汇总端口定位到精确字段后高亮该行。
+    // （已迁入 ErCanvasState：er_field_highlights）
+    // ER 最近一次成功元数据加载的时间（按 tab，展示「更新时间」）。
+    er_last_updated: BTreeMap<TabId, String>,
+    // 手动刷新进行中的 tab：刷新时保留当前可用图，仅重新读取元数据（§3.3 手动刷新）。
+    er_refreshing: BTreeSet<TabId>,
+    // ER 字段按需加载的待请求表集合（去抖合并）：同一批可见表合并为一次批量请求。
+    /// 待请求字段的表集合（结构化身份，缓存/结果归并据此进行，不从展示名反推）。
+    er_pending_columns: BTreeMap<TabId, BTreeSet<fluxdb_core::ErTableRef>>,
+    /// 最近一次 ER JSON 导入结果（校验/差异预览；本轮仅用于展示，未做「应用」）。
+    er_last_import: BTreeMap<TabId, ErImportReport>,
+    // ER 字段按需加载去抖任务：短暂窗口内合并需求，避免每个鼠标/渲染事件启动请求。
+    er_column_debounce_tasks: BTreeMap<TabId, Option<Task<()>>>,
+    // ER 表搜索（§五.6）：按 tab 的输入框实体 / 订阅 / 当前查询 / 选中索引。
+    er_search_input: BTreeMap<TabId, Entity<InputState>>,
+    er_search_subs: BTreeMap<TabId, Subscription>,
+    er_search_query: BTreeMap<TabId, String>,
+    er_search_sel: BTreeMap<TabId, usize>,
+    // ER 业务分组（§五.9-12）：按 schema 分组进入/返回全部；None=全部。
+    er_group: BTreeMap<TabId, Option<String>>,
+    er_custom_groups: BTreeMap<TabId, BTreeMap<String, BTreeSet<String>>>,
+    er_group_inputs: BTreeMap<TabId, Entity<InputState>>,
+    // 最近一次据以构建场景的分组（用于分组切换时触发重建，不因普通 pan/滚动重建）。
+    er_group_built: BTreeMap<TabId, Option<String>>,
+    // ER 小地图（§六.25）：小地图在窗口中的 (x,y,w,h)，供点击导航归一化换算（paint 回报）。
+    // （已迁入 ErCanvasState：er_minimap_rect）
+    // ER 导出对话框（§十）：true 显示 JSON/DBML/Mermaid/SVG 导出到文件动作 + 导入 JSON。
+    er_export_open: BTreeSet<TabId>,
+    // ER 导出对话框当前键盘高亮项索引（0..=4：JSON/DBML/Mermaid/SVG/导入 JSON）。
+    er_export_sel: BTreeMap<TabId, usize>,
+    // ER 导出对话框焦点句柄（打开时聚焦，使键盘上下/Enter/Esc 路由到对话框）。
+    er_export_focus: BTreeMap<TabId, FocusHandle>,
+    // ER 视图持久化已恢复标记（按 tab）：首次渲染本 tab 时应用上次保存的分组/坐标/固定一次。
+    er_view_restored: BTreeSet<TabId>,
+    er_view_save_failed: BTreeSet<TabId>,
+    er_previous_layout: BTreeMap<TabId, (BTreeMap<String, (f32, f32)>, BTreeSet<String>, ErViewport)>,
+    // ER 作用域持久化 key（按 tab）：打开时由 ErDiagramState 生成，保存/恢复据此定位。
+    er_scope_keys: BTreeMap<TabId, String>,
+    er_relationship_scope_keys: BTreeMap<TabId, String>,
+    // ER 本地逻辑关系目录显示缓存与后台请求状态；按 tab 隔离，结果回填前校验 scope。
+    er_relationships: BTreeMap<TabId, Vec<fluxdb_core::ErRelationship>>,
+    er_relationship_loading: BTreeSet<TabId>,
+    er_relationship_tasks: BTreeMap<TabId, Task<()>>,
+    er_relationship_errors: BTreeMap<TabId, String>,
+    er_relationship_panel_open: BTreeSet<TabId>,
+    er_relationship_panel_focus: BTreeMap<TabId, FocusHandle>,
+    er_relationship_form_open: BTreeSet<TabId>,
+    er_relationship_form_editing: BTreeMap<TabId, Option<String>>,
+    er_relationship_form_role_inputs: BTreeMap<TabId, Entity<InputState>>,
+    er_relationship_form_description_inputs: BTreeMap<TabId, Entity<InputState>>,
+    er_relationship_form_left_tables:
+        BTreeMap<TabId, Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>>,
+    er_relationship_form_right_tables:
+        BTreeMap<TabId, Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>>,
+    er_relationship_form_pairs: BTreeMap<TabId, Vec<ErRelationshipPairControls>>,
+    er_relationship_form_filters: BTreeMap<TabId, Vec<ErRelationshipFilterControls>>,
+    /// 基数选择：`1:1 / 1:N / N:1 / N:N / 未知`（映射到 ErMatchCardinality，basis=UserAssertion）。
+    er_relationship_form_cardinality:
+        BTreeMap<TabId, Entity<SelectState<SearchableVec<ErRelationshipSelectOption>>>>,
+    er_relationship_form_subscriptions: BTreeMap<TabId, Vec<Subscription>>,
+    /// 关系面板宽度（按 tab，可拖动左缘调整）。
+    er_relationship_panel_width: BTreeMap<TabId, f32>,
+    /// 关系面板中高亮选中的关系 id（点击画布逻辑边后定位，供编辑/确认）。
+    er_relationship_panel_selected: BTreeMap<TabId, Option<String>>,
+    /// 结构刷新重绑待处理项（§5.2/D9）：刷新后比对新快照产出的 unresolved/needs_review，
+    /// 供关系面板顶部列出，人工重绑。不自动改关系。
+    er_rebind_pending: BTreeMap<TabId, Vec<ErRebindPendingItem>>,
+    /// 可自动重绑的关系（§5.2 第 1 步稳定标识命中的"改名但同对象"）：刷新后由
+    /// `er_rebind_scan` 计算，`apply_er_rebind_auto` 逐个经应用服务写回并持久化。
+    er_rebind_auto: BTreeMap<TabId, Vec<fluxdb_core::ErRelationship>>,
+    /// 自动重绑后台写回任务（不占 `er_relationship_tasks`，避免关系面板误显"提交中"）。
+    er_rebind_tasks: BTreeMap<TabId, Task<()>>,
+    er_rebuild_review_tasks: BTreeMap<TabId, Task<()>>,
+    /// 关系面板拖动起点（全局拖动，无 tab_id 语义，参照 sidebar 模式）。
+    er_relationship_panel_resize_start: Option<SidebarResizeStart>,
+    er_relationship_delete_pending: BTreeMap<TabId, (String, u64)>,
+    er_relationship_delete_undo: BTreeMap<TabId, fluxdb_core::ErRelationship>,
     // Redis 连接级概览（版本/内存/CPU）的定期刷新任务与进行中的单次拉取任务
     redis_overview_refresh_task: Option<Task<()>>,
     redis_overview_refresh_tasks: BTreeMap<u64, Task<()>>,

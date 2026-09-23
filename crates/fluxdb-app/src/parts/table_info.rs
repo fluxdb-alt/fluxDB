@@ -168,6 +168,8 @@ fn tab_belongs_to_database(tab: &TabState, connection_id: ConnectionId, database
         TabKind::Settings(settings) => settings.workspace.as_ref().is_some_and(|workspace| {
             workspace.connection_id == connection_id && workspace.database == database
         }),
+        // ER 图 tab 按「连接 + 库」归属（与侧边栏 ER 节点一一对应）。
+        TabKind::ErDiagram(er) => er.connection_id == connection_id && er.database == database,
         TabKind::UserAdmin(_) => false,
     }
 }
@@ -195,6 +197,7 @@ fn tab_belongs_to_connection(tab: &TabState, connection_id: ConnectionId) -> boo
         TabKind::CreateTable(create) => create.connection_id == connection_id,
         TabKind::UserAdmin(admin) => admin.connection_id == connection_id,
         TabKind::BackupList(list) => list.connection_id == connection_id,
+        TabKind::ErDiagram(er) => er.connection_id == connection_id,
         TabKind::Settings(settings) => settings
             .workspace
             .as_ref()
@@ -221,6 +224,7 @@ mod table_info_tests {
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         }
     }
 

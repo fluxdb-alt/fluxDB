@@ -190,6 +190,7 @@ impl Connector for MockConnector {
                 nullable: column.nullable,
                 primary_key: column.primary_key,
                 comment: column.comment,
+                stable: None,
             })
             .collect())
     }

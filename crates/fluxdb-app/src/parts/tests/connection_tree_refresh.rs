@@ -93,6 +93,7 @@
                 rows: None,
                 modified_at: None,
                 comment: None,
+                stable: None,
             }],
         );
 

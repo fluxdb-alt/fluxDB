@@ -351,6 +351,15 @@ fn table_context_menu(
             cx,
         ))
         .child(table_menu_item(
+            "关联 ER",
+            AppIcon::Schema,
+            false,
+            Some(TableMenuAction::OpenErDiagram),
+            &menu,
+            colors,
+            cx,
+        ))
+        .child(table_menu_item(
             "设计表",
             AppIcon::Settings,
             false,

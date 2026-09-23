@@ -52,6 +52,7 @@ fn mock_objects(connection_id: ConnectionId) -> Vec<ObjectSummary> {
             rows: Some(504),
             modified_at: None,
             comment: Some("Products sold or used in manufacturing.".to_string()),
+            stable: None,
         },
         ObjectSummary {
             path: ObjectPath {
@@ -64,6 +65,7 @@ fn mock_objects(connection_id: ConnectionId) -> Vec<ObjectSummary> {
             rows: Some(4),
             modified_at: None,
             comment: Some("High-level product categories.".to_string()),
+            stable: None,
         },
         ObjectSummary {
             path: ObjectPath {
@@ -76,6 +78,7 @@ fn mock_objects(connection_id: ConnectionId) -> Vec<ObjectSummary> {
             rows: Some(1200),
             modified_at: None,
             comment: Some("Sales orders referencing products and customers.".to_string()),
+            stable: None,
         },
         ObjectSummary {
             path: ObjectPath {
@@ -88,6 +91,7 @@ fn mock_objects(connection_id: ConnectionId) -> Vec<ObjectSummary> {
             rows: Some(88),
             modified_at: None,
             comment: Some("Customers who placed orders.".to_string()),
+            stable: None,
         },
     ]
 }
@@ -294,6 +298,7 @@ fn loaded_completion_columns_in_schema(
                     nullable: column.nullable,
                     primary_key: column.primary_key,
                     comment: column.comment.clone(),
+                    stable: None,
                 })
             })
             .collect()

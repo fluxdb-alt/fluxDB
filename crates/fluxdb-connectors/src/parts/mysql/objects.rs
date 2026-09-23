@@ -115,6 +115,7 @@ async fn mysql_table_objects(
             rows,
             modified_at: modified_at.filter(|value| !value.is_empty()),
             comment: comment.filter(|comment| !comment.is_empty()),
+            stable: None,
         });
     }
     if objects.is_empty() {
@@ -153,6 +154,7 @@ async fn mysql_show_table_objects(
             rows: None,
             modified_at: None,
             comment: None,
+            stable: None,
         });
     }
     Ok(objects)
