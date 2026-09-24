@@ -83,10 +83,10 @@ fn er_relationship_panel(
         // 若不消费按下，按住移动会带动底下 ER 画布）。内部控件在子层先命中，不受此影响。
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |_, _, window, cx| {
-                // 子层可聚焦控件（输入框/下拉等）已在冒泡到达前取得焦点并 prevent_default；
-                // 此时不能再把焦点抢回面板，否则输入框永远失焦、无法输入。
-                if !window.default_prevented() {
+            cx.listener(move |this, _, window, cx| {
+                // 表单中的下拉点击不一定 prevent_default；打开表单时不要让面板
+                // 抢走焦点，否则搜索和选项确认会失效。
+                if !this.er_relationship_form_open.contains(&tab_id) && !window.default_prevented() {
                     panel_focus.focus(window, cx);
                 }
                 cx.stop_propagation();

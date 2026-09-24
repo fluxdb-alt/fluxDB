@@ -836,6 +836,11 @@ struct NavicatMain {
     er_relationship_panel_resize_start: Option<SidebarResizeStart>,
     er_relationship_delete_pending: BTreeMap<TabId, (String, u64)>,
     er_relationship_delete_undo: BTreeMap<TabId, fluxdb_core::ErRelationship>,
+    /// 左右表下拉当前已渲染选项的表 id 列表签名。表单在面板每次 render 都会重建
+    /// （ensure_er_relationship_form_controls），若每次都 set_items 重置 Select 的选项，
+    /// 搜索过滤结果会被重置为全量、搜索文本被清空（set_selected_value 会 clear_query），
+    /// 导致表下拉搜索"输入了但列表不动"。仅当该签名变化时才刷新左右表选项。
+    er_relationship_form_table_options: BTreeMap<TabId, Vec<String>>,
     // Redis 连接级概览（版本/内存/CPU）的定期刷新任务与进行中的单次拉取任务
     redis_overview_refresh_task: Option<Task<()>>,
     redis_overview_refresh_tasks: BTreeMap<u64, Task<()>>,
