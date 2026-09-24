@@ -79,6 +79,20 @@ fn split_filter_batch_text(text: &str, separator: BatchSeparator) -> Vec<&str> {
     }
 }
 
+/// 运算符还能否再加入一个值。
+///
+/// BETWEEN / NOT BETWEEN 语义上是区间，只允许两个值（下限、上限）；
+/// 其余运算符（含 IN / NOT IN 列表）不限制数量。
+fn data_filter_rule_can_add_more_value(operator: DataFilterOperator, current_len: usize) -> bool {
+    if matches!(
+        operator,
+        DataFilterOperator::Between | DataFilterOperator::NotBetween
+    ) {
+        return current_len < 2;
+    }
+    true
+}
+
 /// 从批量片段解析出的待添加值：trim、忽略空行，纯逻辑便于单测。
 fn filter_batch_values_to_add(text: &str, separator: BatchSeparator, selected: &BTreeSet<String>) -> (Vec<String>, usize, usize) {
     let mut added = Vec::new();

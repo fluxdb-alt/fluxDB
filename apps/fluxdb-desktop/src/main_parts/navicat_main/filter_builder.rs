@@ -363,7 +363,15 @@ impl NavicatMain {
             && draft.tab_id == tab_id
         {
             if !draft.values.remove(&value) {
-                draft.values.insert(value);
+                if !data_filter_rule_can_add_more_value(draft.operator, draft.values.len()) {
+                    self.show_message(
+                        "介于/不介于最多选择两个值".to_string(),
+                        AppMessageKind::Warning,
+                        cx,
+                    );
+                } else {
+                    draft.values.insert(value);
+                }
             }
         }
         cx.notify();
@@ -412,6 +420,9 @@ impl NavicatMain {
                 && draft.tab_id == tab_id
             {
                 for value in added_values.iter().cloned() {
+                    if !data_filter_rule_can_add_more_value(draft.operator, draft.values.len()) {
+                        break;
+                    }
                     draft.values.insert(value);
                 }
                 draft.batch_text.clear();
@@ -479,8 +490,16 @@ impl NavicatMain {
             return;
         }
         let value = raw.trim().to_string();
-        if !draft.values.insert(value) {
+        if draft.values.contains(&value) {
             self.show_message("该值已选中".to_string(), AppMessageKind::Warning, cx);
+        } else if !data_filter_rule_can_add_more_value(draft.operator, draft.values.len()) {
+            self.show_message(
+                "介于/不介于最多选择两个值".to_string(),
+                AppMessageKind::Warning,
+                cx,
+            );
+        } else {
+            draft.values.insert(value);
         }
         // 保持输入框空并保留焦点，方便连续输入。
         self.data_filter_value_input_text.clear();
@@ -507,8 +526,17 @@ impl NavicatMain {
 
         // 未提交的单值输入先纳入草稿（沿用与手动添加相同的去空/去重规则）。
         let pending = std::mem::take(&mut draft.input);
-        if !pending.trim().is_empty() {
+        if !pending.trim().is_empty()
+            && data_filter_rule_can_add_more_value(draft.operator, draft.values.len())
+        {
             draft.values.insert(pending.trim().to_string());
+        } else if !pending.trim().is_empty() {
+            // 介于/不介于已满两个值：未提交的单值无法加入，明确提示而非静默丢弃。
+            self.show_message(
+                "介于/不介于最多选择两个值".to_string(),
+                AppMessageKind::Warning,
+                cx,
+            );
         }
         // 批量区若有未处理内容，提示后返回，不静默丢失。
         if !draft.batch_text.trim().is_empty() {

@@ -3677,6 +3677,29 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
     }
 
     #[test]
+    fn data_filter_between_operators_limit_value_count_to_two() {
+        // 介于/不介于最多两个值；其余运算符不限数量。
+        for op in [
+            DataFilterOperator::Between,
+            DataFilterOperator::NotBetween,
+        ] {
+            assert!(data_filter_rule_can_add_more_value(op, 0));
+            assert!(data_filter_rule_can_add_more_value(op, 1));
+            assert!(!data_filter_rule_can_add_more_value(op, 2));
+            assert!(!data_filter_rule_can_add_more_value(op, 3));
+        }
+        for op in [
+            DataFilterOperator::Eq,
+            DataFilterOperator::InList,
+            DataFilterOperator::NotInList,
+            DataFilterOperator::Contains,
+        ] {
+            assert!(data_filter_rule_can_add_more_value(op, 0), "{op:?} 不应限制数量");
+            assert!(data_filter_rule_can_add_more_value(op, 10), "{op:?} 不应限制数量");
+        }
+    }
+
+    #[test]
     fn data_filter_values_strip_outer_quotes_when_used() {
         let specs = data_filter_specs_from_rules(&[DataFilterRule {
             enabled: true,
@@ -6008,3 +6031,4 @@ fn postgres_form_validation_uses_profile_rules() {
         assert_eq!(ErExportKind::Mermaid.extension(), "mmd");
         assert_eq!(ErExportKind::Svg.extension(), "svg");
     }
+

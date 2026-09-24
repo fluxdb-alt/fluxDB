@@ -170,6 +170,16 @@ impl NavicatMain {
     ) {
         let tables = self.er_full_tables.get(&tab_id).cloned().unwrap_or_default();
         let table_options = er_table_options(&tables);
+        // 表选项签名：仅在选项集合真正变化时才刷新左右表下拉。表单随面板每次 render
+        // 重建而重跑本函数，若每次都 set_items + set_selected_value（后者会 clear_query），
+        // 会在用户搜索下拉时把过滤结果与搜索文本一起重置，表现为"选项完全不动"。
+        let option_signature: Vec<String> =
+            table_options.iter().map(|o| o.id.clone()).collect();
+        let options_changed =
+            self.er_relationship_form_table_options.get(&tab_id) != Some(&option_signature);
+        if options_changed {
+            self.er_relationship_form_table_options.insert(tab_id, option_signature);
+        }
         if !self.er_relationship_form_role_inputs.contains_key(&tab_id) {
             self.er_relationship_form_role_inputs.insert(
                 tab_id,
@@ -185,9 +195,11 @@ impl NavicatMain {
                 cx.new(|cx| InputState::new(window, cx).placeholder("说明（可选）")),
             );
         }
-        if let Some(select) = self.er_relationship_form_left_tables.get(&tab_id) {
+        if options_changed
+            && let Some(select) = self.er_relationship_form_left_tables.get(&tab_id)
+        {
             Self::er_refresh_select_options(select, table_options.clone(), window, cx);
-        } else {
+        } else if !self.er_relationship_form_left_tables.contains_key(&tab_id) {
             let select = cx.new(|cx| {
                 SelectState::new(SearchableVec::new(table_options.clone()), None, window, cx)
                     .searchable(true)
@@ -213,9 +225,11 @@ impl NavicatMain {
                 .or_default()
                 .push(subscription);
         }
-        if let Some(select) = self.er_relationship_form_right_tables.get(&tab_id) {
+        if options_changed
+            && let Some(select) = self.er_relationship_form_right_tables.get(&tab_id)
+        {
             Self::er_refresh_select_options(select, table_options, window, cx);
-        } else {
+        } else if !self.er_relationship_form_right_tables.contains_key(&tab_id) {
             let select = cx.new(|cx| {
                 SelectState::new(SearchableVec::new(table_options), None, window, cx)
                     .searchable(true)
@@ -313,9 +327,7 @@ impl NavicatMain {
             }
         }
         // 基数选择：缺失时创建，默认「未知」。
-        if let Some(select) = self.er_relationship_form_cardinality.get(&tab_id) {
-            Self::er_refresh_select_options(select, er_cardinality_options(), window, cx);
-        } else {
+        if !self.er_relationship_form_cardinality.contains_key(&tab_id) {
             let select = cx.new(|cx| {
                 SelectState::new(
                     SearchableVec::new(er_cardinality_options()),
