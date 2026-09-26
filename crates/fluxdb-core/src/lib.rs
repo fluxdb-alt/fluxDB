@@ -24,6 +24,7 @@ include!("parts/write_value.rs");
 include!("parts/connector.rs");
 include!("parts/command_workbench.rs");
 include!("parts/workbench_history.rs");
+include!("parts/operation_kind.rs");
 include!("parts/terminal.rs");
 include!("parts/sql_dialect.rs");
 include!("parts/process_util.rs");

@@ -1,10 +1,11 @@
 //! SQLite 本地持久化原语。
 //!
-//! FileStorage 的 5 个 toml store（connections、queries、query-history、
-//! redis workbench-history、redis key-search-history）迁移到单个
-//! `fluxdb.sqlite` 数据库。所有访问都是 load-all / save-all 全量读写，
-//! 因此用单个通用 kv 表，每条记录序列化为 JSON blob——精确复刻 toml 语义，
-//! 避免按字段建列导致的 serde 漂移风险，diff 最小。
+//! 数据分两类落盘：
+//! - **真表**：`connections`（一条连接一行，见 [`crate::connection_store`]）与
+//!   `history`（所有数据库类型的执行历史，见 [`crate::history_store`]）；
+//! - **kv 表**：仍是 load-all / save-all 全量读写的设置类数据（settings、
+//!   sidebar layout、saved queries、ER 视图与关系、备份记录等），每条记录序列化为
+//!   JSON blob，避免按字段建列导致的 serde 漂移风险。
 //!
 //! 每次调用新开 Connection 并关闭，与按次打开文件对齐，同时保证
 //! FileStorage 只含 PathBuf、天然 Send（可被移入 async 任务）。
@@ -20,19 +21,14 @@ use serde::{Serialize, de::DeserializeOwned};
 /// 数据库文件名，位于 root 下，与 config.toml / completion-index 同级。
 const DB_FILE: &str = "fluxdb.sqlite";
 
-/// 顶层 kv 表的逻辑 key。connections.toml 同时持有连接列表与 SidebarLayout，
-/// 拆成两个独立 key，避免两个入口互相覆盖。
-pub const KEY_CONNECTIONS: &str = "connections";
+/// 顶层 kv 表的逻辑 key（连接与历史已改为真表，不再走 kv）。
 pub const KEY_SIDEBAR_LAYOUT: &str = "sidebar_layout";
 pub const KEY_SAVED_QUERIES: &str = "saved_queries";
-pub const KEY_QUERY_HISTORY: &str = "query_history";
-pub const KEY_REDIS_KEY_SEARCH_HISTORY: &str = "redis_key_search_history";
-pub const KEY_REDIS_WORKBENCH_HISTORY: &str = "redis_workbench_history";
 pub const KEY_BACKUP_RECORDS: &str = "backup_records";
 pub const KEY_ER_VIEWS: &str = "er_views";
 
 /// 将 rusqlite/serde_json 错误映射为 fluxdb 内部错误，对齐 lib.rs `storage_error`。
-fn sqlite_error(message: impl ToString) -> Error {
+pub(crate) fn sqlite_error(message: impl ToString) -> Error {
     Error::new(ErrorKind::Internal, message.to_string())
 }
 
@@ -59,6 +55,9 @@ pub fn open(root: &Path) -> Result<Connection> {
 }
 
 /// 建表（idempotent），并读回当前 schema 版本（PRAGMA user_version）。
+///
+/// 表定义的唯一来源是各职责模块的 `CREATE_SQL` 常量（连接、历史），
+/// 不在此处复制一份，避免两处漂移。
 pub fn create_schema(conn: &Connection) -> Result<i64> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS kv (
@@ -67,6 +66,10 @@ pub fn create_schema(conn: &Connection) -> Result<i64> {
         );",
     )
     .map_err(sqlite_error)?;
+    conn.execute_batch(crate::connection_store::CREATE_SQL)
+        .map_err(sqlite_error)?;
+    conn.execute_batch(crate::history_store::CREATE_SQL)
+        .map_err(sqlite_error)?;
     conn.query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(sqlite_error)
 }

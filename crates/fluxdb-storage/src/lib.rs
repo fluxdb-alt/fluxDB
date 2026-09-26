@@ -5,12 +5,23 @@ use std::path::PathBuf;
 mod credential;
 mod sqlite;
 
+/// 连接持久化：`connections` 表（一条连接一行）的建表与 row↔结构体适配。
+#[path = "parts/connection_store.rs"]
+mod connection_store;
+
+/// 历史持久化：`history` 表（所有数据库类型共一张表）的建表、记录类型与读写。
+#[path = "parts/history_store.rs"]
+mod history_store;
+
+pub use history_store::{
+    QueryHistoryRecord, RedisKeySearchHistoryRecord, RedisWorkbenchHistoryRecord,
+};
+
 use fluxdb_core::{
     ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot, ConnectionConfig, ConnectionId,
     ErRebindEntity, ErRelationship, Error, ErrorKind, MysqlConnectionProfile, MysqlTransportLayer,
-    PostgresConnectionProfile, PostgresTransportLayer, QueryRollbackSnapshot,
-    RedisConnectionProfile, Result, RoutineRef, SavedQuery, SecretRef, Settings, SidebarLayout,
-    TableRef, TriggerRef,
+    PostgresConnectionProfile, PostgresTransportLayer, RedisConnectionProfile, Result, RoutineRef,
+    SavedQuery, SecretRef, Settings, SidebarLayout, TableRef, TriggerRef,
 };
 
 /// ER 逻辑关系目录的 kv key 前缀：`er_rel:{scope}` 存该作用域的 `Vec<ErRelationship>`。
@@ -405,65 +416,77 @@ impl FileStorage {
         )
     }
 
+    /// 加载全部 SQL 查询历史（全量扁平，由上层按作用域过滤）。
     pub fn load_query_history(&self) -> Result<Vec<QueryHistoryRecord>> {
         let conn = self.open_sqlite()?;
+        history_store::load_category(&conn, history_store::CATEGORY_QUERY)?
+            .into_iter()
+            .map(history_store::query_from_row)
+            .collect()
+    }
+
+    /// 全量替换 SQL 查询历史（整表覆盖该类别的所有作用域，与旧的 blob 覆盖语义一致）。
+    pub fn save_query_history(&self, entries: &[QueryHistoryRecord]) -> Result<()> {
+        let rows = entries
+            .iter()
+            .map(history_store::query_to_row)
+            .collect::<Result<Vec<_>>>()?;
+        let conn = self.open_sqlite()?;
+        let tx = conn.unchecked_transaction().map_err(storage_error)?;
+        history_store::replace_category(&tx, history_store::CATEGORY_QUERY, &rows)?;
+        tx.commit().map_err(storage_error)
+    }
+
+    /// 加载全部 Redis Key 搜索历史（全量扁平，由上层按作用域过滤）。
+    pub fn load_redis_key_search_history(&self) -> Result<Vec<RedisKeySearchHistoryRecord>> {
+        let conn = self.open_sqlite()?;
         Ok(
-            sqlite::get_json::<Vec<QueryHistoryRecord>>(&conn, sqlite::KEY_QUERY_HISTORY)?
-                .unwrap_or_default(),
+            history_store::load_category(&conn, history_store::CATEGORY_REDIS_KEY_SEARCH)?
+                .into_iter()
+                .map(history_store::redis_key_search_from_row)
+                .collect(),
         )
     }
 
-    pub fn save_query_history(&self, entries: &[QueryHistoryRecord]) -> Result<()> {
-        let conn = self.open_sqlite()?;
-        let start = entries.len().saturating_sub(1000);
-        sqlite::put_json(&conn, sqlite::KEY_QUERY_HISTORY, &entries[start..].to_vec())
-    }
-
-    pub fn load_redis_key_search_history(&self) -> Result<Vec<RedisKeySearchHistoryRecord>> {
-        let conn = self.open_sqlite()?;
-        Ok(sqlite::get_json::<Vec<RedisKeySearchHistoryRecord>>(
-            &conn,
-            sqlite::KEY_REDIS_KEY_SEARCH_HISTORY,
-        )?
-        .unwrap_or_default())
-    }
-
+    /// 全量替换 Redis Key 搜索历史。
     pub fn save_redis_key_search_history(
         &self,
         entries: &[RedisKeySearchHistoryRecord],
     ) -> Result<()> {
+        let rows = entries
+            .iter()
+            .map(history_store::redis_key_search_to_row)
+            .collect::<Vec<_>>();
         let conn = self.open_sqlite()?;
-        let start = entries.len().saturating_sub(1000);
-        sqlite::put_json(
-            &conn,
-            sqlite::KEY_REDIS_KEY_SEARCH_HISTORY,
-            &entries[start..].to_vec(),
-        )
+        let tx = conn.unchecked_transaction().map_err(storage_error)?;
+        history_store::replace_category(&tx, history_store::CATEGORY_REDIS_KEY_SEARCH, &rows)?;
+        tx.commit().map_err(storage_error)
     }
 
     /// 加载所有连接 / 库的 Redis Workbench 命令历史（全量扁平，
     /// 由上层按 scope 过滤）。不存在时返回空列表。
     pub fn load_redis_workbench_history(&self) -> Result<Vec<RedisWorkbenchHistoryRecord>> {
         let conn = self.open_sqlite()?;
-        Ok(sqlite::get_json::<Vec<RedisWorkbenchHistoryRecord>>(
-            &conn,
-            sqlite::KEY_REDIS_WORKBENCH_HISTORY,
-        )?
-        .unwrap_or_default())
+        history_store::load_category(&conn, history_store::CATEGORY_REDIS_COMMAND)?
+            .into_iter()
+            .map(history_store::redis_command_from_row)
+            .collect()
     }
 
-    /// 全量保存 Redis Workbench 命令历史并截断（与 SQL 历史同样保留最近 1000 条）。
+    /// 全量替换 Redis Workbench 命令历史（每个作用域保留最近
+    /// [`history_store::PER_SCOPE_LIMIT`] 条，由存储层裁剪）。
     pub fn save_redis_workbench_history(
         &self,
         entries: &[RedisWorkbenchHistoryRecord],
     ) -> Result<()> {
+        let rows = entries
+            .iter()
+            .map(history_store::redis_command_to_row)
+            .collect::<Vec<_>>();
         let conn = self.open_sqlite()?;
-        let start = entries.len().saturating_sub(1000);
-        sqlite::put_json(
-            &conn,
-            sqlite::KEY_REDIS_WORKBENCH_HISTORY,
-            &entries[start..].to_vec(),
-        )
+        let tx = conn.unchecked_transaction().map_err(storage_error)?;
+        history_store::replace_category(&tx, history_store::CATEGORY_REDIS_COMMAND, &rows)?;
+        tx.commit().map_err(storage_error)
     }
 
     /// 加载全部备份记录（全量扁平，由上层按连接/库过滤）。不存在时返回空列表。
@@ -503,8 +526,7 @@ impl Storage for FileStorage {
 
     fn load_connections(&self) -> Result<Vec<ConnectionConfig>> {
         let conn = self.open_sqlite()?;
-        sqlite::get_json::<Vec<ConnectionConfig>>(&conn, sqlite::KEY_CONNECTIONS)?
-            .unwrap_or_default()
+        connection_store::load_all(&conn)?
             .into_iter()
             .map(|connection| self.load_connection_secret(connection))
             .collect()
@@ -764,8 +786,9 @@ impl FileStorage {
 
     /// 把连接列表（剥离明文）与 SidebarLayout 一并写入 sqlite。
     ///
-    /// 与历史 toml 行为一致：connections.toml 同时持有两者，保存任一时另一份
-    /// 也一并落盘，避免两个入口互相覆盖。
+    /// 连接进 `connections` 表（整表替换），布局仍是 kv JSON：布局是纯 UI 状态，
+    /// 没有按字段查询需求，两者一起提交以保证「保存连接」与「保存布局」不互相覆盖。
+    /// 同一事务内清理已删除连接的历史（级联）。
     fn write_connections_and_layout(
         &self,
         conn: &rusqlite::Connection,
@@ -782,96 +805,21 @@ impl FileStorage {
         let stripped: Vec<ConnectionConfig> =
             connections.iter().map(strip_plaintext_secrets).collect();
         let tx = conn.unchecked_transaction().map_err(storage_error)?;
-        sqlite::put_json(&tx, sqlite::KEY_CONNECTIONS, &stripped)?;
+        connection_store::replace_all(&tx, &stripped)?;
+        history_store::delete_history_of_missing_connections(
+            &tx,
+            &stripped
+                .iter()
+                .map(|connection| connection.id)
+                .collect::<Vec<_>>(),
+        )?;
         sqlite::put_json(&tx, sqlite::KEY_SIDEBAR_LAYOUT, layout)?;
         tx.commit().map_err(storage_error)?;
         Ok(())
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct QueryHistoryRecord {
-    pub connection_id: ConnectionId,
-    pub database: Option<String>,
-    /// 历史记录所属 schema（PG）；旧记录缺省为 None，`#[serde(default)]` 兼容加载。
-    #[serde(default)]
-    pub schema: Option<String>,
-    pub text: String,
-    #[serde(default)]
-    pub tables: Vec<String>,
-    #[serde(default = "default_query_history_kind")]
-    pub kind: String,
-    #[serde(default = "default_query_history_success")]
-    pub success: bool,
-    #[serde(default)]
-    pub executed_at_unix_secs: u64,
-    #[serde(default)]
-    pub object: Option<String>,
-    #[serde(default)]
-    pub rollback_sql: Option<String>,
-    #[serde(default)]
-    pub rollback_snapshot: Option<QueryRollbackSnapshot>,
-    /// 写入事务状态（committed/uncommitted/rolled_back，§8.4）；旧记录缺省按已提交。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transaction_state: Option<String>,
-    #[serde(default)]
-    pub message: Option<String>,
-    #[serde(default)]
-    pub returned_rows: u64,
-    #[serde(default)]
-    pub affected_rows: u64,
-    #[serde(default)]
-    pub elapsed_ms: u64,
-}
-
-/// Redis Key 搜索历史单条记录，按连接 + 数据库隔离。
-///
-/// - `connection_id`：所属连接 ID。
-/// - `database`：Redis DB 索引字符串（如 `"0"`、`"1"`），`None` 视为 `"0"`。
-/// - `text`：搜索词。
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RedisKeySearchHistoryRecord {
-    pub connection_id: ConnectionId,
-    pub database: Option<String>,
-    pub text: String,
-}
-
-/// Redis Workbench 命令历史单条记录，按连接 + 逻辑数据库隔离（对齐 RedisInsight 的
-/// databaseId 作用域）。
-///
-/// - `id`：scope 内去重的记录 ID，用于删除定位。
-/// - `connection_id` / `database`：归属的连接与逻辑库。
-/// - `text`：命令文本，可回填到 Workbench 输入框。
-/// - `summary` / `source`：结果摘要与来源（Workbench / HistoryRerun / KeyShortcut）。
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RedisWorkbenchHistoryRecord {
-    pub id: u64,
-    pub connection_id: ConnectionId,
-    pub database: u32,
-    pub text: String,
-    #[serde(default = "default_redis_workbench_history_success")]
-    pub success: bool,
-    #[serde(default)]
-    pub executed_at_unix_secs: u64,
-    #[serde(default)]
-    pub summary: String,
-    #[serde(default)]
-    pub source: String,
-}
-
-fn default_redis_workbench_history_success() -> bool {
-    true
-}
-
 include!("parts/backup_restore.rs");
-
-fn default_query_history_kind() -> String {
-    "query".to_string()
-}
-
-fn default_query_history_success() -> bool {
-    true
-}
 
 fn storage_error(error: impl ToString) -> Error {
     Error::new(ErrorKind::Internal, error.to_string())
@@ -1222,7 +1170,8 @@ mod tests {
     use fluxdb_core::{
         COMPLETION_INDEX_VERSION, ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot,
         ConnectionGroup, ConnectionGroupId, ConnectionId, DatabaseKind, Endpoint, LogLevel,
-        ObjectKind, SavedQuery, SidebarOrderEntry, TableFingerprint, TableRef, Theme,
+        ObjectKind, OperationKind, SavedQuery, SidebarOrderEntry, TableFingerprint, TableRef,
+        Theme,
     };
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1771,36 +1720,189 @@ mod tests {
         );
     }
 
+    /// 构造一条 SQL 查询历史记录（默认只读查询）。
+    fn query_record(connection_id: u64, database: Option<&str>, text: &str) -> QueryHistoryRecord {
+        QueryHistoryRecord {
+            connection_id: ConnectionId(connection_id),
+            database: database.map(str::to_string),
+            schema: None,
+            text: text.to_string(),
+            tables: vec!["orders".to_string()],
+            operation_kind: OperationKind::Query,
+            success: true,
+            executed_at_unix_secs: 1_700_000_000,
+            object: None,
+            rollback_sql: None,
+            rollback_snapshot: None,
+            transaction_state: None,
+            message: None,
+            returned_rows: 0,
+            affected_rows: 0,
+            elapsed_ms: 0,
+        }
+    }
+
+    /// 构造一条不含凭据的连接（不触发本机凭据库写入）。
+    fn plain_connection(id: u64, kind: DatabaseKind, endpoint: Endpoint) -> ConnectionConfig {
+        ConnectionConfig {
+            id: ConnectionId(id),
+            name: format!("conn-{id}"),
+            kind,
+            endpoint,
+            credential_ref: None,
+            options: BTreeMap::new(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+        }
+    }
+
     #[test]
-    fn saves_loads_and_limits_query_history() {
+    fn saves_loads_and_limits_query_history_per_scope() {
         let storage = FileStorage::new(unique_temp_dir());
-        let entries = (0..1002)
-            .map(|index| QueryHistoryRecord {
-                connection_id: ConnectionId(7),
-                database: Some("shop".to_string()),
-                schema: None,
-                text: format!("select {index}"),
-                tables: vec!["orders".to_string()],
-                kind: "query".to_string(),
-                success: true,
-                executed_at_unix_secs: 0,
-                object: None,
-                rollback_sql: None,
-                rollback_snapshot: None,
-                transaction_state: None,
-                message: None,
-                returned_rows: 0,
-                affected_rows: 0,
-                elapsed_ms: 0,
-            })
+        // 连接 7 超限 2 条，连接 8 只有 3 条：裁剪按作用域独立，互不影响。
+        let mut entries = (0..1002)
+            .map(|index| query_record(7, Some("shop"), &format!("select {index}")))
             .collect::<Vec<_>>();
+        entries
+            .extend((0..3).map(|index| query_record(8, Some("shop"), &format!("select {index}"))));
 
         storage.save_query_history(&entries).unwrap();
 
         let loaded = storage.load_query_history().unwrap();
-        assert_eq!(loaded.len(), 1000);
-        assert_eq!(loaded[0].text, "select 2");
+        assert_eq!(
+            loaded.len(),
+            1003,
+            "连接 7 裁剪到 1000 条，连接 8 的 3 条不受影响"
+        );
+        assert_eq!(loaded[0].text, "select 2", "丢弃连接 7 最早的两条");
         assert_eq!(loaded[999].text, "select 1001");
+        assert_eq!(loaded[1000].text, "select 0", "连接 8 的记录完整保留");
+    }
+
+    #[test]
+    fn query_history_round_trips_extra_fields_and_operation_kind() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let mut record = query_record(7, Some("shop"), "update t set a=1");
+        record.operation_kind = OperationKind::Write;
+        record.schema = Some("public".to_string());
+        record.tables = vec!["orders".to_string(), "items".to_string()];
+        record.object = Some("orders".to_string());
+        record.transaction_state = Some("committed".to_string());
+        record.message = Some("1 行受影响".to_string());
+        record.affected_rows = 1;
+
+        storage.save_query_history(&[record.clone()]).unwrap();
+
+        assert_eq!(storage.load_query_history().unwrap(), vec![record]);
+    }
+
+    /// 新版本写入的未知操作类别取值，旧版本读回按 `unknown` 兜底（不报错）。
+    #[test]
+    fn unknown_operation_kind_value_falls_back_to_unknown() {
+        let storage = FileStorage::new(unique_temp_dir());
+        storage
+            .save_query_history(&[query_record(7, Some("shop"), "select 1")])
+            .unwrap();
+        let conn = crate::sqlite::open(&storage.root).unwrap();
+        conn.execute("UPDATE history SET operation_kind = 'mystery'", [])
+            .unwrap();
+
+        let loaded = storage.load_query_history().unwrap();
+        assert_eq!(loaded[0].operation_kind, OperationKind::Unknown);
+    }
+
+    /// 历史行的 `kind` 按连接解析成数据库类型；连接删除时其历史级联清理。
+    #[test]
+    fn history_kind_follows_connection_and_cascades_on_delete() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let mysql = plain_connection(
+            1,
+            DatabaseKind::MySql,
+            Endpoint::Tcp {
+                host: "127.0.0.1".to_string(),
+                port: 3306,
+                database: Some("app".to_string()),
+            },
+        );
+        let sqlite = plain_connection(
+            2,
+            DatabaseKind::Sqlite,
+            Endpoint::SqliteFile {
+                path: "demo.db".into(),
+                read_only: false,
+            },
+        );
+        storage.save_connections(&[mysql, sqlite.clone()]).unwrap();
+        storage
+            .save_query_history(&[
+                query_record(1, Some("app"), "select mysql"),
+                query_record(2, None, "select sqlite"),
+            ])
+            .unwrap();
+
+        assert_eq!(stored_history_kinds(&storage), vec!["mysql", "sqlite"]);
+
+        // 连接 1 被删除（保存剩下的连接列表）→ 它的历史同事务清理。
+        storage.save_connections(&[sqlite]).unwrap();
+
+        let loaded = storage.load_query_history().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].connection_id, ConnectionId(2));
+    }
+
+    /// 连接表的定位列/通用列是结构体的投影：tcp / file / uri 三种定位等值往返。
+    #[test]
+    fn connections_round_trip_endpoint_columns_and_extra() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let mut mysql = plain_connection(
+            1,
+            DatabaseKind::MySql,
+            Endpoint::Tcp {
+                host: "db.internal".to_string(),
+                port: 3307,
+                database: Some("app".to_string()),
+            },
+        );
+        mysql.options.insert("ssl".to_string(), "true".to_string());
+        let sqlite = plain_connection(
+            2,
+            DatabaseKind::Sqlite,
+            Endpoint::SqliteFile {
+                path: "/tmp/demo.db".into(),
+                read_only: true,
+            },
+        );
+        let mongo = plain_connection(
+            3,
+            DatabaseKind::MongoDb,
+            Endpoint::Uri {
+                uri: "mongodb://localhost:27017".to_string(),
+            },
+        );
+
+        storage
+            .save_connections(&[mysql.clone(), sqlite.clone(), mongo.clone()])
+            .unwrap();
+
+        assert_eq!(
+            storage.load_connections().unwrap(),
+            vec![mysql, sqlite, mongo]
+        );
+    }
+
+    /// 读取 history 表里按写入顺序排列的数据库类型列。
+    fn stored_history_kinds(storage: &FileStorage) -> Vec<String> {
+        let conn = crate::sqlite::open(&storage.root).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT kind FROM history ORDER BY id")
+            .unwrap();
+        let kinds = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        kinds
     }
 
     #[test]
@@ -1837,6 +1939,47 @@ mod tests {
 
         let loaded = storage.load_backup_records().unwrap();
         assert_eq!(loaded, records);
+    }
+
+    /// Key 搜索历史不携带时间：整表替换时沿用同键旧行的时间，避免每次落盘刷新时间。
+    #[test]
+    fn redis_key_search_history_keeps_first_seen_time_across_replaces() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let entry = |text: &str| RedisKeySearchHistoryRecord {
+            connection_id: ConnectionId(4),
+            database: Some("0".to_string()),
+            text: text.to_string(),
+        };
+        storage
+            .save_redis_key_search_history(&[entry("user:*")])
+            .unwrap();
+        let first_seen = stored_key_search_time(&storage, "user:*");
+
+        storage
+            .save_redis_key_search_history(&[entry("user:*"), entry("order:*")])
+            .unwrap();
+
+        assert_eq!(
+            stored_key_search_time(&storage, "user:*"),
+            first_seen,
+            "已有词应沿用首次落盘时间"
+        );
+        assert!(
+            stored_key_search_time(&storage, "order:*") >= first_seen,
+            "新词应记当前时间"
+        );
+    }
+
+    /// 读取 Key 搜索历史某条文本的落盘时间（该类别通过接口读不到时间，测试直接查表）。
+    fn stored_key_search_time(storage: &FileStorage, text: &str) -> u64 {
+        let conn = crate::sqlite::open(&storage.root).unwrap();
+        conn.query_row(
+            "SELECT executed_at_unix_secs FROM history
+              WHERE category = ?1 AND text = ?2",
+            rusqlite::params![crate::history_store::CATEGORY_REDIS_KEY_SEARCH, text],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap() as u64
     }
 
     #[test]
@@ -2379,16 +2522,28 @@ mod tests {
     fn saves_and_loads_redis_workbench_history_round_trip() {
         let storage = FileStorage::new(unique_temp_dir());
         let entries = vec![
-            redis_record(1, 1, 0, "GET a"),
-            redis_record(2, 1, 1, "GET b"),
-            redis_record(3, 2, 0, "SET k v"),
+            redis_record(0, 1, 0, "GET a"),
+            redis_record(0, 1, 1, "GET b"),
+            redis_record(0, 2, 0, "SET k v"),
         ];
 
         storage.save_redis_workbench_history(&entries).unwrap();
 
-        // 加载后应与写入一致（保持记录字段 + 跨连接 / 库的记录都保留）。
+        // 记录 ID 由数据库按 rowid 分配（写入时忽略传入 id），其余字段等值往返。
         let loaded = storage.load_redis_workbench_history().unwrap();
-        assert_eq!(loaded, entries);
+        assert_eq!(
+            loaded.iter().map(|record| record.id).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "ID 按写入顺序由 rowid 分配"
+        );
+        let normalized = loaded
+            .into_iter()
+            .map(|mut record| {
+                record.id = 0;
+                record
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(normalized, entries);
     }
 
     #[test]
@@ -2398,16 +2553,18 @@ mod tests {
     }
 
     #[test]
-    fn save_redis_workbench_history_truncates_to_1000() {
+    fn save_redis_workbench_history_truncates_to_per_scope_limit() {
         let storage = FileStorage::new(unique_temp_dir());
-        // 写入 1005 条，应只保留最近 1000 条（丢弃最早 5 条）。
-        let entries: Vec<_> = (0..1005).map(|i| redis_record(i, 1, 0, "CMD")).collect();
+        // 同一作用域写入 1005 条，只保留最近 1000 条（丢弃最早 5 条）。
+        let entries: Vec<_> = (0..1005)
+            .map(|i| redis_record(0, 1, 0, &format!("CMD {i}")))
+            .collect();
 
         storage.save_redis_workbench_history(&entries).unwrap();
 
         let loaded = storage.load_redis_workbench_history().unwrap();
-        assert_eq!(loaded.len(), 1000, "应截断到最近 1000 条");
-        assert_eq!(loaded[0].id, 5, "最早的 5 条应被丢弃，保留从 id=5 起");
-        assert_eq!(loaded[999].id, 1004, "最新一条应保留");
+        assert_eq!(loaded.len(), 1000, "应裁剪到最近 1000 条");
+        assert_eq!(loaded[0].text, "CMD 5", "最早的 5 条应被丢弃");
+        assert_eq!(loaded[999].text, "CMD 1004", "最新一条应保留");
     }
 }
