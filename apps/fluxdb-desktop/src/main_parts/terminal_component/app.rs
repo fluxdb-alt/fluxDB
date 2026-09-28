@@ -43,7 +43,6 @@ impl NavicatMain {
                     port: 0,
                     database: Some(cli.database.to_string()),
                 },
-                credential_ref: None,
                 options: std::collections::BTreeMap::new(),
                 redis_profile: None,
                 mysql_profile: None,

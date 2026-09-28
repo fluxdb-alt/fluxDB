@@ -5187,7 +5187,6 @@ where id = 42 and name = 'Bob''s Bike' and flag = 'ignored'"
                 port: 3306,
                 database: database.map(ToString::to_string),
             },
-            credential_ref: None,
             options: BTreeMap::new(),
             redis_profile: None,
             mysql_profile: None,

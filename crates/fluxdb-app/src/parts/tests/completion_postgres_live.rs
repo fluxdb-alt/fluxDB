@@ -124,7 +124,6 @@ fn completion_smoke_config(
             port: *port,
             database: Some(db.clone()),
         },
-        credential_ref: None,
         options: Default::default(),
         redis_profile: None,
         mysql_profile: None,

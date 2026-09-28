@@ -170,7 +170,6 @@ fn fake_config(kind: DatabaseKind) -> ConnectionConfig {
             path: ":memory:".into(),
             read_only: false,
         },
-        credential_ref: None,
         options: BTreeMap::new(),
         redis_profile: None,
         mysql_profile: None,

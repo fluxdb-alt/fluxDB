@@ -62,7 +62,6 @@ impl NavicatMain {
             name: self.copied_connection_name(&config.name),
             kind: config.kind,
             endpoint: config.endpoint,
-            credential_ref: config.credential_ref,
             options: config.options,
             redis_profile: config.redis_profile.clone(),
             mysql_profile: config.mysql_profile.clone(),

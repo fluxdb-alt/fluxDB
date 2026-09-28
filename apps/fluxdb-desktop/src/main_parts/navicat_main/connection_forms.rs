@@ -3,8 +3,7 @@ impl NavicatMain {
         let Some(connection_id) = self.pending_delete_connection.take() else {
             return;
         };
-        // 删除前记录该连接配置，用于按拥有权清理其 Keychain 条目（复制/更新各拥有独立 ref，
-        // 只删本连接，不触碰其他连接）。
+        // 删除前保留连接 ID，提交成功后仅清理该连接的加密凭据。
         let deleted_config = self
             .controller
             .state()
@@ -13,13 +12,20 @@ impl NavicatMain {
             .find(|connection| connection.config.id == connection_id)
             .map(|connection| connection.config.clone());
 
+        let previous = self.controller.clone();
         self.dispatch(AppCommand::DeleteConnection(connection_id), cx);
+        if let Err(error) = self
+            .storage
+            .save_connections(&self.controller.connection_configs())
+        {
+            self.controller = previous;
+            self.show_message(format!("删除连接失败：{error}"), AppMessageKind::Error, cx);
+            cx.notify();
+            return;
+        }
         if let Some(config) = deleted_config {
             self.storage.delete_connection_secrets(&config);
         }
-        let _ = self
-            .storage
-            .save_connections(&self.controller.connection_configs());
         self.connecting_connections.remove(&connection_id);
         self._connection_tasks.remove(&connection_id.0);
         self.loaded_database_children
@@ -56,30 +62,23 @@ impl NavicatMain {
                 let new_options = config.options;
                 config.options = existing.options;
                 config.options.extend(new_options);
-                let has_credentials = existing.credential_ref.is_some()
-                    || config.options.contains_key("password")
-                    || config.redis_profile.as_ref().is_some_and(|profile| {
-                        profile.basic.password.inline.is_some()
-                            || profile.ssh.password.inline.is_some()
-                            || profile.ssh.passphrase.inline.is_some()
-                    })
-                    || config.mysql_profile.as_ref().is_some_and(|profile| {
-                        profile.basic.password.inline.is_some()
-                            || profile.ssh().is_some_and(|ssh| {
-                                ssh.password.inline.is_some() || ssh.passphrase.inline.is_some()
-                            })
-                            || profile.proxy().is_some_and(|proxy| proxy.password.inline.is_some())
-                    });
-                if has_credentials {
-                    config.credential_ref = Some(format!("gdb.connection.{}", connection_id.0));
-                }
             }
+            let previous = self.controller.clone();
             let event = self
                 .controller
                 .dispatch(AppCommand::UpdateConnection(config.clone()));
-            let _ = self
+            if let Err(error) = self
                 .storage
-                .save_connections(&self.controller.connection_configs());
+                .save_connections(&self.controller.connection_configs())
+            {
+                self.controller = previous;
+                self.new_connection_form.test_status =
+                    Some(ConnectionTestStatus::Error(format!("保存连接失败：{error}")));
+                self.show_message(format!("保存连接失败：{error}"), AppMessageKind::Error, cx);
+                self.saving_connection = false;
+                cx.notify();
+                return;
+            }
             self.new_connection_kind = None;
             self.new_connection_password_visible = false;
             self.editing_connection_id = None;
@@ -153,12 +152,22 @@ impl NavicatMain {
                 return;
             }
         }
+        let previous = self.controller.clone();
         let event = self
             .controller
             .dispatch(AppCommand::CreateConnection(draft));
-        let _ = self
+        if let Err(error) = self
             .storage
-            .save_connections(&self.controller.connection_configs());
+            .save_connections(&self.controller.connection_configs())
+        {
+            self.controller = previous;
+            self.new_connection_form.test_status =
+                Some(ConnectionTestStatus::Error(format!("保存连接失败：{error}")));
+            self.show_message(format!("保存连接失败：{error}"), AppMessageKind::Error, cx);
+            self.saving_connection = false;
+            cx.notify();
+            return;
+        }
         self.new_connection_kind = None;
         self.new_connection_password_visible = false;
         if let fluxdb_app::AppEvent::ConnectionCreated(config) = event {
@@ -688,7 +697,6 @@ impl NavicatMain {
             name: form.name.trim().to_string(),
             kind,
             endpoint,
-            credential_ref: None,
             options,
             redis_profile,
             mysql_profile,

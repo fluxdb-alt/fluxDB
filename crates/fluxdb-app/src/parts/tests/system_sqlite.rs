@@ -21,7 +21,6 @@ fn real_sqlite_completion_env(
             path: path.clone(),
             read_only: false,
         },
-        credential_ref: None,
         options: Default::default(), // 非 demo：走真实 SqliteConnector
         redis_profile: None,
         mysql_profile: None,

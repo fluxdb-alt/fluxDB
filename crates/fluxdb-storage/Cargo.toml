@@ -17,16 +17,6 @@ serde_json = "1"
 toml = "0.8"
 tracing = "0.1"
 
-# Linux 系统凭据后端：Secret Service（GNOME Keyring / KWallet 等实现）。经 keyring 4 默认
-# feature（v1 = apple-native + windows-native + zbus-secret-service）；apple/windows 组件被
-# target 门控，Linux 实际启用 zbus-secret-service-keyring-store（纯 Rust zbus，无 C 原生依赖，
-# 利于 CI 与发布，方案 §4.2）。仅 Linux 目标声明；Windows/macOS 不引入。
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = "4"
-
-# Windows 系统凭据后端：Credential Manager，直接经 windows crate（锁内既有版本）。
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.57", features = [
-    "Win32_Foundation",
-    "Win32_Security_Credentials",
-] }
+# 连接密码 AES-256-GCM（密文在 SQLite，默认密钥内置，可通过 config.toml 覆盖）。
+aes-gcm = "0.10"
+rand = "0.8"

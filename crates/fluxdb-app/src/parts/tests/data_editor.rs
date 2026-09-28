@@ -253,7 +253,6 @@
                 port: 0,
                 database: None,
             },
-            credential_ref: None,
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,

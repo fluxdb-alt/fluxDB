@@ -8,7 +8,7 @@ fn config() -> ConnectionConfig {
     ConnectionConfig {
         id: ConnectionId(918_001), name: "PG audit regression".into(), kind: DatabaseKind::Postgres,
         endpoint: Endpoint::Tcp { host: profile.basic.host.clone(), port: profile.basic.port, database: Some(profile.maintenance_database().into()) },
-        credential_ref: None, options: Default::default(), redis_profile: None, mysql_profile: None, postgres_profile: Some(profile),
+        options: Default::default(), redis_profile: None, mysql_profile: None, postgres_profile: Some(profile),
     }
 }
 fn request(config: &ConnectionConfig, sql: &str) -> QueryRequest {

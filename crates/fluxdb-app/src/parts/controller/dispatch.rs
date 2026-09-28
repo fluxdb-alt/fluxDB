@@ -81,25 +81,8 @@ impl AppController {
             }
             AppCommand::CreateConnection(draft) => {
                 let connection_id = ConnectionId(self.next_connection_id);
-                let mut config = draft.into_config(connection_id);
+                let config = draft.into_config(connection_id);
                 self.next_connection_id += 1;
-                if config.credential_ref.is_some()
-                    || config.options.contains_key("password")
-                    || config.redis_profile.as_ref().is_some_and(|profile| {
-                        profile.basic.password.inline.is_some()
-                            || profile.ssh.password.inline.is_some()
-                            || profile.ssh.passphrase.inline.is_some()
-                    })
-                    || config.mysql_profile.as_ref().is_some_and(|profile| {
-                        profile.basic.password.inline.is_some()
-                            || profile.ssh().is_some_and(|ssh| {
-                                ssh.password.inline.is_some() || ssh.passphrase.inline.is_some()
-                            })
-                            || profile.proxy().is_some_and(|proxy| proxy.password.inline.is_some())
-                    })
-                {
-                    config.credential_ref = Some(format!("gdb.connection.{}", connection_id.0));
-                }
                 self.state.connections.push(ConnectionState {
                     config: config.clone(),
                     connected: false,
@@ -252,7 +235,6 @@ impl AppController {
                                 port,
                                 database: profile.basic.database.clone(),
                             },
-                            credential_ref: None,
                             options: BTreeMap::new(),
                             redis_profile: Some(profile),
                             mysql_profile: None,

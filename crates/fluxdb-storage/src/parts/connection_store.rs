@@ -37,10 +37,27 @@ CREATE TABLE IF NOT EXISTS connections (
     uri              TEXT,                          -- endpoint_kind=uri
     default_database TEXT,                          -- 默认库/逻辑库序号（各类型通用）
     read_only        INTEGER NOT NULL DEFAULT 0,    -- 只读连接
-    credential_ref   TEXT,                          -- 凭据引用（账号名）；NULL=无凭据
     extra_json       TEXT    NOT NULL DEFAULT '{}'  -- 类型专属：options + 结构化档案
 );
 ";
+
+/// 旧连接表若仍有外部凭据引用，删掉该废弃列；不读取旧凭据。
+pub(crate) fn drop_legacy_credential_ref(conn: &Connection) -> Result<()> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(connections)")
+        .map_err(sqlite_error)?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(sqlite_error)?;
+    for column in columns {
+        if column.map_err(sqlite_error)? == "credential_ref" {
+            conn.execute_batch("ALTER TABLE connections DROP COLUMN credential_ref")
+                .map_err(sqlite_error)?;
+            break;
+        }
+    }
+    Ok(())
+}
 
 /// 定位枚举 `Endpoint` 的三条取值，落 `endpoint_kind` 列。
 const ENDPOINT_TCP: &str = "tcp";
@@ -95,7 +112,7 @@ pub(crate) fn load_all(conn: &Connection) -> Result<Vec<ConnectionConfig>> {
     let mut stmt = conn
         .prepare(
             "SELECT id, name, kind, endpoint_kind, host, port, file_path, uri,
-                    default_database, read_only, credential_ref, extra_json
+                    default_database, read_only, extra_json
                FROM connections
               ORDER BY id",
         )
@@ -113,8 +130,7 @@ pub(crate) fn load_all(conn: &Connection) -> Result<Vec<ConnectionConfig>> {
                 uri: row.get(7)?,
                 default_database: row.get(8)?,
                 read_only: row.get::<_, i64>(9)? != 0,
-                credential_ref: row.get(10)?,
-                extra_json: row.get(11)?,
+                extra_json: row.get(10)?,
             })
         })
         .map_err(sqlite_error)?;
@@ -133,8 +149,8 @@ pub(crate) fn replace_all(conn: &Connection, connections: &[ConnectionConfig]) -
         .prepare(
             "INSERT INTO connections
                  (id, name, kind, endpoint_kind, host, port, file_path, uri,
-                  default_database, read_only, credential_ref, extra_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                  default_database, read_only, extra_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .map_err(sqlite_error)?;
     for connection in connections {
@@ -152,7 +168,6 @@ pub(crate) fn replace_all(conn: &Connection, connections: &[ConnectionConfig]) -
             store.uri,
             store.default_database,
             store.read_only as i64,
-            store.credential_ref,
             extra_json,
         ])
         .map_err(sqlite_error)?;
@@ -192,7 +207,6 @@ struct StoredRow {
     uri: Option<String>,
     default_database: Option<String>,
     read_only: bool,
-    credential_ref: Option<String>,
     extra_json: String,
 }
 
@@ -208,7 +222,6 @@ struct StoredInsert {
     uri: Option<String>,
     default_database: Option<String>,
     read_only: bool,
-    credential_ref: Option<String>,
     extra: ConnectionExtra,
 }
 
@@ -265,7 +278,6 @@ fn from_config(connection: &ConnectionConfig) -> Result<StoredInsert> {
         uri,
         default_database,
         read_only,
-        credential_ref: connection.credential_ref.clone(),
         extra: ConnectionExtra {
             options: connection.options.clone(),
             redis_profile: connection.redis_profile.clone(),
@@ -337,7 +349,6 @@ fn to_config(row: StoredRow) -> Result<ConnectionConfig> {
         name: row.name,
         kind,
         endpoint,
-        credential_ref: row.credential_ref,
         options: extra.options,
         redis_profile: extra.redis_profile,
         mysql_profile: extra.mysql_profile,

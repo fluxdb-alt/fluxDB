@@ -46,7 +46,6 @@ mod connector_factory_tests {
                 port: 0,
                 database: None,
             },
-            credential_ref: None,
             options,
             redis_profile: None,
             mysql_profile: None,

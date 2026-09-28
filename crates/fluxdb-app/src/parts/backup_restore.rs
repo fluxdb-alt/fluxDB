@@ -224,7 +224,6 @@ mod backup_restore_app_tests {
                 path: source,
                 read_only: false,
             },
-            credential_ref: None,
             options: BTreeMap::new(),
             redis_profile: None,
             mysql_profile: None,
