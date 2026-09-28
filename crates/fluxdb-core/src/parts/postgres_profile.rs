@@ -888,7 +888,7 @@ mod postgres_profile_tests {
     fn uri_credentials_land_in_structured_secret_and_never_dump_in_debug() {
         let p =
             PostgresConnectionProfile::from_uri("postgres://bob:topsecret@h/db").unwrap();
-        // 凭据落进结构化 SecretRef（走 Keychain/内存），而非散落配置。
+        // 凭据落进结构化 SecretRef（走 SQLite 加密表/内存），而非散落配置。
         assert_eq!(p.basic.password.value(), Some("topsecret"));
         assert_eq!(p.basic.username, "bob");
         // SecretRef 的 Debug 不打印正文；序列化也不含明文（见 secret_ref_never_serializes_inline）。

@@ -5,11 +5,11 @@
 
 /// 一条可拨号的不安全密钥引用。
 ///
-/// - `key`：受控存储里的引用名（如 macOS Keychain 的 account），可安全落盘。
+/// - `key`：文件型凭据的路径；密码类凭据由存储层按连接 ID + 类别查询。
 /// - `inline`：仅在内存中出现的一次性值（本次拨号使用），`#[serde(skip)]` 保证绝不写盘。
 #[derive(Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SecretRef {
-    /// 受控存储中的引用名；空表示没有引用。
+    /// 文件型凭据路径；密码类槽位留空。
     pub key: String,
     /// 内存中的受控值；落盘前由 storage 剥离，本字段不参与序列化。
     #[serde(skip)]
@@ -43,7 +43,7 @@ impl SecretRef {
         }
     }
 
-    /// 取用于拨号的值：优先内联受控值，其次引用名（引用通常在拨号前被 storage 解析回填）。
+    /// 取用于拨号的值：优先内联密码，其次文件型凭据路径。
     pub fn value(&self) -> Option<&str> {
         self.inline.as_deref().or(if self.key.is_empty() { None } else { Some(self.key.as_str()) })
     }

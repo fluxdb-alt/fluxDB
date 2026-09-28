@@ -135,7 +135,6 @@ fn pg_config_generation(config: &ConnectionConfig) -> u64 {
             }
         }
     }
-    config.credential_ref.hash(&mut hasher);
     hasher.finish()
 }
 

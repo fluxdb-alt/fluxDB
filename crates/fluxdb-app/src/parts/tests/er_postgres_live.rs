@@ -125,7 +125,6 @@ fn postgres_er_visibility_hides_unauthorized_tables() {
         name: "PG ER Visibility Smoke".to_string(),
         kind: DatabaseKind::Postgres,
         endpoint: Endpoint::Tcp { host: host.clone(), port, database: Some(database.clone()) },
-        credential_ref: None,
         options: Default::default(),
         redis_profile: None,
         mysql_profile: None,

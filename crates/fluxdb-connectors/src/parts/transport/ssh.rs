@@ -821,7 +821,6 @@ mod ssh_tunnel_tests {
                 port: 6379,
                 database: None,
             },
-            credential_ref: None,
             options: options(&[("ssh_enabled", "true"), ("ssh_username", "u")]),
             redis_profile: None,
             mysql_profile: None,

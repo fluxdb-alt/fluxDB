@@ -28,7 +28,7 @@ fn redis_list_remove_position_options() -> Vec<String> {
 }
 
 fn query_history_record_to_entry(record: QueryHistoryRecord) -> QueryHistoryEntry {
-    let kind = query_history_kind_from_storage(&record.kind);
+    let kind = query_history_kind_from_operation(record.operation_kind);
     let success = record.success;
     let text = record.text;
     QueryHistoryEntry {
@@ -67,7 +67,7 @@ fn query_history_entry_to_record(entry: &QueryHistoryEntry) -> QueryHistoryRecor
         schema: entry.schema.clone(),
         text: entry.text.clone(),
         tables: entry.tables.clone(),
-        kind: query_history_kind_to_storage(entry.kind).to_string(),
+        operation_kind: query_history_kind_to_operation(entry.kind),
         success: entry.success,
         executed_at_unix_secs: entry.executed_at_unix_secs,
         object: entry.object.clone(),
@@ -115,19 +115,21 @@ fn query_statement_kind_from_history(kind: QueryHistoryKind) -> fluxdb_core::Que
     }
 }
 
-fn query_history_kind_from_storage(kind: &str) -> QueryHistoryKind {
+/// App 层历史类别 → 规范化操作类别（跨数据库类型的通用动作词）。
+fn query_history_kind_to_operation(kind: QueryHistoryKind) -> fluxdb_core::OperationKind {
     match kind {
-        "data_change" => QueryHistoryKind::DataChange,
-        "schema_change" => QueryHistoryKind::SchemaChange,
-        _ => QueryHistoryKind::Query,
+        QueryHistoryKind::Query => fluxdb_core::OperationKind::Query,
+        QueryHistoryKind::DataChange => fluxdb_core::OperationKind::Write,
+        QueryHistoryKind::SchemaChange => fluxdb_core::OperationKind::Schema,
     }
 }
 
-fn query_history_kind_to_storage(kind: QueryHistoryKind) -> &'static str {
+/// 规范化操作类别 → App 层历史类别；只读/管理/未归类都按普通查询展示。
+fn query_history_kind_from_operation(kind: fluxdb_core::OperationKind) -> QueryHistoryKind {
     match kind {
-        QueryHistoryKind::Query => "query",
-        QueryHistoryKind::DataChange => "data_change",
-        QueryHistoryKind::SchemaChange => "schema_change",
+        fluxdb_core::OperationKind::Write => QueryHistoryKind::DataChange,
+        fluxdb_core::OperationKind::Schema => QueryHistoryKind::SchemaChange,
+        _ => QueryHistoryKind::Query,
     }
 }
 

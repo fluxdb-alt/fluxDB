@@ -747,11 +747,11 @@ impl NewConnectionForm {
                 fluxdb_core::PostgresSshAuth::Password => "password".to_string(),
                 fluxdb_core::PostgresSshAuth::PrivateKey => "private_key".to_string(),
             };
-            if let Some(password) = ssh.password.value() {
+            if let Some(password) = ssh.password.inline.as_deref() {
                 self.ssh_password = password.to_string();
             }
             self.ssh_private_key = ssh.private_key.key.clone();
-            if let Some(passphrase) = ssh.passphrase.value() {
+            if let Some(passphrase) = ssh.passphrase.inline.as_deref() {
                 self.ssh_passphrase = passphrase.to_string();
             }
             self.mysql_ssh_connect_timeout_secs = ssh.connect_timeout_secs.to_string();
@@ -769,7 +769,7 @@ impl NewConnectionForm {
             self.mysql_proxy_host = proxy.host.clone();
             self.mysql_proxy_port = proxy.port.to_string();
             self.mysql_proxy_username = proxy.username.clone();
-            if let Some(password) = proxy.password.value() {
+            if let Some(password) = proxy.password.inline.as_deref() {
                 self.mysql_proxy_password = password.to_string();
             }
         }
@@ -788,7 +788,7 @@ impl NewConnectionForm {
         if let Some(user) = &profile.basic.username {
             self.username = user.clone();
         }
-        if let Some(password) = profile.basic.password.value() {
+        if let Some(password) = profile.basic.password.inline.as_deref() {
             self.password = password.to_string();
         }
         // TLS
@@ -807,11 +807,11 @@ impl NewConnectionForm {
             fluxdb_core::RedisSshAuth::Password => "password".to_string(),
             fluxdb_core::RedisSshAuth::PrivateKey => "private_key".to_string(),
         };
-        if let Some(password) = profile.ssh.password.value() {
+        if let Some(password) = profile.ssh.password.inline.as_deref() {
             self.ssh_password = password.to_string();
         }
         self.ssh_private_key = profile.ssh.private_key.key.clone();
-        if let Some(passphrase) = profile.ssh.passphrase.value() {
+        if let Some(passphrase) = profile.ssh.passphrase.inline.as_deref() {
             self.ssh_passphrase = passphrase.to_string();
         }
         // 拓扑：Sentinel / Cluster
@@ -844,11 +844,11 @@ impl NewConnectionForm {
                 fluxdb_core::MysqlSshAuth::Password => "password".to_string(),
                 fluxdb_core::MysqlSshAuth::PrivateKey => "private_key".to_string(),
             };
-            if let Some(password) = ssh.password.value() {
+            if let Some(password) = ssh.password.inline.as_deref() {
                 self.ssh_password = password.to_string();
             }
             self.ssh_private_key = ssh.private_key.key.clone();
-            if let Some(passphrase) = ssh.passphrase.value() {
+            if let Some(passphrase) = ssh.passphrase.inline.as_deref() {
                 self.ssh_passphrase = passphrase.to_string();
             }
             self.mysql_ssh_connect_timeout_secs = ssh.connect_timeout_secs.to_string();
@@ -864,7 +864,7 @@ impl NewConnectionForm {
             self.mysql_proxy_host = proxy.host.clone();
             self.mysql_proxy_port = proxy.port.to_string();
             self.mysql_proxy_username = proxy.username.clone();
-            if let Some(password) = proxy.password.value() {
+            if let Some(password) = proxy.password.inline.as_deref() {
                 self.mysql_proxy_password = password.to_string();
             }
         }
@@ -879,8 +879,8 @@ impl NewConnectionForm {
     ///
     /// SecretRef 约定（与 `redis_profile` / storage 保持一致）：
     /// - 密码类（基础密码、SSH 密码、SSH 口令）：`key` 留空，值放 `inline`，
-    ///   存储层按 `credential_ref + 槽后缀` 写/读 Keychain，新建与编辑都正确。
-    /// - 证书/私钥文件：以文件路径作 `key`、`inline` 为 None（非密码语义，不落 Keychain）。
+    ///   存储层按 `连接 ID + 凭据类别` 写/读 SQLite 加密凭据表，新建与编辑都正确。
+    /// - 证书/私钥文件：以文件路径作 `key`、`inline` 为 None（非密码语义，不落 SQLite 加密凭据表）。
     fn build_redis_profile(&self) -> fluxdb_core::RedisConnectionProfile {
         use fluxdb_core::{
             RedisBasicOptions, RedisClusterOptions, RedisCloudOptions, RedisConnectionProfile,
@@ -970,10 +970,10 @@ impl NewConnectionForm {
     /// 依据当前编辑值组装一份完整的 MySQL/TiDB 连接档案。
     ///
     /// SecretRef 约定（与 `build_redis_profile` 完全一致，storage 按
-    /// `credential_ref + 槽后缀` 写/读 Keychain）：
+    /// `连接 ID + 凭据类别` 写/读 SQLite 加密凭据表）：
     /// - 密码类（基础密码、SSH 密码、SSH 口令、代理密码）：`key` 留空，值放 `inline`。
     /// - 证书/私钥文件（TLS CA/客户端证书/客户端密钥、SSH 私钥）：以文件路径作 `key`、
-    ///   `inline` 为 None（非密码语义，不落 Keychain）。
+    ///   `inline` 为 None（非密码语义，不落 SQLite 加密凭据表）。
     fn build_mysql_profile(&self) -> fluxdb_core::MysqlConnectionProfile {
         use fluxdb_core::{
             MysqlAdvancedOptions, MysqlBasicOptions, MysqlConnectionProfile, MysqlProxy,
@@ -1069,7 +1069,7 @@ impl NewConnectionForm {
 
     /// PostgreSQL 结构化档案：表单里的主机/账号 + TLS 模式 + SSH/代理 + scope/advanced。
     ///
-    /// SecretRef 约定与 redis/mysql 一致：密码类放 inline（存储层写 Keychain），
+    /// SecretRef 约定与 redis/mysql 一致：密码类放 inline（存储层写 SQLite 加密凭据表），
     /// 证书/私钥以文件路径作 key（非密码语义）。
     fn build_postgres_profile(&self) -> fluxdb_core::PostgresConnectionProfile {
         use fluxdb_core::{

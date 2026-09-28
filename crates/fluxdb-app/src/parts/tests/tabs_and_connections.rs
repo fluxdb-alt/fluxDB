@@ -390,7 +390,6 @@ fn create_table(controller: &AppController) -> &CreateTableState {
             endpoint: Endpoint::Uri {
                 uri: "mongodb://localhost".to_string(),
             },
-            credential_ref: None,
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
@@ -1318,7 +1317,6 @@ fn create_table(controller: &AppController) -> &CreateTableState {
                 path: "stored.db".into(),
                 read_only: false,
             },
-            credential_ref: None,
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
@@ -1332,7 +1330,6 @@ fn create_table(controller: &AppController) -> &CreateTableState {
                 path: "next.db".into(),
                 read_only: false,
             },
-            credential_ref: None,
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
@@ -1367,115 +1364,34 @@ fn create_table(controller: &AppController) -> &CreateTableState {
     }
 
     #[test]
-    fn create_connections_assign_distinct_credential_refs_for_same_name() {
+    fn connections_with_same_name_have_distinct_ids_and_keep_secrets() {
         let mut controller = AppController::new();
         let draft = |kind, password| ConnectionDraft {
-            name: "开发环境".to_string(),
-            kind,
-            endpoint: Endpoint::Tcp {
-                host: "127.0.0.1".to_string(),
-                port: 3306,
-                database: None,
-            },
-            credential_ref: Some("gdb.connection.pending.开发环境".to_string()),
+            name: "开发环境".to_string(), kind,
+            endpoint: Endpoint::Tcp { host: "127.0.0.1".to_string(), port: 3306, database: None },
             options: std::collections::BTreeMap::from([("password".to_string(), password)]),
-            redis_profile: None,
-            mysql_profile: None,
-            postgres_profile: None,
+            redis_profile: None, mysql_profile: None, postgres_profile: None,
         };
-
-        let first = controller.dispatch(AppCommand::CreateConnection(draft(
-            DatabaseKind::Redis,
-            "redis-password".to_string(),
-        )));
-        let second = controller.dispatch(AppCommand::CreateConnection(draft(
-            DatabaseKind::MySql,
-            "mysql-password".to_string(),
-        )));
-
-        let AppEvent::ConnectionCreated(first) = first else {
-            panic!("expected first connection to be created");
-        };
-        let AppEvent::ConnectionCreated(second) = second else {
-            panic!("expected second connection to be created");
-        };
-        assert_eq!(first.credential_ref.as_deref(), Some("gdb.connection.1"));
-        assert_eq!(second.credential_ref.as_deref(), Some("gdb.connection.2"));
+        let AppEvent::ConnectionCreated(first) = controller.dispatch(AppCommand::CreateConnection(draft(DatabaseKind::Redis, "redis-password".to_string()))) else { panic!("expected first connection"); };
+        let AppEvent::ConnectionCreated(second) = controller.dispatch(AppCommand::CreateConnection(draft(DatabaseKind::MySql, "mysql-password".to_string()))) else { panic!("expected second connection"); };
+        assert_ne!(first.id, second.id);
+        assert_eq!(first.options.get("password").map(String::as_str), Some("redis-password"));
+        assert_eq!(second.options.get("password").map(String::as_str), Some("mysql-password"));
     }
 
     #[test]
-    fn copy_of_postgres_connection_gets_independent_credential_ref_and_secret() {
-        // 复制连接：draft 携带原连接的结构化档案（含内联密钥），即便带旧 credential_ref，
-        // CreateConnection 也必须为副本派生全新 ref，且档案内联密钥原样保留（供新 ref 落 keychain）。
+    fn copy_of_postgres_connection_keeps_inline_secret() {
         let mut controller = AppController::new();
         let mut profile = fluxdb_core::PostgresConnectionProfile::default();
-        profile.basic.host = "127.0.0.1".to_string();
-        profile.basic.port = 5432;
-        profile.basic.username = "postgres".to_string();
         profile.basic.password = fluxdb_core::SecretRef::inline("original-secret");
         let draft = ConnectionDraft {
-            name: "开发环境-副本".to_string(),
-            kind: DatabaseKind::Postgres,
-            endpoint: Endpoint::Tcp {
-                host: "127.0.0.1".to_string(),
-                port: 5432,
-                database: None,
-            },
-            credential_ref: Some("gdb.connection.1".to_string()), // copy_connection 带过来的旧 ref
-            options: Default::default(),
-            redis_profile: None,
-            mysql_profile: None,
+            name: "副本".into(), kind: DatabaseKind::Postgres,
+            endpoint: Endpoint::Tcp { host: "127.0.0.1".into(), port: 5432, database: None },
+            options: Default::default(), redis_profile: None, mysql_profile: None,
             postgres_profile: Some(profile),
         };
-        let AppEvent::ConnectionCreated(copy) = controller
-            .dispatch(AppCommand::CreateConnection(draft))
-        else {
-            panic!("expected connection created");
-        };
-        // 副本必须持有全新 ref，绝不能共享原连接的 ref。
-        assert_eq!(copy.credential_ref.as_deref(), Some("gdb.connection.1"), "无既有 id 时首连为 .1");
-        // 副本档案的内联密钥原样保留（内存态），可被 save_connection_secret 写入新 ref 的槽位。
-        assert_eq!(
-            copy.postgres_profile
-                .as_ref()
-                .and_then(|p| p.basic.password.inline.as_deref()),
-            Some("original-secret"),
-            "副本必须携带原密钥供新 ref 落 keychain"
-        );
-    }
-
-    #[test]
-    fn copy_of_mysql_connection_with_flat_password_gets_independent_ref() {
-        // MySQL 扁平密码路径：副本带旧 ref，也必须派生新 ref（as_create 的 has_credentials 由 options 判定）。
-        let mut controller = AppController::new();
-        let draft = ConnectionDraft {
-            name: "mysql-副本".to_string(),
-            kind: DatabaseKind::MySql,
-            endpoint: Endpoint::Tcp {
-                host: "127.0.0.1".to_string(),
-                port: 3306,
-                database: None,
-            },
-            credential_ref: Some("gdb.connection.7".to_string()),
-            options: std::collections::BTreeMap::from([(
-                "password".to_string(),
-                "mysql-secret".to_string(),
-            )]),
-            redis_profile: None,
-            mysql_profile: None,
-            postgres_profile: None,
-        };
-        let AppEvent::ConnectionCreated(copy) = controller
-            .dispatch(AppCommand::CreateConnection(draft))
-        else {
-            panic!("expected connection created");
-        };
-        assert_eq!(
-            copy.credential_ref,
-            Some("gdb.connection.1".to_string()),
-            "副本派生新 ref，不沿用旧 ref"
-        );
-        assert_eq!(copy.options.get("password").map(String::as_str), Some("mysql-secret"));
+        let AppEvent::ConnectionCreated(copy) = controller.dispatch(AppCommand::CreateConnection(draft)) else { panic!("expected connection"); };
+        assert_eq!(copy.postgres_profile.as_ref().and_then(|p| p.basic.password.inline.as_deref()), Some("original-secret"));
     }
 
     #[test]
@@ -1490,7 +1406,6 @@ fn create_table(controller: &AppController) -> &CreateTableState {
                 path: ":memory:".into(),
                 read_only: false,
             },
-            credential_ref: None,
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,
@@ -1560,7 +1475,6 @@ fn create_table(controller: &AppController) -> &CreateTableState {
                 path: main_path,
                 read_only: false,
             },
-            credential_ref: None,
             options: Default::default(),
             redis_profile: None,
             mysql_profile: None,

@@ -5,12 +5,26 @@ use std::path::PathBuf;
 mod credential;
 mod sqlite;
 
+#[path = "parts/connection_secrets.rs"]
+mod connection_secrets;
+
+/// 连接持久化：`connections` 表（一条连接一行）的建表与 row↔结构体适配。
+#[path = "parts/connection_store.rs"]
+mod connection_store;
+
+/// 历史持久化：`history` 表（所有数据库类型共一张表）的建表、记录类型与读写。
+#[path = "parts/history_store.rs"]
+mod history_store;
+
+pub use history_store::{
+    QueryHistoryRecord, RedisKeySearchHistoryRecord, RedisWorkbenchHistoryRecord,
+};
+
 use fluxdb_core::{
     ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot, ConnectionConfig, ConnectionId,
     ErRebindEntity, ErRelationship, Error, ErrorKind, MysqlConnectionProfile, MysqlTransportLayer,
-    PostgresConnectionProfile, PostgresTransportLayer, QueryRollbackSnapshot,
-    RedisConnectionProfile, Result, RoutineRef, SavedQuery, SecretRef, Settings, SidebarLayout,
-    TableRef, TriggerRef,
+    PostgresConnectionProfile, PostgresTransportLayer, RedisConnectionProfile, Result, RoutineRef,
+    SavedQuery, SecretRef, Settings, SidebarLayout, TableRef, TriggerRef,
 };
 
 /// ER 逻辑关系目录的 kv key 前缀：`er_rel:{scope}` 存该作用域的 `Vec<ErRelationship>`。
@@ -27,7 +41,7 @@ pub trait Storage {
     fn save_settings(&self, settings: &Settings) -> Result<()>;
     fn load_connections(&self) -> Result<Vec<ConnectionConfig>>;
     fn save_connections(&self, connections: &[ConnectionConfig]) -> Result<()>;
-    /// 删除某连接所拥有的全部 Keychain 条目（按 credential_ref 拥有权，保护其他连接）。
+    /// 删除该连接在 SQLite 中拥有的加密凭据（不触及旧系统条目）。
     fn delete_connection_secrets(&self, connection: &ConnectionConfig);
     fn load_sidebar_layout(&self, connections: &[ConnectionConfig]) -> Result<SidebarLayout>;
     fn save_sidebar_layout(
@@ -126,67 +140,42 @@ impl FileStorage {
             .unwrap_or_else(std::env::temp_dir)
     }
 
-    // ---- 系统凭据后端（方案 §4.2）----
-    // 通过 credential::backend() 单例访问，保留非系统 root（测试）跳过系统凭据的语义。
-    // 读/写失败传播错误（写不再假成功），删除对 NotFound 幂等容忍。
-
-    fn secret_backend_read(&self, account: &str) -> Result<Option<String>> {
-        if !self.should_use_credential_backend() {
-            return Ok(None);
-        }
+    // ---- SQLite 加密凭据后端；以连接 ID + 凭据类别定位 ----
+    fn secret_backend_read(&self, id: ConnectionId, kind: &str) -> Result<Option<String>> {
         use crate::credential::{backend, to_storage_error};
-        backend().read(account).map_err(|e| to_storage_error(&e))
-    }
-
-    fn secret_backend_write(&self, account: &str, secret: &str) -> Result<()> {
-        if !self.should_use_credential_backend() {
-            return Ok(());
-        }
-        use crate::credential::{backend, to_storage_error};
-        backend()
-            .write(account, secret)
+        backend(&self.root)
+            .read(id.0, kind)
             .map_err(|e| to_storage_error(&e))
     }
 
-    fn best_effort_secret_read(&self, account: &str) -> Option<String> {
-        match self.secret_backend_read(account) {
-            Ok(v) => v,
-            Err(e) => {
-                // 凭据服务不可用/锁定：保留连接资料，不回填密码并记日志，避免把"无凭据服务"
-                // 误处理成"没有连接"或覆盖原配置。UI 级可理解提示属界面层（AI-03）。
-                tracing::warn!(target: "fluxdb_storage", error = %e, account, "读取系统凭据失败，连接保留但不回填密码");
+    fn secret_backend_write(&self, id: ConnectionId, kind: &str, secret: &str) -> Result<()> {
+        use crate::credential::{backend, to_storage_error};
+        backend(&self.root)
+            .write(id.0, kind, secret)
+            .map_err(|e| to_storage_error(&e))
+    }
+
+    fn best_effort_secret_read(&self, id: ConnectionId, kind: &str) -> Option<String> {
+        match self.secret_backend_read(id, kind) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(target: "fluxdb_storage", %error, connection_id = id.0, kind, "读取加密连接凭据失败，连接保留但不回填密码");
                 None
             }
         }
     }
 
-    fn secret_backend_delete(&self, account: &str) {
-        if let Err(e) = self.secret_backend_delete_checked(account) {
-            tracing::warn!(target: "fluxdb_storage", error = %e, account, "删除系统凭据失败");
+    fn secret_backend_delete(&self, id: ConnectionId, kind: &str) {
+        if let Err(error) = self.secret_backend_delete_checked(id, kind) {
+            tracing::warn!(target: "fluxdb_storage", %error, connection_id = id.0, kind, "删除加密连接凭据失败");
         }
     }
 
-    fn secret_backend_delete_checked(&self, account: &str) -> Result<()> {
-        if !self.should_use_credential_backend() {
-            return Ok(());
-        }
+    fn secret_backend_delete_checked(&self, id: ConnectionId, kind: &str) -> Result<()> {
         use crate::credential::{backend, to_storage_error};
-        match backend().delete(account) {
-            Ok(()) | Err(crate::credential::CredentialError::NotFound) => Ok(()),
-            Err(e) => Err(to_storage_error(&e)),
-        }
-    }
-
-    /// 是否应访问系统凭据后端。测试注入 override 时绕过"非系统 root 短路"，
-    /// 以便用隔离内存后端驱动凭据路径；否则按系统 root 判断（保持原有语义）。
-    fn should_use_credential_backend(&self) -> bool {
-        #[cfg(any(test, feature = "test-util"))]
-        {
-            if crate::credential::test_override_active() {
-                return true;
-            }
-        }
-        self.uses_system_keychain()
+        backend(&self.root)
+            .delete(id.0, kind)
+            .map_err(|e| to_storage_error(&e))
     }
 
     fn config_path(&self) -> PathBuf {
@@ -405,65 +394,77 @@ impl FileStorage {
         )
     }
 
+    /// 加载全部 SQL 查询历史（全量扁平，由上层按作用域过滤）。
     pub fn load_query_history(&self) -> Result<Vec<QueryHistoryRecord>> {
         let conn = self.open_sqlite()?;
+        history_store::load_category(&conn, history_store::CATEGORY_QUERY)?
+            .into_iter()
+            .map(history_store::query_from_row)
+            .collect()
+    }
+
+    /// 全量替换 SQL 查询历史（整表覆盖该类别的所有作用域，与旧的 blob 覆盖语义一致）。
+    pub fn save_query_history(&self, entries: &[QueryHistoryRecord]) -> Result<()> {
+        let rows = entries
+            .iter()
+            .map(history_store::query_to_row)
+            .collect::<Result<Vec<_>>>()?;
+        let conn = self.open_sqlite()?;
+        let tx = conn.unchecked_transaction().map_err(storage_error)?;
+        history_store::replace_category(&tx, history_store::CATEGORY_QUERY, &rows)?;
+        tx.commit().map_err(storage_error)
+    }
+
+    /// 加载全部 Redis Key 搜索历史（全量扁平，由上层按作用域过滤）。
+    pub fn load_redis_key_search_history(&self) -> Result<Vec<RedisKeySearchHistoryRecord>> {
+        let conn = self.open_sqlite()?;
         Ok(
-            sqlite::get_json::<Vec<QueryHistoryRecord>>(&conn, sqlite::KEY_QUERY_HISTORY)?
-                .unwrap_or_default(),
+            history_store::load_category(&conn, history_store::CATEGORY_REDIS_KEY_SEARCH)?
+                .into_iter()
+                .map(history_store::redis_key_search_from_row)
+                .collect(),
         )
     }
 
-    pub fn save_query_history(&self, entries: &[QueryHistoryRecord]) -> Result<()> {
-        let conn = self.open_sqlite()?;
-        let start = entries.len().saturating_sub(1000);
-        sqlite::put_json(&conn, sqlite::KEY_QUERY_HISTORY, &entries[start..].to_vec())
-    }
-
-    pub fn load_redis_key_search_history(&self) -> Result<Vec<RedisKeySearchHistoryRecord>> {
-        let conn = self.open_sqlite()?;
-        Ok(sqlite::get_json::<Vec<RedisKeySearchHistoryRecord>>(
-            &conn,
-            sqlite::KEY_REDIS_KEY_SEARCH_HISTORY,
-        )?
-        .unwrap_or_default())
-    }
-
+    /// 全量替换 Redis Key 搜索历史。
     pub fn save_redis_key_search_history(
         &self,
         entries: &[RedisKeySearchHistoryRecord],
     ) -> Result<()> {
+        let rows = entries
+            .iter()
+            .map(history_store::redis_key_search_to_row)
+            .collect::<Vec<_>>();
         let conn = self.open_sqlite()?;
-        let start = entries.len().saturating_sub(1000);
-        sqlite::put_json(
-            &conn,
-            sqlite::KEY_REDIS_KEY_SEARCH_HISTORY,
-            &entries[start..].to_vec(),
-        )
+        let tx = conn.unchecked_transaction().map_err(storage_error)?;
+        history_store::replace_category(&tx, history_store::CATEGORY_REDIS_KEY_SEARCH, &rows)?;
+        tx.commit().map_err(storage_error)
     }
 
     /// 加载所有连接 / 库的 Redis Workbench 命令历史（全量扁平，
     /// 由上层按 scope 过滤）。不存在时返回空列表。
     pub fn load_redis_workbench_history(&self) -> Result<Vec<RedisWorkbenchHistoryRecord>> {
         let conn = self.open_sqlite()?;
-        Ok(sqlite::get_json::<Vec<RedisWorkbenchHistoryRecord>>(
-            &conn,
-            sqlite::KEY_REDIS_WORKBENCH_HISTORY,
-        )?
-        .unwrap_or_default())
+        history_store::load_category(&conn, history_store::CATEGORY_REDIS_COMMAND)?
+            .into_iter()
+            .map(history_store::redis_command_from_row)
+            .collect()
     }
 
-    /// 全量保存 Redis Workbench 命令历史并截断（与 SQL 历史同样保留最近 1000 条）。
+    /// 全量替换 Redis Workbench 命令历史（每个作用域保留最近
+    /// [`history_store::PER_SCOPE_LIMIT`] 条，由存储层裁剪）。
     pub fn save_redis_workbench_history(
         &self,
         entries: &[RedisWorkbenchHistoryRecord],
     ) -> Result<()> {
+        let rows = entries
+            .iter()
+            .map(history_store::redis_command_to_row)
+            .collect::<Vec<_>>();
         let conn = self.open_sqlite()?;
-        let start = entries.len().saturating_sub(1000);
-        sqlite::put_json(
-            &conn,
-            sqlite::KEY_REDIS_WORKBENCH_HISTORY,
-            &entries[start..].to_vec(),
-        )
+        let tx = conn.unchecked_transaction().map_err(storage_error)?;
+        history_store::replace_category(&tx, history_store::CATEGORY_REDIS_COMMAND, &rows)?;
+        tx.commit().map_err(storage_error)
     }
 
     /// 加载全部备份记录（全量扁平，由上层按连接/库过滤）。不存在时返回空列表。
@@ -495,7 +496,22 @@ impl Storage for FileStorage {
 
     fn save_settings(&self, settings: &Settings) -> Result<()> {
         ensure_private_dir(&self.root)?;
-        let text = toml::to_string_pretty(settings).map_err(storage_error)?;
+        let mut document = toml::Value::try_from(settings).map_err(storage_error)?;
+        // connection_secret_key 只允许直接编辑 config.toml；设置 UI 的保存不得擦除密钥。
+        match fs::read_to_string(self.config_path()) {
+            Ok(current) => {
+                let current: toml::Value = toml::from_str(&current).map_err(storage_error)?;
+                if let Some(key) = current.get("connection_secret_key") {
+                    document
+                        .as_table_mut()
+                        .ok_or_else(|| storage_error("Settings TOML 不是表"))?
+                        .insert("connection_secret_key".into(), key.clone());
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(storage_error(e)),
+        }
+        let text = toml::to_string_pretty(&document).map_err(storage_error)?;
         fs::write(self.config_path(), text).map_err(storage_error)?;
         // 配置文件收敛为 0o600（方案 §12.2；含存量旧文件）。
         harden_file_perms(&self.config_path())
@@ -503,21 +519,20 @@ impl Storage for FileStorage {
 
     fn load_connections(&self) -> Result<Vec<ConnectionConfig>> {
         let conn = self.open_sqlite()?;
-        sqlite::get_json::<Vec<ConnectionConfig>>(&conn, sqlite::KEY_CONNECTIONS)?
-            .unwrap_or_default()
+        connection_store::load_all(&conn)?
             .into_iter()
             .map(|connection| self.load_connection_secret(connection))
             .collect()
     }
 
     fn save_connections(&self, connections: &[ConnectionConfig]) -> Result<()> {
-        // 方案 §4.2 / §10.4-1：系统凭据与 SQLite 配置不是同一事务，采用"暂存-提交-切换"：
+        // 方案 §4.2 / §10.4-1：凭据表与连接表使用不同连接，不能共享事务，采用"暂存-提交-切换"：
         // 1) 把整套新凭据写入临时 staging 键（验证可写，失败只删 staging，正式旧值不动）；
         // 2) 读取正式键旧值后切换正式凭据；任一写入失败则恢复全部旧值；
         // 3) 原子提交 SQLite 配置；提交失败同样恢复正式凭据，最后清理 staging。
         // 由此保证进程内任一阶段失败都不会留下“新配置 + 部分新密码”的状态。
-        let mut staged: Vec<String> = Vec::new(); // 已写入的 staging 键
-        let mut pending: Vec<(String, String)> = Vec::new(); // (正式键, 新值)
+        let mut staged: Vec<(ConnectionId, String)> = Vec::new(); // 已写入的 staging 键
+        let mut pending: Vec<(ConnectionId, String, String)> = Vec::new(); // (正式键, 新值)
         for connection in connections {
             match self.stage_connection_secret(connection, &mut staged, &mut pending) {
                 Ok(()) => {}
@@ -545,9 +560,9 @@ impl Storage for FileStorage {
         };
         layout.repair(connections);
         let mut old_credentials = Vec::with_capacity(pending.len());
-        for (account, _) in &pending {
-            match self.secret_backend_read(account) {
-                Ok(value) => old_credentials.push((account.clone(), value)),
+        for (id, kind, _) in &pending {
+            match self.secret_backend_read(*id, kind) {
+                Ok(value) => old_credentials.push((*id, kind.clone(), value)),
                 Err(error) => {
                     self.cleanup_staged_credentials(&staged);
                     return Err(error);
@@ -555,8 +570,8 @@ impl Storage for FileStorage {
             }
         }
 
-        for (account, value) in &pending {
-            if let Err(write_error) = self.secret_backend_write(account, value) {
+        for (id, kind, value) in &pending {
+            if let Err(write_error) = self.secret_backend_write(*id, kind, value) {
                 let rollback_errors = self.restore_credentials(&old_credentials);
                 self.cleanup_staged_credentials(&staged);
                 return Err(credential_switch_error(write_error, rollback_errors));
@@ -574,7 +589,7 @@ impl Storage for FileStorage {
     }
 
     fn delete_connection_secrets(&self, connection: &ConnectionConfig) {
-        self.delete_owned_keychain_secrets(connection);
+        self.delete_owned_secrets(connection);
     }
 
     fn load_sidebar_layout(&self, connections: &[ConnectionConfig]) -> Result<SidebarLayout> {
@@ -599,160 +614,133 @@ impl Storage for FileStorage {
 
 impl FileStorage {
     fn load_connection_secret(&self, mut connection: ConnectionConfig) -> Result<ConnectionConfig> {
-        let Some(credential_ref) = self.credential_ref_for_keychain(&connection) else {
-            return Ok(connection);
-        };
-
-        // 扁平历史参数：`options["password"]` 从 Keychain 取回。
+        use connection_secrets::{DATABASE_PASSWORD, ENDPOINT_URI, URL_PARAMS};
+        let id = connection.id;
+        // 新格式只依赖连接 ID 和类别；旧格式的 SecretRef.key 仅作一次性迁移提示。
+        if let fluxdb_core::Endpoint::Uri { uri } = &mut connection.endpoint {
+            if uri.is_empty() {
+                if let Some(secret) = self.best_effort_secret_read(id, ENDPOINT_URI) {
+                    *uri = secret;
+                }
+            }
+        }
+        if !connection.options.contains_key("url_params") {
+            if let Some(value) = self.best_effort_secret_read(id, URL_PARAMS) {
+                connection.options.insert("url_params".into(), value);
+            }
+        }
         if !connection.options.contains_key(PLAINTEXT_PASSWORD_OPTION) {
-            if let Some(secret) = self.best_effort_secret_read(&credential_ref) {
+            if let Some(secret) = self.best_effort_secret_read(id, DATABASE_PASSWORD) {
                 connection
                     .options
-                    .insert(PLAINTEXT_PASSWORD_OPTION.to_string(), secret);
+                    .insert(PLAINTEXT_PASSWORD_OPTION.into(), secret);
             }
         }
-
-        // 结构化档案：逐槽位把受控值从 Keychain 回填到内存。
         if let Some(profile) = connection.redis_profile.as_mut() {
-            for (suffix, slot) in profile_secret_slots_mut(profile) {
-                if slot.key.is_empty() {
-                    slot.key = format!("{credential_ref}{suffix}");
-                }
+            for (kind, slot) in profile_secret_slots_mut(profile) {
                 if slot.inline.is_none() {
-                    slot.inline = self.best_effort_secret_read(&slot.key);
+                    slot.inline = self.best_effort_secret_read(id, kind);
                 }
+                slot.key.clear();
             }
         }
-
-        // MySQL 结构化档案：同理回填（MySQL/Redis 不同栈，槽位后缀无冲突）。
         if let Some(profile) = connection.mysql_profile.as_mut() {
-            for (suffix, slot) in mysql_profile_secret_slots_mut(profile) {
-                if slot.key.is_empty() {
-                    slot.key = format!("{credential_ref}{suffix}");
-                }
+            for (kind, slot) in mysql_profile_secret_slots_mut(profile) {
                 if slot.inline.is_none() {
-                    slot.inline = self.best_effort_secret_read(&slot.key);
+                    slot.inline = self.best_effort_secret_read(id, kind);
                 }
+                slot.key.clear();
             }
         }
-
-        // PostgreSQL 结构化档案：同理回填（与 MySQL/Redis 槽位后缀无冲突）。
         if let Some(profile) = connection.postgres_profile.as_mut() {
-            for (suffix, slot) in postgres_profile_secret_slots_mut(profile) {
-                if slot.key.is_empty() {
-                    slot.key = format!("{credential_ref}{suffix}");
-                }
+            for (kind, slot) in postgres_profile_secret_slots_mut(profile) {
                 if slot.inline.is_none() {
-                    slot.inline = self.best_effort_secret_read(&slot.key);
+                    slot.inline = self.best_effort_secret_read(id, kind);
                 }
+                slot.key.clear();
             }
         }
-
         Ok(connection)
     }
-
-    // 方案 §4.2 / §10.4-1 的"暂存-提交-切换"辅助：见 save_connections 编排注释。
 
     fn stage_connection_secret(
         &self,
         connection: &ConnectionConfig,
-        staged: &mut Vec<String>,
-        pending: &mut Vec<(String, String)>,
+        staged: &mut Vec<(ConnectionId, String)>,
+        pending: &mut Vec<(ConnectionId, String, String)>,
     ) -> Result<()> {
-        let Some(credential_ref) = self.credential_ref_for_keychain(connection) else {
-            return Ok(());
-        };
+        use connection_secrets::{DATABASE_PASSWORD, ENDPOINT_URI, URL_PARAMS};
+        let id = connection.id;
         let mut batch: Vec<(String, String)> = Vec::new();
+        if let fluxdb_core::Endpoint::Uri { uri } = &connection.endpoint {
+            batch.push((ENDPOINT_URI.into(), uri.clone()));
+        }
+        if let Some(params) = connection.options.get("url_params") {
+            batch.push((URL_PARAMS.into(), params.clone()));
+        }
         if let Some(password) = connection.options.get(PLAINTEXT_PASSWORD_OPTION) {
-            batch.push((credential_ref.clone(), password.clone()));
+            batch.push((DATABASE_PASSWORD.into(), password.clone()));
         }
-        for (suffix, slot) in profile_secret_slots_combined(connection) {
+        for (kind, slot) in profile_secret_slots_combined(connection) {
             if let Some(value) = slot.inline.as_deref() {
-                batch.push((
-                    secret_slot_account(&credential_ref, suffix, slot),
-                    value.to_string(),
-                ));
+                batch.push((kind.into(), value.into()));
             }
         }
-
-        // 写 staging；任一失败，删本次已写 staging（正式旧值不动），报错。
-        let mut written_staging: Vec<String> = Vec::new();
-        for (real, value) in &batch {
-            let key = staging_key(real);
-            match self.secret_backend_write(&key, value) {
-                Ok(()) => written_staging.push(key),
-                Err(e) => {
-                    for k in &written_staging {
-                        self.secret_backend_delete(k);
-                    }
-                    return Err(e);
+        let mut written: Vec<(ConnectionId, String)> = Vec::new();
+        for (kind, value) in &batch {
+            let temp_kind = staging_kind(kind);
+            if let Err(error) = self.secret_backend_write(id, &temp_kind, value) {
+                for (staged_id, staged_kind) in &written {
+                    self.secret_backend_delete(*staged_id, staged_kind);
                 }
+                return Err(error);
             }
+            written.push((id, temp_kind));
         }
-        staged.extend(written_staging);
-        pending.extend(batch);
+        staged.extend(written);
+        pending.extend(batch.into_iter().map(|(kind, value)| (id, kind, value)));
         Ok(())
     }
 
-    fn cleanup_staged_credentials(&self, staged: &[String]) {
-        for key in staged {
-            self.secret_backend_delete(key);
+    fn cleanup_staged_credentials(&self, staged: &[(ConnectionId, String)]) {
+        for (id, kind) in staged {
+            self.secret_backend_delete(*id, kind);
         }
     }
 
-    /// 把本轮可能触及的正式凭据完整恢复到保存前状态。
-    fn restore_credentials(&self, old_credentials: &[(String, Option<String>)]) -> Vec<String> {
+    fn restore_credentials(
+        &self,
+        old_credentials: &[(ConnectionId, String, Option<String>)],
+    ) -> Vec<String> {
         let mut errors = Vec::new();
-        for (account, old_value) in old_credentials {
+        for (id, kind, old_value) in old_credentials {
             let result = match old_value {
-                Some(value) => self.secret_backend_write(account, value),
-                None => self.secret_backend_delete_checked(account),
+                Some(value) => self.secret_backend_write(*id, kind, value),
+                None => self.secret_backend_delete_checked(*id, kind),
             };
             if let Err(error) = result {
-                tracing::error!(target: "fluxdb_storage", %error, account, "恢复系统凭据失败");
-                errors.push(format!("{account}: {error}"));
+                tracing::error!(target: "fluxdb_storage", %error, connection_id = id.0, kind, "恢复连接凭据失败");
+                errors.push(format!("{}:{kind}: {error}", id.0));
             }
         }
         errors
     }
 
-    fn delete_owned_keychain_secrets(&self, connection: &ConnectionConfig) {
-        let Some(credential_ref) = self.credential_ref_for_keychain(connection) else {
-            return;
+    fn delete_owned_secrets(&self, connection: &ConnectionConfig) {
+        use connection_secrets::{
+            DATABASE_PASSWORD, ENDPOINT_URI, PROXY_PASSWORD, SSH_PASSPHRASE, SSH_PASSWORD,
+            URL_PARAMS,
         };
-        // 扁平历史密码与结构化档案槽位同属该 ref。
-        self.secret_backend_delete(&credential_ref);
-        let mut accounts: Vec<String> = Vec::new();
-        if let Some(profile) = connection.redis_profile.as_ref() {
-            for (suffix, slot) in profile_secret_slots(profile) {
-                accounts.push(secret_slot_account(&credential_ref, suffix, slot));
-            }
+        for kind in [
+            DATABASE_PASSWORD,
+            SSH_PASSWORD,
+            SSH_PASSPHRASE,
+            PROXY_PASSWORD,
+            ENDPOINT_URI,
+            URL_PARAMS,
+        ] {
+            self.secret_backend_delete(connection.id, kind);
         }
-        if let Some(profile) = connection.mysql_profile.as_ref() {
-            for (suffix, slot) in mysql_profile_secret_slots(profile) {
-                accounts.push(secret_slot_account(&credential_ref, suffix, slot));
-            }
-        }
-        if let Some(profile) = connection.postgres_profile.as_ref() {
-            for (suffix, slot) in postgres_profile_secret_slots(profile) {
-                accounts.push(secret_slot_account(&credential_ref, suffix, slot));
-            }
-        }
-        for account in accounts {
-            self.secret_backend_delete(&account);
-        }
-    }
-
-    fn credential_ref_for_keychain(&self, connection: &ConnectionConfig) -> Option<String> {
-        if !self.should_use_credential_backend() {
-            return None;
-        }
-
-        connection.credential_ref.clone()
-    }
-
-    fn uses_system_keychain(&self) -> bool {
-        Self::default_root().is_ok_and(|root| root == self.root)
     }
 
     /// 打开本 root 下的 sqlite 数据库并确保 kv 表存在。
@@ -764,8 +752,9 @@ impl FileStorage {
 
     /// 把连接列表（剥离明文）与 SidebarLayout 一并写入 sqlite。
     ///
-    /// 与历史 toml 行为一致：connections.toml 同时持有两者，保存任一时另一份
-    /// 也一并落盘，避免两个入口互相覆盖。
+    /// 连接进 `connections` 表（整表替换），布局仍是 kv JSON：布局是纯 UI 状态，
+    /// 没有按字段查询需求，两者一起提交以保证「保存连接」与「保存布局」不互相覆盖。
+    /// 同一事务内清理已删除连接的历史（级联）。
     fn write_connections_and_layout(
         &self,
         conn: &rusqlite::Connection,
@@ -782,96 +771,21 @@ impl FileStorage {
         let stripped: Vec<ConnectionConfig> =
             connections.iter().map(strip_plaintext_secrets).collect();
         let tx = conn.unchecked_transaction().map_err(storage_error)?;
-        sqlite::put_json(&tx, sqlite::KEY_CONNECTIONS, &stripped)?;
+        connection_store::replace_all(&tx, &stripped)?;
+        history_store::delete_history_of_missing_connections(
+            &tx,
+            &stripped
+                .iter()
+                .map(|connection| connection.id)
+                .collect::<Vec<_>>(),
+        )?;
         sqlite::put_json(&tx, sqlite::KEY_SIDEBAR_LAYOUT, layout)?;
         tx.commit().map_err(storage_error)?;
         Ok(())
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct QueryHistoryRecord {
-    pub connection_id: ConnectionId,
-    pub database: Option<String>,
-    /// 历史记录所属 schema（PG）；旧记录缺省为 None，`#[serde(default)]` 兼容加载。
-    #[serde(default)]
-    pub schema: Option<String>,
-    pub text: String,
-    #[serde(default)]
-    pub tables: Vec<String>,
-    #[serde(default = "default_query_history_kind")]
-    pub kind: String,
-    #[serde(default = "default_query_history_success")]
-    pub success: bool,
-    #[serde(default)]
-    pub executed_at_unix_secs: u64,
-    #[serde(default)]
-    pub object: Option<String>,
-    #[serde(default)]
-    pub rollback_sql: Option<String>,
-    #[serde(default)]
-    pub rollback_snapshot: Option<QueryRollbackSnapshot>,
-    /// 写入事务状态（committed/uncommitted/rolled_back，§8.4）；旧记录缺省按已提交。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transaction_state: Option<String>,
-    #[serde(default)]
-    pub message: Option<String>,
-    #[serde(default)]
-    pub returned_rows: u64,
-    #[serde(default)]
-    pub affected_rows: u64,
-    #[serde(default)]
-    pub elapsed_ms: u64,
-}
-
-/// Redis Key 搜索历史单条记录，按连接 + 数据库隔离。
-///
-/// - `connection_id`：所属连接 ID。
-/// - `database`：Redis DB 索引字符串（如 `"0"`、`"1"`），`None` 视为 `"0"`。
-/// - `text`：搜索词。
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RedisKeySearchHistoryRecord {
-    pub connection_id: ConnectionId,
-    pub database: Option<String>,
-    pub text: String,
-}
-
-/// Redis Workbench 命令历史单条记录，按连接 + 逻辑数据库隔离（对齐 RedisInsight 的
-/// databaseId 作用域）。
-///
-/// - `id`：scope 内去重的记录 ID，用于删除定位。
-/// - `connection_id` / `database`：归属的连接与逻辑库。
-/// - `text`：命令文本，可回填到 Workbench 输入框。
-/// - `summary` / `source`：结果摘要与来源（Workbench / HistoryRerun / KeyShortcut）。
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RedisWorkbenchHistoryRecord {
-    pub id: u64,
-    pub connection_id: ConnectionId,
-    pub database: u32,
-    pub text: String,
-    #[serde(default = "default_redis_workbench_history_success")]
-    pub success: bool,
-    #[serde(default)]
-    pub executed_at_unix_secs: u64,
-    #[serde(default)]
-    pub summary: String,
-    #[serde(default)]
-    pub source: String,
-}
-
-fn default_redis_workbench_history_success() -> bool {
-    true
-}
-
 include!("parts/backup_restore.rs");
-
-fn default_query_history_kind() -> String {
-    "query".to_string()
-}
-
-fn default_query_history_success() -> bool {
-    true
-}
 
 fn storage_error(error: impl ToString) -> Error {
     Error::new(ErrorKind::Internal, error.to_string())
@@ -1020,8 +934,17 @@ fn database_hash(database: Option<&str>, schema: Option<&str>) -> String {
     format!("d{:016x}", hasher.finish())
 }
 
+fn staging_kind(kind: &str) -> String {
+    format!("__staging__:{kind}")
+}
+
 fn strip_plaintext_secrets(connection: &ConnectionConfig) -> ConnectionConfig {
     let mut connection = connection.clone();
+    // 自由输入的 URL 参数也可能包含密码或令牌，整字段加密而非尝试猜测键名。
+    connection.options.remove("url_params");
+    if let fluxdb_core::Endpoint::Uri { uri } = &mut connection.endpoint {
+        uri.clear(); // 连接 URI 整体存入 AES-GCM 密文表，避免 userinfo/query 泄露密码。
+    }
     connection.options.retain(|key, _| {
         let key = key.to_ascii_lowercase();
         !key.contains("password") && !key.contains("secret")
@@ -1050,21 +973,7 @@ fn strip_plaintext_secrets(connection: &ConnectionConfig) -> ConnectionConfig {
     connection
 }
 
-/// 遍历 Redis 档案中需要走 Keychain 的「密码类」槽位。
-/// 返回 `(Keychain 账号后缀, 该槽的 SecretRef)`。
-///
-/// 证书/私钥文件一律以文件路径引用（`key` 存路径，非密码语义），不在此列；
-/// 只有真正的密码（基础密码、SSH 密码、SSH 私钥口令）才进 Keychain。
-/// 槽位在 Keychain 中的 account：未显式设 key 时按 `{ref}{suffix}` 推导，否则用显式 key。
-fn secret_slot_account(credential_ref: &str, suffix: &str, slot: &SecretRef) -> String {
-    if slot.key.is_empty() {
-        format!("{credential_ref}{suffix}")
-    } else {
-        slot.key.clone()
-    }
-}
-
-/// 合并 Redis/MySQL/PostgreSQL 三栈的密码槽位，返回 `(后缀, SecretRef)` 列表。
+/// 合并 Redis/MySQL/PostgreSQL 的密码槽位，返回 `(secret_kind, SecretRef)`。
 fn profile_secret_slots_combined(connection: &ConnectionConfig) -> Vec<(&'static str, &SecretRef)> {
     let mut slots: Vec<(&'static str, &SecretRef)> = Vec::new();
     if let Some(profile) = connection.redis_profile.as_ref() {
@@ -1077,12 +986,6 @@ fn profile_secret_slots_combined(connection: &ConnectionConfig) -> Vec<(&'static
         slots.extend(postgres_profile_secret_slots(profile));
     }
     slots
-}
-
-/// 暂存（staging）凭据键名：与正式键一一对应，前缀唯一，绝不与正式/其它连接键冲突。
-/// 提交成功后删除 staging；任何失败只清理 staging，正式旧值不受影响。
-fn staging_key(real_account: &str) -> String {
-    format!("__fluxdb_staging__/{real_account}")
 }
 
 fn credential_switch_error(error: Error, rollback_errors: Vec<String>) -> Error {
@@ -1099,10 +1002,13 @@ fn credential_switch_error(error: Error, rollback_errors: Vec<String>) -> Error 
 }
 
 fn profile_secret_slots(profile: &RedisConnectionProfile) -> Vec<(&'static str, &SecretRef)> {
-    let mut slots: Vec<(&'static str, &SecretRef)> = vec![("", &profile.basic.password)];
+    let mut slots: Vec<(&'static str, &SecretRef)> = vec![(
+        connection_secrets::DATABASE_PASSWORD,
+        &profile.basic.password,
+    )];
     if profile.ssh.enabled {
-        slots.push((".ssh_password", &profile.ssh.password));
-        slots.push((".ssh_passphrase", &profile.ssh.passphrase));
+        slots.push((connection_secrets::SSH_PASSWORD, &profile.ssh.password));
+        slots.push((connection_secrets::SSH_PASSPHRASE, &profile.ssh.passphrase));
     }
     slots
 }
@@ -1111,29 +1017,38 @@ fn profile_secret_slots(profile: &RedisConnectionProfile) -> Vec<(&'static str, 
 fn profile_secret_slots_mut(
     profile: &mut RedisConnectionProfile,
 ) -> Vec<(&'static str, &mut SecretRef)> {
-    let mut slots: Vec<(&'static str, &mut SecretRef)> = vec![("", &mut profile.basic.password)];
+    let mut slots: Vec<(&'static str, &mut SecretRef)> = vec![(
+        connection_secrets::DATABASE_PASSWORD,
+        &mut profile.basic.password,
+    )];
     if profile.ssh.enabled {
-        slots.push((".ssh_password", &mut profile.ssh.password));
-        slots.push((".ssh_passphrase", &mut profile.ssh.passphrase));
+        slots.push((connection_secrets::SSH_PASSWORD, &mut profile.ssh.password));
+        slots.push((
+            connection_secrets::SSH_PASSPHRASE,
+            &mut profile.ssh.passphrase,
+        ));
     }
     slots
 }
 
-/// 遍历 MySQL 档案中需要走 Keychain 的「密码类」槽位。
-/// 返回 `(Keychain 账号后缀, 该槽的 SecretRef)`。
+/// 遍历 MySQL 档案中需要走 SQLite 加密凭据表的「密码类」槽位。
+/// 返回 `(secret_kind, 该槽的 SecretRef)`。
 ///
 /// 证书/私钥文件一律以文件路径引用（`key` 存路径，非密码语义），不在此列；
-/// 只有真正的密码（基础密码、SSH 密码、SSH 私钥口令、代理密码）才进 Keychain。
+/// 只有真正的密码（基础密码、SSH 密码、SSH 私钥口令、代理密码）才进 SQLite 加密凭据表。
 fn mysql_profile_secret_slots(profile: &MysqlConnectionProfile) -> Vec<(&'static str, &SecretRef)> {
-    let mut slots: Vec<(&'static str, &SecretRef)> = vec![("", &profile.basic.password)];
+    let mut slots: Vec<(&'static str, &SecretRef)> = vec![(
+        connection_secrets::DATABASE_PASSWORD,
+        &profile.basic.password,
+    )];
     for layer in &profile.transport {
         match layer {
             MysqlTransportLayer::Ssh(ssh) if ssh.enabled => {
-                slots.push((".ssh_password", &ssh.password));
-                slots.push((".ssh_passphrase", &ssh.passphrase));
+                slots.push((connection_secrets::SSH_PASSWORD, &ssh.password));
+                slots.push((connection_secrets::SSH_PASSPHRASE, &ssh.passphrase));
             }
             MysqlTransportLayer::Proxy(proxy) if proxy.enabled => {
-                slots.push((".proxy_password", &proxy.password));
+                slots.push((connection_secrets::PROXY_PASSWORD, &proxy.password));
             }
             _ => {}
         }
@@ -1149,15 +1064,16 @@ fn mysql_profile_secret_slots_mut(
     let MysqlConnectionProfile {
         basic, transport, ..
     } = profile;
-    let mut slots: Vec<(&'static str, &mut SecretRef)> = vec![("", &mut basic.password)];
+    let mut slots: Vec<(&'static str, &mut SecretRef)> =
+        vec![(connection_secrets::DATABASE_PASSWORD, &mut basic.password)];
     for layer in transport.iter_mut() {
         match layer {
             MysqlTransportLayer::Ssh(ssh) if ssh.enabled => {
-                slots.push((".ssh_password", &mut ssh.password));
-                slots.push((".ssh_passphrase", &mut ssh.passphrase));
+                slots.push((connection_secrets::SSH_PASSWORD, &mut ssh.password));
+                slots.push((connection_secrets::SSH_PASSPHRASE, &mut ssh.passphrase));
             }
             MysqlTransportLayer::Proxy(proxy) if proxy.enabled => {
-                slots.push((".proxy_password", &mut proxy.password));
+                slots.push((connection_secrets::PROXY_PASSWORD, &mut proxy.password));
             }
             _ => {}
         }
@@ -1165,23 +1081,26 @@ fn mysql_profile_secret_slots_mut(
     slots
 }
 
-/// 遍历 PostgreSQL 档案中需要走 Keychain 的「密码类」槽位。
-/// 返回 `(Keychain 账号后缀, 该槽的 SecretRef)`。
+/// 遍历 PostgreSQL 档案中需要走 SQLite 加密凭据表的「密码类」槽位。
+/// 返回 `(secret_kind, 该槽的 SecretRef)`。
 ///
 /// 证书/私钥文件一律以文件路径引用（`key` 存路径，非密码语义），不在此列；
-/// 只有真正的密码（基础密码、SSH 密码、SSH 私钥口令、代理密码）才进 Keychain。
+/// 只有真正的密码（基础密码、SSH 密码、SSH 私钥口令、代理密码）才进 SQLite 加密凭据表。
 fn postgres_profile_secret_slots(
     profile: &PostgresConnectionProfile,
 ) -> Vec<(&'static str, &SecretRef)> {
-    let mut slots: Vec<(&'static str, &SecretRef)> = vec![("", &profile.basic.password)];
+    let mut slots: Vec<(&'static str, &SecretRef)> = vec![(
+        connection_secrets::DATABASE_PASSWORD,
+        &profile.basic.password,
+    )];
     for layer in &profile.transport {
         match layer {
             PostgresTransportLayer::Ssh(ssh) if ssh.enabled => {
-                slots.push((".ssh_password", &ssh.password));
-                slots.push((".ssh_passphrase", &ssh.passphrase));
+                slots.push((connection_secrets::SSH_PASSWORD, &ssh.password));
+                slots.push((connection_secrets::SSH_PASSPHRASE, &ssh.passphrase));
             }
             PostgresTransportLayer::Proxy(proxy) if proxy.enabled => {
-                slots.push((".proxy_password", &proxy.password));
+                slots.push((connection_secrets::PROXY_PASSWORD, &proxy.password));
             }
             _ => {}
         }
@@ -1197,15 +1116,16 @@ fn postgres_profile_secret_slots_mut(
     let PostgresConnectionProfile {
         basic, transport, ..
     } = profile;
-    let mut slots: Vec<(&'static str, &mut SecretRef)> = vec![("", &mut basic.password)];
+    let mut slots: Vec<(&'static str, &mut SecretRef)> =
+        vec![(connection_secrets::DATABASE_PASSWORD, &mut basic.password)];
     for layer in transport.iter_mut() {
         match layer {
             PostgresTransportLayer::Ssh(ssh) if ssh.enabled => {
-                slots.push((".ssh_password", &mut ssh.password));
-                slots.push((".ssh_passphrase", &mut ssh.passphrase));
+                slots.push((connection_secrets::SSH_PASSWORD, &mut ssh.password));
+                slots.push((connection_secrets::SSH_PASSPHRASE, &mut ssh.passphrase));
             }
             PostgresTransportLayer::Proxy(proxy) if proxy.enabled => {
-                slots.push((".proxy_password", &mut proxy.password));
+                slots.push((connection_secrets::PROXY_PASSWORD, &mut proxy.password));
             }
             _ => {}
         }
@@ -1222,12 +1142,13 @@ mod tests {
     use fluxdb_core::{
         COMPLETION_INDEX_VERSION, ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot,
         ConnectionGroup, ConnectionGroupId, ConnectionId, DatabaseKind, Endpoint, LogLevel,
-        ObjectKind, SavedQuery, SidebarOrderEntry, TableFingerprint, TableRef, Theme,
+        ObjectKind, OperationKind, SavedQuery, SidebarOrderEntry, TableFingerprint, TableRef,
+        Theme,
     };
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    // ---- AI-02 系统凭据：用线程隔离的 InMemoryBackend 驱动，不访问真实密码库 ----
+    // ---- 线程隔离的 InMemoryBackend 驱动异常分支，不访问真实用户数据 ----
 
     use crate::credential::{
         InMemoryBackend, UnavailableBackend, clear_test_backend, set_test_backend,
@@ -1235,7 +1156,7 @@ mod tests {
     use std::sync::Arc;
 
     /// 构造带扁平密码的 MySQL 连接。
-    fn conn_with_password(id: u64, credential_ref: &str, password: &str) -> ConnectionConfig {
+    fn conn_with_password(id: u64, password: &str) -> ConnectionConfig {
         ConnectionConfig {
             id: ConnectionId(id),
             name: format!("conn-{id}"),
@@ -1245,7 +1166,6 @@ mod tests {
                 port: 3306,
                 database: Some("app".to_string()),
             },
-            credential_ref: Some(credential_ref.to_string()),
             options: BTreeMap::from([(
                 PLAINTEXT_PASSWORD_OPTION.to_string(),
                 password.to_string(),
@@ -1260,15 +1180,19 @@ mod tests {
     #[test]
     fn save_connection_secret_propagates_write_failure() {
         let backend = Arc::new(InMemoryBackend::new());
-        backend.fail_writes_with_prefix("__fluxdb_staging__/gdb.connection.1");
+        backend.fail_writes_with_prefix("1:__staging__:");
         set_test_backend(backend.clone());
         let storage = FileStorage::new(unique_temp_dir());
 
-        let conn = conn_with_password(1, "gdb.connection.1", "s3cret");
+        let conn = conn_with_password(1, "s3cret");
         let err = storage.save_connections(&[conn]).unwrap_err();
         assert!(!err.to_string().is_empty(), "写失败应返回非空错误");
         // 正式键不应被写入（失败发生在暂存阶段）。
-        assert!(backend.peek("gdb.connection.1").is_none());
+        assert!(
+            backend
+                .peek(1, connection_secrets::DATABASE_PASSWORD)
+                .is_none()
+        );
         clear_test_backend();
     }
 
@@ -1280,22 +1204,23 @@ mod tests {
         let storage = FileStorage::new(unique_temp_dir());
 
         // 先保存成功（写入正式凭据 + 配置）。
-        let v1 = conn_with_password(1, "gdb.connection.1", "old-pw");
+        let v1 = conn_with_password(1, "old-pw");
         storage.save_connections(&[v1.clone()]).unwrap();
 
         // 注入：下一次配置提交失败；再保存新密码。
         crate::credential::fail_next_commit();
-        let v2 = conn_with_password(1, "gdb.connection.1", "new-pw");
+        let v2 = conn_with_password(1, "new-pw");
         assert!(storage.save_connections(&[v2.clone()]).is_err());
 
         // 正式凭据仍是旧值（新值未被写入）。
-        assert_eq!(backend.peek("gdb.connection.1").as_deref(), Some("old-pw"));
-        // 暂存键无残留。
-        assert!(
+        assert_eq!(
             backend
-                .peek("__fluxdb_staging__/gdb.connection.1")
-                .is_none()
+                .peek(1, connection_secrets::DATABASE_PASSWORD)
+                .as_deref(),
+            Some("old-pw")
         );
+        // 暂存键无残留。
+        assert!(backend.peek(1, "__staging__:database_password").is_none());
         // 配置仍为旧连接（静默失效被阻止，连接资料保留）。
         let loaded = storage.load_connections().unwrap();
         assert_eq!(loaded.len(), 1);
@@ -1307,22 +1232,26 @@ mod tests {
     fn save_connections_cleans_staging_on_multi_slot_failure() {
         let backend = Arc::new(InMemoryBackend::new());
         // 第二个连接的暂存写失败。
-        backend.fail_writes_with_prefix("__fluxdb_staging__/gdb.connection.2");
+        backend.fail_writes_with_prefix("2:__staging__:");
         set_test_backend(backend.clone());
         let storage = FileStorage::new(unique_temp_dir());
 
-        let c1 = conn_with_password(1, "gdb.connection.1", "pw1");
-        let c2 = conn_with_password(2, "gdb.connection.2", "pw2");
+        let c1 = conn_with_password(1, "pw1");
+        let c2 = conn_with_password(2, "pw2");
         assert!(storage.save_connections(&[c1, c2]).is_err());
 
         // 两连接的正式键都未写；第一连接的暂存被清理。
-        assert!(backend.peek("gdb.connection.1").is_none());
-        assert!(backend.peek("gdb.connection.2").is_none());
         assert!(
             backend
-                .peek("__fluxdb_staging__/gdb.connection.1")
+                .peek(1, connection_secrets::DATABASE_PASSWORD)
                 .is_none()
         );
+        assert!(
+            backend
+                .peek(2, connection_secrets::DATABASE_PASSWORD)
+                .is_none()
+        );
+        assert!(backend.peek(1, "__staging__:database_password").is_none());
         clear_test_backend();
     }
 
@@ -1333,30 +1262,32 @@ mod tests {
         set_test_backend(backend.clone());
         let storage = FileStorage::new(unique_temp_dir());
 
-        let old1 = conn_with_password(1, "gdb.connection.1", "old-1");
-        let old2 = conn_with_password(2, "gdb.connection.2", "old-2");
+        let old1 = conn_with_password(1, "old-1");
+        let old2 = conn_with_password(2, "old-2");
         storage
             .save_connections(&[old1.clone(), old2.clone()])
             .unwrap();
 
         // 第一项先写成新值，第二项失败一次；恢复阶段不再失败。
-        backend.fail_next_write("gdb.connection.2");
-        let new1 = conn_with_password(1, "gdb.connection.1", "new-1");
-        let new2 = conn_with_password(2, "gdb.connection.2", "new-2");
+        backend.fail_next_write("2:database_password");
+        let new1 = conn_with_password(1, "new-1");
+        let new2 = conn_with_password(2, "new-2");
         assert!(storage.save_connections(&[new1, new2]).is_err());
 
-        assert_eq!(backend.peek("gdb.connection.1").as_deref(), Some("old-1"));
-        assert_eq!(backend.peek("gdb.connection.2").as_deref(), Some("old-2"));
-        assert!(
+        assert_eq!(
             backend
-                .peek("__fluxdb_staging__/gdb.connection.1")
-                .is_none()
+                .peek(1, connection_secrets::DATABASE_PASSWORD)
+                .as_deref(),
+            Some("old-1")
         );
-        assert!(
+        assert_eq!(
             backend
-                .peek("__fluxdb_staging__/gdb.connection.2")
-                .is_none()
+                .peek(2, connection_secrets::DATABASE_PASSWORD)
+                .as_deref(),
+            Some("old-2")
         );
+        assert!(backend.peek(1, "__staging__:database_password").is_none());
+        assert!(backend.peek(2, "__staging__:database_password").is_none());
         let loaded = storage.load_connections().unwrap();
         assert_eq!(loaded.len(), 2);
         assert_eq!(
@@ -1377,7 +1308,7 @@ mod tests {
         set_test_backend(Arc::new(InMemoryBackend::new()));
         let storage = FileStorage::new(unique_temp_dir());
         storage
-            .save_connections(&[conn_with_password(1, "gdb.connection.1", "pw")])
+            .save_connections(&[conn_with_password(1, "pw")])
             .unwrap();
 
         // 切换为不可用后端，验证读仍返回该连接、且密码未回填。
@@ -1499,47 +1430,21 @@ mod tests {
         assert_eq!(parsed, Settings::default());
     }
 
-    /// 凭据清理的槽位 account 推导必须与保存路径一致（save/delete 共用 secret_slot_account），
-    /// 保证「按连接 ref 只删本连接」，且删除幂等不报错。
     #[test]
-    fn secret_account_derivation_matches_save_and_delete_is_idempotent() {
-        // 空 key 按 ref+suffix 推导；显式 key 用显式值。
-        let slot_empty = SecretRef::inline("pw");
-        assert_eq!(
-            secret_slot_account("gdb.connection.7", ":pg:password", &slot_empty),
-            "gdb.connection.7:pg:password"
-        );
-        let slot_named = SecretRef::ref_key("user-shared-key");
-        assert_eq!(
-            secret_slot_account("gdb.connection.7", ":pg:password", &slot_named),
-            "user-shared-key"
-        );
-
-        // 携带 PG 档案的连接：delete_owned_keychain_secrets 遍历槽位，不 panic、幂等。
-        // 测试目录非系统 Keychain（uses_system_keychain=false）→ credential_ref_for_keychain 返回 None，
-        // 走无副作用路径；这里主要锁定枚举逻辑与「无 Keychain 时安全无操作」。
-        let mut profile = fluxdb_core::PostgresConnectionProfile::default();
-        profile.basic.password = SecretRef::inline("secret");
-        let mut config = ConnectionConfig {
-            id: ConnectionId(9),
-            name: "pg".into(),
-            kind: DatabaseKind::Postgres,
-            endpoint: Endpoint::Tcp {
-                host: "h".into(),
-                port: 5432,
-                database: None,
-            },
-            credential_ref: Some("gdb.connection.9".into()),
-            options: BTreeMap::new(),
-            redis_profile: None,
-            mysql_profile: None,
-            postgres_profile: Some(profile),
-        };
+    fn secret_kinds_are_stable_and_delete_is_idempotent() {
+        assert_eq!(connection_secrets::DATABASE_PASSWORD, "database_password");
+        assert_eq!(connection_secrets::SSH_PASSWORD, "ssh_password");
+        let connection = conn_with_password(9, "secret");
         let storage = FileStorage::new(unique_temp_dir());
-        storage.delete_connection_secrets(&config);
-        storage.delete_connection_secrets(&config); // 重复删除幂等
-        config.credential_ref = None; // 无 ref 也安全无操作
-        storage.delete_connection_secrets(&config);
+        storage.save_connections(&[connection.clone()]).unwrap();
+        storage.delete_connection_secrets(&connection);
+        storage.delete_connection_secrets(&connection);
+        assert!(
+            storage.load_connections().unwrap()[0]
+                .options
+                .get("password")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1771,36 +1676,188 @@ mod tests {
         );
     }
 
+    /// 构造一条 SQL 查询历史记录（默认只读查询）。
+    fn query_record(connection_id: u64, database: Option<&str>, text: &str) -> QueryHistoryRecord {
+        QueryHistoryRecord {
+            connection_id: ConnectionId(connection_id),
+            database: database.map(str::to_string),
+            schema: None,
+            text: text.to_string(),
+            tables: vec!["orders".to_string()],
+            operation_kind: OperationKind::Query,
+            success: true,
+            executed_at_unix_secs: 1_700_000_000,
+            object: None,
+            rollback_sql: None,
+            rollback_snapshot: None,
+            transaction_state: None,
+            message: None,
+            returned_rows: 0,
+            affected_rows: 0,
+            elapsed_ms: 0,
+        }
+    }
+
+    /// 构造一条不含凭据的连接（不触发本机凭据库写入）。
+    fn plain_connection(id: u64, kind: DatabaseKind, endpoint: Endpoint) -> ConnectionConfig {
+        ConnectionConfig {
+            id: ConnectionId(id),
+            name: format!("conn-{id}"),
+            kind,
+            endpoint,
+            options: BTreeMap::new(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+        }
+    }
+
     #[test]
-    fn saves_loads_and_limits_query_history() {
+    fn saves_loads_and_limits_query_history_per_scope() {
         let storage = FileStorage::new(unique_temp_dir());
-        let entries = (0..1002)
-            .map(|index| QueryHistoryRecord {
-                connection_id: ConnectionId(7),
-                database: Some("shop".to_string()),
-                schema: None,
-                text: format!("select {index}"),
-                tables: vec!["orders".to_string()],
-                kind: "query".to_string(),
-                success: true,
-                executed_at_unix_secs: 0,
-                object: None,
-                rollback_sql: None,
-                rollback_snapshot: None,
-                transaction_state: None,
-                message: None,
-                returned_rows: 0,
-                affected_rows: 0,
-                elapsed_ms: 0,
-            })
+        // 连接 7 超限 2 条，连接 8 只有 3 条：裁剪按作用域独立，互不影响。
+        let mut entries = (0..1002)
+            .map(|index| query_record(7, Some("shop"), &format!("select {index}")))
             .collect::<Vec<_>>();
+        entries
+            .extend((0..3).map(|index| query_record(8, Some("shop"), &format!("select {index}"))));
 
         storage.save_query_history(&entries).unwrap();
 
         let loaded = storage.load_query_history().unwrap();
-        assert_eq!(loaded.len(), 1000);
-        assert_eq!(loaded[0].text, "select 2");
+        assert_eq!(
+            loaded.len(),
+            1003,
+            "连接 7 裁剪到 1000 条，连接 8 的 3 条不受影响"
+        );
+        assert_eq!(loaded[0].text, "select 2", "丢弃连接 7 最早的两条");
         assert_eq!(loaded[999].text, "select 1001");
+        assert_eq!(loaded[1000].text, "select 0", "连接 8 的记录完整保留");
+    }
+
+    #[test]
+    fn query_history_round_trips_extra_fields_and_operation_kind() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let mut record = query_record(7, Some("shop"), "update t set a=1");
+        record.operation_kind = OperationKind::Write;
+        record.schema = Some("public".to_string());
+        record.tables = vec!["orders".to_string(), "items".to_string()];
+        record.object = Some("orders".to_string());
+        record.transaction_state = Some("committed".to_string());
+        record.message = Some("1 行受影响".to_string());
+        record.affected_rows = 1;
+
+        storage.save_query_history(&[record.clone()]).unwrap();
+
+        assert_eq!(storage.load_query_history().unwrap(), vec![record]);
+    }
+
+    /// 新版本写入的未知操作类别取值，旧版本读回按 `unknown` 兜底（不报错）。
+    #[test]
+    fn unknown_operation_kind_value_falls_back_to_unknown() {
+        let storage = FileStorage::new(unique_temp_dir());
+        storage
+            .save_query_history(&[query_record(7, Some("shop"), "select 1")])
+            .unwrap();
+        let conn = crate::sqlite::open(&storage.root).unwrap();
+        conn.execute("UPDATE history SET operation_kind = 'mystery'", [])
+            .unwrap();
+
+        let loaded = storage.load_query_history().unwrap();
+        assert_eq!(loaded[0].operation_kind, OperationKind::Unknown);
+    }
+
+    /// 历史行的 `kind` 按连接解析成数据库类型；连接删除时其历史级联清理。
+    #[test]
+    fn history_kind_follows_connection_and_cascades_on_delete() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let mysql = plain_connection(
+            1,
+            DatabaseKind::MySql,
+            Endpoint::Tcp {
+                host: "127.0.0.1".to_string(),
+                port: 3306,
+                database: Some("app".to_string()),
+            },
+        );
+        let sqlite = plain_connection(
+            2,
+            DatabaseKind::Sqlite,
+            Endpoint::SqliteFile {
+                path: "demo.db".into(),
+                read_only: false,
+            },
+        );
+        storage.save_connections(&[mysql, sqlite.clone()]).unwrap();
+        storage
+            .save_query_history(&[
+                query_record(1, Some("app"), "select mysql"),
+                query_record(2, None, "select sqlite"),
+            ])
+            .unwrap();
+
+        assert_eq!(stored_history_kinds(&storage), vec!["mysql", "sqlite"]);
+
+        // 连接 1 被删除（保存剩下的连接列表）→ 它的历史同事务清理。
+        storage.save_connections(&[sqlite]).unwrap();
+
+        let loaded = storage.load_query_history().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].connection_id, ConnectionId(2));
+    }
+
+    /// 连接表的定位列/通用列是结构体的投影：tcp / file / uri 三种定位等值往返。
+    #[test]
+    fn connections_round_trip_endpoint_columns_and_extra() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let mut mysql = plain_connection(
+            1,
+            DatabaseKind::MySql,
+            Endpoint::Tcp {
+                host: "db.internal".to_string(),
+                port: 3307,
+                database: Some("app".to_string()),
+            },
+        );
+        mysql.options.insert("ssl".to_string(), "true".to_string());
+        let sqlite = plain_connection(
+            2,
+            DatabaseKind::Sqlite,
+            Endpoint::SqliteFile {
+                path: "/tmp/demo.db".into(),
+                read_only: true,
+            },
+        );
+        let mongo = plain_connection(
+            3,
+            DatabaseKind::MongoDb,
+            Endpoint::Uri {
+                uri: "mongodb://localhost:27017".to_string(),
+            },
+        );
+
+        storage
+            .save_connections(&[mysql.clone(), sqlite.clone(), mongo.clone()])
+            .unwrap();
+
+        assert_eq!(
+            storage.load_connections().unwrap(),
+            vec![mysql, sqlite, mongo]
+        );
+    }
+
+    /// 读取 history 表里按写入顺序排列的数据库类型列。
+    fn stored_history_kinds(storage: &FileStorage) -> Vec<String> {
+        let conn = crate::sqlite::open(&storage.root).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT kind FROM history ORDER BY id")
+            .unwrap();
+        let kinds = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        kinds
     }
 
     #[test]
@@ -1837,6 +1894,47 @@ mod tests {
 
         let loaded = storage.load_backup_records().unwrap();
         assert_eq!(loaded, records);
+    }
+
+    /// Key 搜索历史不携带时间：整表替换时沿用同键旧行的时间，避免每次落盘刷新时间。
+    #[test]
+    fn redis_key_search_history_keeps_first_seen_time_across_replaces() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let entry = |text: &str| RedisKeySearchHistoryRecord {
+            connection_id: ConnectionId(4),
+            database: Some("0".to_string()),
+            text: text.to_string(),
+        };
+        storage
+            .save_redis_key_search_history(&[entry("user:*")])
+            .unwrap();
+        let first_seen = stored_key_search_time(&storage, "user:*");
+
+        storage
+            .save_redis_key_search_history(&[entry("user:*"), entry("order:*")])
+            .unwrap();
+
+        assert_eq!(
+            stored_key_search_time(&storage, "user:*"),
+            first_seen,
+            "已有词应沿用首次落盘时间"
+        );
+        assert!(
+            stored_key_search_time(&storage, "order:*") >= first_seen,
+            "新词应记当前时间"
+        );
+    }
+
+    /// 读取 Key 搜索历史某条文本的落盘时间（该类别通过接口读不到时间，测试直接查表）。
+    fn stored_key_search_time(storage: &FileStorage, text: &str) -> u64 {
+        let conn = crate::sqlite::open(&storage.root).unwrap();
+        conn.query_row(
+            "SELECT executed_at_unix_secs FROM history
+              WHERE category = ?1 AND text = ?2",
+            rusqlite::params![crate::history_store::CATEGORY_REDIS_KEY_SEARCH, text],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap() as u64
     }
 
     #[test]
@@ -1978,6 +2076,31 @@ mod tests {
     }
 
     #[test]
+    fn settings_save_preserves_config_only_secret_key() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let key = "ab".repeat(32);
+        fs::create_dir_all(&storage.root).unwrap();
+        fs::write(
+            storage.config_path(),
+            format!("connection_secret_key = \"{key}\"\n"),
+        )
+        .unwrap();
+        let settings = Settings::default();
+        storage.save_settings(&settings).unwrap();
+        assert_eq!(storage.load_settings().unwrap(), settings);
+        let document: toml::Value = fs::read_to_string(storage.config_path())
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            document
+                .get("connection_secret_key")
+                .and_then(toml::Value::as_str),
+            Some(key.as_str())
+        );
+    }
+
+    #[test]
     fn missing_connections_returns_empty_list() {
         let storage = FileStorage::new(unique_temp_dir());
 
@@ -1992,7 +2115,7 @@ mod tests {
         storage.save_connections(&connections).unwrap();
 
         let loaded = storage.load_connections().unwrap();
-        // 临时目录不启用 Keychain：密钥不落盘（正确安全行为），非密钥字段应等值往返。
+        // 临时目录也使用加密凭据表，读取后完整回填内存。
         assert_eq!(loaded[0], connections[0]);
         assert_eq!(loaded[1], connections[1]);
         assert_eq!(loaded[2], connections[2]);
@@ -2000,7 +2123,7 @@ mod tests {
         let redis = loaded[3].redis_profile.as_ref().expect("redis profile");
         assert_eq!(redis.basic.host, "127.0.0.1");
         assert_eq!(redis.ssh.host, "bastion");
-        assert!(redis.basic.password.inline.is_none(), "密钥不应落盘");
+        assert_eq!(redis.basic.password.inline.as_deref(), Some("topsecret"));
 
         // sqlite 是二进制 WAL 文件，按字节读取断言明文密钥不入库。
         let bytes = fs::read(sqlite::db_path(&storage.root)).unwrap();
@@ -2012,12 +2135,6 @@ mod tests {
                 "明文密钥不应落入 sqlite: {forbidden}"
             );
         }
-        assert!(
-            bytes
-                .windows("credential_ref".len())
-                .any(|w| w == "credential_ref".as_bytes()),
-            "credential_ref 应保留入库"
-        );
     }
 
     #[test]
@@ -2040,6 +2157,59 @@ mod tests {
     }
 
     #[test]
+    fn uri_credentials_are_encrypted_and_recovered_by_connection_id() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let uri = "mongodb://alice:uri-secret@host/db?password=query-secret";
+        let connection = ConnectionConfig {
+            id: ConnectionId(31),
+            name: "uri".into(),
+            kind: DatabaseKind::MongoDb,
+            endpoint: Endpoint::Uri { uri: uri.into() },
+            options: BTreeMap::new(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+        };
+        storage.save_connections(&[connection.clone()]).unwrap();
+        let conn = storage.open_sqlite().unwrap();
+        let disk_uri: String = conn
+            .query_row("SELECT uri FROM connections WHERE id = 31", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(disk_uri.is_empty());
+        assert_eq!(
+            storage.load_connections().unwrap(),
+            vec![connection.clone()]
+        );
+        storage.delete_connection_secrets(&connection);
+        assert_eq!(
+            storage.load_connections().unwrap()[0].endpoint,
+            Endpoint::Uri { uri: String::new() }
+        );
+    }
+
+    #[test]
+    fn url_params_are_encrypted_and_restored() {
+        let storage = FileStorage::new(unique_temp_dir());
+        let mut connection = sample_connections()[0].clone();
+        connection
+            .options
+            .insert("url_params".into(), "?password=very-sensitive".into());
+        storage.save_connections(&[connection.clone()]).unwrap();
+        let db = storage.open_sqlite().unwrap();
+        let extra: String = db
+            .query_row(
+                "SELECT extra_json FROM connections WHERE id = ?1",
+                [connection.id.0],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!extra.contains("very-sensitive"));
+        assert_eq!(storage.load_connections().unwrap(), vec![connection]);
+    }
+
+    #[test]
     fn drops_plaintext_secret_options_when_saving_connections() {
         let storage = FileStorage::new(unique_temp_dir());
         let mut connections = sample_connections();
@@ -2058,7 +2228,13 @@ mod tests {
                 .any(|w| w == "do-not-save-this".as_bytes()),
             "明文密钥值不应落入 sqlite"
         );
-        assert!(storage.load_connections().unwrap()[0].options.is_empty());
+        assert_eq!(
+            storage.load_connections().unwrap()[0]
+                .options
+                .get("password")
+                .map(String::as_str),
+            Some("do-not-save-this")
+        );
     }
 
     #[test]
@@ -2103,7 +2279,12 @@ mod tests {
             .collect();
         assert_eq!(
             suffixes,
-            vec!["", ".ssh_password", ".ssh_passphrase", ".proxy_password"]
+            vec![
+                connection_secrets::DATABASE_PASSWORD,
+                connection_secrets::SSH_PASSWORD,
+                connection_secrets::SSH_PASSPHRASE,
+                connection_secrets::PROXY_PASSWORD
+            ]
         );
 
         // 剥离后所有内联密钥清空。
@@ -2167,7 +2348,12 @@ mod tests {
             .collect();
         assert_eq!(
             suffixes,
-            vec!["", ".ssh_password", ".ssh_passphrase", ".proxy_password"]
+            vec![
+                connection_secrets::DATABASE_PASSWORD,
+                connection_secrets::SSH_PASSWORD,
+                connection_secrets::SSH_PASSPHRASE,
+                connection_secrets::PROXY_PASSWORD
+            ]
         );
 
         // 剥离后所有内联密钥清空。
@@ -2289,7 +2475,6 @@ mod tests {
                     port: 3306,
                     database: Some("app".to_string()),
                 },
-                credential_ref: Some("gdb.connection.1".to_string()),
                 options: BTreeMap::new(),
                 redis_profile: None,
                 mysql_profile: None,
@@ -2303,7 +2488,6 @@ mod tests {
                     path: "demo.db".into(),
                     read_only: false,
                 },
-                credential_ref: None,
                 options: BTreeMap::new(),
                 redis_profile: None,
                 mysql_profile: None,
@@ -2316,7 +2500,6 @@ mod tests {
                 endpoint: Endpoint::Uri {
                     uri: "mongodb://localhost:27017".to_string(),
                 },
-                credential_ref: Some("gdb.connection.3".to_string()),
                 options: BTreeMap::new(),
                 redis_profile: None,
                 mysql_profile: None,
@@ -2331,7 +2514,6 @@ mod tests {
                     port: 6379,
                     database: Some("0".to_string()),
                 },
-                credential_ref: Some("gdb.connection.4".to_string()),
                 options: BTreeMap::new(),
                 redis_profile: Some(RedisConnectionProfile {
                     basic: fluxdb_core::RedisBasicOptions {
@@ -2379,16 +2561,28 @@ mod tests {
     fn saves_and_loads_redis_workbench_history_round_trip() {
         let storage = FileStorage::new(unique_temp_dir());
         let entries = vec![
-            redis_record(1, 1, 0, "GET a"),
-            redis_record(2, 1, 1, "GET b"),
-            redis_record(3, 2, 0, "SET k v"),
+            redis_record(0, 1, 0, "GET a"),
+            redis_record(0, 1, 1, "GET b"),
+            redis_record(0, 2, 0, "SET k v"),
         ];
 
         storage.save_redis_workbench_history(&entries).unwrap();
 
-        // 加载后应与写入一致（保持记录字段 + 跨连接 / 库的记录都保留）。
+        // 记录 ID 由数据库按 rowid 分配（写入时忽略传入 id），其余字段等值往返。
         let loaded = storage.load_redis_workbench_history().unwrap();
-        assert_eq!(loaded, entries);
+        assert_eq!(
+            loaded.iter().map(|record| record.id).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "ID 按写入顺序由 rowid 分配"
+        );
+        let normalized = loaded
+            .into_iter()
+            .map(|mut record| {
+                record.id = 0;
+                record
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(normalized, entries);
     }
 
     #[test]
@@ -2398,16 +2592,18 @@ mod tests {
     }
 
     #[test]
-    fn save_redis_workbench_history_truncates_to_1000() {
+    fn save_redis_workbench_history_truncates_to_per_scope_limit() {
         let storage = FileStorage::new(unique_temp_dir());
-        // 写入 1005 条，应只保留最近 1000 条（丢弃最早 5 条）。
-        let entries: Vec<_> = (0..1005).map(|i| redis_record(i, 1, 0, "CMD")).collect();
+        // 同一作用域写入 1005 条，只保留最近 1000 条（丢弃最早 5 条）。
+        let entries: Vec<_> = (0..1005)
+            .map(|i| redis_record(0, 1, 0, &format!("CMD {i}")))
+            .collect();
 
         storage.save_redis_workbench_history(&entries).unwrap();
 
         let loaded = storage.load_redis_workbench_history().unwrap();
-        assert_eq!(loaded.len(), 1000, "应截断到最近 1000 条");
-        assert_eq!(loaded[0].id, 5, "最早的 5 条应被丢弃，保留从 id=5 起");
-        assert_eq!(loaded[999].id, 1004, "最新一条应保留");
+        assert_eq!(loaded.len(), 1000, "应裁剪到最近 1000 条");
+        assert_eq!(loaded[0].text, "CMD 5", "最早的 5 条应被丢弃");
+        assert_eq!(loaded[999].text, "CMD 1004", "最新一条应保留");
     }
 }

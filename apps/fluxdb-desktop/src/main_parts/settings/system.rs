@@ -304,7 +304,7 @@ fn settings_connection_security_panel(colors: UiColors) -> Div {
         .child(
             settings_panel_group("安全", colors).child(settings_preference_row(
                 "敏感信息保存",
-                "连接配置继续只保存 credential_ref 或非敏感选项",
+                "连接密码以 AES 密文存入 SQLite，不保存明文",
                 AppIcon::Check,
                 "已启用",
                 colors,

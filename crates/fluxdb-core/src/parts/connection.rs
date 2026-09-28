@@ -20,7 +20,6 @@ pub struct ConnectionConfig {
     pub name: String,
     pub kind: DatabaseKind,
     pub endpoint: Endpoint,
-    pub credential_ref: Option<String>,
     pub options: BTreeMap<String, String>,
     /// Redis 专用结构化连接档案（TLS / SSH / Sentinel / Cluster / Cloud / URI）。
     /// 仅为 Redis 连接填充；历史连接缺省为 `None`，兼容既有落盘数据。
@@ -370,7 +369,6 @@ pub struct ConnectionDraft {
     pub name: String,
     pub kind: DatabaseKind,
     pub endpoint: Endpoint,
-    pub credential_ref: Option<String>,
     pub options: BTreeMap<String, String>,
     /// Redis 专用结构化连接档案；见 [`ConnectionConfig::redis_profile`]。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -390,7 +388,6 @@ impl ConnectionDraft {
             name: self.name,
             kind: self.kind,
             endpoint: self.endpoint,
-            credential_ref: self.credential_ref,
             options: self.options,
             redis_profile: self.redis_profile,
             mysql_profile: self.mysql_profile,
