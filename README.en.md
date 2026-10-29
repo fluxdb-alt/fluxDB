@@ -2,7 +2,7 @@
 
 **A native, cross-platform database client and SQL editor designed for high performance and low overhead: query, edit data, manage schemas and debug Redis in one window.**
 
-FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MySQL, PostgreSQL, SQL Server, SQLite, TiDB, Dameng DM8 and Redis into one desktop workflow, with a permission-aware AI Agent.
+FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MySQL, PostgreSQL, SQL Server, SQLite, TiDB, Dameng DM8, MongoDB and Redis into one desktop workflow, with a permission-aware AI Agent.
 
 **English | [简体中文](./README.md)**
 
@@ -19,6 +19,16 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 
 ## Latest changes
 
+### v0.1.14
+
+- **MongoDB support**: connection-string import with SRV discovery, database/collection/view browsing, a collection workspace (documents, aggregation, indexes, info), filters projection and sort, a visual condition builder, SQL-style query completion, document create/edit/duplicate/delete, JSON / JSONL / CSV import and export, collection rename and drop, a command-line terminal, and AI page context with controlled execution.
+- **MongoDB first-release limits**: no database-level backup/restore (`mongodump` / `mongorestore`) and no performance-metrics panel; no cross-database collection moves, bulk delete, in-table row editing, transactions or change streams. See [Database support](#database-support) and [MongoDB support](./docs/mongodb.md#7-已知限制) (Chinese).
+- **Oversized values no longer drop rows**: when a cell exceeds the result-page budget its body is offloaded to local controlled storage and only a preview plus size is kept, viewable in chunks; upload replacement now streams in chunks. Applies to MySQL, SQLite, PostgreSQL, SQL Server and Dameng DM8.
+- **MongoDB query performance**: the document area now uses a virtualized list with whole-page parse caching, building only the cards in view each frame.
+- **Stability fixes**: fixed rows with large values failing to update or delete in PostgreSQL and in tables without primary keys, SQL Server dropping rows over budget, crashes when importing non-ASCII values into MongoDB, and filter/sort popovers not anchored to the control that opened them.
+
+[Full release notes](./release-notes/v0.1.14/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.13
 
 - **Oracle support**: Service Name / SID connections, schema/object browsing, SQL queries with dialect-aware completion, table design, data editing, filtering and sorting, user and permission management, local logical export, and AI page context with controlled execution.
@@ -28,21 +38,9 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 
 [Full release notes](./release-notes/v0.1.13/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
 
-### v0.1.12
-
-- **Bidirectional filter form and SQL input**: switch between form and condition-input editing in either direction. Form values populate the input automatically, and typed conditions can be parsed back into editable form rules while preserving groups, AND/OR combinations and sort rules.
-- **All SQL data sources**: MySQL, TiDB, PostgreSQL, SQL Server, SQLite and Dameng DM8 apply their own dialect behavior for types, operators, identifiers and `LIKE` wildcard escaping.
-- **Complex conditions**: edit multiple rules, nested parentheses and per-row AND/OR connectors; condition input includes completion and a synchronized highlighted SQL preview.
-- **Filter and sort interaction**: the mode switch appears only while filters are expanded; conditions scroll while sort and apply actions stay fixed, with the expanded area limited to 35% of the data region. Sort rules support field changes, direction, removal, clear/undo and drag reordering by a six-dot handle.
-- **Field detail sizing**: the detail drawer now has a 220px minimum height so metadata, the value editor and save actions remain visible while resizing.
-- **Stability**: fixed UTF-8 character-boundary crashes in filter parsing, SQL editor completion and diagnostic positioning, with cross-dialect, nested-condition and round-trip coverage.
-- **Update experience**: in-app updates show the download percentage, downloaded size and total size, and display localized release notes in the update dialog.
-
-[Full release notes](./release-notes/v0.1.12/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
-
 ## Why FluxDB
 
-- **One workspace for multiple data sources**: manage relational databases and Redis side by side.
+- **One workspace for multiple data sources**: manage relational databases, MongoDB and Redis side by side.
 - **From query to write**: SQL editing, editable result sets, table design, import/export, backup/restore and ER diagrams.
 - **Native architecture, performance first**: built with Rust + GPUI, without Electron or a WebView, with low overhead and responsive interaction as design goals.
 - **AI with explicit boundaries**: bounded reads, authorized editor edits and approval for write or high-risk tools.
@@ -65,6 +63,14 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 - Layout ER diagrams from real foreign keys, with optional local logical relationships.
 - Local logical relationships never create or modify database foreign keys.
 - Export ER diagrams as JSON, DBML, Mermaid or SVG.
+
+### MongoDB workbench
+
+- Connection-string import with SRV discovery, browsing by database / collection / view, and connection info with topology.
+- The documents tab supports filter, projection, sort, collation, paging and index hint, with card, table and JSON display modes.
+- The condition builder and completion cover filter, projection, sort and aggregation pipelines; aggregation, indexes and collection info each have their own tab.
+- Create, edit, duplicate and delete documents; import JSON / JSONL / CSV and export JSON / JSONL / CSV.
+- Collection context menu covers pin, copy name, refresh, export, rename, import and drop; databases can create collections and be dropped.
 
 ### Redis workbench
 
@@ -99,9 +105,10 @@ Capabilities vary by database. See the [user guide](./docs/user-guide.md) for de
 | SQL Server | T-SQL queries, database/schema/object browsing, table design and data editing, table import/export, logins, database users, role membership and explicit permissions, object-level logical backup/restore, AI page context and controlled execution | Object-level logical SQL backup and restore | SQL Server authentication, TLS, explicit ports; named instances require the actual port | Windows integrated authentication, Azure AD, contained database users, column-level permission editing, user-defined server roles, SQL Browser/named-instance auto-discovery, and database-level physical `BACKUP DATABASE`. Object-level logical backup and restore is not a substitute for database-level disaster recovery. |
 | SQLite | Local file connections, SQL queries, object browsing, table management, data editing | Consistent `VACUUM INTO` snapshot; restore to a new file with integrity and foreign-key checks | Local file path | - |
 | Dameng DM8 | Schema/object browsing, SQL queries, table design and management, data editing, table import | Logical backup and SQL restore; restore currently targets a single schema | Instance and schema connection settings | - |
+| MongoDB | Connection-string import (`mongodb://` / `mongodb+srv://`), database/collection/view browsing, collection workspace (document filter/projection/sort, condition builder, aggregation, indexes, collection info), document create/edit/duplicate/delete, JSON / JSONL / CSV import and export, collection rename and drop, command-line terminal, SQL-style query completion, AI page context and controlled execution | No database-level backup/restore; export is document-level logical export (JSON / JSONL / CSV) | `mongodb+srv://` discovery, SCRAM-SHA-1 / SCRAM-SHA-256 / MONGODB-X509, TLS options via connection-string import; at most 500 documents per query | No `mongodump` / `mongorestore` backup and restore, no performance-metrics panel, no SSH tunnel, no bulk delete (and no undo), no cross-database collection moves, no view rename/drop, no time-series or capped collection creation, no in-table row editing, no transactions or change streams; CSV import supports scalar fields only and must be UTF-8; new documents always get an ObjectId `_id`. |
 | Redis | Keyspace browsing, value editing, TTL, Workbench, CLI, Pub/Sub | No database-level backup/restore | TLS, SSH, Sentinel, Cluster, URI/Cloud; Cluster uses DB 0 only | - |
 
-MongoDB and MariaDB are not currently supported. They are roadmap candidates, not current capabilities.
+MariaDB is not currently supported. It is a roadmap candidate, not a current capability.
 
 ## AI Agent
 
@@ -201,9 +208,9 @@ AI is used extensively in the development workflow. Humans own requirements, rev
 Current priorities are real-world coverage for existing databases, stability and the cross-platform release experience. Candidate directions include:
 
 - **SQL Server follow-up**: Windows integrated authentication and Azure AD, contained database users, column-level permissions, user-defined server roles, named-instance auto-discovery, and database-level physical backup/restore.
-- **MongoDB**: document browsing, querying and editing.
+- **MongoDB follow-up**: database-level backup/restore, performance metrics, bulk delete and bulk writes, in-table row editing, transactions and change streams.
 - **MariaDB**: independent dialect, system tables and backup parameter support.
-- **More databases**: evaluate Oracle, ClickHouse, DuckDB, Elasticsearch/OpenSearch and others based on community demand.
+- **More databases**: evaluate ClickHouse, DuckDB, Elasticsearch/OpenSearch and others based on community demand.
 
 The roadmap does not imply current support.
 
