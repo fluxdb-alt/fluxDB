@@ -137,6 +137,26 @@ mod sidebar_refresh_tests {
         assert!(has_table_group_and_row(&visible_rows(true, true)));
     }
 
+    /// SQL 型连接的库下不能出现「集合」分组（Mongo 专用）。
+    #[test]
+    fn sql_databases_do_not_show_mongo_collection_group() {
+        for kind in [
+            DatabaseKind::MySql,
+            DatabaseKind::Postgres,
+            DatabaseKind::Sqlite,
+            DatabaseKind::Redis,
+        ] {
+            assert!(
+                !ObjectGroup::for_kind(kind).contains(&ObjectGroup::Collections),
+                "{kind:?}"
+            );
+        }
+        assert_eq!(
+            ObjectGroup::for_kind(DatabaseKind::MongoDb),
+            &[ObjectGroup::Collections]
+        );
+    }
+
     #[test]
     fn first_database_load_does_not_show_empty_table_group() {
         assert!(!has_table_group_and_row(&visible_rows(true, false)));

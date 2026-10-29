@@ -233,7 +233,8 @@ enum ObjectGroup {
 }
 
 impl ObjectGroup {
-    const ALL: [Self; 8] = [
+    /// SQL 型连接的分组；「集合」只属于 Mongo，不能出现在这里（否则 MySQL 等库也会多出集合分组）。
+    const ALL: [Self; 7] = [
         Self::Tables,
         Self::Views,
         Self::Procedures,
@@ -241,7 +242,6 @@ impl ObjectGroup {
         Self::Queries,
         Self::Backup,
         Self::ErDiagram,
-        Self::Collections,
     ];
 
     /// MongoDB 库下只展示「集合」一个分组。

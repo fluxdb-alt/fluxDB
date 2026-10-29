@@ -192,6 +192,23 @@ mod controller_dispatch_tests {
         assert!(index.is_database_dirty(ConnectionId(1), Some("main"), None));
     }
 
+    /// 连接串导入命令必须路由到 Mongo 处理器，而不是兜底落到表处理器报内部错误。
+    #[test]
+    fn discover_mongo_connection_routes_to_mongo_handler() {
+        let mut controller = AppController::new();
+        let event = controller.dispatch(AppCommand::DiscoverMongoConnection {
+            connection_string:
+                "mongodb+srv://user:pass@cluster0.h0l2m0b.mongodb.net".to_string(),
+        });
+        let AppEvent::MongoConnectionDiscovered(draft) = event else {
+            panic!("MongoDB 连接串导入应返回发现事件，实际 {event:?}");
+        };
+        assert_eq!(draft.kind, DatabaseKind::MongoDb);
+        let profile = draft.mongo_profile.expect("应带上解析出的 Mongo 档案");
+        assert!(profile.srv);
+        assert_eq!(profile.basic.username, "user");
+    }
+
     #[test]
     fn commands_on_small_stack_handle_mysql_handshake_failure() {
         const CHILD_PORT: &str = "FLUXDB_DISPATCH_STACK_TEST_PORT";

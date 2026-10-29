@@ -38,7 +38,9 @@ impl AppController {
             | AppCommand::BeginAiTableQuery { .. }
             | AppCommand::LoadAiTablePage { .. }) => self.dispatch_ai_table_page(command),
             AppCommand::AiConversation(command) => return self.dispatch_ai_conversation(command),
-            command @ (AppCommand::OpenMongoCollection { .. }
+            command @ (AppCommand::OpenMongoCli { .. }
+            | AppCommand::LoadMongoFieldSample { .. }
+            | AppCommand::OpenMongoCollection { .. }
             | AppCommand::BeginMongoLoad(_)
             | AppCommand::LoadMongoDocuments { .. }
             | AppCommand::FinishMongoDocuments { .. }
@@ -84,6 +86,7 @@ impl AppController {
             | AppCommand::MoveConnectionToTopLevel(..)
             | AppCommand::TestConnection(..)
             | AppCommand::DiscoverRedisConnection { .. }
+            | AppCommand::DiscoverMongoConnection { .. }
             | AppCommand::OpenConnection(..)
             | AppCommand::ToggleConnectionExpanded(..)
             | AppCommand::DisconnectConnection(..)
