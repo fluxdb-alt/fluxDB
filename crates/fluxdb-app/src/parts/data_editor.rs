@@ -771,13 +771,16 @@ fn postgres_changes_with_original_values(changes: &DataChangeSet, page: &DataPag
         let candidates = page.rows.iter().filter(|row| identity.values.iter().all(|(name, value)|
             page.columns.iter().position(|col| &col.name == name).and_then(|index| row.values.get(index)) == Some(value))).collect::<Vec<_>>();
         if candidates.len() != 1 { return Err(Error::new(ErrorKind::Query, "原始行身份不唯一，已取消提交")); }
+        let authoritative = |value: &CellValue| {
+            !matches!(value, CellValue::BinarySummary(_)) && !value.is_truncated()
+        };
         for (col, value) in page.columns.iter().zip(&candidates[0].values) {
-            if !matches!(value, CellValue::BinarySummary(_)) && !value.is_truncated() {
+            if authoritative(value) {
                 identity.values.insert(col.name.clone(), value.clone());
             }
         }
         // 无主键行最初把整行值当身份，其中可能已有预览值；只保留能忠实比较的完整值。
-        identity.values.retain(|_, value| !value.is_truncated());
+        identity.values.retain(|_, value| authoritative(value));
         if identity.values.is_empty() {
             return Err(Error::new(
                 ErrorKind::Unsupported,
@@ -843,6 +846,15 @@ mod postgres_original_value_identity_tests {
             byte_length: Some(128 * 1024),
             preview: "preview".to_string(),
             preview_truncated: true,
+        })
+    }
+
+    fn binary_summary() -> CellValue {
+        CellValue::BinarySummary(fluxdb_core::BinaryCellSummary {
+            type_name: "bytea".to_string(),
+            is_null: false,
+            byte_length: 4096,
+            preview_hex: Some("00ff".to_string()),
         })
     }
 
@@ -931,6 +943,23 @@ mod postgres_original_value_identity_tests {
 
         let error = postgres_changes_with_original_values(&changes, &page)
             .expect_err("不能把预览绑定成行身份");
+
+        assert_eq!(error.kind, ErrorKind::Unsupported);
+        assert!(error.message.contains("大字段"), "{}", error.message);
+    }
+
+    /// 二进制主键在页里只有摘要，不能拿摘要文案拼 WHERE。
+    #[test]
+    fn binary_primary_key_digest_is_rejected() {
+        let summary = binary_summary();
+        let page = page(vec![column("id", true)], vec![summary.clone()]);
+        let changes = update(std::collections::BTreeMap::from([(
+            "id".to_string(),
+            summary,
+        )]));
+
+        let error = postgres_changes_with_original_values(&changes, &page)
+            .expect_err("二进制摘要不能作为行身份");
 
         assert_eq!(error.kind, ErrorKind::Unsupported);
         assert!(error.message.contains("大字段"), "{}", error.message);

@@ -414,9 +414,9 @@ fn pg_identity_where(
         if !columns.iter().any(|col| &col.name == column) {
             return Err(Error::new(ErrorKind::Query, "行身份引用了不存在的列"));
         }
-        // 预览值（超大字段/截断文本）不是权威内容：按它拼 WHERE 只会静默命中 0 行，
-        // 把并发冲突误报成“目标行已不存在”。上游应剔除这类身份；这里兜底拒绝。
-        if value.is_truncated() {
+        // 预览值（超大字段/截断文本/二进制摘要）不是权威内容：按它拼 WHERE
+        // 只会静默命中 0 行，把并发冲突误报成“目标行已不存在”。
+        if value.is_truncated() || matches!(value, CellValue::BinarySummary(_)) {
             return Err(Error::new(
                 ErrorKind::Unsupported,
                 "行身份包含未完整加载的大字段，无法安全定位行；请刷新后重试或改用主键定位",
@@ -483,6 +483,35 @@ mod pg_identity_guard_tests {
 
         let error = pg_identity_where(&mut params, &identity, &columns)
             .expect_err("预览身份必须被拒绝");
+
+        assert_eq!(error.kind, ErrorKind::Unsupported);
+        assert!(error.message.contains("大字段"), "{}", error.message);
+    }
+
+    #[test]
+    fn identity_rejects_binary_summary() {
+        let identity = RowIdentity {
+            values: std::collections::BTreeMap::from([(
+                "payload".to_string(),
+                CellValue::BinarySummary(fluxdb_core::BinaryCellSummary {
+                    type_name: "bytea".to_string(),
+                    is_null: false,
+                    byte_length: 4096,
+                    preview_hex: Some("00ff".to_string()),
+                }),
+            )]),
+        };
+        let columns = vec![Column {
+            name: "payload".to_string(),
+            type_name: Some("bytea".to_string()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        }];
+        let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
+
+        let error = pg_identity_where(&mut params, &identity, &columns)
+            .expect_err("二进制摘要身份必须被拒绝");
 
         assert_eq!(error.kind, ErrorKind::Unsupported);
         assert!(error.message.contains("大字段"), "{}", error.message);
