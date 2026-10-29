@@ -200,11 +200,81 @@ fn validate_identity(identity: &fluxdb_core::RowIdentity, columns: &[Column]) ->
         return Err(Error::new(ErrorKind::Query, "缺少行身份条件，已取消提交"));
     }
 
-    for column in identity.values.keys() {
+    for (column, value) in &identity.values {
         ensure_column_exists(column, columns)?;
+        if value.is_truncated() || matches!(value, CellValue::BinarySummary(_)) {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                "行身份包含未完整加载的大字段，无法安全定位行；请刷新后重试或改用主键定位",
+            ));
+        }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod identity_value_guard_tests {
+    use super::validate_identity;
+    use fluxdb_core::{CellValue, Column, RowIdentity};
+    use std::collections::BTreeMap;
+
+    fn columns() -> Vec<Column> {
+        vec![
+            Column {
+                name: "id".to_string(),
+                type_name: Some("text".to_string()),
+                nullable: false,
+                primary_key: true,
+                comment: None,
+            },
+            Column {
+                name: "payload".to_string(),
+                type_name: Some("text".to_string()),
+                nullable: true,
+                primary_key: false,
+                comment: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn complete_identity_is_allowed() {
+        let identity = RowIdentity {
+            values: BTreeMap::from([("id".to_string(), CellValue::Text("id-1".to_string()))]),
+        };
+        validate_identity(&identity, &columns()).expect("完整身份可提交");
+    }
+
+    #[test]
+    fn truncated_identity_is_rejected_for_shared_connectors() {
+        for value in [
+            CellValue::TruncatedText {
+                preview: "prefix".to_string(),
+                total_chars: 1000,
+            },
+            CellValue::LargeValue(fluxdb_core::LargeCellValue {
+                content_id: "content-1".to_string(),
+                kind: fluxdb_core::LargeValueKind::Text,
+                byte_length: Some(1000),
+                preview: "prefix".to_string(),
+                preview_truncated: true,
+            }),
+            CellValue::BinarySummary(fluxdb_core::BinaryCellSummary {
+                type_name: "bytea".to_string(),
+                is_null: false,
+                byte_length: 1000,
+                preview_hex: Some("00ff".to_string()),
+            }),
+        ] {
+            let identity = RowIdentity {
+                values: BTreeMap::from([("payload".to_string(), value)]),
+            };
+            let error =
+                validate_identity(&identity, &columns()).expect_err("预览身份必须被拒绝");
+            assert_eq!(error.kind, fluxdb_core::ErrorKind::Unsupported);
+        }
+    }
 }
 
 fn ensure_column_exists(column: &str, columns: &[Column]) -> fluxdb_core::Result<()> {

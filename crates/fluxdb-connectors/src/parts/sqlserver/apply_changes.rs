@@ -337,6 +337,12 @@ fn sqlserver_identity_predicate_from(
                 format!("字段不存在或已变更：{name}"),
             ));
         }
+        if value.is_truncated() || matches!(value, CellValue::BinarySummary(_)) {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                "行身份包含未完整加载的大字段，无法安全定位行；请刷新后重试或改用主键定位",
+            ));
+        }
         let quoted = fluxdb_core::SqlServerDialect.quote_identifier(name);
         if matches!(value, CellValue::Null) {
             clauses.push(format!("{quoted} IS NULL"));

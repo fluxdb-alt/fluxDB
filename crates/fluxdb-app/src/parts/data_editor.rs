@@ -665,6 +665,9 @@ fn row_identity(page: &DataPage, row_index: usize) -> fluxdb_core::Result<RowIde
         if column.primary_key
             && let Some(value) = row.values.get(index)
         {
+            if !row_identity_value_is_authoritative(value) {
+                return Err(unlocatable_row_identity_error());
+            }
             values.insert(column.name.clone(), value.clone());
         }
     }
@@ -672,18 +675,34 @@ fn row_identity(page: &DataPage, row_index: usize) -> fluxdb_core::Result<RowIde
     if values.is_empty() {
         // 无主键时保留完整原始值，不能用第一列冒充唯一身份。
         for (column, value) in page.columns.iter().zip(&row.values) {
-            if matches!(value, CellValue::BinarySummary(_)) {
-                return Err(Error::new(ErrorKind::Unsupported, "无唯一键且包含二进制摘要，无法可靠定位原始行"));
+            if !row_identity_value_is_authoritative(value) {
+                continue;
             }
             values.insert(column.name.clone(), value.clone());
         }
     }
 
     if values.is_empty() {
-        return Err(Error::new(ErrorKind::Internal, "无法定位行身份"));
+        return Err(unlocatable_row_identity_error());
     }
 
     Ok(RowIdentity { values })
+}
+
+/// 只有完整内存值才能作为写入定位条件。
+///
+/// 预览、内容引用和二进制摘要都可能与数据库真值不同，拼进 WHERE 只会命中 0 行，
+/// 或把并发冲突伪装成“目标行已不存在”。无主键行允许跳过这些列，但至少要保留一个
+/// 完整列，否则不能提交。
+fn row_identity_value_is_authoritative(value: &CellValue) -> bool {
+    !value.is_truncated() && !matches!(value, CellValue::BinarySummary(_))
+}
+
+fn unlocatable_row_identity_error() -> Error {
+    Error::new(
+        ErrorKind::Unsupported,
+        "行身份包含未完整加载的大字段，无法安全定位行；请刷新后重试或改用主键定位",
+    )
 }
 
 fn upsert_cell_update(
@@ -960,6 +979,29 @@ mod postgres_original_value_identity_tests {
 
         let error = postgres_changes_with_original_values(&changes, &page)
             .expect_err("二进制摘要不能作为行身份");
+
+        assert_eq!(error.kind, ErrorKind::Unsupported);
+        assert!(error.message.contains("大字段"), "{}", error.message);
+    }
+
+    #[test]
+    fn row_identity_drops_preview_columns_and_keeps_complete_ones() {
+        let page = page(
+            vec![column("payload", false), column("note", false)],
+            vec![large_value(), CellValue::Text("ok".to_string())],
+        );
+
+        let identity = row_identity(&page, 0).expect("完整列仍可定位");
+
+        assert_eq!(identity.values.len(), 1);
+        assert_eq!(identity.values.get("note"), Some(&CellValue::Text("ok".to_string())));
+    }
+
+    #[test]
+    fn row_identity_with_only_preview_columns_is_rejected() {
+        let page = page(vec![column("payload", true)], vec![binary_summary()]);
+
+        let error = row_identity(&page, 0).expect_err("不能生成预览身份");
 
         assert_eq!(error.kind, ErrorKind::Unsupported);
         assert!(error.message.contains("大字段"), "{}", error.message);
