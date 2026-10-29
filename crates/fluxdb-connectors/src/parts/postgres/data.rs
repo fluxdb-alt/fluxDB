@@ -744,8 +744,9 @@ fn pg_next_param(
         // 截断文本只作为筛选条件的前缀参与比较；写入路径已在
         // `validate_data_changes` 拒绝，不会把预览落库。
         CellValue::TruncatedText { preview, .. } => params.push(Box::new(preview.clone())),
-        // 大字段同样只有预览：筛选只能按前缀比较；写入路径已在
-        // `validate_data_changes` 拒绝（含行身份），不会把预览落库。
+        // 大字段同样只有预览：筛选只能按前缀比较；写入值由
+        // `validate_data_changes` 拒绝，行身份由 PG 提交前的原值过滤与
+        // `pg_identity_where` 兜底拒绝，预览不会进入 WHERE。
         CellValue::LargeValue(large) => params.push(Box::new(large.preview.clone())),
         // 文件/预览二进制：真实内容走 Bytes；BinarySummary 只读预览不参与过滤筛选内容。
         CellValue::Bytes(value) => params.push(Box::new(value.clone())),

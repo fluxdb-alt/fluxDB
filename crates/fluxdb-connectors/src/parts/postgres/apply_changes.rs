@@ -414,6 +414,14 @@ fn pg_identity_where(
         if !columns.iter().any(|col| &col.name == column) {
             return Err(Error::new(ErrorKind::Query, "行身份引用了不存在的列"));
         }
+        // 预览值（超大字段/截断文本）不是权威内容：按它拼 WHERE 只会静默命中 0 行，
+        // 把并发冲突误报成“目标行已不存在”。上游应剔除这类身份；这里兜底拒绝。
+        if value.is_truncated() {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                "行身份包含未完整加载的大字段，无法安全定位行；请刷新后重试或改用主键定位",
+            ));
+        }
         let quoted = fluxdb_core::PostgresDialect.quote_identifier(column);
         if matches!(value, CellValue::Null) {
             clauses.push(format!("{quoted} IS NULL"));
@@ -446,4 +454,37 @@ fn pg_append_row_location(sql: &mut String, params: &mut Vec<Box<dyn ToSql + Syn
     params.push(Box::new(location.0)); let oid = params.len();
     params.push(Box::new(location.1)); let tid = params.len();
     sql.push_str(&format!(" AND tableoid = ${oid}::oid AND ctid = CAST(${tid}::text AS tid)"));
+}
+
+#[cfg(test)]
+mod pg_identity_guard_tests {
+    use super::*;
+
+    /// 预览值不能拼成 WHERE：否则会静默命中 0 行，把并发冲突误报成“目标行已不存在”。
+    #[test]
+    fn identity_rejects_truncated_value() {
+        let identity = RowIdentity {
+            values: std::collections::BTreeMap::from([(
+                "payload".to_string(),
+                CellValue::TruncatedText {
+                    preview: "前 4000 字符".to_string(),
+                    total_chars: 100_000,
+                },
+            )]),
+        };
+        let columns = vec![Column {
+            name: "payload".to_string(),
+            type_name: Some("text".to_string()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        }];
+        let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
+
+        let error = pg_identity_where(&mut params, &identity, &columns)
+            .expect_err("预览身份必须被拒绝");
+
+        assert_eq!(error.kind, ErrorKind::Unsupported);
+        assert!(error.message.contains("大字段"), "{}", error.message);
+    }
 }

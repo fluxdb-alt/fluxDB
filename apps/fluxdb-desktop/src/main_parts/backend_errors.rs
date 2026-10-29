@@ -158,6 +158,9 @@ fn localize_backend_error_text(text: &str) -> String {
             "app.backend_error.streamed_text_chunk_too_small"
         }
         "无唯一键且包含二进制摘要，无法可靠定位原始行" => "app.backend_error.row_identity_binary_ambiguous",
+        "行身份包含未完整加载的大字段，无法安全定位行；请刷新后重试或改用主键定位" => {
+            "app.backend_error.row_identity_large_value_unlocatable"
+        }
         "无法定位行身份" => "app.backend_error.row_identity_locate_failed",
         "原始行身份不唯一，已取消提交" => "app.backend_error.row_identity_not_unique",
         "工具入参必须是对象" => "app.backend_error.tool_args_not_object",

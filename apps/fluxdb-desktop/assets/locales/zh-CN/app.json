@@ -4317,6 +4317,7 @@
     "query_result_not_editable": "查询结果不可编辑",
     "original_data_page_not_loaded": "原始数据页未加载",
     "row_identity_binary_ambiguous": "无唯一键且包含二进制摘要，无法可靠定位原始行",
+    "row_identity_large_value_unlocatable": "行身份包含未完整加载的大字段，无法安全定位行；请刷新后重试或改用主键定位",
     "row_identity_locate_failed": "无法定位行身份",
     "row_identity_not_unique": "原始行身份不唯一，已取消提交",
     "tool_args_not_object": "工具入参必须是对象",

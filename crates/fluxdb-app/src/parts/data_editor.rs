@@ -760,6 +760,11 @@ fn original_editor_row_identity(editor: &DataEditorState, row: usize) -> fluxdb_
 }
 
 /// PG 更新/删除带上读取时的原值，服务端可检测同主键行的并发修改。
+///
+/// 只加载了预览的值（超大字段、截断文本、二进制摘要）不能参与并发校验：
+/// 页里保存的只是前缀/摘要，绑进 `WHERE` 永远匹配不到数据库里的完整内容，
+/// 会把正常提交误报成“目标行已不存在”。无主键行的初始身份可能整行都是这类值，
+/// 移除后若没有可比较的身份，必须明确拒绝，不能退化成无身份更新。
 fn postgres_changes_with_original_values(changes: &DataChangeSet, page: &DataPage) -> fluxdb_core::Result<DataChangeSet> {
     let mut changes = changes.clone();
     for identity in changes.updates.iter_mut().map(|u| &mut u.identity).chain(changes.deletes.iter_mut()) {
@@ -767,7 +772,17 @@ fn postgres_changes_with_original_values(changes: &DataChangeSet, page: &DataPag
             page.columns.iter().position(|col| &col.name == name).and_then(|index| row.values.get(index)) == Some(value))).collect::<Vec<_>>();
         if candidates.len() != 1 { return Err(Error::new(ErrorKind::Query, "原始行身份不唯一，已取消提交")); }
         for (col, value) in page.columns.iter().zip(&candidates[0].values) {
-            if !matches!(value, CellValue::BinarySummary(_)) { identity.values.insert(col.name.clone(), value.clone()); }
+            if !matches!(value, CellValue::BinarySummary(_)) && !value.is_truncated() {
+                identity.values.insert(col.name.clone(), value.clone());
+            }
+        }
+        // 无主键行最初把整行值当身份，其中可能已有预览值；只保留能忠实比较的完整值。
+        identity.values.retain(|_, value| !value.is_truncated());
+        if identity.values.is_empty() {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                "行身份包含未完整加载的大字段，无法安全定位行；请刷新后重试或改用主键定位",
+            ));
         }
     }
     Ok(changes)
@@ -805,4 +820,119 @@ mod cell_detail_truncated_tests {
 #[cfg(test)]
 mod data_editor_upload_tests {
     include!("data_editor_upload_tests.rs");
+}
+
+#[cfg(test)]
+mod postgres_original_value_identity_tests {
+    use super::*;
+
+    fn column(name: &str, primary_key: bool) -> Column {
+        Column {
+            name: name.to_string(),
+            type_name: Some("text".to_string()),
+            nullable: true,
+            primary_key,
+            comment: None,
+        }
+    }
+
+    fn large_value() -> CellValue {
+        CellValue::LargeValue(fluxdb_core::LargeCellValue {
+            content_id: "content-1".to_string(),
+            kind: fluxdb_core::LargeValueKind::Text,
+            byte_length: Some(128 * 1024),
+            preview: "preview".to_string(),
+            preview_truncated: true,
+        })
+    }
+
+    fn page(columns: Vec<Column>, values: Vec<CellValue>) -> DataPage {
+        DataPage {
+            columns,
+            rows: vec![Row { values }],
+            offset: 0,
+            limit: 100,
+            has_more: false,
+            incomplete: None,
+        }
+    }
+
+    fn update(identity: std::collections::BTreeMap<String, CellValue>) -> DataChangeSet {
+        DataChangeSet {
+            object: ObjectPath {
+                connection_id: ConnectionId(1),
+                database: Some("db".to_string()),
+                schema: Some("public".to_string()),
+                name: "t".to_string(),
+                kind: ObjectKind::Table,
+            },
+            inserts: Vec::new(),
+            updates: vec![RowUpdate {
+                identity: RowIdentity { values: identity },
+                cells: vec![CellUpdate::new("note", CellValue::Text("changed".to_string()))],
+            }],
+            deletes: Vec::new(),
+            insert_intents: None,
+        }
+    }
+
+    /// 有主键时，超大字段只有预览，不能进并发校验身份；其余完整列照常保留。
+    #[test]
+    fn skips_large_value_preview_from_optimistic_identity() {
+        let page = page(
+            vec![column("id", true), column("payload", false), column("note", false)],
+            vec![CellValue::I64(1), large_value(), CellValue::Text("ok".to_string())],
+        );
+        let changes = update(std::collections::BTreeMap::from([(
+            "id".to_string(),
+            CellValue::I64(1),
+        )]));
+
+        let guarded = postgres_changes_with_original_values(&changes, &page).expect("identity");
+
+        let identity = &guarded.updates[0].identity.values;
+        assert_eq!(identity.get("id"), Some(&CellValue::I64(1)));
+        assert_eq!(identity.get("note"), Some(&CellValue::Text("ok".to_string())));
+        assert!(
+            !identity.contains_key("payload"),
+            "大字段预览不能作为 WHERE 身份，否则必然匹配不到完整值"
+        );
+    }
+
+    /// 无主键时初始身份可能包含整行预览值：移除预览，保留仍可比较的完整值。
+    #[test]
+    fn no_pk_identity_drops_truncated_values_but_keeps_complete_ones() {
+        let large = large_value();
+        let page = page(
+            vec![column("payload", false), column("note", false)],
+            vec![large.clone(), CellValue::Text("ok".to_string())],
+        );
+        let changes = update(std::collections::BTreeMap::from([
+            ("payload".to_string(), large),
+            ("note".to_string(), CellValue::Text("ok".to_string())),
+        ]));
+
+        let guarded = postgres_changes_with_original_values(&changes, &page).expect("identity");
+
+        let identity = &guarded.updates[0].identity.values;
+        assert_eq!(identity.get("note"), Some(&CellValue::Text("ok".to_string())));
+        assert!(!identity.contains_key("payload"));
+    }
+
+    /// 无主键行身份只剩预览值时不能继续生成无条件 UPDATE，必须明确拒绝。
+    #[test]
+    fn no_pk_identity_with_only_truncated_values_is_rejected() {
+        let large = large_value();
+        let page = page(vec![column("payload", false)], vec![large.clone()]);
+        let changes = update(std::collections::BTreeMap::from([(
+            "payload".to_string(),
+            large,
+        )]));
+
+        let error = postgres_changes_with_original_values(&changes, &page)
+            .expect_err("不能把预览绑定成行身份");
+
+        assert_eq!(error.kind, ErrorKind::Unsupported);
+        assert!(error.message.contains("大字段"), "{}", error.message);
+    }
 }
