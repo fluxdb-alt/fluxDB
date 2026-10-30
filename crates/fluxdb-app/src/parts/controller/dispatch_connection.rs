@@ -91,6 +91,7 @@ impl AppController {
                     // 配置已变更：旧会话按旧档案建立，一律释放（含仅改密码/TLS 的情况）。
                     fluxdb_connectors::pg_close_connection_sessions(config.id);
                     fluxdb_connectors::sqlserver_close_connection_sessions(config.id);
+                    fluxdb_connectors::mongo_close_connection_client(config.id);
                     settle_closed_query_history(&mut self.state.query_history, config.id, None);
                     if endpoint_changed {
                         connection.connected = false;
@@ -318,6 +319,7 @@ impl AppController {
                 // 不再挂到空闲 TTL（设计 §3.3）。
                 fluxdb_connectors::pg_close_connection_sessions(connection_id);
                 fluxdb_connectors::sqlserver_close_connection_sessions(connection_id);
+                fluxdb_connectors::mongo_close_connection_client(connection_id);
                 settle_closed_query_history(&mut self.state.query_history, connection_id, None);
                 // 断开后这些标签页的结果页里外置的大字段内容没有消费者，随之释放配额。
                 if let Some(store) = fluxdb_core::cell_content_store() {
@@ -402,6 +404,7 @@ impl AppController {
             AppCommand::DeleteConnection(connection_id) => {
                 fluxdb_connectors::pg_close_connection_sessions(connection_id);
                 fluxdb_connectors::sqlserver_close_connection_sessions(connection_id);
+                fluxdb_connectors::mongo_close_connection_client(connection_id);
                 settle_closed_query_history(&mut self.state.query_history, connection_id, None);
                 let original_len = self.state.connections.len();
                 self.state

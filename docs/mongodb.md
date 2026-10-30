@@ -281,7 +281,23 @@ Filter / 投影 / 排序三框与聚合管道都从单行 `InputState` 换成 `E
 
 `Connector` trait 的 MongoDB 方法默认返回 `Unsupported`，由 `MongoConnector` 覆盖，SQL 型连接不受影响。
 
-### 5.2 开发构建的帧率（重要）
+### 5.2 客户端复用（性能）
+
+`mongo_connect` 按连接缓存驱动 `MongoClient`（`mongo_clients()`，键为 `ConnectionId`，附 URI 指纹）。整连接只建一个连接池，`find` / `$sample` / 索引 / 集合信息 / 命令共用。
+
+**为什么必须复用**：驱动 client 自带连接池，而重建 client 每次要新开 3 条 TCP（有认证再加 SCRAM 握手）。实测同一实例、同一查询：
+
+| 网络 | 每次重建 client | 复用 client |
+| --- | --- | --- |
+| 本机 | ~16 ms | ~2 ms |
+| 30 ms RTT | ~387 ms | ~144 ms |
+| 30 ms RTT 打开集合页（find + `$sample`） | ~873 ms | ~410 ms |
+
+**失效规则**：URI 指纹变化（主机/库/参数/密码任一变化）自动重建，不依赖调用方；`mongo_close_connection_client(connection_id)` 在断开连接、编辑配置、删除连接时释放（与 `pg_close_connection_sessions` / `sqlserver_close_connection_sessions` 同一批调用点）。缓存不设空闲 TTL——一个 client 就是一个连接池，长期存活本就应该；若将来出现大量不断开的连接占用问题，再按最近使用时间淘汰。
+
+新增的连接器方法**必须**走 `mongo_connect`，不要自己 `ClientOptions::parse` + `MongoClient::with_options`：那会绕过缓存，退回到每次操作新建连接池。
+
+### 5.3 开发构建的帧率（重要）
 
 **用 `cargo run` / `target/debug` 跑时，渲染慢的根因通常是构建档位，不是页面代码。**
 
@@ -310,7 +326,7 @@ opt-level = 3
 
 判断当前跑的是哪种构建：`ls -la target/debug/fluxdb-desktop` 若体积在几百 MB 且 mtime 是刚构建的，就是 debug。release 构建本来就有优化，不需要这段配置。
 
-### 5.3 栈溢出防护（重要）
+### 5.4 栈溢出防护（重要）
 
 `tokio::runtime::Runtime::block_on` 在**调用方线程**上 poll future，只借用 runtime 跑 IO。因此驱动代码（尤其 BSON 序列化/反序列化）吃的是调用方栈。
 
@@ -324,7 +340,7 @@ gpui 的后台任务在 macOS 上跑在 GCD worker 线程里，栈仅约 512 KiB
 
 `crates/fluxdb-connectors/tests/mongo_live.rs` 里的 `mongo_live_operations_survive_small_caller_stack` 用 192 KiB 栈的线程复现该环境；漏掉放大栈会直接打挂测试进程。
 
-### 5.4 刷新语义
+### 5.5 刷新语义
 
 MongoDB 集合与表同级加载，`replace_loaded_children` 的「库级替换」集合必须包含 `ObjectKind::Collection`，否则每次刷新都会把集合清单再追加一遍，侧边栏出现重复行。
 
