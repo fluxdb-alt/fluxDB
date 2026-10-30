@@ -15,6 +15,7 @@
 - 按钮及按钮式控件提供 `cursor_pointer()`、hover，组件支持时提供 active；具体圆角、输入框与菜单样式见后续章节。
 - 数据请求、数据库和文件操作等耗时任务显示 loading/disabled，不阻塞 UI；数据区域刷新也要明确 loading。
 - 轻量反馈统一使用主窗口 `show_message(...)`，单槽替换并重新计时，不散落 `push_notification` 或自绘提示。
+- `apply_component_theme_colors` 只做主题字段的投影，不写死品牌色：`primary` / `accent` 及其前景色必须成对取自主题文件。组件按 `tokens.accent` 画悬停底色、按 `accent_foreground` 画悬停文字，只改一半会让 ghost 按钮（如 MongoDB 查询面板的「添加条件」「条件构建」）悬停时文字与底色同色。回归用例见 `main_parts/theme_tests.rs`。
 
 ## 当前页面 AI 上下文
 - 新增页面或功能时检查是否接入，并向用户说明 AI 可见的定位、结构、文本、数据与状态，以及未接入/不可读内容。
