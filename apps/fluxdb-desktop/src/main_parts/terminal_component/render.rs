@@ -22,7 +22,8 @@ struct TermColors {
     status_fg: gpui::Rgba,
     danger_bg: gpui::Rgba,
     danger_fg: gpui::Rgba,
-    /// 选区高亮（半透明铺在文本下层）。
+    /// 选区高亮：带 alpha、铺在文本**下面**。不透明色画在字形之上会把字盖掉，
+    /// 选中区域就变成一条没有文字的实心色块。
     selection_bg: gpui::Rgba,
 }
 
@@ -38,7 +39,8 @@ impl TermColors {
                 status_fg: rgb(0x9ca3aa),
                 danger_bg: rgb(0x4a1d1d),
                 danger_fg: rgb(0xffb4b4),
-                selection_bg: rgb(0x33527a),
+                // 带 alpha 的挂蓝色：压住文字仍能读，和 Zed/Navop 的选区观感一致。
+                selection_bg: rgba(0x2f5d9e66),
             }
         } else {
             TermColors {
@@ -49,7 +51,7 @@ impl TermColors {
                 status_fg: rgb(0x5c6269),
                 danger_bg: rgb(0xfbe4e4),
                 danger_fg: rgb(0x9b1c1c),
-                selection_bg: rgb(0xbcd7f0),
+                selection_bg: rgba(0x2f6fbf4d),
             }
         }
     }
@@ -95,33 +97,30 @@ impl Render for TerminalComponent {
             .on_action(window.listener_for(&component, TerminalComponent::paste))
             .on_action(window.listener_for(&component, TerminalComponent::clear))
             // 鼠标：左键按下开始选区（并聚焦），拖动更新，抬起/移出结束；滚轮滚动回看。
+            // 连击次数决定选区类型：2 次选词、3 次选行（与 Zed / 主流终端一致）。
             .on_mouse_down(MouseButton::Left, {
                 let component = component.clone();
                 move |event, _window, cx| {
+                    let click_count = event.click_count;
                     component.update(cx, |comp, cx| {
-                        comp.begin_mouse_selection(event.position);
+                        comp.begin_mouse_selection(event.position, click_count);
                         cx.notify();
                     });
                 }
             })
-            .on_mouse_move({
+            // 右键：先保证有选区可复制（无选区就选指针下的词），菜单由下方的
+            // `.context_menu(...)` 打开——它自己处理窗口级右键与外部点击关闭。
+            .on_mouse_down(MouseButton::Right, {
                 let component = component.clone();
                 move |event, _window, cx| {
-                    component.update(cx, |comp, _| comp.update_mouse_selection(event.position));
+                    component.update(cx, |comp, cx| {
+                        comp.begin_context_menu_selection(event.position);
+                        cx.notify();
+                    });
                 }
             })
-            .on_mouse_up(MouseButton::Left, {
-                let component = component.clone();
-                move |_, _window, cx| {
-                    component.update(cx, |comp, _| comp.end_mouse_selection());
-                }
-            })
-            .on_mouse_up_out(MouseButton::Left, {
-                let component = component.clone();
-                move |_, _window, cx| {
-                    component.update(cx, |comp, _| comp.end_mouse_selection());
-                }
-            })
+            // 拖动/抬起不挂在这个 div 上：div 的 move 监听只在指针悬停时回调，
+            // 一拖出终端边界选区就冻结。改在画布 paint 里挂窗口级监听（见 TerminalCanvas::paint）。
             .on_scroll_wheel({
                 let component = component.clone();
                 move |event, _window, cx| {
@@ -184,8 +183,67 @@ impl Render for TerminalComponent {
                     .with_priority(2),
                 )
             })
-
+            // 右键菜单：gpui-component 的 `context_menu` 自己挂窗口级右键监听、按窗口坐标
+            // 定位、点外部/Esc 关闭、关闭后把焦点还回终端，不用自建弹层与遮罩。
+            // 菜单内容按“当前有没有选区”变化：无选区时“复制”置灰。
+            .context_menu({
+                let component = component.clone();
+                move |menu, _window, cx| {
+                    terminal_context_menu(menu, &component, cx)
+                }
+            })
     }
+}
+
+/// 终端右键菜单：复制 / 粘贴 / 清屏。
+///
+/// 点击处理器持有 Weak 引用：菜单是延迟构建的实体，强引用会让终端与菜单互相持有。
+/// 无选区时“复制”置灰——空选区点了也没有内容可复制（与 Zed 的 `has_selection` 分支同效）。
+fn terminal_context_menu(
+    menu: gpui_component::menu::PopupMenu,
+    component: &Entity<crate::TerminalComponent>,
+    cx: &mut App,
+) -> gpui_component::menu::PopupMenu {
+    let has_selection = component.read(cx).grid.has_selection();
+    let weak = component.downgrade();
+    menu
+        .min_w(px(180.))
+        .item(
+            PopupMenuItem::new(tr("app.context.copy"))
+                .icon(IconName::Copy)
+                .disabled(!has_selection)
+                .on_click({
+                    let weak = weak.clone();
+                    move |_, _, cx| {
+                        // 复制与 `cmd-c` 共用 `copy_selection`，不另写一套逻辑。
+                        if let Some(component) = weak.upgrade() {
+                            component.update(cx, |comp, cx| comp.copy_selection(cx));
+                        }
+                    }
+                }),
+        )
+        .item(
+            PopupMenuItem::new(tr("app.context.paste"))
+                .icon(IconName::Replace)
+                .on_click({
+                    let weak = weak.clone();
+                    move |_, _, cx| {
+                        if let Some(component) = weak.upgrade() {
+                            component.update(cx, |comp, cx| comp.paste_from_clipboard(cx));
+                        }
+                    }
+                }),
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new(tr("app.terminal.clear_screen"))
+                .icon(IconName::Delete)
+                .on_click(move |_, _, cx| {
+                    if let Some(component) = weak.upgrade() {
+                        component.update(cx, |comp, cx| comp.clear_screen(cx));
+                    }
+                }),
+        )
 }
 
 /// 渲染补全候选浮层的面板本体（位置由 `completion_popup_anchor` + `anchored` 决定）。
@@ -318,6 +376,9 @@ struct TerminalLayout {
     status_h: Pixels,
     /// 全角字符的绘图字号缩放比（使 CJK 字形前进恰为 2 倍 cell_w，光标按格对齐不发生漂移）。
     cjk_scale: f32,
+    /// 画布的命中区：窗口级鼠标监听据此判断指针是否还在终端上（拖出后靠它区分
+    /// “拖选继续”与“点到别处”）。
+    hitbox: gpui::Hitbox,
 }
 
 impl IntoElement for TerminalCanvas {
@@ -398,11 +459,16 @@ impl Element for TerminalCanvas {
             }
         });
 
+        // 命中区在 prepaint 插入（paint 阶段不允许 insert_hitbox），
+        // 供 paint 里注册的窗口级拖动/抬起监听判断指针是否还在终端上。
+        let hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
+
         TerminalLayout {
             cell_w,
             line_h,
             status_h,
             cjk_scale,
+            hitbox,
         }
     }
 
@@ -431,6 +497,61 @@ impl Element for TerminalCanvas {
             ElementInputHandler::new(bounds, self.component.clone()),
             cx,
         );
+
+        // 挂窗口级拖动/抬起监听：元素自身的 `on_mouse_move` 只在指针悬停时回调，
+        // 拖出终端边界后选区就冻结。这里按 Zed/Navop 的做法监听整个窗口——
+        // 按下状态且（正在拖选或其下就是终端）时更新端点，超出上下边界则启动自动滚动。
+        // 监听每帧重新注册，闭包拿的是本帧测出的 hitbox / bounds。
+        let hitbox = prepaint.hitbox.clone();
+        {
+            let component = self.component.clone();
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                if phase != gpui::DispatchPhase::Bubble {
+                    return;
+                }
+                // 在窗口外松手收不到 MouseUp：靠下一次“无按键移动”收尾，避免拖选状态卡住。
+                if event.pressed_button.is_none() {
+                    component.update(cx, |comp, cx| {
+                        if comp.selection_origin.is_some() {
+                            comp.end_mouse_selection();
+                            cx.notify();
+                        }
+                    });
+                    return;
+                }
+                let hovered = hitbox.is_hovered(window);
+                component.update(cx, |comp, cx| {
+                    if !comp.dragging_selection && !hovered {
+                        return;
+                    }
+                    // 只有真的按下过（有起点）才拖选，避免无锚点的移动改选区。
+                    if comp.selection_origin.is_none() {
+                        return;
+                    }
+                    if comp.update_mouse_selection(event.position) {
+                        cx.notify();
+                    }
+                    comp.update_selection_autoscroll(event.position);
+                    comp.ensure_selection_autoscroll(cx);
+                });
+            });
+        }
+        {
+            let component = self.component.clone();
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+                if phase != gpui::DispatchPhase::Bubble
+                    || event.button != MouseButton::Left
+                {
+                    return;
+                }
+                component.update(cx, |comp, cx| {
+                    if comp.selection_origin.is_some() {
+                        comp.end_mouse_selection();
+                        cx.notify();
+                    }
+                });
+            });
+        }
 
         // 读 grid 快照。
         let (visible_lines, cursor, following) = {
@@ -482,6 +603,12 @@ impl Element for TerminalCanvas {
         // 跟随底部时按 screen 行取逐列样式对齐像素；否则退化纯文本。
         let following =
             following && visible_lines.len() as u16 == self.component.read(cx).grid.rows();
+
+        // 选区高亮先铺：底色必须在字形之下，否则选中的文字会被整块盖掉。
+        if self.component.read(cx).grid.has_selection() {
+            paint_selection(&self.component, bounds, prepaint, &colors, window, cx);
+        }
+
         let mut i = 0usize;
         for line_text in &visible_lines {
             let top = bounds.origin.y + px(i as f32 * f32::from(prepaint.line_h));
@@ -521,11 +648,6 @@ impl Element for TerminalCanvas {
                 window,
                 cx,
             );
-        }
-
-        // 选区高亮（跟随底部时按屏幕坐标铺半透明底）。
-        if following && self.component.read(cx).grid.has_selection() {
-            paint_selection(&self.component, bounds, prepaint, &colors, window, cx);
         }
 
         // 光标块（仅跟随底部时绘制）。
@@ -601,9 +723,11 @@ fn paint_term_row(
 }
 
 /// 绘制产品统一的 Redis CLI 当前输入行，遮掉后端原生的 host:port 提示符。
+///
+/// 不再给整行铺背景：画布底色已经铺过，这里再铺一层同色矩形会把这一行的选区高亮盖掉。
 fn paint_prompt_line(
     line: &str,
-    bounds: Bounds<Pixels>,
+    _bounds: Bounds<Pixels>,
     left: f32,
     top: Pixels,
     layout: &TerminalLayout,
@@ -611,11 +735,6 @@ fn paint_prompt_line(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let row = Bounds::new(
-        point(bounds.origin.x, top),
-        size(bounds.size.width, layout.line_h),
-    );
-    window.paint_quad(fill(row, colors.bg));
     paint_plain_line(line, left, top, layout, colors, window, cx);
 }
 
@@ -827,7 +946,7 @@ fn paint_selection(
     window: &mut Window,
     cx: &mut App,
 ) {
-    // 逐行找出连续选中的列区间，绘一块半透明 bg（文本已先画好，铺在其上的高亮接近选区观感）。
+    // 逐行找出连续选中的列区间，绘一块半透明 bg。调用点在字形之前：高亮在文字下面。
     let comp = component.read(cx);
     for y in 0..comp.grid.rows() as usize {
         let mut x = 0usize;

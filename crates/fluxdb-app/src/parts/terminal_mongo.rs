@@ -335,12 +335,19 @@ impl MongoRepl {
                         }
                     }
                 }
-                // Ctrl+C / Ctrl+U：清空当前输入行。
+                // Ctrl+C：放弃当前输入并另起一行（与 node/mongosh REPL 一致，`\r\n` 后重画提示符）。
+                // Ctrl+U：就地清空当前行，不换行。
                 0x03 | 0x15 => {
                     self.escape.clear();
                     self.line.clear();
                     self.cursor = 0;
-                    echo.extend_from_slice(b"\r");
+                    if *byte == 0x03 {
+                        // 只换行，**不擦除**被放弃的输入：node/mongosh REPL 实测就是 `\r\r\n` + 重画提示符，
+                        // 旧行保留可见。加了 `\x1b[K` 会把整行擦成空白，用户看到的就是「按完什么都没了」。
+                        echo.extend_from_slice(b"\r\n");
+                    } else {
+                        echo.extend_from_slice(b"\r");
+                    }
                     echo.extend_from_slice(self.prompt().as_bytes());
                     echo.extend_from_slice(b"\x1b[K");
                 }
@@ -664,9 +671,12 @@ impl mterm::TerminalSessionAdapter for MongoCliAdapter {
         self.session.prompt()
     }
 
-    /// Ctrl+C 不下发任何字节：REPL 侧把 Ctrl+C 当作「清空当前输入行」处理，会话保持存活。
+    /// Ctrl+C 下发 `\x03`：由 REPL 自己当作「清空当前输入行」处理，会话保持存活。
+    ///
+    /// 不能返回空切片——组件层收到空切片就完全不写后端，REPL 的 `0x03` 分支永远收不到，
+    /// 表现就是「按 Ctrl+C 什么都清不掉」。进程内 REPL 没有信号语义，不会因此退出。
     fn ctrl_c_bytes(&self, _state: mterm::TerminalSessionState) -> &'static [u8] {
-        b""
+        b"\x03"
     }
 
     fn meta(&self) -> std::collections::BTreeMap<String, String> {
@@ -921,16 +931,56 @@ mod mongo_repl_input_tests {
         assert_eq!(repl.line, "a");
     }
 
+    /// adapter 必须把 Ctrl+C 真的下发到 REPL：返回空切片时组件层不会写后端，
+    /// REPL 的清行分支就成了死代码（用户看到的现象是「按 Ctrl+C 没反应」）。
+    #[test]
+    fn adapter_forwards_ctrl_c_to_the_repl() {
+        let adapter = MongoCliAdapter::new(
+            &fluxdb_core::ConnectionConfig {
+                id: fluxdb_core::ConnectionId(1),
+                name: "unit".into(),
+                kind: fluxdb_core::DatabaseKind::MongoDb,
+                endpoint: fluxdb_core::Endpoint::Tcp {
+                    host: "127.0.0.1".into(),
+                    port: 1,
+                    database: Some("demo".into()),
+                },
+                options: std::collections::BTreeMap::new(),
+                redis_profile: None,
+                mysql_profile: None,
+                postgres_profile: None,
+                dameng_profile: None,
+                sqlserver_profile: None,
+                mongo_profile: None,
+                oracle_profile: None,
+            },
+            MongoCliSession::new("demo".into()),
+        );
+        assert_eq!(
+            mterm::TerminalSessionAdapter::ctrl_c_bytes(&adapter, mterm::TerminalSessionState::Ready),
+            b"\x03",
+            "Ctrl+C 必须下发 \\x03，否则 REPL 的清行分支收不到任何输入"
+        );
+    }
+
     #[test]
     fn ctrl_c_and_ctrl_u_clear_the_current_line_without_executing() {
+        // Ctrl+C 换一行再重画提示符（node/mongosh REPL 实测行为），Ctrl+U 就地清空。
         let (mut repl, tx, rx) = repl();
         repl.feed("db.events.find(".as_bytes(), &tx);
         let _ = drain(&rx);
         repl.feed(b"\x03", &tx);
-        let output = drain(&rx);
-        assert_eq!(output, b"\rdemo> \x1b[K".to_vec());
+        // 只有 `\r\n` + 提示符：不能带 `\x1b[K` —— 那会把被放弃的输入擦成空白。
+        assert_eq!(drain(&rx), b"\r\ndemo> \x1b[K".to_vec());
         assert!(repl.line.is_empty());
         assert!(repl.history.is_empty(), "清行不应产生历史记录");
+
+        repl.feed("show dbs".as_bytes(), &tx);
+        let _ = drain(&rx);
+        repl.feed(b"\x15", &tx);
+        assert_eq!(drain(&rx), b"\rdemo> \x1b[K".to_vec());
+        assert!(repl.line.is_empty());
+        assert!(repl.history.is_empty(), "Ctrl+U 不应产生历史记录");
     }
 
     #[test]

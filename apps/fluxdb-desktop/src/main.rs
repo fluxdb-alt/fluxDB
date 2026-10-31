@@ -71,9 +71,9 @@ use gpui::{
     StatefulInteractiveElement, Subscription, Task, TitlebarOptions, Transformation,
     UniformListScrollHandle, WeakEntity, Window, WindowBounds, WindowControlArea, WindowOptions,
     actions, anchored, canvas, deferred, div, ease_in_out, hsla, img, list, opaque_grey,
-    percentage, point, px, rgb, size, svg, uniform_list,
+    percentage, point, px, rgb, rgba, size, svg, uniform_list,
 };
-use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_component::{
     ActiveTheme as _, Colorize as _, Disableable as _, IconName, IndexPath, Root, Sizable as _,
     Theme as ComponentTheme, ThemeConfig, ThemeMode, ThemeRegistry, VirtualListScrollHandle,
@@ -217,3 +217,5 @@ include!("main_parts/tabs_workspace_tests.rs");
 include!("main_parts/sidebar_refresh_tests.rs");
 #[cfg(test)]
 include!("main_parts/mongo_sidebar_tests.rs");
+#[cfg(test)]
+include!("main_parts/terminal_menu_tests.rs");

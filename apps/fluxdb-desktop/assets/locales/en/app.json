@@ -4163,7 +4163,8 @@
       "danger_confirmed": "Dangerous command confirmed",
       "danger_pending": "Dangerous command pending confirmation: %{line}"
     },
-    "danger_banner": "ⓘ Dangerous command pending: %{command}    Enter to confirm · Esc to cancel"
+    "danger_banner": "ⓘ Dangerous command pending: %{command}    Enter to confirm · Esc to cancel",
+    "clear_screen": "Clear screen"
   },
   "editor": {
     "completion": {

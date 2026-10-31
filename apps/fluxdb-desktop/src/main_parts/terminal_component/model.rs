@@ -90,6 +90,29 @@ enum EdgeSide {
     Right,
 }
 
+/// 拖选越过可视区上下边界时的自动滚动方向。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionEdge {
+    Top,
+    Bottom,
+}
+
+impl SelectionEdge {
+    /// 视口滚动的行增量（正 = 内容下移 = 向上回看）。
+    fn shift_rows(self) -> i32 {
+        match self {
+            SelectionEdge::Top => 1,
+            SelectionEdge::Bottom => -1,
+        }
+    }
+}
+
+/// 拖选阈值（像素）：抖动一两个像素的点击不算拖选，与 gpui `div` 的拖拽阈值一致。
+const SELECTION_DRAG_THRESHOLD: f32 = 2.0;
+
+/// 自动滚动节拍（毫秒）：拖出边界后每拍滚一行，与 Zed 终端的拖选自动滚动节奏一致。
+const SELECTION_AUTOSCROLL_INTERVAL_MS: u64 = 16;
+
 /// 每个终端标签页对应的组件实体。
 pub(crate) struct TerminalComponent {
     pub focus_handle: FocusHandle,
@@ -116,8 +139,16 @@ pub(crate) struct TerminalComponent {
     /// 最近一次绘制时输入光标的矩形（window 坐标）。`bounds_for_range` 返回它，
     /// macOS 据此把输入法候选栏定位到光标旁边；否则候选栏落到屏幕左下角。
     pub ime_caret_bounds: Option<Bounds<Pixels>>,
-    /// 鼠标左键按下拖动选中（区分“按下未拖动”与“正在拖选”）。
+    /// 已越过拖动阈值、正在拖选（仅“按下”还没越过阈值时为 false）。
     pub dragging_selection: bool,
+    /// 左键按下的窗口坐标：拖选阈值以它为基准，抬起时清空。
+    pub selection_origin: Option<Point<Pixels>>,
+    /// 最近一次拖选的指针窗口坐标：自动滚动后按它重算端点。
+    pub selection_cursor: Option<Point<Pixels>>,
+    /// 拖出可视区上下边界时的自动滚动方向（None = 不滚动）。
+    pub selection_autoscroll: Option<SelectionEdge>,
+    /// 自动滚动节拍任务；None 表示当前没在跑（抬起/到顶底后清空）。
+    pub selection_autoscroll_task: Option<Task<()>>,
     /// prepaint 测得的 cell 尺寸 / 状态栏高缓存，供鼠标事件做「像素 → 单元格」换算。
     pub last_cell_w: f32,
     pub last_line_h: f32,
@@ -161,6 +192,10 @@ impl TerminalComponent {
             ime_composing: false,
             ime_caret_bounds: None,
             dragging_selection: false,
+            selection_origin: None,
+            selection_cursor: None,
+            selection_autoscroll: None,
+            selection_autoscroll_task: None,
             last_cell_w: 8.0,
             last_line_h: 15.0,
             last_status_h: 24.0,
@@ -875,24 +910,159 @@ impl TerminalComponent {
 
     // ---- 选区：按下 / 拖动 / 抬起（像素坐标系 → cell 坐标） ----
 
-    /// 落地一次“按下”：把窗口像素点换算进 grid（clamp 进可视区）后开始选区。
-    pub fn begin_mouse_selection(&mut self, point: Point<Pixels>) {
+    /// 落地一次“按下”：按点击次数决定选区类型（1 次=拖选、2 次=选词、3 次及以上=选行）。
+    ///
+    /// 单击只记录按下位置并清掉旧选区，不产生可见选区：与主流终端一致，点一下不留一格
+    /// 色块、也不覆盖剪贴板；真正的高亮从拖动越过 `SELECTION_DRAG_THRESHOLD` 才开始。
+    /// 双击/三击直接产出固定区间，并清掉拖选起点——之后按住拖动不会把它改回普通拖选。
+    pub fn begin_mouse_selection(&mut self, point: Point<Pixels>, click_count: usize) {
         // 先随用户点击回到底部跟随（与主流终端一致：点击即回到最新输出）。
         self.grid.scroll_to_bottom();
-        self.grid.begin_selection(self.window_point_to_cell(point));
-        self.dragging_selection = true;
+        let cell = self.window_point_to_cell(point);
+        // 双击/三击是「选中整词/整行」的一次性动作，不再进入拖选状态。
+        self.dragging_selection = false;
+        self.selection_origin = None;
+        self.selection_cursor = None;
+        self.selection_autoscroll = None;
+        self.selection_autoscroll_task = None;
+        match click_count {
+            2 => {
+                self.grid.select_word_at(cell);
+            }
+            n if n >= 3 => {
+                self.grid.select_line_at(cell.y);
+            }
+            _ => {
+                // 单击先清掉旧选区；锚点等越过拖动阈值再落，避免“零长选区”被当成选中一格。
+                self.grid.clear_selection();
+                self.selection_origin = Some(point);
+            }
+        }
     }
 
     /// 拖动更新选中端点。
-    pub fn update_mouse_selection(&mut self, point: Point<Pixels>) {
-        if self.dragging_selection {
-            self.grid.update_selection(self.window_point_to_cell(point));
+    ///
+    /// 返回 true 表示选区真的变了（调用方据此 `cx.notify()`）：安静终端下拖选不会自然
+    /// 触发重绘，早期实现漏掉这次通知，表现就是“按住拖动没有高亮”。
+    pub fn update_mouse_selection(&mut self, point: Point<Pixels>) -> bool {
+        let Some(origin) = self.selection_origin else {
+            return false;
+        };
+        if !self.dragging_selection {
+            // 与 gpui 的 div 拖拽阈值对齐：抖动一两个像素的点击不算拖选。
+            let moved = ((f32::from(point.x) - f32::from(origin.x)).powi(2)
+                + (f32::from(point.y) - f32::from(origin.y)).powi(2))
+            .sqrt();
+            if moved <= SELECTION_DRAG_THRESHOLD {
+                return false;
+            }
+            self.dragging_selection = true;
+            // 越过阈值才落锚点：单击自始至终没有选区。
+            self.grid.begin_selection(self.window_point_to_cell(origin));
         }
+        let cell = self.window_point_to_cell(point);
+        self.grid.update_selection(cell);
+        self.selection_cursor = Some(point);
+        true
+    }
+
+    /// 右键落地：没有选区时先选中指针下的词，已有选区则原样保留。
+    ///
+    /// 与 Zed 一致——右键菜单里的“复制”针对选区，空选区直接弹菜单会让复制无从下手；
+    /// 但已经拖选/双击选好的内容也不能被右键悄悄覆盖掉。
+    pub fn begin_context_menu_selection(&mut self, point: Point<Pixels>) {
+        // 右键是独立动作：先掐断任何残留的拖选 / 自动滚动状态。
+        self.dragging_selection = false;
+        self.selection_origin = None;
+        self.selection_cursor = None;
+        self.selection_autoscroll = None;
+        self.selection_autoscroll_task = None;
+        if self.grid.has_selection() {
+            return;
+        }
+        self.grid.select_word_at(self.window_point_to_cell(point));
     }
 
     /// 抬起结束拖动（保留已选中的选区供复制）。
     pub fn end_mouse_selection(&mut self) {
         self.dragging_selection = false;
+        self.selection_origin = None;
+        self.selection_cursor = None;
+        self.selection_autoscroll = None;
+        self.selection_autoscroll_task = None;
+    }
+
+    /// 启动拖选自动滚动的一拍（已在跑则复用，不会重复起任务）。
+    ///
+    /// 拖出可视区后指针不再移动，只靠移动事件推不动选区；这里按帧推进，直到
+    /// 指针回到可视区、抬起或滚到顶/底为止。
+    pub fn ensure_selection_autoscroll(&mut self, cx: &mut Context<Self>) {
+        if self.selection_autoscroll.is_none() || self.selection_autoscroll_task.is_some() {
+            return;
+        }
+        self.selection_autoscroll_task = Some(cx.spawn(async move |this, cx| {
+            smol::Timer::after(std::time::Duration::from_millis(
+                SELECTION_AUTOSCROLL_INTERVAL_MS,
+            ))
+            .await;
+            let _ = this.update(cx, |comp, cx| {
+                comp.selection_autoscroll_task = None;
+                comp.run_selection_autoscroll_tick(cx);
+            });
+        }));
+    }
+
+    fn run_selection_autoscroll_tick(&mut self, cx: &mut Context<Self>) {
+        if self.selection_autoscroll.is_none() {
+            return;
+        }
+        // 滚到顶/底时 step 返回 false，节拍自然停下，不会空转。
+        if self.step_selection_autoscroll() {
+            cx.notify();
+            self.ensure_selection_autoscroll(cx);
+        }
+    }
+
+    /// 拖选自动滚动的一步：滚动 1 行并同步选区坐标。
+    ///
+    /// 端点仍按拖出边界时的像素位置换算，滚动后它会落到新的一行上——这正是
+    /// “拖出边界继续选”的语义。返回 true 表示视口真的动了，需要重绘。
+    pub fn step_selection_autoscroll(&mut self) -> bool {
+        let Some(direction) = self.selection_autoscroll else {
+            return false;
+        };
+        let moved = match direction {
+            SelectionEdge::Top => self.grid.scroll_up(1),
+            SelectionEdge::Bottom => self.grid.scroll_down(1),
+        };
+        if moved == 0 {
+            return false;
+        }
+        self.grid.shift_selection_rows(direction.shift_rows());
+
+        if let Some(position) = self.selection_cursor {
+            self.grid.update_selection(self.window_point_to_cell(position));
+        }
+        true
+    }
+
+    /// 按拖选位置刷新“是否贴边自动滚动”。窗口级移动监听转发这里，指针离开终端也能拖选。
+    pub fn update_selection_autoscroll(&mut self, position: Point<Pixels>) {
+        if !self.dragging_selection {
+            self.selection_autoscroll = None;
+            return;
+        }
+        self.selection_cursor = Some(position);
+        let top = self.last_origin_y;
+        let bottom = self.last_origin_y + self.last_content_h;
+        let y = f32::from(position.y);
+        self.selection_autoscroll = if y < top {
+            Some(SelectionEdge::Top)
+        } else if y > bottom {
+            Some(SelectionEdge::Bottom)
+        } else {
+            None
+        };
     }
 
     // ---- 滚动回看（滚轮） ----
@@ -903,10 +1073,14 @@ impl TerminalComponent {
             return;
         }
         let lines = (delta_y / self.last_line_h.max(1.0)).round() as i32;
-        if lines > 0 {
-            self.grid.scroll_up(lines as usize);
+        let moved = if lines > 0 {
+            self.grid.scroll_up(lines as usize) as i32
         } else {
-            self.grid.scroll_down((-lines) as usize);
+            -(self.grid.scroll_down((-lines) as usize) as i32)
+        };
+        if moved != 0 {
+            // 选区用视口坐标存储：自己滚动时也要把选区一起搬，否则高亮会“粘”在屏幕位置。
+            self.grid.shift_selection_rows(moved);
         }
     }
 
@@ -914,6 +1088,11 @@ impl TerminalComponent {
 
     /// 复制当前选区（无选区时 no-op）。
     pub fn copy(&mut self, _action: &TermCopy, _window: &mut Window, cx: &mut Context<Self>) {
+        self.copy_selection(cx);
+    }
+
+    /// 把当前选区写入剪贴板（键盘快捷键与右键菜单共用同一条路径）。
+    fn copy_selection(&mut self, cx: &mut Context<Self>) {
         if !self.grid.has_selection() {
             return;
         }
@@ -925,6 +1104,11 @@ impl TerminalComponent {
 
     /// 把剪贴板文本作为输入下发到 PTY（相当于用户键入，交由 redis-cli 行编辑回显）。
     pub fn paste(&mut self, _action: &TermPaste, _window: &mut Window, cx: &mut Context<Self>) {
+        self.paste_from_clipboard(cx);
+    }
+
+    /// 粘贴剪贴板内容（键盘快捷键与右键菜单共用同一条路径）。
+    fn paste_from_clipboard(&mut self, cx: &mut Context<Self>) {
         if self.pending_dangerous.is_some()
             || matches!(
                 self.state,
@@ -941,6 +1125,11 @@ impl TerminalComponent {
 
     /// 清屏（Ctrl-L 清空主屏并回到底部）。
     pub fn clear(&mut self, _action: &TermClear, _window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_screen(cx);
+    }
+
+    /// 清屏（键盘快捷键与右键菜单共用同一条路径）。
+    fn clear_screen(&mut self, cx: &mut Context<Self>) {
         self.send_bytes(b"\x0c", cx);
         self.grid.scroll_to_bottom();
     }

@@ -4163,7 +4163,8 @@
       "danger_confirmed": "危险命令已确认执行",
       "danger_pending": "危险命令待确认: %{line}"
     },
-    "danger_banner": "ⓘ 危险命令待确认: %{command}    Enter 确认 · Esc 取消"
+    "danger_banner": "ⓘ 危险命令待确认: %{command}    Enter 确认 · Esc 取消",
+    "clear_screen": "清屏"
   },
   "editor": {
     "completion": {
