@@ -264,9 +264,52 @@ Filter / 投影 / 排序三框与聚合管道都从单行 `InputState` 换成 `E
   - 单格渲染贴 Compass：ObjectId/UUID 转十六进制、Binary 转 base64、`$numberLong` 等取内层标量、日期转 ISO，其余用紧凑 JSON；以 `= + - @` 开头的值前置单引号，防 Excel 公式注入；文件头写 UTF-8 BOM，Windows Excel 打开中文不乱码。
 - **落盘**：先写 `<目标>.partial`，全部成功后才改名到目标路径；取消或失败删除临时文件（CSV 的中间 `.ejsonl` 同样清理），不留半截数据。运行中可「取消导出」，取消标记每页检查一次；运行中不允许关闭弹框（只能取消或等待）。
 
-## 4. 命令行终端
+## 4. 命令行终端（MongoDB shell）
 
-库右键「命令行终端」打开 `MongoCli` 标签页，复用内置终端组件（自动补全 + 历史）。执行走 `mongo_run_command`，与查询编辑器共用同一实现，结果以一行 Extended JSON 返回。
+库右键「命令行终端」打开 `MongoCli` 标签页，复用内置终端组件（历史 + 补全）。写的是 shell 语法，不是命令 JSON：
+
+```text
+use fluxdb_demo
+show dbs
+show collections
+db.events.find({ event_type: "page_view" }).sort({ duration_ms: -1 }).limit(20)
+db.events.findOne({ _id: ObjectId("66e000000000000000000001") })
+db.events.countDocuments({ success: false })
+db.events.distinct("source")
+db.events.aggregate([{ "$group": { "_id": "$source", "n": { "$sum": 1 } } }])
+db.events.getIndexes()
+db.events.stats()
+db.getCollectionNames()
+```
+
+- **第一版只读**：`insert` / `update` / `delete` / `drop` / `createIndex` 等写与管理方法在解析层直接拒绝并说明原因，写入仍走集合工作台或导入。不做 JS 求值（`let` / 变量 / 多语句一律报错），避免为一条查询引入 JS 引擎。
+- **参数**放宽为 JSON5（无引号键、单引号、尾逗号），并把常用构造器就地换成 Extended JSON：`ObjectId("…")`、`ISODate("…")`、`NumberLong(…)`、`NumberInt(…)`、`NumberDecimal(…)`、`UUID("…")`。改写只认白名单、且不进入字符串内部，因此 `"call ObjectId(1)"` 这类文本不受影响。
+- **结果排版对齐 Compass**：键蓝色、字符串绿色、数字橙色、布尔青色，类型保留 `ObjectId('…')` / `ISODate('…')` / `BinData(…)` 标注；`show dbs` 带磁盘占用（`1.000GB` 风格）。
+- **`use` 只切换本终端会话的库**：prompt 变成 `fluxdb_demo> `，补全列表在后台重读该库集合名；连接配置不被改写，也不影响其他标签页。prompt 与补全共享同一份 `MongoCliSession`，避免渲染层按旧库换算光标列。集合名只影响补全，因此读取放到后台线程：同步读会让 `use` 后的提示符等到建连超时才出现；同一个库已在读时复用，换库才重新发起，读到旧库的结果直接丢弃。
+- **行编辑**：← / → 按单元格移动光标（宽字符跨两格），Home / End 到行首行尾，退格与 Delete 删光标左右整个字符，中途输入在光标处插入并重画行尾。REPL 自己维护 `line + cursor`（字节偏移，永远落在字符边界）；桌面端对按字符编辑的后端只发一次按键，不再像 redis-cli 那样按字节数放大。
+- **补全边打字边出**（对齐 Compass / mongosh）：不用按 Tab，回显一到就按当前输入行刷新浮层。候选来源全是本地状态（关键字、库名、集合名、方法白名单），不发任何请求，因此能跟着每个字符刷新。空行不弹；已经打完的那条候选不再提示自己。
+	- 行首给 `use ` / `show dbs` / `show collections` / `db.`；`use <前缀>` 之后给库名（开场后台读一次全库列表，`use` 切库不重读）；`db.` 之后给当前库的集合名；`db.<集合>.` 之后给只读方法名（`find` / `findOne` / `count` / `countDocuments` / `estimatedDocumentCount` / `distinct` / `aggregate` / `getIndexes` / `stats`，与解析器白名单一致）。
+	- **集合名一律补成 `db["<集合>"]` 方括号形式**（Compass 也是这样）：集合名合法地可以带点，`db.a.b.find(` 在解析器眼里是「集合 a、方法 b」，只有方括号能无歧义表达。用户手敲的点写法在比对前会先被规范化成方括号形式（`canonical_input`），否则前缀对不上一个候选都出不来。
+	- 候选是整行文本，替换区间为整行；回车写回整行、Esc 关闭。浮层根 div 带 `terminal-completion-popup` 调试选择器，供 UI 用例断言它真的画出来了。
+	- **键鼠共用一个高亮下标**：↑/↓ 在候选间移动（不把方向键透传给 PTY，否则用户挑候选时整行输入被历史记录替换掉）、鼠标划过改高亮、鼠标点击直接写回（等于选中后回车）。没有高亮时 ↓ 选第一项、↑ 选最后一项；Tab / Shift-Tab 仍循环。候选超过可视高度时按 `completion_scroll` 跟随滚动。
+	- **浮层跟着光标走**（`completion_popup_anchor()`）：锚点是光标所在单元格的正下方，横坐标按 `cursor_cell_x()` 算——展示提示符替换了后端提示符，不能直接用 `grid.cursor().x`，否则 `fluxdb_demo> ` 这种长前缀下浮层偏左若干格。下方放不下就翻到光标上方，最后夹进内容区；右侧越界由 `anchored().snap_to_window_with_margin(8px)` 兜底。
+	- **用 `deferred(anchored())` 画在容器裁剪之外**（与 `filter_ui/popover.rs` 同一套）：终端面板是 `overflow_hidden`，浮层写成它的子元素时超出行高的部分会被切掉，表现为「只露出一条边」。终端画布也必须自己绝对定位并铺满——它若留在流内，绝对定位浮层会以画布底边为静态基准。
+	- **候选行用 gpui-component 的 `ListItem`**：悬停 / 选中底色、内边距、无障碍名由组件按主题给，与编辑器补全浮层同一套观感。浮层与滚动区都 `stop_propagation` 吞掉鼠标按下与滚轮，否则点候选会同时开始终端选区、滚浮层会翻走终端历史。
+	- **配色走组件主题，不写死**：背景 `muted`、文字 `popover_foreground`、边框 `border`、圆角 `radius_lg`。终端面板随主题走，浮层写死深色会在浅色主题里变成一块突兀的黑板。
+	- **背景不能用 `popover`**：浅色主题里 `popover` 就是纯白，与终端面板（写死 `0xffffff`）同色，浮层只剩一条边框——截图上就是「显示出了一点」。`muted` 浅色为 `neutral-100`、深色为 `neutral-800`，两个主题下都比面板深一档。
+	- **字号必须显式给**（浮层与每个 `ListItem` 都写 `.text_size(TERMINAL_FONT_SIZE)`）：`Root` 会 `set_rem_size(theme.font_size)`（默认 16px），`ListItem` 自己还写死了 `text_base()`；不覆盖就比终端 12px 大，行框定高 30px 装不下，上下各切一刀，表现为「use 只剩半截」。
+	- **高度由候选数显式算出**（`completion_popup_height()`）：行高 30（复用编辑器的 `COMPLETION_ROW_HEIGHT`）+ 外壳内边距 8，上限 260 后滚动。只写 `max_h` 不够——绝对定位元素仍会被拉伸到上限，一条候选也撑成一整块空板（实测 180×260）。宽度按内容撑开，`min_w(180)` / `max_w(520)` 只做上下限。
+	- **候选行必须定高**（`.h(COMPLETION_ROW_HEIGHT)`），不能用 `py_*` 让文字自然撑开：自然行高（约 25px）与按常量算的外层高度不一致时，外层一裁就一个字都看不见（表现为一个空白细条）。行高与 `completion_popup_height()` 共用同一个常量，两边不能各算一套。
+	- 组件层通过 `TerminalCompletionAdapter::completion_on_typing()` 决定是否边打字边提示，默认关闭（redis-cli / shell 的输入行由子进程回显，抢在回显前算会慢半拍）；只有进程内 REPL 打开它。
+		- 打开后，`pump_transport` **每帧**重算候选，而不是只在有新输出时：集合名与库名由后台线程异步写进 `MongoCliSession`，到位时没有任何字节进 grid，按「有新输出」触发会让「打开就敲 `db.`」永远不出候选。只有候选真的变了才请求重绘，输入行没变时不会闪。
+	- 补全读的是 grid 里已回显的输入行，而 REPL 回显要等 30ms 泵才进 grid。真实按键间隔远大于该延迟，所以人用没问题；自动化用例必须等回显（`type_in_terminal_echo`）再断言候选，否则按空行算候选会拿到全量列表。
+	- 写回整行时退格次数按后端语义算：redis-cli 按字节、进程内 REPL 按字符（`backend_edits_by_char()`）。两者混用会让中文输入多删字符。
+- **报错只回一行，且是英文**（对齐 mongosh）：`Unknown method: x` / `Unrecognized statement: x` / `Usage: show dbs | show collections`。终端是 shell 环境，沿用 mongosh 的英文错误，不跟界面语言包走；多行「支持：…」清单不再打印——终端里是一整块红字，可用写法按 Tab 看得更快。`show` 的多余 token（`show dbs | show collections`）现在直接报错，不再被当成 `show dbs` 静默执行。
+	- 同一原则覆盖终端可达的全部错误来源：shell 解析器、`mongo_find` 的 Filter/Projection 解析、连接与驱动错误（`client.rs`）。`mongo_find` 的 Sort / Collation / Hint 校验同时服务集合工作台，报错文案保持中文不动——同一句校验只有一份，不为终端再复制一套。集合工作台 / 导入弹窗的报错同样仍是中文。
+- 单次最多返回 `MONGO_MAX_DOCUMENTS_PER_QUERY`（500）篇文档；`countDocuments` 用真实 `count` 命令，不受该上限影响。
+- 分层：解析与执行在 `crates/fluxdb-connectors/src/parts/mongo/shell.rs`（`Connector::mongo_shell`），行编辑与回显在 `crates/fluxdb-app/src/parts/terminal_mongo.rs`，渲染复用既有终端组件。
+
+原来的命令对象写法（`{"ping": 1}`）已移除——终端只接受 shell 语法，混着两种写法会让「为什么这条能跑那条不能」变成谜。连接器的 `mongo_run_command` 仍保留给查询编辑器与测试使用。
 
 ## 5. 实现要点
 
@@ -275,7 +318,7 @@ Filter / 投影 / 排序三框与聚合管道都从单行 `InputState` 换成 `E
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
 | 领域 | `crates/fluxdb-core/src/parts/mongo_profile.rs` | `MongoConnectionProfile`：URI ↔ 结构化档案、校验、`to_uri` |
-| 连接器 | `crates/fluxdb-connectors/src/parts/mongo/` | `client.rs`（建连/错误映射/大栈执行）、`documents.rs`（库与集合的增删查、文档的插入/替换/删除）、`metadata.rs`（集合信息/索引/服务端信息）、`import.rs`（格式嗅探、CSV 类型推断、批量写入）、`connector.rs`（`Connector` 实现） |
+| 连接器 | `crates/fluxdb-connectors/src/parts/mongo/` | `client.rs`（建连/错误映射/大栈执行）、`documents.rs`（库与集合的增删查、文档的插入/替换/删除）、`metadata.rs`（集合信息/索引/服务端信息）、`import.rs`（格式嗅探、CSV 类型推断、批量写入）、`shell.rs`（shell 语句解析、执行与 Compass 风格排版）、`connector.rs`（`Connector` 实现） |
 | 应用 | `crates/fluxdb-app/src/parts/controller/dispatch_mongo.rs`、`mongo_collection_state.rs` | 命令编排、标签页状态、加载令牌 |
 | UI | `apps/fluxdb-desktop/src/main_parts/mongo_collection.rs`（分节/查询/结果条/抽屉）、`mongo_documents.rs`（卡片、字段列表、表格、JSON、四个操作按钮）、`mongo_document_edit.rs`（编辑 / 复制 / 新增共用的抽屉会话、删除确认框、未保存草稿的切换确认框）、`mongo_import.rs`（文档导入弹窗）、`navicat_main/mongo_*.rs` | 渲染与交互，只发 `AppCommand` |
 

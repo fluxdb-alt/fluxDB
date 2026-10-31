@@ -1,12 +1,13 @@
-// MongoDB 命令行终端：库内执行 Extended JSON 命令的 REPL。
+// MongoDB 命令行终端：库内执行 shell 语句（`use` / `show dbs` / `db.<集合>.<方法>(...)`）的 REPL。
 //
 // mongosh 不一定安装在本机，且它需要真实 PTY 与会话协议；这里改为「自有行编辑 + 连接器执行」：
-//   - `MongoReplTransport`：一个后台线程接收按键字节、维护输入行与历史、把命令交给连接器执行，
+//   - `MongoReplTransport`：一个后台线程接收按键字节、维护输入行与历史、把语句交给连接器执行，
 //     并把回显 / 结果 / prompt 作为终端字节流回传，交给桌面端既有 TermGrid 渲染。
 //   - `MongoCliAdapter`：会话命名 / prompt / 状态文案（供终端 surface 展示）。
-//   - `MongoCliCompletion`：命令名补全（Tab）与危险命令识别（dropDatabase / shutdown 等）。
+//   - `MongoCliCompletion`：库名与集合名 / 方法名补全（Tab）。
 //
-// 边界：不经过 PTY，密码不会出现在任何子进程 argv；命令文本与结果只在本地终端内呈现。
+// 边界：不经过 PTY，密码不会出现在任何子进程 argv；语句文本与结果只在本地终端内呈现。
+// 语法与只读范围由连接器的 `mongo_shell` 决定，这里只负责行编辑与回显。
 
 // 本文件随 `include!` 汇入 crate 根作用域，与 `terminal_redis.rs` 共享命名空间；
 // 为避免 `use` 重名冲突，统一用模块别名限定终端核心类型。
@@ -16,29 +17,88 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 const MONGO_TERM_COLS: u16 = 120;
 const MONGO_TERM_ROWS: u16 = 32;
 
-/// 需要二次确认的危险命令（键名，判断 JSON 命令对象的第一个键）。
-const DANGEROUS_MONGO_COMMANDS: &[&str] = &["dropDatabase", "drop", "delete", "shutdown", "setParameter"];
+/// 顶层语句补全候选：与连接器 shell 解析器支持的关键字保持一致。
+const MONGO_SHELL_KEYWORDS: &[&str] = &["use ", "show dbs", "show collections", "db."];
 
-/// 可补全 / 可提示的命令键。桌面端只做键名补全，不猜测参数结构。
-const MONGO_COMMAND_KEYS: &[&str] = &[
-    "ping",
-    "buildInfo",
-    "serverStatus",
-    "dbStats",
-    "collStats",
-    "listCollections",
-    "listIndexes",
-    "count",
-    "distinct",
+/// 集合方法补全候选（`db.<集合>.` 之后）。
+const MONGO_SHELL_METHODS: &[&str] = &[
     "find",
+    "findOne",
+    "count",
+    "countDocuments",
+    "estimatedDocumentCount",
+    "distinct",
     "aggregate",
-    "insert",
-    "update",
-    "delete",
-    "dropDatabase",
-    "drop",
-    "createIndexes",
+    "getIndexes",
+    "stats",
 ];
+
+/// REPL 与 adapter 共享的会话状态。
+///
+/// 当前库由 `use` 切换，它同时决定 prompt —— 终端渲染拿 adapter 的 prompt 换算光标列，
+/// 两者必须永远一致，所以放在同一份共享状态里，而不是各存一份。
+#[derive(Clone, Default)]
+pub struct MongoCliSession {
+    database: std::sync::Arc<std::sync::Mutex<String>>,
+    /// 当前库的集合名（补全用）；`use` 切换后重新读取。
+    collections: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// 所有库名（`use <库>` 补全用）；开场读一次。
+    databases: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl MongoCliSession {
+    pub fn new(database: String) -> Self {
+        Self {
+            database: std::sync::Arc::new(std::sync::Mutex::new(database)),
+            collections: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            databases: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    fn database(&self) -> String {
+        self.database
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_default()
+    }
+
+    fn set_database(&self, database: String) {
+        if let Ok(mut current) = self.database.lock() {
+            *current = database;
+        }
+    }
+
+    fn collections(&self) -> Vec<String> {
+        self.collections
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_default()
+    }
+
+    fn set_collections(&self, names: Vec<String>) {
+        if let Ok(mut current) = self.collections.lock() {
+            *current = names;
+        }
+    }
+
+    fn databases(&self) -> Vec<String> {
+        self.databases
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_default()
+    }
+
+    fn set_databases(&self, names: Vec<String>) {
+        if let Ok(mut current) = self.databases.lock() {
+            *current = names;
+        }
+    }
+
+    /// 终端提示符：`<库名>> `，与 Compass / mongosh 的当前库提示一致。
+    fn prompt(&self) -> String {
+        format!("{}> ", self.database())
+    }
+}
 
 /// MongoDB REPL 传输：UI 线程按键字节 → 后台线程 → 输出字节流。
 pub struct MongoReplTransport {
@@ -49,8 +109,8 @@ pub struct MongoReplTransport {
 }
 
 impl MongoReplTransport {
-    /// 启动 REPL 线程。`connection_id` 只用于日志与错误上下文，命令实际走连接配置。
-    pub fn new(config: fluxdb_core::ConnectionConfig, database: String) -> Self {
+    /// 启动 REPL 线程。`session` 与 adapter 共享当前库与集合列表。
+    pub fn new(config: fluxdb_core::ConnectionConfig, session: MongoCliSession) -> Self {
         let (input_tx, input_rx) = std::sync::mpsc::channel::<Vec<u8>>();
         let (output_tx, output_rx) = std::sync::mpsc::channel::<Vec<u8>>();
         let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -58,8 +118,11 @@ impl MongoReplTransport {
         let connection_id = config.id;
         let worker = std::thread::Builder::new()
             .name("fluxdb-mongo-cli".to_string())
+            // 连接器在放大栈的线程里跑驱动，但 REPL 自己也会压栈（JSON 解析 + 排版），
+            // 与其它 mongo 调用一致给 8 MiB，避免 debug 构建下擦到保护页。
+            .stack_size(8 * 1024 * 1024)
             .spawn(move || {
-                let mut repl = MongoRepl::new(config, database);
+                let mut repl = MongoRepl::new(config, session);
                 repl.greet(&output_tx);
                 while worker_alive.load(std::sync::atomic::Ordering::Relaxed) {
                     let bytes = match input_rx.recv() {
@@ -111,8 +174,10 @@ impl Drop for MongoReplTransport {
 /// REPL 本体：输入行、历史与连接器执行。
 struct MongoRepl {
     config: fluxdb_core::ConnectionConfig,
-    database: String,
+    session: MongoCliSession,
     line: String,
+    /// 光标在 `line` 内的字节偏移，永远落在字符边界上（左 / 右方向键与中途插入靠它）。
+    cursor: usize,
     /// 历史命令（旧 → 新）；`history_cursor` 为回看位置（`len` = 当前输入行）。
     history: Vec<String>,
     history_cursor: usize,
@@ -120,33 +185,119 @@ struct MongoRepl {
     pending: Vec<u8>,
     /// 转义序列中间态（方向键等）。
     escape: Vec<u8>,
+    /// 正在后台读取集合列表的库名；`None` 表示没有在读。
+    /// 连打 `use` 时同一库不重复建连，换库则重新读。
+    refreshing: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl MongoRepl {
-    fn new(config: fluxdb_core::ConnectionConfig, database: String) -> Self {
+    fn new(config: fluxdb_core::ConnectionConfig, session: MongoCliSession) -> Self {
         Self {
             config,
-            database,
+            session,
             line: String::new(),
+            cursor: 0,
             history: Vec::new(),
             history_cursor: 0,
             pending: Vec::new(),
             escape: Vec::new(),
+            refreshing: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
     fn prompt(&self) -> String {
-        format!("{}> ", self.database)
+        self.session.prompt()
     }
 
+    /// 会话开场：只给提示符，不打用途说明。
+    ///
+    /// 顶部信息条已经写明连接 / 库，再刷一段 banner 只是把真正的第一行输出往下挤。
     fn greet(&mut self, out: &Sender<Vec<u8>>) {
-        let banner = format!(
-            "MongoDB 命令行已连接 {}。输入 Extended JSON 命令（如 {{\"ping\": 1}}），Ctrl+D 退出。\r\n",
-            self.database
-        );
-        let _ = out.send(banner.into_bytes());
         let prompt = self.prompt();
         let _ = out.send(prompt.into_bytes());
+        // 集合名只影响补全，晚一点到没关系；放到后台读，别让首次提示符等建连。
+        self.refresh_collections();
+        self.refresh_databases();
+    }
+
+    /// 后台读一次全部库名（`use <库>` 补全用）。
+    ///
+    /// 库列表在一次会话里基本不变，开场读一次就够；`use` 切换不重读，避免每次切库都建连。
+    fn refresh_databases(&mut self) {
+        let config = self.config.clone();
+        let session = self.session.clone();
+        let spawned = std::thread::Builder::new()
+            .name("fluxdb-mongo-cli-databases".to_string())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || {
+                if let Ok(objects) = fluxdb_connectors::connector_for(&config)
+                    .and_then(|connector| connector.list_objects(None))
+                {
+                    session
+                        .set_databases(objects.into_iter().map(|object| object.path.name).collect());
+                }
+            });
+        if spawned.is_err() {
+            tracing::debug!(
+                connection_id = self.config.id.0,
+                "MongoDB 命令行无法启动库名读取线程，use 补全退化为无候选"
+            );
+        }
+    }
+
+    /// 后台重读当前库的集合名（补全用）。
+    ///
+    /// 读列表要建连，慢的时候能拖到超时；同步做会让 `use` 之后的提示符一直不出现。
+    /// 失败只让补全少几条候选，不影响输入。已有一次在途时直接跳过，避免连打 `use`
+    /// 堆出一串并发读。
+    fn refresh_collections(&mut self) {
+        let database = self.session.database();
+        if database.trim().is_empty() {
+            return;
+        }
+        // 同一个库已在读就直接复用；换了库则必须再发一次，否则新库永远拿不到候选。
+        let refreshing = self.refreshing.clone();
+        match refreshing.lock() {
+            Ok(mut in_flight) if in_flight.as_deref() != Some(database.as_str()) => {
+                *in_flight = Some(database.clone());
+            }
+            _ => return,
+        }
+        let config = self.config.clone();
+        let session = self.session.clone();
+        let spawned = std::thread::Builder::new()
+            .name("fluxdb-mongo-cli-collections".to_string())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || {
+                let objects = fluxdb_connectors::connector_for(&config).and_then(|connector| {
+                    connector.list_objects(Some(&fluxdb_core::ObjectPath {
+                        connection_id: config.id,
+                        database: Some(database.clone()),
+                        schema: None,
+                        name: String::new(),
+                        kind: fluxdb_core::ObjectKind::Database,
+                    }))
+                });
+                // 读取期间又切了库：这份结果属于旧库，丢掉，别覆盖新库的候选。
+                if let Ok(objects) = objects
+                    && session.database() == database
+                {
+                    session.set_collections(
+                        objects.into_iter().map(|object| object.path.name).collect(),
+                    );
+                }
+                if let Ok(mut in_flight) = refreshing.lock()
+                    && in_flight.as_deref() == Some(database.as_str())
+                {
+                    *in_flight = None;
+                }
+            });
+        if spawned.is_err() {
+            // 线程起不来就把标记清掉，否则此后同一个库再也不会刷新。
+            if let Ok(mut in_flight) = self.refreshing.lock() {
+                *in_flight = None;
+            }
+        }
     }
 
     /// 处理一段按键字节。
@@ -159,16 +310,28 @@ impl MongoRepl {
                     if self.escape.is_empty() {
                         echo.extend_from_slice(b"\r\n");
                         commands.push(std::mem::take(&mut self.line));
+                        self.cursor = 0;
                     } else {
                         self.escape.clear();
                     }
                 }
-                // 退格：按整字符删除（宽字符占 2 列，退格需移动 2 列再抹 2 列）。
+                // 退格：删光标左侧整个字符。光标不在行尾时整行重画，否则只抹掉那几个单元。
                 0x7f | 0x08 => {
-                    if self.escape.is_empty() && let Some(ch) = self.line.pop() {
-                        let width = fluxdb_core::terminal::char_cell_width(ch).max(1);
-                        for _ in 0..width {
-                            echo.extend_from_slice(b"\x08 \x08");
+                    if !self.escape.is_empty() {
+                        self.escape.clear();
+                    } else if let Some(start) = self.char_before(self.cursor) {
+                        let width = self.line[start..self.cursor]
+                            .chars()
+                            .map(|ch| fluxdb_core::terminal::char_cell_width(ch).max(1) as usize)
+                            .sum::<usize>();
+                        self.line.replace_range(start..self.cursor, "");
+                        self.cursor = start;
+                        if self.cursor == self.line.len() {
+                            for _ in 0..width {
+                                echo.extend_from_slice(b"\x08 \x08");
+                            }
+                        } else {
+                            self.redraw(&mut echo);
                         }
                     }
                 }
@@ -176,6 +339,7 @@ impl MongoRepl {
                 0x03 | 0x15 => {
                     self.escape.clear();
                     self.line.clear();
+                    self.cursor = 0;
                     echo.extend_from_slice(b"\r");
                     echo.extend_from_slice(self.prompt().as_bytes());
                     echo.extend_from_slice(b"\x1b[K");
@@ -186,6 +350,12 @@ impl MongoRepl {
                     echo.extend_from_slice(b"\x1b[2J\x1b[H");
                     echo.extend_from_slice(self.prompt().as_bytes());
                     echo.extend_from_slice(self.line.as_bytes());
+                    // 光标回到输入行内的原位置（重画后光标停在行尾）。
+                    let back: usize = self.line[self.cursor..]
+                        .chars()
+                        .map(|ch| fluxdb_core::terminal::char_cell_width(ch).max(1) as usize)
+                        .sum();
+                    self.move_cursor_left(&mut echo, back);
                 }
                 // Ctrl+D：结束会话（与 shell 一致）。
                 0x04 => {
@@ -194,24 +364,38 @@ impl MongoRepl {
                     let _ = out.send(Vec::new());
                     return;
                 }
+                // Tab：补全走桌面端的补全浮层（`MongoCliCompletion`），这里不重复实现。
+                b'\t' => {}
                 0x1b => {
                     self.escape.clear();
                     self.escape.push(*byte);
                 }
                 _ if !self.escape.is_empty() => {
                     self.escape.push(*byte);
-                    if self.escape.starts_with(b"\x1b[") && self.escape.len() == 3 {
+                    // CSI 序列以 0x40..=0x7e 的字节结束（`ESC[A`、`ESC[3~` 都是），
+                    // 按终止字节收尾才能等到 4 字节的 `ESC[3~`；固定长度会把后续按键一起吞掉。
+                    // 至少 `ESC[` + 1 字节才算完整：`[` 自己也在 0x40..=0x7e 区间里。
+                    let complete = self.escape.len() >= 3
+                        && self
+                            .escape
+                            .last()
+                            .is_some_and(|byte| matches!(byte, 0x40..=0x7e));
+                    if complete {
                         let sequence = std::mem::take(&mut self.escape);
                         match sequence.as_slice() {
                             b"\x1b[A" => self.history_previous(&mut echo),
                             b"\x1b[B" => self.history_next(&mut echo),
+                            b"\x1b[C" => self.cursor_right(&mut echo),
+                            b"\x1b[D" => self.cursor_left(&mut echo),
+                            b"\x1b[H" => self.cursor_home(&mut echo),
+                            b"\x1b[F" => self.cursor_end(&mut echo),
+                            b"\x1b[3~" => self.delete_at_cursor(&mut echo),
                             _ => {}
                         }
                     } else if !self.escape.starts_with(b"\x1b[") || self.escape.len() > 8 {
                         self.escape.clear();
                     }
                 }
-                b'\t' => {}
                 _ => {
                     self.pending.push(*byte);
                     // 只有完整 UTF-8 前缀才消费；不完整尾巴留到下一段。
@@ -230,9 +414,21 @@ impl MongoRepl {
                             if ch.is_control() {
                                 continue;
                             }
-                            self.line.push(ch);
+                            self.line.insert(self.cursor, ch);
+                            self.cursor += ch.len_utf8();
                             let mut buffer = [0u8; 4];
                             echo.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
+                            // 光标不在行尾：后面的内容要重新画一遍，并把光标退回插入点之后。
+                            if self.cursor < self.line.len() {
+                                let rest = self.line[self.cursor..].to_string();
+                                echo.extend_from_slice(rest.as_bytes());
+                                echo.extend_from_slice(b"\x1b[K");
+                                let back: usize = rest
+                                    .chars()
+                                    .map(|c| fluxdb_core::terminal::char_cell_width(c).max(1) as usize)
+                                    .sum();
+                                self.move_cursor_left(&mut echo, back);
+                            }
                         }
                     } else if self.pending.len() > 4 {
                         self.pending.clear();
@@ -249,7 +445,7 @@ impl MongoRepl {
         }
     }
 
-    /// 执行一条命令并返回终端要回显的字节（结果 / 错误 + 新 prompt）。
+    /// 执行一条语句并返回终端要回显的字节（结果 / 错误 + 新 prompt）。
     fn execute(&mut self, command: &str) -> Vec<u8> {
         let command = command.trim().to_string();
         let mut out = String::new();
@@ -258,25 +454,38 @@ impl MongoRepl {
             return out.into_bytes();
         }
         if command.eq_ignore_ascii_case("exit") || command.eq_ignore_ascii_case("quit") {
-            out.push_str("已退出 MongoDB 命令行。\r\n");
+            out.push_str("MongoDB shell exited.\r\n");
             return out.into_bytes();
         }
         if self.history.last() != Some(&command) {
             self.history.push(command.clone());
         }
         self.history_cursor = self.history.len();
-        match fluxdb_connectors::connector_for(&self.config)
-            .and_then(|connector| {
-                connector.mongo_run_command(self.config.id, &self.database, &command)
-            }) {
+        let database = self.session.database();
+        match fluxdb_connectors::connector_for(&self.config).and_then(|connector| {
+            connector.mongo_shell(self.config.id, &database, &command)
+        }) {
             Ok(result) => {
-                out.push_str(&result);
-                if !result.ends_with('\n') {
-                    out.push_str("\r\n");
+                if let Some(database) = result.database {
+                    // `use` 只切换本会话的库：prompt 与补全列表跟着换，连接配置不动。
+                    self.session.set_database(database);
+                    self.refresh_collections();
+                }
+                if !result.output.is_empty() {
+                    // 连接器给的排版文本用 `\n`；终端里必须补 `\r`，否则下一行会接着上一行的列。
+                    for line in result.output.trim_end_matches('\n').split('\n') {
+                        out.push_str(line);
+                        out.push_str("\r\n");
+                    }
                 }
             }
             Err(error) => {
-                out.push_str(&format!("error: {}\r\n", error.message));
+                // 错误按行回显：多行提示（用法说明）在终端里逐行换行才对齐。
+                for line in error.message.lines() {
+                    out.push_str("\x1b[31m");
+                    out.push_str(line.trim_end());
+                    out.push_str("\x1b[0m\r\n");
+                }
             }
         }
         out.push_str(&self.prompt());
@@ -289,6 +498,7 @@ impl MongoRepl {
         }
         self.history_cursor -= 1;
         self.line = self.history[self.history_cursor].clone();
+        self.cursor = self.line.len();
         self.redraw(echo);
     }
 
@@ -302,31 +512,104 @@ impl MongoRepl {
             .get(self.history_cursor)
             .cloned()
             .unwrap_or_default();
+        self.cursor = self.line.len();
         self.redraw(echo);
     }
 
-    /// 回车重画当前输入行（历史翻页用）。
+    /// 回车重画当前输入行（历史翻页 / 中途编辑用），光标回到 `cursor` 处。
     fn redraw(&self, echo: &mut Vec<u8>) {
         echo.extend_from_slice(b"\r");
         echo.extend_from_slice(self.prompt().as_bytes());
         echo.extend_from_slice(self.line.as_bytes());
         echo.extend_from_slice(b"\x1b[K");
+        let back: usize = self.line[self.cursor..]
+            .chars()
+            .map(|ch| fluxdb_core::terminal::char_cell_width(ch).max(1) as usize)
+            .sum();
+        self.move_cursor_left(echo, back);
+    }
+
+    /// `cursor` 左侧那个字符的字节起点；已在行首返回 `None`。
+    fn char_before(&self, cursor: usize) -> Option<usize> {
+        self.line[..cursor].char_indices().next_back().map(|(i, _)| i)
+    }
+
+    fn cursor_left(&mut self, echo: &mut Vec<u8>) {
+        let Some(start) = self.char_before(self.cursor) else {
+            return;
+        };
+        let width = self.line[start..self.cursor]
+            .chars()
+            .map(|ch| fluxdb_core::terminal::char_cell_width(ch).max(1) as usize)
+            .sum();
+        self.cursor = start;
+        self.move_cursor_left(echo, width);
+    }
+
+    /// Delete：删光标右侧整个字符。
+    fn delete_at_cursor(&mut self, echo: &mut Vec<u8>) {
+        let Some(ch) = self.line[self.cursor..].chars().next() else {
+            return;
+        };
+        self.line
+            .replace_range(self.cursor..self.cursor + ch.len_utf8(), "");
+        self.redraw(echo);
+    }
+
+    fn cursor_right(&mut self, echo: &mut Vec<u8>) {
+        let Some(ch) = self.line[self.cursor..].chars().next() else {
+            return;
+        };
+        let width = fluxdb_core::terminal::char_cell_width(ch).max(1) as usize;
+        self.cursor += ch.len_utf8();
+        // 宽字符占两格，向右移动要按单元列走。
+        echo.extend_from_slice(format!("\x1b[{width}C").as_bytes());
+    }
+
+    fn cursor_home(&mut self, echo: &mut Vec<u8>) {
+        let width: usize = self.line[..self.cursor]
+            .chars()
+            .map(|ch| fluxdb_core::terminal::char_cell_width(ch).max(1) as usize)
+            .sum();
+        self.cursor = 0;
+        self.move_cursor_left(echo, width);
+    }
+
+    fn cursor_end(&mut self, echo: &mut Vec<u8>) {
+        let rest = self.line[self.cursor..].to_string();
+        let width: usize = rest
+            .chars()
+            .map(|ch| fluxdb_core::terminal::char_cell_width(ch).max(1) as usize)
+            .sum();
+        self.cursor = self.line.len();
+        if width > 0 {
+            echo.extend_from_slice(format!("\x1b[{width}C").as_bytes());
+        }
+    }
+
+    fn move_cursor_left(&self, echo: &mut Vec<u8>, cells: usize) {
+        if cells > 0 {
+            echo.extend_from_slice(format!("\x1b[{cells}D").as_bytes());
+        }
     }
 }
 
-/// MongoDB 命令行会话 adapter：命名 / prompt / 状态文案（spawn 参数不会被使用）。
+/// MongoDB shell 会话 adapter：命名 / prompt / 状态文案（spawn 参数不会被使用）。
 pub struct MongoCliAdapter {
     connection_id: fluxdb_core::ConnectionId,
-    database: String,
     connection_name: String,
+    session: MongoCliSession,
 }
 
 impl MongoCliAdapter {
-    pub fn new(config: &fluxdb_core::ConnectionConfig, database: String) -> Self {
+    pub fn new(
+        config: &fluxdb_core::ConnectionConfig,
+        session: MongoCliSession,
+    ) -> Self {
         Self {
             connection_id: config.id,
-            database,
             connection_name: config.name.clone(),
+            session,
         }
     }
 }
@@ -339,19 +622,21 @@ impl mterm::TerminalSessionAdapter for MongoCliAdapter {
     fn session_key(&self) -> mterm::TerminalSessionKey {
         mterm::TerminalSessionKey::Mongo {
             connection_id: self.connection_id.0,
-            database: self.database.clone(),
+            database: self.session.database(),
         }
     }
 
     fn title(&self) -> String {
-        format!("MongoDB CLI - {}", self.database)
+        format!("MongoDB Shell - {}", self.session.database())
     }
 
     fn status_text(&self, state: mterm::TerminalSessionState) -> String {
         match state {
             mterm::TerminalSessionState::Connecting => "连接中…".to_string(),
             mterm::TerminalSessionState::PtyRunning => "会话已建立".to_string(),
-            mterm::TerminalSessionState::Ready => format!("{} · 就绪", self.database),
+            mterm::TerminalSessionState::Ready => {
+                format!("{} · 就绪", self.session.database())
+            }
             mterm::TerminalSessionState::Busy => "执行中…".to_string(),
             mterm::TerminalSessionState::AwaitingConfirmation => "等待确认".to_string(),
             mterm::TerminalSessionState::Exited => "已退出".to_string(),
@@ -376,7 +661,7 @@ impl mterm::TerminalSessionAdapter for MongoCliAdapter {
     fn on_output(&mut self, _bytes: &[u8], _state: &mut mterm::TerminalSessionState) {}
 
     fn prompt(&self) -> String {
-        format!("{}> ", self.database)
+        self.session.prompt()
     }
 
     /// Ctrl+C 不下发任何字节：REPL 侧把 Ctrl+C 当作「清空当前输入行」处理，会话保持存活。
@@ -387,20 +672,20 @@ impl mterm::TerminalSessionAdapter for MongoCliAdapter {
     fn meta(&self) -> std::collections::BTreeMap<String, String> {
         let mut meta = std::collections::BTreeMap::new();
         meta.insert("connection_id".to_string(), self.connection_id.0.to_string());
-        meta.insert("database".to_string(), self.database.clone());
+        meta.insert("database".to_string(), self.session.database());
         meta.insert("profile".to_string(), self.connection_name.clone());
         meta
     }
 }
 
-/// MongoDB 命令行补全 / 危险命令识别。
-pub struct MongoCliCompletion;
+/// MongoDB shell 补全：顶层关键字 / `db.` 后的集合名 / `db.<集合>.` 后的方法名。
+pub struct MongoCliCompletion {
+    session: MongoCliSession,
+}
 
 impl MongoCliCompletion {
-    fn is_dangerous_impl(input: &str) -> bool {
-        DANGEROUS_MONGO_COMMANDS
-            .iter()
-            .any(|command| input.contains(&format!("\"{command}\"")))
+    pub fn new(session: MongoCliSession) -> Self {
+        Self { session }
     }
 
     /// 当前 token 的替换区间：输入行末尾连续标识符字符。
@@ -409,11 +694,96 @@ impl MongoCliCompletion {
         let start = input
             .char_indices()
             .rev()
-            .take_while(|(_, ch)| ch.is_ascii_alphanumeric() || *ch == '_')
+            .take_while(|(_, ch)| ch.is_alphanumeric() || *ch == '_')
             .last()
             .map(|(index, _)| index)
             .unwrap_or(end);
         (start, end)
+    }
+
+    /// 按输入行的形状给出候选（只补名字，不猜参数）。
+    ///
+    /// 集合名一律用 `db["name"]` 方括号形式（与 Compass 一致）：集合名里合法地可以带点，
+    /// `db.a.b.find(` 在解析器眼里是「集合 a、方法 b」，只有方括号能无歧义表达。
+    fn candidates(&self, input: &str) -> Vec<String> {
+        // `use fl`：补库名（后面还有别的词就说明库名写完了）。
+        if let Some(rest) = input.strip_prefix("use ")
+            && !rest.contains(char::is_whitespace)
+        {
+            return self
+                .session
+                .databases()
+                .into_iter()
+                .map(|name| format!("use {name}"))
+                .collect();
+        }
+        if let Some(rest) = input.strip_prefix("db[") {
+            return Self::bracket_candidates(self, rest);
+        }
+        if let Some(rest) = input.strip_prefix("db.") {
+            if let Some(dot) = rest.find('.') {
+                let collection = &rest[..dot];
+                let after = &rest[dot + 1..];
+                // 走到 `(` 之后就不给候选了：参数结构没法按名字猜。
+                if !collection.is_empty() && !after.contains('(') {
+                    return MONGO_SHELL_METHODS
+                        .iter()
+                        .map(|name| format!("db[\"{collection}\"].{name}("))
+                        .collect();
+                }
+            }
+            // `db.eve` / `db.`：补集合名。
+            return self
+                .session
+                .collections()
+                .into_iter()
+                .map(|name| format!("db[\"{name}\"]."))
+                .collect();
+        }
+        MONGO_SHELL_KEYWORDS
+            .iter()
+            .map(|keyword| (*keyword).to_string())
+            .collect()
+    }
+
+    /// 把 `db.<集合>.` 的输入改写成方括号写法，供候选前缀比对。
+    ///
+    /// 用户用点写法打出来的行必须与方括号候选比得上，否则一个候选都出不来。集合名的边界
+    /// 是它后面的 `.`：还没出现点（`db.eve`）就说明集合名还在输入中，保持引号未闭合。
+    fn canonical_input(input: &str) -> String {
+        let Some(rest) = input.strip_prefix("db.") else {
+            return input.to_string();
+        };
+        // 已经带 `(`：语句写完了，不再补。
+        if rest.contains('(') {
+            return input.to_string();
+        }
+        match rest.find('.') {
+            Some(dot) => format!("db[\"{}\"].{}", &rest[..dot], &rest[dot + 1..]),
+            None => format!("db[\"{rest}"),
+        }
+    }
+
+    /// `db["…"]` 之后的候选：`"]` 还没出现就是还在写集合名，出现之后补方法名。
+    fn bracket_candidates(&self, rest: &str) -> Vec<String> {
+        match rest.split_once("\"]") {
+            // `db[` / `db["eve`：补集合名。
+            None => self
+                .session
+                .collections()
+                .into_iter()
+                .map(|name| format!("db[\"{name}\"]."))
+                .collect(),
+            // `db["events"].` / `db["events"].fi`：补方法名。
+            Some((name, after)) if !after.contains('(') => {
+                let name = name.trim_start_matches('"');
+                MONGO_SHELL_METHODS
+                    .iter()
+                    .map(|method| format!("db[\"{name}\"].{method}("))
+                    .collect()
+            }
+            Some(_) => Vec::new(),
+        }
     }
 }
 
@@ -423,17 +793,27 @@ impl mterm::TerminalCompletionAdapter for MongoCliCompletion {
     }
 
     fn complete(&self, ctx: &mterm::TerminalCommandContext) -> Vec<mterm::TerminalCompletionItem> {
-        let (start, end) = Self::token_range(&ctx.input);
-        let token = &ctx.input[start..end];
-        MONGO_COMMAND_KEYS
-            .iter()
-            .filter(|key| key.starts_with(token))
-            .map(|key| mterm::TerminalCompletionItem {
-                label: (*key).to_string(),
-                insert_text: (*key).to_string(),
-                replace_start: start,
-                replace_end: end,
-                detail: Some(format!("{key}")),
+        // 候选统一用方括号拼集合名，用户敲的却是 `db.events.`。比对前把输入也转成
+        // 方括号形式，否则前缀永远对不上（`db.events.` vs `db["events"].`）会一个候选都不出。
+        let typed = Self::canonical_input(&ctx.input);
+        let (start, end) = Self::token_range(&typed);
+        let prefix = &typed[..start];
+        let token = &typed[start..end];
+        // 候选是**整行**文本（带着 `db.` / 集合名前缀），因此替换区间是整行。
+        //
+        // 区间用字节偏移（组件层按字节发退格）。多发的退格落在空输入行上会被忽略，
+        // 不会吃掉提示符，因此含中文的输入也安全。
+        self.candidates(&typed)
+            .into_iter()
+            .filter(|candidate| {
+                candidate.starts_with(prefix) && candidate[prefix.len()..].starts_with(token)
+            })
+            .map(|candidate| mterm::TerminalCompletionItem {
+                label: candidate.clone(),
+                insert_text: candidate.clone(),
+                replace_start: 0,
+                replace_end: ctx.input.len(),
+                detail: None,
                 kind: mterm::TerminalCompletionKind::Command,
                 priority: mterm::TerminalCompletionPriority::Normal,
             })
@@ -448,8 +828,15 @@ impl mterm::TerminalCompletionAdapter for MongoCliCompletion {
         }
     }
 
-    fn is_dangerous(&self, input: &str) -> bool {
-        Self::is_dangerous_impl(input)
+    /// 写操作已在连接器解析层拒绝（只读终端），这里不需要二次确认。
+    fn is_dangerous(&self, _input: &str) -> bool {
+        false
+    }
+
+    /// 边打字边出候选（mongosh / Compass 的行为）。候选来自本地关键字与集合名，
+    /// 不用等任何请求，所以能跟着回显逐字刷新。
+    fn completion_on_typing(&self) -> bool {
+        true
     }
 }
 
@@ -457,7 +844,7 @@ impl mterm::TerminalCompletionAdapter for MongoCliCompletion {
 mod mongo_repl_input_tests {
     use super::*;
 
-    /// 构造一个不连库的 REPL（配置指向不可达地址；本组用例只测输入处理）。
+    /// 构造一个不连库的 REPL（配置指向不可达地址；本组用例只测输入处理与补全）。
     fn repl() -> (MongoRepl, Sender<Vec<u8>>, Receiver<Vec<u8>>) {
         let config = fluxdb_core::ConnectionConfig {
             id: fluxdb_core::ConnectionId(1),
@@ -478,7 +865,11 @@ mod mongo_repl_input_tests {
             oracle_profile: None,
         };
         let (tx, rx) = std::sync::mpsc::channel();
-        (MongoRepl::new(config, "demo".into()), tx, rx)
+        (
+            MongoRepl::new(config, MongoCliSession::new("demo".into())),
+            tx,
+            rx,
+        )
     }
 
     fn drain(rx: &Receiver<Vec<u8>>) -> Vec<u8> {
@@ -490,12 +881,27 @@ mod mongo_repl_input_tests {
     }
 
     #[test]
-    fn banner_and_prompt_use_the_target_database() {
+    fn prompt_shows_the_current_database_like_compass() {
+        let (repl, _tx, _rx) = repl();
+        assert_eq!(repl.prompt(), "demo> ");
+    }
+
+    #[test]
+    fn greeting_is_only_the_prompt() {
         let (mut repl, tx, rx) = repl();
         repl.greet(&tx);
-        let output = String::from_utf8_lossy(&drain(&rx)).to_string();
-        assert!(output.contains("demo"), "{output}");
-        assert!(output.ends_with("demo> "), "{output}");
+        // 开场不打用途说明：第一行就是提示符，别把函数签名塞进终端。
+        assert_eq!(String::from_utf8_lossy(&drain(&rx)), "demo> ");
+    }
+
+    #[test]
+    fn use_switches_the_prompt_and_stays_in_the_session() {
+        let (mut repl, _tx, _rx) = repl();
+        let rendered = String::from_utf8_lossy(&repl.execute("use other_db")).to_string();
+        assert!(rendered.contains("switched to db other_db"), "{rendered}");
+        assert!(rendered.ends_with("other_db> "), "{rendered}");
+        // 库只属于会话：adapter 的 prompt 必须同步，否则渲染层光标会错位。
+        assert_eq!(repl.session.prompt(), "other_db> ");
     }
 
     #[test]
@@ -518,7 +924,7 @@ mod mongo_repl_input_tests {
     #[test]
     fn ctrl_c_and_ctrl_u_clear_the_current_line_without_executing() {
         let (mut repl, tx, rx) = repl();
-        repl.feed("dropDatabase".as_bytes(), &tx);
+        repl.feed("db.events.find(".as_bytes(), &tx);
         let _ = drain(&rx);
         repl.feed(b"\x03", &tx);
         let output = drain(&rx);
@@ -563,44 +969,179 @@ mod mongo_repl_input_tests {
     #[test]
     fn history_navigation_redraws_with_erase_to_end_of_line() {
         let (mut repl, tx, rx) = repl();
-        repl.history = vec!["{\"ping\": 1}".into(), "{\"buildInfo\": 1}".into()];
+        repl.history = vec!["show dbs".into(), "show collections".into()];
         repl.history_cursor = repl.history.len();
         repl.feed(b"\x1b[A", &tx);
         let output = String::from_utf8_lossy(&drain(&rx)).to_string();
-        assert_eq!(repl.line, "{\"buildInfo\": 1}");
+        assert_eq!(repl.line, "show collections");
         assert!(output.ends_with("\x1b[K"), "{output}");
         repl.feed(b"\x1b[A", &tx);
-        assert_eq!(repl.line, "{\"ping\": 1}");
+        assert_eq!(repl.line, "show dbs");
         repl.feed(b"\x1b[B", &tx);
-        assert_eq!(repl.line, "{\"buildInfo\": 1}");
+        assert_eq!(repl.line, "show collections");
+    }
+
+    #[test]
+    fn arrow_keys_move_the_cursor_and_typing_inserts_at_it() {
+        let (mut repl, tx, rx) = repl();
+        repl.feed(b"find()", &tx);
+        let _ = drain(&rx);
+
+        // ← 两次：光标落在 `find` 之后、`()` 之前。
+        repl.feed(b"\x1b[D\x1b[D", &tx);
+        let output = String::from_utf8_lossy(&drain(&rx)).to_string();
+        assert_eq!(output, "\x1b[1D\x1b[1D", "每次只动一格: {output}");
+        assert_eq!(repl.cursor, 4);
+
+        // 中途插入：后面的内容重画一遍，光标退回插入点之后。
+        repl.feed(b"X", &tx);
+        assert_eq!(repl.line, "findX()");
+        assert_eq!(repl.cursor, 5);
+        let output = String::from_utf8_lossy(&drain(&rx)).to_string();
+        assert!(output.contains("()\x1b[K"), "行尾内容要重画: {output}");
+        assert!(output.ends_with("\x1b[2D"), "光标退回插入点: {output}");
+
+        // → 回到行尾后就停住，不越界。
+        repl.feed(b"\x1b[C\x1b[C\x1b[C", &tx);
+        assert_eq!(repl.cursor, "findX()".len());
+    }
+
+    #[test]
+    fn cursor_moves_by_cells_for_wide_characters() {
+        let (mut repl, tx, rx) = repl();
+        repl.feed("中a".as_bytes(), &tx);
+        let _ = drain(&rx);
+        // 先跨过半角的 `a`：一格。
+        repl.feed(b"\x1b[D", &tx);
+        assert_eq!(String::from_utf8_lossy(&drain(&rx)), "\x1b[1D");
+        assert_eq!(repl.cursor, "中".len());
+        // 再跨过 `中`：两个单元格、三个字节，按键只发一次。
+        repl.feed(b"\x1b[D", &tx);
+        assert_eq!(String::from_utf8_lossy(&drain(&rx)), "\x1b[2D");
+        assert_eq!(repl.cursor, 0);
+    }
+
+    #[test]
+    fn backspace_and_delete_work_at_the_cursor() {
+        let (mut repl, tx, rx) = repl();
+        repl.feed("abc".as_bytes(), &tx);
+        let _ = drain(&rx);
+        repl.feed(b"\x1b[D", &tx); // 光标在 b 之后
+        let _ = drain(&rx);
+        repl.feed(b"\x7f", &tx);
+        assert_eq!(repl.line, "ac", "退格删光标左侧字符");
+        assert_eq!(repl.cursor, 1);
+
+        repl.feed(b"\x1b[3~", &tx);
+        assert_eq!(repl.line, "a", "Delete 删光标右侧字符（4 字节序列不能被吞）");
+    }
+
+    #[test]
+    fn home_and_end_jump_to_the_line_edges() {
+        let (mut repl, tx, rx) = repl();
+        repl.feed(b"show dbs", &tx);
+        let _ = drain(&rx);
+        repl.feed(b"\x1b[H", &tx);
+        assert_eq!(repl.cursor, 0);
+        assert_eq!(String::from_utf8_lossy(&drain(&rx)), "\x1b[8D");
+        repl.feed(b"\x1b[F", &tx);
+        assert_eq!(repl.cursor, 8);
+        assert_eq!(String::from_utf8_lossy(&drain(&rx)), "\x1b[8C");
     }
 
     #[test]
     fn exit_command_reports_without_touching_the_database() {
         let (mut repl, _tx, _rx) = repl();
         let rendered = String::from_utf8_lossy(&repl.execute(" quit ")).to_string();
-        assert!(rendered.contains("已退出"), "{rendered}");
+        assert!(rendered.contains("exited"), "{rendered}");
         assert!(repl.history.is_empty());
     }
 
     #[test]
-    fn completion_offers_known_commands_and_marks_writes_dangerous() {
-        let completion = MongoCliCompletion;
-        let items = completion.complete(&input("dro"));
-        assert!(
-            items.iter().any(|item| item.insert_text == "dropDatabase"),
-            "dropDatabase 应出现在补全里"
-        );
-        assert!(MongoCliCompletion::is_dangerous_impl(r#"{ "dropDatabase": 1 }"#));
-        assert!(!MongoCliCompletion::is_dangerous_impl(r#"{ "ping": 1 }"#));
+    fn syntax_errors_are_echoed_line_by_line_in_red() {
+        let (mut repl, _tx, _rx) = repl();
+        let rendered = String::from_utf8_lossy(&repl.execute("db.events.insertOne({})")).to_string();
+        assert!(rendered.contains("read-only"), "{rendered}");
+        // 错误行带 ANSI 红色，且以 CRLF 结束——否则下一行会接着上一行的列。
+        assert!(rendered.contains("\x1b[31m"), "{rendered}");
+        assert!(rendered.contains("\r\n"), "{rendered}");
+        assert!(rendered.ends_with("demo> "), "{rendered}");
     }
 
-    /// 构造补全上下文（补全只看输入行走尾的 token）。
-    fn input(text: &str) -> mterm::TerminalCommandContext {
+    #[test]
+    fn completion_offers_keywords_while_typing_a_new_statement() {
+        let completion = MongoCliCompletion::new(MongoCliSession::new("demo".into()));
+        let items = completion.complete(&context("sh"));
+        assert!(
+            items.iter().any(|item| item.insert_text == "show dbs"),
+            "{items:?}"
+        );
+        assert!(items.iter().any(|item| item.insert_text == "show collections"));
+    }
+
+    #[test]
+    fn completion_offers_collections_then_methods_and_replaces_the_whole_line() {
+        let session = MongoCliSession::new("demo".into());
+        let mut database = session.database.lock().unwrap();
+        *database = "demo".to_string();
+        drop(database);
+        session.set_collections(vec!["events".into(), "orders".into()]);
+        let completion = MongoCliCompletion::new(session);
+
+        let collections = completion.complete(&context("db.ev"));
+        assert_eq!(collections.len(), 1, "{collections:?}");
+        // 集合名用方括号：集合名允许带点，`db.a.b.find(` 会被解析成「集合 a、方法 b」。
+        assert_eq!(collections[0].insert_text, "db[\"events\"].");
+        assert_eq!(collections[0].replace_start, 0);
+        assert_eq!(collections[0].replace_end, "db.ev".len(), "整行替换");
+
+        let methods = completion.complete(&context("db.events.co"));
+        assert!(
+            methods
+                .iter()
+                .any(|item| item.insert_text == "db[\"events\"].countDocuments("),
+            "{methods:?}"
+        );
+        assert!(
+            methods
+                .iter()
+                .all(|item| item.replace_end == "db.events.co".len()),
+            "方法候选同样替换整行"
+        );
+    }
+
+    #[test]
+    fn completion_walks_the_bracket_form_and_database_names() {
+        let session = MongoCliSession::new("demo".into());
+        session.set_collections(vec!["events".into()]);
+        session.set_databases(vec!["admin".into(), "fluxdb_demo".into()]);
+        let completion = MongoCliCompletion::new(session);
+
+        // `use fl` 补库名（开场后台读一次，切库不重读）。
+        let databases = completion.complete(&context("use fl"));
+        assert_eq!(databases.len(), 1, "{databases:?}");
+        assert_eq!(databases[0].insert_text, "use fluxdb_demo");
+
+        // 方括号进行中：还没闭合引号就补集合名。
+        let opening = completion.complete(&context("db[\"eve"));
+        assert_eq!(opening[0].insert_text, "db[\"events\"].", "{opening:?}");
+
+        // 方括号闭合后按方法名补。
+        let methods = completion.complete(&context("db[\"events\"].fi"));
+        assert!(
+            methods
+                .iter()
+                .any(|item| item.insert_text == "db[\"events\"].find("),
+            "{methods:?}"
+        );
+    }
+
+    /// 构造补全上下文（补全按整行给出候选）。
+    fn context(text: &str) -> mterm::TerminalCommandContext {
         mterm::TerminalCommandContext {
             input: text.to_string(),
             cursor: text.len(),
-            prompt: String::new(),
+            prompt: "demo> ".to_string(),
             kind: mterm::TerminalSessionKind::MongoCli,
             meta: std::collections::BTreeMap::new(),
         }

@@ -62,6 +62,8 @@ impl Render for TerminalComponent {
         let component = cx.entity();
         div()
             .id(("terminal", component.entity_id()))
+            // 仅调试构建记录：端到端用例靠它定位终端表面并点击取得焦点。
+            .debug_selector(|| "terminal-surface".to_string())
             .flex_1()
             .size_full()
             .relative()
@@ -131,79 +133,177 @@ impl Render for TerminalComponent {
                     cx.stop_propagation();
                 }
             })
-            .child(TerminalCanvas {
-                component: component.clone(),
-            })
+            // 画布同样绝对定位并铺满：它若留在流内，绝对定位的补全浮层就以它的底边为
+            // 静态基准，`top(N)` 会落到容器底部之外（面板比窗口高时直接被裁掉）。
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(TerminalCanvas {
+                        component: component.clone(),
+                    }),
+            )
             .when(self.completion_active(), |this| {
-                // 补全浮层：叠加在终端面上、贴近输入行，供用户用 Tab/Shift-Tab 选、Enter 应用、Esc 关闭。
+                // 补全浮层：贴着输入光标画，候选行用 gpui-component 的 `ListItem`
+                // （悬停 / 选中 / 键盘高亮都走同一套主题色，与编辑器补全浮层一致）。
                 let items = self.completion_items.clone();
                 let selected = self.completion_index;
-                this.child(completion_popup(
-                    &items,
-                    selected,
-                    ComponentTheme::global(cx).radius_lg,
-                ))
+                let anchor = self.completion_popup_anchor();
+                let scroll = self.completion_scroll.clone();
+                let theme = ComponentTheme::global(cx);
+                let hover_entity = component.clone();
+                let click_entity = component.clone();
+                // 走 deferred + anchored（与 filter_ui/popover.rs 同一套）：浮层按窗口坐标绘制，
+                // 不受终端面板 `overflow_hidden` 裁切。写死成面板子元素的话，超出行高的部分
+                // 会被切掉，用户看到的就是「只露出一条边」。
+                this.child(
+                    gpui::deferred(
+                        gpui::anchored()
+                            .anchor(gpui::Anchor::TopLeft)
+                            .position(anchor)
+                            // 光标在行尾时浮层会顶到右边缘，交给 anchored 夹回窗口内。
+                            .snap_to_window_with_margin(px(8.))
+                            .child(completion_popup(
+                                &items,
+                                selected,
+                                &scroll,
+                                theme.radius_lg,
+                                &theme.colors,
+                                move |index, cx| {
+                                    hover_entity.update(cx, |comp, cx| {
+                                        comp.select_completion(index, cx);
+                                    });
+                                },
+                                move |index, cx| {
+                                    click_entity.update(cx, |comp, cx| {
+                                        comp.accept_completion(index, cx);
+                                    });
+                                },
+                            )),
+                    )
+                    .with_priority(2),
+                )
             })
+
     }
 }
 
-/// 渲染补全候选浮层（绝对定位于终端左下角，覆盖输入行区域）。
+/// 渲染补全候选浮层的面板本体（位置由 `completion_popup_anchor` + `anchored` 决定）。
+///
+/// 候选行用 gpui-component 的 `ListItem`：悬停底色、选中底色、内边距、字号回落都由组件
+/// 按主题给，和编辑器补全浮层是同一套观感；这里只锁行高与字号（终端是 12px 等宽）。
+/// 底色不用 `popover`——浅色主题下它就是纯白，与终端面板同色，浮层只剩一条边框
+/// （截图上就是「显示出了一点」），所以用 `muted`。
 fn completion_popup(
     items: &[TerminalCompletionItem],
     selected: Option<usize>,
+    scroll: &ScrollHandle,
     radius: gpui::Pixels,
+    colors: &gpui_component::ThemeColor,
+    on_hover: impl Fn(usize, &mut App) + 'static,
+    on_click: impl Fn(usize, &mut App) + 'static,
 ) -> impl IntoElement {
+    // 显式给高度：只写 `max_h` 时绝对定位元素仍会被拉伸到上限，一条候选也撑成一整块黑板。
+    let height = crate::TerminalComponent::completion_popup_height(items.len());
+    let row_h = crate::TerminalComponent::COMPLETION_ROW_HEIGHT;
+    let row_hover = std::rc::Rc::new(on_hover);
+    let row_click = std::rc::Rc::new(on_click);
     let rows: Vec<_> = items
         .iter()
         .enumerate()
         .map(|(i, item)| {
-            let is_selected = Some(i) == selected;
             let label = item.label.clone();
             let detail = item.detail.clone();
-            div()
+            let hover = row_hover.clone();
+            let click = row_click.clone();
+            gpui_component::list::ListItem::new(("terminal-completion", i))
+                // 仅调试构建记录：端到端用例据此断言候选行没被外壳裁掉半截。
+                .debug_selector(move || format!("terminal-completion-row:{i}"))
+                // 鼠标划过就改高亮：键盘与鼠标共用 `completion_index`，不会出现两套选中态。
+                .on_mouse_enter(move |_, _, cx| hover(i, cx))
+                // 按下即应用（与编辑器补全一致：点一下就写回输入行，不用再按回车）。
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| click(i, cx))
+                .h(px(row_h))
                 .px_2()
-                .py_0p5()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .when(is_selected, |this| this.bg(rgb(0x33527a)))
+                .rounded(px(3.0))
+                .cursor_pointer()
+                // `ListItem` 自己写死了 `text_base()`（16px），不覆盖的话行框只有 30px、
+                // 字被上下各切一刀——截图上就是「use 只剩上半截」。
+                .text_size(px(TERMINAL_FONT_SIZE))
+                .selected(Some(i) == selected)
                 .child(
                     div()
-                        .text_color(if is_selected {
-                            rgb(0xffffff)
-                        } else {
-                            rgb(0x9aa5b1)
-                        })
-                        .child(label),
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                // 仅调试构建记录：端到端用例据此断言文字没被行框裁掉。
+                                .debug_selector(move || format!("terminal-completion-label:{i}"))
+                                .text_color(colors.popover_foreground)
+                                .child(label),
+                        )
+                        .when(detail.is_some(), |this| {
+                            this.child(
+                                div()
+                                    .text_color(colors.muted_foreground)
+                                    .text_sm()
+                                    .child(detail.unwrap_or_default()),
+                            )
+                        }),
                 )
-                .when(detail.is_some(), |this| {
-                    this.child(
-                        div()
-                            .text_color(rgb(0x6b7280))
-                            .text_sm()
-                            .child(detail.unwrap_or_default()),
-                    )
-                })
         })
         .collect();
 
     div()
         .id("terminal-completion-popup")
-        .absolute()
-        .left_0()
-        .bottom_2()
-        .min_w(px(320.0))
-        .max_h(px(260.0))
-        .overflow_y_scrollbar()
-        .bg(rgb(0x1a1b1e))
-        .shadow_lg()
+        // 仅调试构建记录：端到端用例据此断言浮层真的画出来了。
+        .debug_selector(|| "terminal-completion-popup".to_string())
+        // 位置由外层 `anchored()` 给；这里不再自己定位，否则会与锚点叠加。
+        // 高度按候选数固定；宽度按内容撑开，只给上下限防止缩成一条或铺满屏幕。
+        .h(px(height))
+        .min_w(px(180.0))
+        .max_w(px(520.0))
+        // 背景不能用 `popover`：浅色主题里它就是纯白，与终端面板同色，浮层只剩一条边框
+        // （像素比对了卡片内 (255,255,255) 与面板完全一致）。
+        // `muted` 浅色是 #f5f5f5、深色是 neutral-800，两个主题下都比面板深一档。
+        // 字号也必须显式给：不写就继承根字号（16px 而非终端的 12px），字被行框裁掉半截。
+        .text_size(px(TERMINAL_FONT_SIZE))
+        .line_height(px(TERMINAL_FONT_SIZE + 4.0))
+        .bg(colors.muted)
+        .text_color(colors.popover_foreground)
+        // 阴影与编辑器浮层同一个规格（`0 8 18 rgba(0,0,0,.22)`）：`shadow_md` 太淡，
+        // 浮层压在纯白终端面上时几乎看不出边界。
+        .shadow(vec![gpui_component::box_shadow(
+            px(0.),
+            px(8.),
+            px(18.),
+            px(0.),
+            gpui::hsla(0., 0., 0., 0.22),
+        )])
         .rounded(radius)
         .border_1()
-        .border_color(rgb(0x3a3d42))
-        .px_1()
-        .py_1()
-        .child(div().flex().flex_col().children(rows))
+        .border_color(colors.border)
+        .p(px(4.))
+        // 浮层自己吞掉鼠标与滚轮：否则点候选会同时开始终端选区、滚浮层会翻走终端历史。
+        // 放在最深一层（List 项）之后仍会先跑，所以点击应用不会被打断。
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+        // 候选行直接作为滚动区的子元素：`ScrollHandle::scroll_to_item` 按直接子元素的下标
+        // 滚动，多包一层 flex 容器就只有 0 号子元素，键盘选到第 9 项以后浮层不会跟着滚。
+        .child(
+            div()
+                .id("terminal-completion-scroll")
+                .w_full()
+                .max_h(px(height - 8.0))
+                .flex()
+                .flex_col()
+                .track_scroll(scroll)
+                .overflow_y_scrollbar()
+                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .children(rows),
+        )
 }
 
 /// 终端画布 Element。

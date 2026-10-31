@@ -179,7 +179,9 @@ impl AppController {
             return AppEvent::TabActivated(tab_id);
         }
         let tab_id = self.next_tab_id();
-        let title = format!("MongoDB CLI - {}", cli.database);
+        // 与语言包 `app.tabs.mongo_cli` / adapter 标题统一叫 Shell；展示层会按语言包覆盖标题，
+        // 但 AI 上下文与拖拽预览直接用这里的字符串。
+        let title = format!("MongoDB Shell - {}", cli.database);
         self.push_tab(TabState {
             id: tab_id,
             title,

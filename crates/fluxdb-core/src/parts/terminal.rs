@@ -12,7 +12,7 @@ pub mod terminal {
     pub enum TerminalSessionKind {
         RedisCli,
         MySqlCli,
-        /// MongoDB 命令行：库内执行 Extended JSON 命令的 REPL（不经 PTY）。
+        /// MongoDB 命令行：库内执行 shell 语句（`use` / `show` / `db.<集合>.<方法>()`）的 REPL（不经 PTY）。
         MongoCli,
         SshShell,
         GenericShell,
@@ -220,6 +220,15 @@ pub mod terminal {
         fn apply(&self, item: &TerminalCompletionItem) -> CompletionApplyEffect;
         /// 输入行是否属于危险命令（adapter 决定是否打断 Enter 并要求确认）。
         fn is_dangerous(&self, input: &str) -> bool;
+
+        /// 是否边打字边显示候选（mongosh / Compass 风格）。
+        ///
+        /// 默认关闭：shell / redis-cli 的输入行由子进程回显，抢在回显前算候选会慢半拍，
+        /// 用户按 Tab 才补更符合那些终端的习惯。进程内 REPL 的候选来自本地状态，
+        /// 可以跟着每个回显字符实时刷新。
+        fn completion_on_typing(&self) -> bool {
+            false
+        }
     }
 
     /// 内存版 transport（测试 / SSH 预留）：不拉起真实 PTY，

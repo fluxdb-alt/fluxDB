@@ -417,7 +417,7 @@ fn statusbar_context(state: &AppState) -> Option<String> {
             state,
             cli.connection_id,
             Some(&cli.database),
-            Some("MongoDB CLI"),
+            Some("MongoDB Shell"),
         ),
         TabKind::CreateTable(create) => {
             let table_kind = if create.is_design() {

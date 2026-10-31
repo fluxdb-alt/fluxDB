@@ -9,9 +9,9 @@
 
 use fluxdb_core::terminal::{
     char_cell_width, row_real_chars, CompletionApplyEffect, TermGrid, TermPoint,
-    TerminalCommandContext, TerminalCompletionAdapter, TerminalCompletionItem, TerminalSessionAdapter,
-    TerminalSessionState, TerminalTranscriptEntry, TerminalTranscriptKind, classify_transcript_line,
-    feed_bytes,
+    TerminalCommandContext, TerminalCompletionAdapter, TerminalCompletionItem,
+    TerminalSessionAdapter, TerminalSessionState, TerminalTranscriptEntry, TerminalTranscriptKind,
+    classify_transcript_line, feed_bytes,
 };
 
 /// 终端键盘动作（危险命令确认 / 特殊键）。
@@ -129,8 +129,10 @@ pub(crate) struct TerminalComponent {
     pub last_origin_y: f32,
     /// 补全浮层候选（非空 + `completion_index.is_some()` 时显示）。
     pub completion_items: Vec<TerminalCompletionItem>,
-    /// 当前选中候选下标（None = 浮层未打开）。
+    /// 当前选中候选下标；`None` 只表示「没有高亮项」（边打字边提示时就是这样）。
     pub completion_index: Option<usize>,
+    /// 补全浮层候选列表的滚动句柄（候选多于可视行时，键盘选中要跟着滚）。
+    pub completion_scroll: ScrollHandle,
     /// 会话语义日志（prompt / command / output / error / notice），
     /// 是「终端做了什么」的语义层记录；首期承接状态展示，后续供回看 / 搜索面板复用。
     pub transcript: Vec<TerminalTranscriptEntry>,
@@ -167,6 +169,7 @@ impl TerminalComponent {
             last_origin_y: 0.0,
             completion_items: Vec::new(),
             completion_index: None,
+            completion_scroll: ScrollHandle::new(),
             transcript: Vec::new(),
         }
     }
@@ -223,13 +226,13 @@ impl TerminalComponent {
     pub fn spawn_mongo_repl(
         &mut self,
         config: fluxdb_core::ConnectionConfig,
-        database: String,
+        session: fluxdb_app::MongoCliSession,
         cx: &mut Context<Self>,
     ) {
         if self.transport.is_some() {
             return;
         }
-        let repl = fluxdb_app::MongoReplTransport::new(config, database);
+        let repl = fluxdb_app::MongoReplTransport::new(config, session);
         self.state = TerminalSessionState::Ready;
         self.failure_reason = None;
         self.transport = Some(TerminalBackend::Repl(repl));
@@ -319,7 +322,12 @@ impl TerminalComponent {
         for (kind, text) in pending_transcript {
             self.record_transcript(kind, text);
         }
-        if changed {
+        // 每帧都重算，不只在有新输出时：Mongo 的集合名由后台线程异步填进会话状态，
+        // 到位时没有任何字节进 grid。只在 `changed` 分支刷新会让「打开就敲 db.」永远不出候选。
+        // 候选来自本地状态，重算很便宜；输入行没变时结果也相同，不会闪。
+        let before = self.completion_items.clone();
+        self.sync_typing_completion();
+        if changed || before != self.completion_items {
             self.dirty = true;
             cx.notify();
         }
@@ -359,6 +367,13 @@ impl TerminalComponent {
             .unwrap_or_else(|| text.trim_start().to_string())
     }
 
+    /// 当前后端是否按字符编辑输入行（进程内 REPL 是，redis-cli 按字节）。
+    ///
+    /// 按字节编辑的后端要把一个宽字符的 3 个字节逐个删掉；按字符编辑的后端只认一次按键。
+    fn backend_edits_by_char(&self) -> bool {
+        self.transport.as_ref().is_some_and(TerminalBackend::edits_by_char)
+    }
+
     /// 定位当前输入行上、处于 grid 光标左/右侧的完整字符（按终端单元宽度对齐）。
     ///
     /// 宽字符占 2 个单元格，其第 2 个单元是空白 ` `，不能按"字符数组相邻格"直接取；
@@ -392,9 +407,92 @@ impl TerminalComponent {
 
     // ---- 补全（浮层 + 应用到 PTY） ----
 
+    /// 补全候选行高，与编辑器补全浮层同一个常量（`COMPLETION_ROW_HEIGHT`）。
+    pub const COMPLETION_ROW_HEIGHT: f32 = crate::editor_component::COMPLETION_ROW_HEIGHT;
+
+    /// 补全浮层高度（像素）：候选行数 × 行高 + 内边距，超过上限就滚动。
+    ///
+    /// 行高直接复用编辑器的 `COMPLETION_ROW_HEIGHT`，外壳内边距与 `render.rs` 的 `p_1`
+    /// （上下各 4px）一致。两边是同一个数，不能各算一套——算小了外层一裁，文字整块消失。
+    pub fn completion_popup_height(items: usize) -> f32 {
+        /// 外壳上下内边距 4+4。
+        const SHELL_PADDING: f32 = 8.0;
+        /// 超过这个高度就滚动，不把整屏占满。
+        const MAX_H: f32 = 260.0;
+        (items as f32 * Self::COMPLETION_ROW_HEIGHT + SHELL_PADDING).min(MAX_H)
+    }
+
     /// 是否正显示补全浮层。
+    ///
+    /// 只看候选，不看高亮下标：边打字边提示时没有选中项，浮层照样要显示。
     pub fn completion_active(&self) -> bool {
-        self.completion_index.is_some() && !self.completion_items.is_empty()
+        !self.completion_items.is_empty()
+    }
+
+    /// 补全浮层的窗口坐标锚点（像素）：输入光标正下方那一格。
+    ///
+    /// 用窗口坐标而不是相对容器偏移：浮层走 `deferred(anchored())` 画在容器裁剪之外，
+    /// 相对定位会被终端面板的 `overflow_hidden` 切掉（截图上就是只剩一条边）。
+    /// 横向跟着光标列走（以前钉在面板左边缘，光标在行尾时浮层和光标离着半个屏幕）。
+    /// 下方放不下就翻到光标行上方，最后夹进内容区——不夹的话面板比窗口高时浮层跑到窗口外；
+    /// 右侧越界由 `anchored().snap_to_window_with_margin` 兜底。
+    pub fn completion_popup_anchor(&self) -> Point<Pixels> {
+        let height = Self::completion_popup_height(self.completion_items.len());
+        let line_h = self.last_line_h.max(1.0);
+        let cursor_y = f32::from(self.grid.cursor().y);
+        let below = (cursor_y + 1.0) * line_h;
+        let top = if below + height <= self.last_content_h {
+            below
+        } else {
+            cursor_y * line_h - height
+        };
+        let top = top.clamp(0.0, (self.last_content_h - height).max(0.0));
+        let left = self.cursor_cell_x() as f32 * self.last_cell_w;
+        point(
+            px(self.last_origin_x + left),
+            px(self.last_origin_y + top),
+        )
+    }
+
+    /// 输入光标在内容区里的单元格列（含提示符前缀）。
+    ///
+    /// 与 `render.rs` 画光标块用的是同一套换算：后端提示符被换成了展示提示符，
+    /// 所以光标列不能直接用 `cursor.x`，否则 `fluxdb_demo> ` 这种长前缀下浮层会偏左若干格。
+    fn cursor_cell_x(&self) -> usize {
+        let cursor = self.grid.cursor();
+        let view = self.grid.row_view(cursor.y as usize);
+        let line: String = view.chars.iter().collect();
+        let native = self.adapter.prompt();
+        let display = self.adapter.display_prompt();
+        match normalize_prompt_line(&line, &native, &display) {
+            Some((_, native_prefix_len, input_len)) => {
+                let input_cursor = byte_cursor_to_cell(&view.chars, cursor.x as usize)
+                    .saturating_sub(native_prefix_len);
+                display.chars().count() + input_cursor.min(input_len)
+            }
+            None => cursor.x as usize,
+        }
+    }
+
+    /// 浮层可见时用 ↑/↓ 移动高亮；返回 true 表示按键已被浮层消费。
+    ///
+    /// 没有高亮（边打字边提示）时 ↓ 选第一项、↑ 选最后一项，和编辑器补全一致。
+    fn move_completion_selection(&mut self, delta: i32, cx: &mut Context<Self>) -> bool {
+        let n = self.completion_items.len();
+        if n == 0 {
+            return false;
+        }
+        let n_i = n as i32;
+        let next = match self.completion_index {
+            Some(idx) => (idx as i32 + delta).rem_euclid(n_i),
+            None if delta > 0 => 0,
+            None => n_i - 1,
+        } as usize;
+        self.completion_index = Some(next);
+        // 候选超过可视高度时要跟着滚，否则键盘选到浮层外什么也看不见。
+        self.completion_scroll.scroll_to_item(next);
+        cx.notify();
+        true
     }
 
     /// 当前命令的只读参数提示。参数不会写入 PTY，实际光标仍停在已输入命令末尾。
@@ -447,17 +545,68 @@ impl TerminalComponent {
         }
     }
 
+    /// 鼠标划过候选行：把高亮挪过去（与 ↑/↓ 共用同一个下标）。
+    pub fn select_completion(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.completion_items.len() && self.completion_index != Some(index) {
+            self.completion_index = Some(index);
+            cx.notify();
+        }
+    }
+
+    /// 鼠标点击候选行：直接应用（等价于选中后回车，不必再按一次）。
+    pub fn accept_completion(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(item) = self.completion_items.get(index).cloned() else {
+            return;
+        };
+        self.close_completion();
+        self.apply_completion(&item, cx);
+        cx.notify();
+    }
+
     /// 关闭并清空补全浮层。
     fn close_completion(&mut self) {
         self.completion_items.clear();
         self.completion_index = None;
+        // 滚回顶部：下一次打开若沿用上次的滚动位置，第一屏候选会凭空少几行。
+        self.completion_scroll.set_offset(point(px(0.), px(0.)));
     }
 
-    /// 应用一个补全候选：按 adapter 给的效果改写 PTY 当前行。
+    /// 按当前输入行刷新候选（边打字边提示用）。
+    ///
+    /// 只在用户没有正在用 Tab 选候选时刷新：否则每来一段回显都会把高亮重置回第一项，
+    /// 用户没法继续往下选。候选来源是本地状态，不需要额外请求。
+    fn sync_typing_completion(&mut self) {
+        if !self.completion.completion_on_typing() || self.completion_index.is_some() {
+            return;
+        }
+        if !matches!(
+            self.state,
+            TerminalSessionState::Ready | TerminalSessionState::PtyRunning
+        ) {
+            return;
+        }
+        let ctx = self.completion_context();
+        // 空行不弹：mongosh 在空提示符下也不刷候选，否则一进终端就是满屏列表。
+        if ctx.input.trim().is_empty() {
+            self.close_completion();
+            return;
+        }
+        let input = ctx.input.trim().to_string();
+        // 已经打完的候选不再提示：否则刚用回车写回 `show dbs`，下一个回显又把它自己弹出来。
+        self.completion_items = self
+            .completion
+            .complete(&ctx)
+            .into_iter()
+            .filter(|item| item.insert_text.trim() != input)
+            .collect();
+    }
+
+    /// 应用一个补全候选：按 adapter 给的效果改写当前输入行。
     ///
     /// 多数为 `Replace{start,end,text}`：替换区间是相对输入行的 byte 偏移（光标在行尾），
-    /// 我们发给 redis-cli 若干退格（0x7f）删掉区间内的字符、再键入 `text`——redis-cli 的
-    /// 行编辑器会回显抹除 + 新字符，grid 由这些回显字节自行同步，故不会错位。
+    /// 我们发若干退格删掉区间内的内容、再键入 `text`——后端行编辑器会回显抹除 + 新字符，
+    /// grid 由这些回显字节自行同步，故不会错位。退格次数按后端语义算：redis-cli 的
+    /// linenoise 按字节删，进程内 REPL 按字符删。
     fn apply_completion(&mut self, item: &TerminalCompletionItem, cx: &mut Context<Self>) {
         if !matches!(
             self.state,
@@ -478,7 +627,13 @@ impl TerminalComponent {
                 let start = start.min(input.len());
                 let end = end.min(input.len());
                 let delete_bytes = end.saturating_sub(start);
-                for _ in 0..delete_bytes {
+                // 进程内 REPL 自己按字符维护输入行，一个退格删一个字符；redis-cli 按字节。
+                let delete_count = if self.backend_edits_by_char() {
+                    input[start..end].chars().count()
+                } else {
+                    delete_bytes
+                };
+                for _ in 0..delete_count {
                     self.send_bytes(b"\x7f", cx);
                 }
                 self.send_bytes(text.as_bytes(), cx);
@@ -540,8 +695,9 @@ impl TerminalComponent {
             // 取消危险命令：清确认态并下发 Ctrl-C 清掉 redis-cli 命令行。
             self.state = TerminalSessionState::Ready;
             self.send_bytes(b"\x03", cx);
-        } else if self.completion_index.is_some() {
+        } else if self.completion_active() {
             // 关闭补全浮层，不把 Esc 透传给 PTY。
+            // 用 `completion_active` 而不是高亮下标：边打字边提示的浮层没有高亮项。
             self.close_completion();
             cx.notify();
         } else {
@@ -583,10 +739,11 @@ impl TerminalComponent {
     fn send_backspace(&mut self, cx: &mut Context<Self>) {
         self.close_completion(); // 编辑输入行，候选已失效。
         let cursor_x = self.grid.cursor().x as usize;
-        match self.cursor_edge_byte_len(cursor_x, EdgeSide::Left) {
-            Some(n) => self.send_bytes(&vec![0x7f; n], cx),
-            None => self.send_bytes(b"\x7f", cx),
-        }
+        let n = self
+            .cursor_edge_byte_len(cursor_x, EdgeSide::Left)
+            .filter(|_| !self.backend_edits_by_char())
+            .unwrap_or(1);
+        self.send_bytes(&vec![0x7f; n], cx);
     }
 
     pub fn delete(&mut self, _action: &TermDelete, _window: &mut Window, cx: &mut Context<Self>) {
@@ -595,20 +752,22 @@ impl TerminalComponent {
         // 切出半字 `�`。与 backspace/move_* 一致，按光标右侧完整字符的字节数连发 `ESC[3~`，
         // 让一次 Delete 删掉整个字符，绝不残留半字。
         let cursor_x = self.grid.cursor().x as usize;
-        match self.cursor_edge_byte_len(cursor_x, EdgeSide::Right) {
-            Some(n) => self.send_bytes(&vec![0x1b, b'[', b'3', b'~'].repeat(n), cx),
-            None => self.send_bytes(b"\x1b[3~", cx),
-        }
+        let n = self
+            .cursor_edge_byte_len(cursor_x, EdgeSide::Right)
+            .filter(|_| !self.backend_edits_by_char())
+            .unwrap_or(1);
+        self.send_bytes(&vec![0x1b, b'[', b'3', b'~'].repeat(n), cx);
     }
 
     pub fn move_left(&mut self, _action: &TermLeft, _window: &mut Window, cx: &mut Context<Self>) {
         self.close_completion();
         // 同上：中文按字节移动会落进字符中间，按左侧整字字节数连发 `ESC[D` 跨过整个字符。
         let cursor_x = self.grid.cursor().x as usize;
-        match self.cursor_edge_byte_len(cursor_x, EdgeSide::Left) {
-            Some(n) => self.send_bytes(&vec![0x1b, b'[', b'D'].repeat(n), cx),
-            None => self.send_bytes(b"\x1b[D", cx),
-        }
+        let n = self
+            .cursor_edge_byte_len(cursor_x, EdgeSide::Left)
+            .filter(|_| !self.backend_edits_by_char())
+            .unwrap_or(1);
+        self.send_bytes(&vec![0x1b, b'[', b'D'].repeat(n), cx);
     }
 
     pub fn move_right(
@@ -620,24 +779,35 @@ impl TerminalComponent {
         self.close_completion();
         // 同上：按光标右侧整字字节数连发 `ESC[C` 跨过整个字符。
         let cursor_x = self.grid.cursor().x as usize;
-        match self.cursor_edge_byte_len(cursor_x, EdgeSide::Right) {
-            Some(n) => self.send_bytes(&vec![0x1b, b'[', b'C'].repeat(n), cx),
-            None => self.send_bytes(b"\x1b[C", cx),
-        }
+        let n = self
+            .cursor_edge_byte_len(cursor_x, EdgeSide::Right)
+            .filter(|_| !self.backend_edits_by_char())
+            .unwrap_or(1);
+        self.send_bytes(&vec![0x1b, b'[', b'C'].repeat(n), cx);
     }
 
     pub fn move_up(&mut self, _action: &TermUp, _window: &mut Window, cx: &mut Context<Self>) {
+        // 浮层打开时 ↑/↓ 在候选间移动，不透传给 PTY（透传会去翻 redis-cli 历史行，
+        // 用户在挑候选却被换掉了整行输入）。
+        if self.move_completion_selection(-1, cx) {
+            return;
+        }
         self.close_completion();
         self.send_bytes(b"\x1b[A", cx);
     }
 
     pub fn move_down(&mut self, _action: &TermDown, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.move_completion_selection(1, cx) {
+            return;
+        }
         self.close_completion();
         self.send_bytes(b"\x1b[B", cx);
     }
 
     pub fn move_home(&mut self, _action: &TermHome, _window: &mut Window, cx: &mut Context<Self>) {
         self.close_completion();
+        // `ESC[H` / `ESC[F` 不带数量，无法像退格那样按字节放大；
+        // 按字节编辑的后端（redis-cli）认这两个；REPL 也认，按字符处理。
         self.send_bytes(b"\x1b[H", cx);
     }
 
@@ -647,10 +817,13 @@ impl TerminalComponent {
     }
 
     pub fn tab(&mut self, _action: &TermTab, _window: &mut Window, cx: &mut Context<Self>) {
-        // 浮层已打开：Tab 循环到下一个候选。
-        if let Some(idx) = self.completion_index {
+        // 浮层已打开（含边打字边提示的无高亮态）：Tab 把高亮带到下一项。
+        if !self.completion_items.is_empty() {
             let n = self.completion_items.len();
-            self.completion_index = Some(if n == 0 { idx } else { (idx + 1) % n });
+            self.completion_index = Some(match self.completion_index {
+                Some(idx) => (idx + 1) % n,
+                None => 0,
+            });
             cx.notify();
             return;
         }

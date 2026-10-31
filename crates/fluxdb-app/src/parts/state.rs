@@ -781,7 +781,7 @@ pub enum TabKind {
     QueryEditor(QueryEditorState),
     RedisWorkbench(RedisWorkbenchState),
     RedisCli(RedisCliState),
-    /// MongoDB 命令行终端（库内执行 Extended JSON 命令的 REPL）。
+    /// MongoDB 命令行终端（库内执行 shell 语句的 REPL）。
     MongoCli(MongoCliState),
     RedisPubSub(RedisPubSubState),
     CreateTable(CreateTableState),
