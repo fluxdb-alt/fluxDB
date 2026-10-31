@@ -377,7 +377,7 @@ fn mongo_query_panel_keeps_filter_row_and_collapses_options(cx: &mut TestAppCont
         "builder comes before the options grid: {builder:?} {projection:?}"
     );
     let add = cx
-        .debug_bounds("mongo-query-builder-add")
+        .debug_bounds("mongo-query-builder-add:root")
         .expect("add condition must render");
     cx.simulate_click(add.center(), Modifiers::default());
     assert!(
@@ -395,35 +395,28 @@ fn mongo_query_panel_keeps_filter_row_and_collapses_options(cx: &mut TestAppCont
         field_cell.size.width >= gpui::px(140.) && value_cell.size.width >= gpui::px(120.),
         "field and value cells keep usable widths: {field_cell:?} {value_cell:?}"
     );
-    // 两格从单行 `Input` 换成 `Editor`（要挂补全）后，首行仍要从格子顶边开始排。
+    // 字段格与值格都是代码编辑器——只有编辑器能挂补全。
     //
-    // 不能拿编辑器盒子的中心去比格子中心：编辑器 reserve 两行（`LayoutMode::CodeEditor`
-    // 默认 rows=2，且没有对外改行的入口），盒子的**布局高度**比 30px 的格子高，
-    // 超出的部分靠 `overflow_hidden` 裁掉。量的只能是「盒子顶边贴住格子顶边」——
-    // 若有人把外壳的裁剪或对齐改坏，首行就会掉到格子外面。
+    // 两格一律不许越出格子宽度：它们曾因多行编辑器溢出而长出拖不动的滚动条。
+    // 垂直位置不在这里量（那时文字还没排好），下面用光标行对齐格子中线来验。
     let field_body = cx
         .debug_bounds("mongo-query-builder-field-body:0")
         .expect("field editor body renders");
+    assert!(
+        field_body.size.width <= field_cell.size.width,
+        "field editor keeps its cell's width: body={field_body:?} cell={field_cell:?}"
+    );
     let value_body = cx
         .debug_bounds("mongo-query-builder-value-body:0")
         .expect("value editor body renders");
-    for (name, body, cell) in [
-        ("field", field_body, field_cell),
-        ("value", value_body, value_cell),
-    ] {
-        assert!(
-            body.origin.y >= cell.origin.y && body.origin.y - cell.origin.y <= gpui::px(2.),
-            "{name} editor's first row starts at its cell's top edge: body={body:?} cell={cell:?}"
-        );
-        assert!(
-            body.size.width <= cell.size.width,
-            "{name} editor keeps its cell's width: body={body:?} cell={cell:?}"
-        );
-    }
-    // 两格都真的挂上了补全 provider，且键盘输入落进格子本身。
+    assert!(
+        value_body.size.width <= value_cell.size.width,
+        "value editor keeps its cell's width: body={value_body:?} cell={value_cell:?}"
+    );
+    // 键盘输入落进格子本身的输入状态，且字段格真的挂上了补全 provider。
     //
-    // 这里不验候选内容：候选来自字段目录，而目录要靠真实集合的抽样回填，
-    // 无库的布局测试里它是空的。候选的筛选规则由 `mongo_completion_tests` 单测覆盖；
+    // 这里不验候选内容：候选来自字段目录，而目录要靠真实集合的抽样回填，无库的
+    // 布局测试里它是空的。候选的筛选规则由 `mongo_completion_tests` 单测覆盖；
     // 这一步只保证接线没断——provider 装上、焦点可达、打字能进编辑器。
     let (row_field, row_value) = cx.update(|_, cx| {
         let builder = view
@@ -431,19 +424,37 @@ fn mongo_query_panel_keeps_filter_row_and_collapses_options(cx: &mut TestAppCont
             .mongo_query_builders
             .get(&tab_id)
             .expect("builder state");
-        (
-            builder.rows()[0].field.clone(),
-            builder.rows()[0].value.clone(),
-        )
+        let row = builder
+            .condition(&[0])
+            .and_then(|condition| condition.row.as_ref())
+            .expect("first condition row");
+        (row.field.clone(), row.value.clone())
     });
     cx.update(|_, cx| {
         assert!(
             row_field.read(cx).lsp().completion_provider.is_some(),
-            "the field cell must have a completion provider"
+            "the field cell must have a field-path completion provider"
         );
         assert!(
             row_value.read(cx).lsp().completion_provider.is_some(),
-            "the value cell must have a completion provider"
+            "the value cell must have a value completion provider"
+        );
+    });
+    // 只有一个条件时条件树不该有可滚区间。
+    //
+    // 树把内边距放在内层就是为这条：滚动容器自己带内边距时，gpui 会把它同时
+    // 算进内容与视口，`max_offset` 恒为两倍内边距，右侧于是挂着一根拖不动的
+    // 滚动条。
+    cx.update(|_, cx| {
+        let builder = view
+            .read(cx)
+            .mongo_query_builders
+            .get(&tab_id)
+            .expect("builder state");
+        assert_eq!(
+            builder.scroll.max_offset(),
+            gpui::point(gpui::px(0.), gpui::px(0.)),
+            "one condition row fits the tree, so it must not scroll"
         );
     });
     cx.simulate_click(field_cell.center(), Modifiers::default());
@@ -455,6 +466,21 @@ fn mongo_query_panel_keeps_filter_row_and_collapses_options(cx: &mut TestAppCont
             "typing lands in the field cell's editor"
         );
     });
+    // 文字落在格子的**中线**上。
+    //
+    // 编辑器不像单行 `Input` 会自己垂直居中：它从上内边距往下排，盒子贴着
+    // 28px 的格子放就会低 3.5px。量的是光标那一行的中心——字形就在这一行里。
+    let cursor_row = cx.update(|_, cx| {
+        row_field
+            .read(cx)
+            .cursor_layout()
+            .expect("the field editor lays its cursor out")
+            .0
+    });
+    assert!(
+        (cursor_row.center().y - field_cell.center().y).abs() <= gpui::px(1.5),
+        "the field text sits on its cell's center line: cursor={cursor_row:?} cell={field_cell:?}"
+    );
     // 新行默认空值：不写进 JSON，Filter 仍是空对象——加了一行还没填不该把结果查空。
     let filter_value = cx.update(|_, cx| {
         view.read(cx)
@@ -477,6 +503,30 @@ fn mongo_query_panel_keeps_filter_row_and_collapses_options(cx: &mut TestAppCont
         cx.debug_bounds("mongo-query-builder-row:0").is_none(),
         "removing the row drops it from the builder"
     );
+    // 组内子项数不设上限：连加七条都要落成行。
+    //
+    // 曾经卡在每组 6 个直接子项，第 7 条时「添加条件」无声置灰，条件树却还没滚动
+    // ——用户看到的就是「加了 6 个条件就无法添加了」。上限只剩总数 24 条。
+    for _ in 0..7 {
+        let add = cx
+            .debug_bounds("mongo-query-builder-add:root")
+            .expect("add condition must render");
+        cx.simulate_click(add.center(), Modifiers::default());
+    }
+    assert!(
+        cx.debug_bounds("mongo-query-builder-row:6").is_some(),
+        "a single group keeps accepting rows past six"
+    );
+    for _ in 0..7 {
+        let remove = cx
+            .debug_bounds("mongo-query-builder-remove:0")
+            .expect("remove button must render");
+        cx.simulate_click(remove.center(), Modifiers::default());
+    }
+    assert!(
+        cx.debug_bounds("mongo-query-builder-row:0").is_none(),
+        "clearing the seven probe rows leaves the builder empty"
+    );
     // 先收起：下面要验的是「带着复杂表达式**重新展开**」时的拒绝路径。
     let builder_toggle = cx
         .debug_bounds("mongo-query-builder-toggle")
@@ -487,7 +537,7 @@ fn mongo_query_panel_keeps_filter_row_and_collapses_options(cx: &mut TestAppCont
         "clicking the builder entry again collapses it"
     );
 
-    // 复杂表达式不能靠构建器改写：展开时只报错，Filter 一个字都不动。
+    // 添加子组：子组默认 AND，再添加第二条同字段条件；切为 OR 后不能被对象键覆盖。
     let filter_editor = cx.update(|_, cx| {
         view.read(cx)
             .mongo_query_inputs
@@ -497,6 +547,73 @@ fn mongo_query_panel_keeps_filter_row_and_collapses_options(cx: &mut TestAppCont
             .filter
             .clone()
     });
+    let builder_toggle = cx
+        .debug_bounds("mongo-query-builder-toggle")
+        .expect("builder entry stays visible");
+    cx.simulate_click(builder_toggle.center(), Modifiers::default());
+    let add_group = cx
+        .debug_bounds("mongo-query-builder-add-group:root")
+        .expect("add subgroup must render");
+    // 工具条是单行流式布局，内容超宽会把右侧按钮推出卡片、甚至推到窗口外。
+    // 窗口外的点击被 gpui 静默丢弃（表现为「点了没反应」），所以先卡住边界。
+    let window_bounds = cx.update(|window, _| window.bounds());
+    assert!(
+        window_bounds.contains(&add_group.center()),
+        "toolbar buttons must stay inside the window: {add_group:?} {window_bounds:?}"
+    );
+    cx.simulate_click(add_group.center(), Modifiers::default());
+    assert!(cx.debug_bounds("mongo-query-builder-group:0").is_some());
+    let nested_add = cx
+        .debug_bounds("mongo-query-builder-add:0")
+        .expect("subgroup condition button");
+    cx.simulate_click(nested_add.center(), Modifiers::default());
+    for (path, field, value) in [("0-0", "status", "\"paid\""), ("0-1", "status", "\"pending\"")] {
+        let field_input = cx.update(|_, cx| {
+            view.read(cx)
+                .mongo_query_builders
+                .get(&tab_id)
+                .and_then(|builder| {
+                    let path: Vec<usize> = path.split('-').map(|part| part.parse().expect("path")).collect();
+                    builder.condition(&path).and_then(|condition| condition.row.as_ref()).map(|row| (row.field.clone(), row.value.clone()))
+                })
+                .expect("nested condition row")
+        });
+        cx.update(|window, cx| {
+            field_input.0.update(cx, |input, cx| input.set_value(field, window, cx));
+            field_input.1.update(cx, |input, cx| input.set_value(value, window, cx));
+        });
+    }
+    // 分段控件里点 OR：不再有下拉菜单，交互是就地切换。
+    let nested_or = cx
+        .debug_bounds("mongo-query-builder-logic:0:or")
+        .expect("subgroup OR segment");
+    cx.simulate_click(nested_or.center(), Modifiers::default());
+    cx.run_until_parked();
+    let nested_value = cx
+        .debug_bounds("mongo-query-builder-value:0-1")
+        .expect("nested value input");
+    cx.simulate_click(nested_value.center(), Modifiers::default());
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("\"archived\"");
+    let nested_filter = cx.update(|_, cx| filter_editor.read(cx).value().to_string());
+    assert_eq!(
+        nested_filter,
+        r#"{"$or":[{"status":"paid"},{"status":"archived"}]}"#,
+        "OR preserves both conditions and nested editor changes reach Filter"
+    );
+    let remove_group = cx
+        .debug_bounds("mongo-query-builder-remove-group:0")
+        .expect("remove subgroup");
+    cx.simulate_click(remove_group.center(), Modifiers::default());
+    assert!(cx.debug_bounds("mongo-query-builder-group:0").is_none());
+
+    // 根 `$or` 能从 Filter 反向展开：两个分支各成一组、同字段条件不互相覆盖。
+    // 往返后文本必须原样（顺序、键名都不许被改写）。
+    let builder_toggle = cx
+        .debug_bounds("mongo-query-builder-toggle")
+        .expect("builder entry stays visible");
+    cx.simulate_click(builder_toggle.center(), Modifiers::default());
+    assert!(cx.debug_bounds("mongo-query-builder").is_none());
     cx.update(|window, cx| {
         filter_editor.update(cx, |editor, cx| {
             editor.set_value(
@@ -512,13 +629,14 @@ fn mongo_query_panel_keeps_filter_row_and_collapses_options(cx: &mut TestAppCont
     cx.simulate_click(builder_toggle.center(), Modifiers::default());
     cx.run_until_parked();
     assert!(
-        cx.debug_bounds("mongo-query-builder-row:0").is_none(),
-        "a rejected filter must not produce condition rows"
+        cx.debug_bounds("mongo-query-builder-row:0-0").is_some()
+            && cx.debug_bounds("mongo-query-builder-row:1-0").is_some(),
+        "root OR conditions remain editable without losing duplicate fields"
     );
-    let untouched = cx.update(|_, cx| filter_editor.read(cx).value().to_string());
-    assert!(
-        untouched.contains("$or"),
-        "rejecting the builder must leave the filter untouched: {untouched:?}"
+    let round_trip = cx.update(|_, cx| filter_editor.read(cx).value().to_string());
+    assert_eq!(
+        round_trip, r#"{"$or":[{"status":"paid"},{"status":"pending"}]}"#,
+        "parsing the builder must not rewrite the filter text"
     );
     // 收起来，后面用回简单查询。
     let builder_toggle = cx
@@ -527,7 +645,7 @@ fn mongo_query_panel_keeps_filter_row_and_collapses_options(cx: &mut TestAppCont
     cx.simulate_click(builder_toggle.center(), Modifiers::default());
     assert!(
         cx.debug_bounds("mongo-query-builder").is_none(),
-        "collapsing after a rejected filter still works"
+        "collapsing after a round trip still works"
     );
 
     // 折叠态提示：附加条件在界面上不可见时，唯一提示就是折叠入口旁的计数。
@@ -664,5 +782,117 @@ fn mongo_query_panel_keeps_filter_row_and_collapses_options(cx: &mut TestAppCont
         (six_rows - four_rows).abs() <= gpui::px(0.5),
         "past four lines the frame stops growing and the editor scrolls: \
          four={four_rows:?} six={six_rows:?}"
+    );
+
+    // 条件树封顶 240px：条件多了必须在树内滚动，不能把结果区一路挤下去。
+    //
+    // 光靠根组铺满 6 条条件只有约 198px，够不到封顶，所以让 Filter 解析出一棵更高的树：
+    // 根 `$or` 下四个展开的子组、每组三条条件（约 450px）。走的是生产路径
+    // （解析 Filter → 渲染 → 量边界），不是给测试造的旁路。
+    //
+    // 逐条点「添加」不行：加满第一个子组后，第二个子组的按钮已被滚出封顶视口，
+    // 窗口外的点击被 gpui 静默丢弃。
+    let filter_editor = cx.update(|_, cx| {
+        view.read(cx)
+            .mongo_query_inputs
+            .get(&tab_id)
+            .expect("query inputs")
+            .read(cx)
+            .filter
+            .clone()
+    });
+    cx.update(|window, cx| {
+        filter_editor.update(cx, |editor, cx| {
+            editor.set_value(
+                r#"{"$or":[
+                    {"a1":1,"a2":2,"a3":3},
+                    {"b1":1,"b2":2,"b3":3},
+                    {"c1":1,"c2":2,"c3":3},
+                    {"d1":1,"d2":2,"d3":3}
+                ]}"#,
+                window,
+                cx,
+            );
+        });
+    });
+    let options = cx
+        .debug_bounds("mongo-query-options")
+        .expect("options toggle stays visible");
+    cx.simulate_click(options.center(), Modifiers::default());
+    let builder_toggle = cx
+        .debug_bounds("mongo-query-builder-toggle")
+        .expect("builder entry stays visible");
+    cx.simulate_click(builder_toggle.center(), Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    let tree = cx
+        .debug_bounds("mongo-query-builder-tree")
+        .expect("conditions tree renders");
+    // 内容远超上限，所以树必须**顶到** 240px：正好等于 240 才说明封顶生效且没被外层压扁。
+    // 只断言「不超过」会漏掉「树被挤成几十像素」这种同样看不见条件的坏法。
+    assert!(
+        (tree.size.height - gpui::px(crate::MONGO_QUERY_BUILDER_TREE_MAX_HEIGHT)).abs()
+            <= gpui::px(0.5),
+        "the conditions tree fills its {}px cap and scrolls inside: {tree:?}",
+        crate::MONGO_QUERY_BUILDER_TREE_MAX_HEIGHT
+    );
+    // 封顶后靠下的行落到可视区之外；滚轮必须能把它们滚进视口。滚动条与滚轮都来自
+    // 原生 `overflow_y_scroll`，滚不动就说明树被压成 0 高或没有可滚区间
+    // ——这正是「条件太多时没有滑块」的那个 bug。
+    let last_row = "mongo-query-builder-row:3-2";
+    let before = cx
+        .debug_bounds(last_row)
+        .expect("last row is laid out inside the scroll content")
+        .origin
+        .y;
+    assert!(
+        before + gpui::px(crate::MONGO_QUERY_BUILDER_CONTROL_HEIGHT)
+            > tree.origin.y + tree.size.height,
+        "the overflowing row starts outside the capped viewport: {before:?} {tree:?}"
+    );
+    let wheel_position = gpui::point(
+        tree.origin.x + gpui::px(20.),
+        tree.origin.y + tree.size.height - gpui::px(20.),
+    );
+    // 滚动条覆盖层的边界必须**不随内容移动**。
+    //
+    // 覆盖层是 `absolute().inset_0()`：挂在滚动容器自己身上时它就成了滚动内容的
+    // 子节点，内容滚多远它跟多远，拇指相对覆盖层的位置不变——用户看到的就是
+    // 「滚了但滚动条不动」。所以它得挂在外层。这里用滚动前后的边界相等来锁。
+    let overlay_before = cx
+        .debug_bounds("scrollbar-overlay")
+        .expect("the tree's scrollbar overlay renders");
+    for _ in 0..3 {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: wheel_position,
+            delta: gpui::ScrollDelta::Lines(gpui::point(0., -6.)),
+            ..Default::default()
+        });
+    }
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    let after = cx
+        .debug_bounds(last_row)
+        .expect("last row still renders after scrolling")
+        .origin
+        .y;
+    assert!(
+        after < before,
+        "wheel scrolling must move the capped tree content: {before} -> {after}"
+    );
+    let overlay_after = cx
+        .debug_bounds("scrollbar-overlay")
+        .expect("the tree's scrollbar overlay renders");
+    assert_eq!(
+        overlay_before, overlay_after,
+        "the scrollbar overlay is a viewport overlay and must not scroll with the content"
+    );
+    // 覆盖层要盖住整个可视区，且不越出树外框。
+    let tree_after = cx
+        .debug_bounds("mongo-query-builder-tree")
+        .expect("conditions tree renders");
+    assert!(
+        (overlay_after.size.height - tree_after.size.height).abs() <= gpui::px(1.),
+        "the overlay matches the tree viewport: overlay={overlay_after:?} tree={tree_after:?}"
     );
 }

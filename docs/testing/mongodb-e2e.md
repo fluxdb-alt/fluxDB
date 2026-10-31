@@ -13,6 +13,7 @@
 | 导入：格式嗅探 / 类型推断 / 单元格转换 / JSON 错误定位 / 非 ASCII 与宽表预览 | `crates/fluxdb-connectors/src/parts/mongo/import.rs` 内 `mongo_import_engine_tests`（8 个用例） | 否 |
 | 刷新替换语义 | `crates/fluxdb-app/src/parts/table_info.rs` 内 `replace_loaded_children_tests` | 否 |
 | 连接器端到端 | `crates/fluxdb-connectors/tests/mongo_live.rs` | 是 |
+| 查询面板与嵌套条件构建（生产视图） | `apps/fluxdb-desktop/src/main_parts/i18n_tests/mongo_query_panel.rs` | 否 |
 | UI 端到端（生产视图） | `apps/fluxdb-desktop/src/main_parts/mongo_sidebar_tests.rs` | 是 |
 
 ## 2. 凭据注入
@@ -51,7 +52,40 @@ cargo test --locked -p fluxdb-connectors --test mongo_live -- --test-threads=1
 
 该用例用 192 KiB 栈线程复现同样环境：把 `mongo_run` / `mongo_block_on` 换成直接 `mongo_runtime().block_on`，测试进程会直接崩（`fatal runtime error: stack overflow, aborting`），而不是断言失败。恢复放大栈后稳定通过。
 
-## 4. UI 端到端（`apps/fluxdb-desktop/src/main_parts/mongo_sidebar_tests.rs`）
+## 4. 查询面板与嵌套条件构建（无需真实数据库）
+
+```bash
+FLUXDB_PROFILE=dev cargo test --locked -p fluxdb-desktop --bin fluxdb-desktop \
+  mongo_query_panel_keeps_filter_row_and_collapses_options -- --exact
+```
+
+由生产 View 的无头点击驱动：打开「更多选项 → 条件构建」→ 添加条件 / 子组 → 点分段控件的 `OR` 段（`mongo-query-builder-logic:0:or`，五段控件里的一段，不是键盘选下拉项）→ 验证同字段两条条件都写入 Filter → 删除子组 → 收起抽屉。
+
+断言里还量了两格的几何：两格都是**代码编辑器**（字段挂路径补全、值挂同行字段的取值补全），宽度不许越出格子——它们曾因多行编辑器溢出而长出拖不动的滚动条；垂直位置量的是编辑器光标行的中心与格子中线之差（≤ 1.5px），锁住「加了补全后字不在格子正中」这个回归。
+
+同一段还断言 `builder.scroll.max_offset() == 0`：只有一个条件时树不该有可滚区间。滚动容器自带内边距时 gpui 会把它算两遍，单行也判成溢出并画出滚动条。
+
+同一段还断言两格的 `lsp().completion_provider` 都存在：候选内容依赖真实集合的字段目录，无库环境是空的，所以这里只锁「接线没断」，筛选规则由 `mongo_completion_tests` 覆盖（含值格只取同行字段取值、目录外路径给空候选）。
+
+工具条是单行流式布局，所以在点「添加子组」前先断言它的中心落在 `window.bounds()` 内：内容超宽会把右侧按钮推出窗口，而窗口外的点击被 gpui 静默丢弃，症状是「点了没反应」而不是报错。
+
+五种组类型的语义（`$nor` / `$elemMatch` / `$not+$elemMatch` 的往返与字段作用域）由同 crate 的纯模型单测覆盖，不依赖视图：
+
+```bash
+cargo test --locked -p fluxdb-desktop mongo_query_builder_model_tests
+```
+
+它锁的是「解析 → 写回」逐字相等，以及数组组缺字段时不产出条件；另有 `a_wide_group_is_not_capped_per_group` 锁「单组八条条件照常展开」——组内卡条数会让「添加条件」在第 7 条时无声置灰。
+
+面板用例里也连点七次「添加条件」再逐条移除：同一组超过六条仍要落成行。上限只剩总数 24 条，中间的溢出交给条件树滚动。
+
+默认态与收起态不渲染构建器，查询面板高度不被嵌套条件长期占用；展开后条件树封顶 240px，再多也在树内滚动，不挤占结果区。
+
+封顶这条用例的树从 Filter 文本反向展开（根 `$or` 四个子组、每组三条条件），不逐条点「添加条件」：加满第一个子组后，后一个子组的按钮已被滚出封顶视口，窗口外的点击被 gpui 静默丢弃，用例会卡在「按钮点了没反应」而不是报错。树高用 `mongo-query-builder-tree` 的实测边界量，再发三次滚轮事件断言最后一行上移——滚动条与滚轮同属原生 `overflow_y_scroll`，滚不动就说明树被压成 0 高或没有可滚区间。
+
+滚完还要断言 `scrollbar-overlay` 的边界**没变**、且高度等于树的可视区：覆盖层是视口覆盖层，跟内容一起滚时拇指就在原地不动，正是「往下滚滚动条不动」那个 bug。
+
+## 5. UI 端到端（`apps/fluxdb-desktop/src/main_parts/mongo_sidebar_tests.rs`）
 
 ```bash
 cargo test --locked -p fluxdb-desktop --bin fluxdb-desktop \
@@ -93,7 +127,7 @@ cargo test --locked -p fluxdb-desktop --bin fluxdb-desktop \
 
 断言既有可观察反馈（debug 选择器边界），也有业务结果（返回条数 > 0）。第 9–11 步都要先比对目标中心点是否在窗口内——越界点击会被 gpui 静默丢弃；卡片正文很高，所以要先把展开的卡片收起，否则第二张卡片只有卡头露出视口外。第 11 步的保存由真实按钮触发，但替换全文走编辑器实体（`set_value` 不产生 Change 事件，按钮可用性由编辑框的 Change 订阅驱动重绘）；若当前集合没有可改的顶层标量字段，用例打印原因后提前返回，不谎报通过。未保存切换的断言不再允许跳过：探针文档保证窗口内至少有两只可点的编辑按钮，缺任何一只都会让用例失败。
 
-## 5. 无凭据时
+## 6. 无凭据时
 
 - `cargo test -p fluxdb-connectors --test mongo_live` → 5 个用例全部跳过（0.00s）。
 - `cargo test -p fluxdb-desktop --bin fluxdb-desktop` → Mongo E2E 跳过，其余 117 个用例照常运行（本机实测 116 passed + 2 ignored）。

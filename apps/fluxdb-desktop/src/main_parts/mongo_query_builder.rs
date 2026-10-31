@@ -1,12 +1,10 @@
-// MongoDB 查询面板的「条件构建」：字段 / 运算符 / 值几行，直接改写成 Filter JSON。
+// MongoDB 查询面板的「条件构建」：递归条件组直接改写成 Filter JSON。
 //
 // 它只是 Filter 的另一种输入法，不持有查询：每改一次就把 JSON 写回 Filter 编辑器，
-// 真正执行的仍是面板里那一份文本。所以构建器与手写 JSON 永远一致，
-// 不会出现「构建器里一套、实际查的是另一套」。
+// 真正执行的仍是面板里那一份文本。构建器与手写 JSON 永远一致。
 //
-// 反向也走同一条路：展开构建器时解析当前 Filter。只认多条件平铺对象里的单个比较运算符，
-// 复杂表达式（`$or`、嵌套对象、`$regex` 等）一律拒绝并提示继续手写 JSON——
-// 猜错了改写语义，比不做更糟。
+// 反向也走同一条路：展开时解析当前 Filter。能无损表达的嵌套逻辑进入条件组；
+// 其他复杂表达式拒绝改写并提示继续手写 JSON。
 
 /// 条件构建器支持的运算符，顺序即下拉菜单顺序（对齐交互稿）。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,27 +75,169 @@ impl MongoQueryOperator {
     }
 }
 
-/// 条件上限：再多就该直接写 JSON。与交互稿一致。
-const MONGO_QUERY_BUILDER_MAX_ROWS: usize = 6;
 /// 构建器控件高度。
 ///
-/// 交互稿是 35px，这里压到 30px：条件行最多六条，35 一行在常驻面板里太占地方，
-/// 而整块构建器的存在感应当低于它下面的结果区。字段/值两格是代码编辑器（要挂补全），
-/// 但它按行高算最小高度、外面给 `h_full` 就能填满这一格，因此同样能压到 30px。
-const MONGO_QUERY_BUILDER_CONTROL_HEIGHT: f32 = 30.;
+/// 交互稿是 35px，这里压到 28px：一行 35px 在常驻面板里太占地方，
+/// 而整块构建器的存在感应当低于它下面的结果区。字段/值两格是代码编辑器，
+/// 盒子按 [`MONGO_QUERY_BUILDER_CELL_EDITOR_HEIGHT`] 定高后由外框居中。
+const MONGO_QUERY_BUILDER_CONTROL_HEIGHT: f32 = 28.;
+/// 组的左右内边距与嵌套缩进：比交互稿（10px / 30px）再收一档，
+/// 条件行因此多出十几像素给值格，长值不会被挤成省略号。
+const MONGO_QUERY_BUILDER_GROUP_PADDING: f32 = 6.;
+const MONGO_QUERY_BUILDER_GROUP_INDENT: f32 = 11.;
+/// 条件树的固定高度上限（交互稿 `.tree{max-height:240px}`）。
+///
+/// 超过就在树内滚动：条件再多也不许把结果区挤没——构建器是编辑条件的手段，
+/// 不是这一屏的主角。
+const MONGO_QUERY_BUILDER_TREE_MAX_HEIGHT: f32 = 240.;
 /// 运算符列的固定宽度，与字段/值两侧的自适应列分开。
-const MONGO_QUERY_BUILDER_OPERATOR_WIDTH: f32 = 150.;
+const MONGO_QUERY_BUILDER_OPERATOR_WIDTH: f32 = 140.;
 /// 字段格最小宽度：再窄连 `customer.tier` 这种路径都看不全。
 const MONGO_QUERY_BUILDER_FIELD_MIN_WIDTH: f32 = 140.;
 /// 值格最小宽度：等宽小字下约十来个字符，够看清 `"paid"` 或 `500`。
 const MONGO_QUERY_BUILDER_VALUE_MIN_WIDTH: f32 = 120.;
+/// 条件格编辑器的内容高度：上下各 8px 内边距 + 一行 11px 文字（行高 1.5）。
+///
+/// 编辑器不像单行 `Input` 会把自己垂直居中，它总是从盒子顶边往下排，
+/// 盒子贴着 28px 的格子放就会低 3.5px。给它这个「内边距 + 一行」的高度、
+/// 再由外框 `items_center` 居中，首行才落在格子中线上；多出的内边距被
+/// 外框裁掉，裁不到字。
+const MONGO_QUERY_BUILDER_CELL_EDITOR_HEIGHT: f32 = 8. + 11. * 1.5 + 8.;
 
-/// 构建器里的一行条件。
+type MongoBuilderPath = Vec<usize>;
+
+/// 数组组头部的字段格：只有 `$elemMatch` / `$not+$elemMatch` 组才有。
+///
+/// 单行 `InputState`——这一格不需要补全（数组路径从上面继承下来），
+/// 也就省掉多行编辑器那根滑块。
+#[derive(Debug)]
+struct MongoQueryBuilderFieldCell {
+    input: Entity<InputState>,
+    _subscription: Subscription,
+}
+
+/// 一个集合标签页的构建器状态（输入框实体随结构一起 drop）。
+struct MongoQueryBuilder {
+    root: MongoBuilderGroup,
+    error: Option<SharedString>,
+    /// 条件树的滚动位置。滚动条由 `vertical_scrollbar` 覆盖层绘制，句柄必须跨帧保留，
+    /// 否则每次重绘都回到顶部，拖不动。
+    scroll: ScrollHandle,
+}
+
+impl MongoQueryBuilder {
+    fn new() -> Self {
+        Self {
+            root: MongoBuilderGroup::new(MongoBuilderLogic::And),
+            error: None,
+            scroll: ScrollHandle::default(),
+        }
+    }
+
+    fn error(&self) -> Option<SharedString> {
+        self.error.clone()
+    }
+
+    fn group(&self, path: &[usize]) -> Option<&MongoBuilderGroup> {
+        let mut group = &self.root;
+        for index in path {
+            match group.children.get(*index)? {
+                MongoBuilderNode::Group(child) => group = child,
+                MongoBuilderNode::Condition(_) => return None,
+            }
+        }
+        Some(group)
+    }
+
+    fn group_mut(&mut self, path: &[usize]) -> Option<&mut MongoBuilderGroup> {
+        let mut group = &mut self.root;
+        for index in path {
+            match group.children.get_mut(*index)? {
+                MongoBuilderNode::Group(child) => group = child,
+                MongoBuilderNode::Condition(_) => return None,
+            }
+        }
+        Some(group)
+    }
+
+    /// 只给单测用：按路径取条件，避免测试自己再走一遍树。
+    #[cfg(test)]
+    fn condition(&self, path: &[usize]) -> Option<&MongoBuilderCondition> {
+        let (index, parent) = path.split_last()?;
+        match self.group(parent)?.children.get(*index)? {
+            MongoBuilderNode::Condition(condition) => Some(condition),
+            MongoBuilderNode::Group(_) => None,
+        }
+    }
+
+    fn condition_mut(&mut self, path: &[usize]) -> Option<&mut MongoBuilderCondition> {
+        let (index, parent) = path.split_last()?;
+        match self.group_mut(parent)?.children.get_mut(*index)? {
+            MongoBuilderNode::Condition(condition) => Some(condition),
+            MongoBuilderNode::Group(_) => None,
+        }
+    }
+
+    fn can_add_group(&self) -> bool {
+        self.root.group_count() < MONGO_QUERY_BUILDER_MAX_GROUPS
+    }
+
+    fn condition_count(&self) -> usize {
+        self.root.condition_count()
+    }
+}
+
+/// 把纯 JSON 树实例化为 GPUI 编辑器；每个叶节点只创建一次。
+fn build_mongo_builder_group(
+    view: &mut NavicatMain,
+    tab_id: TabId,
+    model: &MongoBuilderGroup,
+    window: &mut Window,
+    cx: &mut Context<NavicatMain>,
+) -> MongoBuilderGroup {
+    let children = model
+        .children
+        .iter()
+        .map(|node| match node {
+            MongoBuilderNode::Condition(condition) => {
+                let row = view.new_mongo_builder_row(
+                    tab_id,
+                    condition.field.clone(),
+                    condition.operator,
+                    condition.value.clone(),
+                    window,
+                    cx,
+                );
+                MongoBuilderNode::Condition(MongoBuilderCondition {
+                    field: String::new(),
+                    operator: row.operator,
+                    value: String::new(),
+                    row: Some(row),
+                })
+            }
+            MongoBuilderNode::Group(group) => MongoBuilderNode::Group(build_mongo_builder_group(
+                view, tab_id, group, window, cx,
+            )),
+        })
+        .collect();
+    MongoBuilderGroup {
+        logic: model.logic,
+        field: model.field.clone(),
+        open: model.open,
+        children,
+        field_input: model
+            .logic
+            .is_array()
+            .then(|| view.new_mongo_builder_field_cell(tab_id, model.field.clone(), window, cx)),
+    }
+}
+/// 构建器里的一行条件。字段与值由输入框实体持有，模型只保留运算符。
+///
+/// 两格都是 `EditorState`：只有代码编辑器能挂 `Lsp.completion_provider`，
+/// 而两格都要补全——字段补路径，值补同一行字段的取值。两者的滚动条问题
+/// 用同一招压掉，见 `new_mongo_builder_row`。
+#[derive(Debug)]
 struct MongoQueryBuilderRow {
-    /// 字段路径：允许任意文档路径（字段目录只是候选），因此是输入框而不是固定下拉。
-    ///
-    /// 用 `EditorState` 而非单行 `InputState`：只有编辑器能挂补全 provider
-    /// （`Lsp.completion_provider`），单行输入框没有这个入口。
     field: Entity<EditorState>,
     operator: MongoQueryOperator,
     value: Entity<EditorState>,
@@ -106,29 +246,6 @@ struct MongoQueryBuilderRow {
     _value_subscription: Subscription,
 }
 
-/// 一个集合标签页的构建器状态（输入框实体随结构一起 drop）。
-struct MongoQueryBuilder {
-    rows: Vec<MongoQueryBuilderRow>,
-    /// Filter 解析不出构建器形态时的提示；成功写回即清除。
-    error: Option<SharedString>,
-}
-
-impl MongoQueryBuilder {
-    fn new() -> Self {
-        Self {
-            rows: Vec::new(),
-            error: None,
-        }
-    }
-
-    fn rows(&self) -> &[MongoQueryBuilderRow] {
-        &self.rows
-    }
-
-    fn error(&self) -> Option<SharedString> {
-        self.error.clone()
-    }
-}
 
 impl NavicatMain {
     /// 展开/收起条件构建器。
@@ -159,30 +276,24 @@ impl NavicatMain {
             return;
         };
         let text = filter.read(cx).value().to_string();
-        match parse_mongo_builder_conditions(&text) {
-            Ok(conditions) => {
-                let rows = conditions
-                    .into_iter()
-                    .map(|(field, operator, value)| {
-                        self.new_mongo_builder_row(tab_id, field, operator, value, window, cx)
-                    })
-                    .collect();
+        match parse_mongo_builder_filter(&text) {
+            Ok(model) => {
+                let root = build_mongo_builder_group(self, tab_id, &model, window, cx);
                 let builder = self
                     .mongo_query_builders
                     .entry(tab_id)
                     .or_insert_with(MongoQueryBuilder::new);
-                builder.rows = rows;
+                builder.root = root;
                 builder.error = None;
                 self.mongo_query_builder_expanded.insert(tab_id, true);
             }
             Err(error) => {
-                // 展开并把提示摆在面板里：报错却什么都不弹，用户只会以为按钮坏了。
-                // 条件行保持为空、JSON 一个字都不动——拒绝改写的承诺要看得见。
+                // 拒绝时清空编辑器草稿，Filter 一个字都不动。
                 let builder = self
                     .mongo_query_builders
                     .entry(tab_id)
                     .or_insert_with(MongoQueryBuilder::new);
-                builder.rows.clear();
+                builder.root = MongoBuilderGroup::new(MongoBuilderLogic::And);
                 builder.error = Some(error);
                 self.mongo_query_builder_expanded.insert(tab_id, true);
             }
@@ -192,8 +303,13 @@ impl NavicatMain {
 
     /// 新建一行条件；两个输入框的改动都立刻回写 Filter。
     ///
-    /// 两格都挂补全：字段格按字段目录补路径，值格按**本行字段**补它出现过的取值
-    /// （`{"status": "pai` 在 Compass 里就这么补，用户不用去结果区翻写法）。
+    /// 两格都是 `EditorState`：只有代码编辑器能挂 `Lsp.completion_provider`，
+    /// 补全是这两格的主要输入方式。它是多行编辑器，所以要关掉那处会凭空长出一根
+    /// 滑块的设置——`scroll_beyond_last_line(Some(0))`。默认值在末行下方留半屏空白，
+    /// 滚动条把它当成可滚内容，28px 的格子里就多出一根拖不动的滑块。
+    /// 行数保持默认两行（没有对外改行的入口），多出的高度由外壳 `overflow_hidden` 裁掉。
+    /// `submit_on_enter` 则让回车只结束编辑——两格都是单值（路径 / 标量），
+    /// 多行编辑器默认会往里塞换行。
     fn new_mongo_builder_row(
         &mut self,
         tab_id: TabId,
@@ -202,29 +318,30 @@ impl NavicatMain {
         value: String,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> MongoQueryBuilderRow {
+    ) -> Rc<MongoQueryBuilderRow> {
         let view = cx.entity().downgrade();
         let field_input = cx.new(|cx| {
             let mut editor = EditorState::new(window, cx)
                 .placeholder(tr("app.mongo.query.builder_field_placeholder"))
                 .default_value(field)
-                // `submit_on_enter`：回车只结束编辑，不往条件格里塞换行。
                 .soft_wrap(false)
-                .submit_on_enter(true);
-            configure_mongo_builder_completion(&mut editor, None, view.clone(), tab_id, window, cx);
+                .submit_on_enter(true)
+                .scroll_beyond_last_line(Some(0));
+            configure_mongo_builder_field_completion(&mut editor, view.clone(), tab_id, window, cx);
             editor
         });
-        // 值格的候选要问同行字段格「你是什么字段」，所以先把字段格实体降级传进去。
+        // 值候选要问同行字段格「你是什么字段」，所以先把字段格实体降级传进去。
         let field_weak = field_input.downgrade();
         let value_input = cx.new(|cx| {
             let mut editor = EditorState::new(window, cx)
                 .placeholder(tr("app.mongo.query.builder_value_placeholder"))
                 .default_value(value)
                 .soft_wrap(false)
-                .submit_on_enter(true);
-            configure_mongo_builder_completion(
+                .submit_on_enter(true)
+                .scroll_beyond_last_line(Some(0));
+            configure_mongo_builder_value_completion(
                 &mut editor,
-                Some(field_weak),
+                field_weak,
                 view,
                 tab_id,
                 window,
@@ -250,28 +367,56 @@ impl NavicatMain {
                 }
             },
         );
-        MongoQueryBuilderRow {
+        Rc::new(MongoQueryBuilderRow {
             field: field_input,
             operator,
             value: value_input,
             _field_subscription: field_subscription,
             _value_subscription: value_subscription,
-        }
+        })
     }
 
-    /// 添加一行条件并聚焦到它的值输入框（新行的字段通常还没填，光标停在值上也合理——
-    /// 与交互稿「添加后聚焦新值输入」一致）。
+    /// 数组组头部的字段格：`$elemMatch` 必须知道作用在哪个数组上。
+    fn new_mongo_builder_field_cell(
+        &mut self,
+        tab_id: TabId,
+        field: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Rc<MongoQueryBuilderFieldCell> {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(tr("app.mongo.query.builder_array_field_placeholder"))
+                .default_value(field)
+        });
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            move |this: &mut Self, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.sync_mongo_query_builder(tab_id, window, cx);
+                }
+            },
+        );
+        Rc::new(MongoQueryBuilderFieldCell {
+            input,
+            _subscription: subscription,
+        })
+    }
+
+    /// 添加一行条件并聚焦到值输入框。
     pub(crate) fn add_mongo_builder_condition(
         &mut self,
         tab_id: TabId,
+        path: MongoBuilderPath,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self
-            .mongo_query_builders
-            .get(&tab_id)
-            .is_some_and(|builder| builder.rows.len() >= MONGO_QUERY_BUILDER_MAX_ROWS)
-        {
+        let can_add = self.mongo_query_builders.get(&tab_id).is_some_and(|builder| {
+            builder.group(&path).is_some()
+                && builder.condition_count() < MONGO_QUERY_BUILDER_MAX_CONDITIONS
+        });
+        if !can_add {
             return;
         }
         let row = self.new_mongo_builder_row(
@@ -284,75 +429,168 @@ impl NavicatMain {
         );
         row.value
             .update(cx, |input, cx| input.focus_handle(cx).focus(window, cx));
-        self.mongo_query_builders
-            .entry(tab_id)
-            .or_insert_with(MongoQueryBuilder::new)
-            .rows
-            .push(row);
+        if let Some(group) = self
+            .mongo_query_builders
+            .get_mut(&tab_id)
+            .and_then(|builder| builder.group_mut(&path))
+        {
+            group.children.push(MongoBuilderNode::Condition(MongoBuilderCondition {
+                field: String::new(),
+                operator: MongoQueryOperator::Eq,
+                value: String::new(),
+                row: Some(row),
+            }));
+        }
         cx.notify();
     }
 
-    /// 移除一行；JSON 随之重算（被移除字段的过滤条件同时消失）。
-    pub(crate) fn remove_mongo_builder_condition(
+    pub(crate) fn add_mongo_builder_group(
         &mut self,
         tab_id: TabId,
-        index: usize,
+        path: MongoBuilderPath,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(builder) = self.mongo_query_builders.get_mut(&tab_id)
-            && index < builder.rows.len()
+        let can_add = self.mongo_query_builders.get(&tab_id).is_some_and(|builder| {
+            builder.can_add_group()
+                && builder.condition_count() < MONGO_QUERY_BUILDER_MAX_CONDITIONS
+                && path.len() < MONGO_QUERY_BUILDER_MAX_DEPTH
+                && builder.group(&path).is_some()
+        });
+        if !can_add {
+            return;
+        }
+        let mut child = MongoBuilderGroup::new(MongoBuilderLogic::And);
+        // 新建的子组直接展开：刚建出来就折成一行，用户会找不到自己刚加的组。
+        child.open = true;
+        child.children.push(MongoBuilderNode::Condition(MongoBuilderCondition {
+            field: String::new(),
+            operator: MongoQueryOperator::Eq,
+            value: String::new(),
+            row: None,
+        }));
+        let child = build_mongo_builder_group(self, tab_id, &child, window, cx);
+        if let Some(group) = self
+            .mongo_query_builders
+            .get_mut(&tab_id)
+            .and_then(|builder| builder.group_mut(&path))
         {
-            builder.rows.remove(index);
+            group.children.push(MongoBuilderNode::Group(child));
         }
         self.sync_mongo_query_builder(tab_id, window, cx);
+        cx.notify();
     }
 
-    /// 字段候选（字段目录）选中后写进该行的字段输入框。
-    ///
-    /// `set_value` 不触发 `InputEvent::Change`，所以这里手动补一次同步。
-    pub(crate) fn set_mongo_builder_field(
+    /// 删除条件或子组；根组只清空，不移除自己的编辑入口。
+    pub(crate) fn remove_mongo_builder_node(
         &mut self,
         tab_id: TabId,
-        index: usize,
-        field: String,
+        path: MongoBuilderPath,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(input) = self
-            .mongo_query_builders
-            .get(&tab_id)
-            .and_then(|builder| builder.rows.get(index))
-            .map(|row| row.field.clone())
-        else {
-            return;
-        };
-        input.update(cx, |input, cx| input.set_value(field, window, cx));
+        if let Some(builder) = self.mongo_query_builders.get_mut(&tab_id) {
+            if path.is_empty() {
+                builder.root.children.clear();
+            } else if let Some((index, parent)) = path.split_last()
+                && let Some(group) = builder.group_mut(parent)
+                && *index < group.children.len()
+            {
+                group.children.remove(*index);
+            }
+        }
         self.sync_mongo_query_builder(tab_id, window, cx);
+        cx.notify();
     }
 
     pub(crate) fn set_mongo_builder_operator(
         &mut self,
         tab_id: TabId,
-        index: usize,
+        path: MongoBuilderPath,
         operator: MongoQueryOperator,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(row) = self
+        if let Some(condition) = self
             .mongo_query_builders
             .get_mut(&tab_id)
-            .and_then(|builder| builder.rows.get_mut(index))
+            .and_then(|builder| builder.condition_mut(&path))
         {
-            row.operator = operator;
+            condition.operator = operator;
         }
         self.sync_mongo_query_builder(tab_id, window, cx);
     }
 
-    /// 把条件行拼成 Filter JSON 写回编辑器。
-    ///
-    /// 没填字段或没填值的行直接跳过（`$exists` 除外）：用户加了行还没填完时，
-    /// 不该出现 `{ "field": "" }` 这种把结果查空的过滤条件。
+    pub(crate) fn set_mongo_builder_logic(
+        &mut self,
+        tab_id: TabId,
+        path: MongoBuilderPath,
+        logic: MongoBuilderLogic,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let needs_field_input = logic.is_array();
+        if let Some(group) = self
+            .mongo_query_builders
+            .get_mut(&tab_id)
+            .and_then(|builder| builder.group_mut(&path))
+        {
+            // 离开数组组时字段路径跟着失效：留着会让下一次切回来显示出
+            // 一个用户已经看不见的旧值。
+            if !needs_field_input {
+                group.field.clear();
+                group.field_input = None;
+            }
+            group.logic = logic;
+            group.open = true;
+        }
+        // 切进数组组时补一个字段输入框——它只在数组组里有意义。
+        if needs_field_input && self.mongo_builder_group_field_input(tab_id, &path).is_none() {
+            let cell = self.new_mongo_builder_field_cell(tab_id, String::new(), window, cx);
+            if let Some(group) = self
+                .mongo_query_builders
+                .get_mut(&tab_id)
+                .and_then(|builder| builder.group_mut(&path))
+            {
+                group.field_input = Some(cell);
+            }
+        }
+        self.sync_mongo_query_builder(tab_id, window, cx);
+        cx.notify();
+    }
+
+    fn mongo_builder_group_field_input(
+        &self,
+        tab_id: TabId,
+        path: &[usize],
+    ) -> Option<Rc<MongoQueryBuilderFieldCell>> {
+        self.mongo_query_builders
+            .get(&tab_id)?
+            .group(path)?
+            .field_input
+            .clone()
+    }
+
+    /// 展开/收起子组。收起态只画组头，展开才铺开子项——默认收起，
+    /// 否则十个条件一展开就吃掉半屏，结果区跟着被挤没。
+    pub(crate) fn toggle_mongo_builder_group(
+        &mut self,
+        tab_id: TabId,
+        path: MongoBuilderPath,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(group) = self
+            .mongo_query_builders
+            .get_mut(&tab_id)
+            .and_then(|builder| builder.group_mut(&path))
+        {
+            group.open = !group.open;
+        }
+        cx.notify();
+    }
+
+    /// 把递归条件树拼成 Filter JSON。未完成条件被跳过，空组不产出过滤条件。
     fn sync_mongo_query_builder(
         &mut self,
         tab_id: TabId,
@@ -369,39 +607,59 @@ impl NavicatMain {
         let Some(builder) = self.mongo_query_builders.get(&tab_id) else {
             return;
         };
-        let mut document = serde_json::Map::new();
-        for row in builder.rows() {
-            let field = row.field.read(cx).value().to_string();
-            let field = field.trim();
-            if field.is_empty() {
-                continue;
-            }
-            let text = row.value.read(cx).value().to_string();
-            let Some(value) = mongo_builder_condition_value(row.operator, &text) else {
-                continue;
-            };
-            document.insert(
-                field.to_string(),
-                mongo_builder_expression(row.operator, value),
-            );
-        }
-        let json = serde_json::Value::Object(document).to_string();
-        filter.update(cx, |editor, cx| editor.set_value(json, window, cx));
-        let had_error = self
-            .mongo_query_builders
-            .get(&tab_id)
-            .is_some_and(|builder| builder.error.is_some());
+        let model = mongo_builder_snapshot(&builder.root, cx);
+        filter.update(cx, |editor, cx| {
+            editor.set_value(mongo_builder_group_json(&model).to_string(), window, cx)
+        });
+        let had_error = builder.error.is_some();
         if let Some(builder) = self.mongo_query_builders.get_mut(&tab_id) {
             builder.error = None;
         }
-        // 只在错误提示真的消失时才重绘本视图。
-        //
-        // 这里每条按键都会走到，而条件行与 Filter 都是独立实体，各自 notify 就够重绘自己；
-        // 无条件 `cx.notify()` 会让整个主视图（侧栏树、标签条、文档虚拟列表、查询面板）
-        // 每次按键多排一帧——实测每键多 ~1.4ms，正是「打开条件构建器后帧率往下掉」的来源。
+        // 每键不通知整页；编辑器与条件格各自重绘。
         if had_error {
             cx.notify();
         }
+    }
+}
+
+/// 读取所有叶编辑器，生成不包含 GPUI 类型的序列化快照。
+///
+/// 字段留空的条件只在数组组里有意义（指「数组元素自身」）；普通组里它就是
+/// 一条没写完的条件，跳过不写进 JSON——不编造字段名，免得静默查错字段。
+fn mongo_builder_snapshot(group: &MongoBuilderGroup, cx: &App) -> MongoBuilderGroup {
+    let inside_elem = group.logic.is_array();
+    let children = group
+        .children
+        .iter()
+        .filter_map(|node| match node {
+            MongoBuilderNode::Condition(condition) => {
+                let row = condition.row.as_ref()?;
+                let field = row.field.read(cx).value().trim().to_string();
+                if field.is_empty() && !inside_elem {
+                    return None;
+                }
+                Some(MongoBuilderNode::Condition(MongoBuilderCondition {
+                    field,
+                    operator: condition.operator,
+                    value: row.value.read(cx).value().to_string(),
+                    row: Some(row.clone()),
+                }))
+            }
+            MongoBuilderNode::Group(group) => {
+                Some(MongoBuilderNode::Group(mongo_builder_snapshot(group, cx)))
+            }
+        })
+        .collect();
+    MongoBuilderGroup {
+        logic: group.logic,
+        // 数组组的字段路径同样来自输入框，快照里换成纯字符串。
+        field: group
+            .field_input
+            .as_ref()
+            .map_or_else(|| group.field.clone(), |cell| cell.input.read(cx).value().trim().to_string()),
+        open: group.open,
+        children,
+        field_input: group.field_input.clone(),
     }
 }
 
@@ -488,70 +746,14 @@ fn format_mongo_builder_scalar(value: &serde_json::Value) -> String {
     value.to_string()
 }
 
-/// Filter JSON → 条件行；只接受能无损表达成「字段 / 运算符 / 值」的形态。
-///
-/// 语法与连接器执行时的 [`mongo_parse_json`] 同规则：先严格 JSON，失败再按 JSON5
-/// 收（无引号键、单引号、注释、尾逗号）。否则会出现「能查、构建器却报语法错」——
-/// Compass 查询栏里常见的 `{event_type: "page_view"}` 正是这种写法。
-///
-/// [`mongo_parse_json`]: ../../../../crates/fluxdb-connectors/src/parts/mongo/client.rs
-fn parse_mongo_builder_conditions(
-    text: &str,
-) -> Result<Vec<(String, MongoQueryOperator, String)>, SharedString> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
-    }
-    let value = parse_mongo_relaxed_json(trimmed)
-        .ok_or_else(|| tr("app.mongo.query.builder_json_error"))?;
-    let Some(document) = value.as_object() else {
-        return Err(tr("app.mongo.query.builder_json_error"));
-    };
-    let complex = || tr("app.mongo.query.builder_complex_error");
-    let mut conditions = Vec::new();
-    for (field, expression) in document {
-        if field.starts_with('$') {
-            return Err(complex());
-        }
-        let (operator, value) = match expression {
-            // 包装对象里必须恰好一个受支持的 `$op`：`$or`、`$regex`、多运算符组合都拒绝。
-            serde_json::Value::Object(wrapper) => {
-                let mut entries = wrapper.iter();
-                let (Some((key, value)), None) = (entries.next(), entries.next()) else {
-                    return Err(complex());
-                };
-                let Some(operator) = MongoQueryOperator::from_json_operator(key) else {
-                    return Err(complex());
-                };
-                if operator == MongoQueryOperator::Exists && !value.is_boolean() {
-                    return Err(complex());
-                }
-                (operator, value)
-            }
-            other => (MongoQueryOperator::Eq, other),
-        };
-        let text = match (operator, value) {
-            (MongoQueryOperator::In, serde_json::Value::Array(items)) => items
-                .iter()
-                .map(format_mongo_builder_scalar)
-                .collect::<Vec<_>>()
-                .join(", "),
-            // 等值条件挂数组/对象时，一格输入框表达不了，别硬拆。
-            (_, value) if value.is_array() || value.is_object() => return Err(complex()),
-            (_, value) => format_mongo_builder_scalar(value),
-        };
-        conditions.push((field.clone(), operator, text));
-    }
-    Ok(conditions)
-}
-
-/// 构建器渲染快照：只带这一帧要用的句柄。
-///
-/// 渲染期间不回头读视图状态（`Context` 已被借用），所以先把行摊平成值。
+/// 构建器渲染快照：克隆轻量实体句柄，不在渲染期间读视图状态。
+#[derive(Clone)]
 struct MongoQueryBuilderView {
-    /// 每行：字段编辑器、运算符、值编辑器。
-    rows: Vec<(Entity<EditorState>, MongoQueryOperator, Entity<EditorState>)>,
+    root: MongoBuilderGroup,
     error: Option<SharedString>,
+    condition_count: usize,
+    can_add_group: bool,
+    scroll: ScrollHandle,
 }
 
 fn mongo_query_builder_view(
@@ -560,16 +762,18 @@ fn mongo_query_builder_view(
 ) -> MongoQueryBuilderView {
     builders.get(&tab_id).map_or_else(
         || MongoQueryBuilderView {
-            rows: Vec::new(),
+            root: MongoBuilderGroup::new(MongoBuilderLogic::And),
             error: None,
+            condition_count: 0,
+            can_add_group: true,
+            scroll: ScrollHandle::default(),
         },
         |builder| MongoQueryBuilderView {
-            rows: builder
-                .rows()
-                .iter()
-                .map(|row| (row.field.clone(), row.operator, row.value.clone()))
-                .collect(),
+            root: builder.root.clone(),
             error: builder.error(),
+            condition_count: builder.condition_count(),
+            can_add_group: builder.can_add_group(),
+            scroll: builder.scroll.clone(),
         },
     )
 }
@@ -583,6 +787,9 @@ struct MongoQueryTone {
     green_soft: gpui::Rgba,
     /// 绿色描边（交互稿 `--green-line`）。
     green_line: gpui::Rgba,
+    /// 数组组（`$elemMatch`）的青灰字色：和普通逻辑组区分开，
+    /// 因为它们换的是作用范围，不只是连接词。
+    array_ink: gpui::Rgba,
 }
 
 fn mongo_query_tone(colors: UiColors) -> MongoQueryTone {
@@ -591,155 +798,586 @@ fn mongo_query_tone(colors: UiColors) -> MongoQueryTone {
             mint: rgb(0x222c26),
             green_soft: rgb(0x263e2f),
             green_line: rgb(0x3b5b45),
+            array_ink: rgb(0x7fa8c9),
         }
     } else {
         MongoQueryTone {
             mint: rgb(0xf6faf7),
             green_soft: rgb(0xeaf4ed),
             green_line: rgb(0xc6ddce),
+            array_ink: rgb(0x2f6f9e),
         }
     }
 }
 
-/// 构建器分节：条件行，「添加条件」挂在最后一行末尾。
+/// 条件构建抽屉。
 ///
-/// 没有单独的列名行：字段格自己写「字段路径，如 customer.tier」，运算符显示中文名，
-/// 值格写「值，如 "paid" 或 500」——三列各自说清楚是什么，再挂一条列名行就是重复，
-/// 还白吃掉一条 ~14px 的横向带。
-///
-/// 「添加条件」也不单独占一行：它跟着最后一个条件行走（没有条件时与空提示同行），
-/// 否则一条 28px 的横向带只放得下一个按钮。整块只有条件行本身的高度。
+/// 结构对齐交互稿：顶部一条 28px 工具条（根组逻辑 + 计数 + 新建入口），
+/// 下面是条件树。树**封顶 240px**并在内部滚动——条件再多也不许把结果区挤没，
+/// 构建器是编辑条件的手段，不是这一屏的主角。抽屉收起时完全不占高度。
 fn mongo_query_builder_section(
     tab_id: TabId,
     builder: &MongoQueryBuilderView,
-    field_paths: &[SharedString],
     colors: UiColors,
     tone: MongoQueryTone,
     window: &Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    // 字段目录整块共享一次：每行各持一份会让 6 行 × 每帧各克隆一遍全量路径，
-    // 目录越大越贵（实测 52 字段时每帧多 ~0.5ms）。
-    let field_paths: Rc<[SharedString]> = Rc::from(field_paths);
-    let mut rows = div().flex().flex_col().gap(px(6.));
-    let count = builder.rows.len();
-    let can_add = count < MONGO_QUERY_BUILDER_MAX_ROWS;
-    for (index, (field, operator, value)) in builder.rows.iter().enumerate() {
-        let row = mongo_query_builder_row(
-            tab_id,
-            index,
-            field,
-            *operator,
-            value,
-            &field_paths,
-            colors,
-            tone,
-            window,
-            cx,
-        );
-        rows = if index + 1 == count {
-            // 末行：条件行吃掉剩余宽度，右侧接「添加条件」与快捷键提示。
-            rows.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .child(div().flex_1().min_w(px(0.)).child(row))
-                    .child(mongo_query_builder_add_button(
-                        tab_id, can_add, colors, cx,
-                    ))
-                    .child(mongo_query_builder_run_hint(colors)),
-            )
-        } else {
-            rows.child(row)
-        };
-    }
-    if count == 0 {
-        // 解析失败时说清楚为什么没条件行；否则只是「还没有条件」的空提示。
-        let (message, color) = match &builder.error {
-            Some(error) => (error.clone(), colors.danger),
-            None => (tr("app.mongo.query.builder_empty"), colors.muted),
-        };
-        rows = rows.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .text_size(px(10.))
-                        .text_color(color)
-                        .child(message),
-                )
-                .child(mongo_query_builder_add_button(
-                    tab_id, can_add, colors, cx,
-                ))
-                .child(mongo_query_builder_run_hint(colors)),
-        );
-    }
-
-    div()
-        .debug_selector(|| "mongo-query-builder".to_string())
-        .px(px(12.))
-        .py(px(8.))
-        .border_t_1()
+    let path = MongoBuilderPath::new();
+    let selector_path = mongo_builder_path_label(&path);
+    let root = &builder.root;
+    // 根组的数组字段格也挂在这条工具条上：根组若选了 `$elemMatch`，
+    // 字段和逻辑一样是这一层的属性，不该另起一行。
+    let root_field_cell = root
+        .field_input
+        .as_ref()
+        .map(|cell| mongo_query_builder_array_field_cell(&path, cell, colors, window, cx));
+    let mut strip = div()
+        .debug_selector(|| "mongo-query-builder-toolbar".to_string())
+        .h(px(28.))
+        .flex_none()
+        .px(px(10.))
+        .flex()
+        .items_center()
+        // 窄窗口下工具条内容会顶出卡片，右侧按钮被推到窗外——点击落到窗口外会被
+        // gpui 静默丢弃，看起来像「按钮没反应」。计数文字先让位（截断），按钮不让。
+        .overflow_hidden()
+        .gap_2()
+        .border_b_1()
         .border_color(colors.border_soft)
         .bg(tone.mint)
+        .child(mongo_query_builder_logic_toggle(
+            tab_id,
+            &path,
+            root.logic,
+            &selector_path,
+            tone,
+            colors,
+            cx,
+        ));
+    if let Some(cell) = root_field_cell {
+        strip = strip.child(cell);
+    }
+    strip = strip
+        // 说明与计数同处一个可收缩块：窄窗口下这里先被截断，右侧按钮保持完整宽度。
+        // 按钮本身不让位——它们被挤出窗口就点不到了。
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .overflow_hidden()
+                .flex()
+                .items_center()
+                .gap_2()
+                // 说明随逻辑走：分段控件上只写 AND/OR/NOR/ELEM，这里说清它对这一组意味着什么。
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(10.))
+                        .text_color(colors.muted)
+                        .whitespace_nowrap()
+                        .child(tr(root.logic.label_key())),
+                )
+                .child(
+                    div()
+                        .min_w(px(0.))
+                        .overflow_hidden()
+                        .text_size(px(10.))
+                        .text_color(colors.muted)
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(SharedString::from(format!(
+                            "{} · {}",
+                            tr("app.mongo.query.builder_condition_count")
+                                .replace("%{count}", &builder.condition_count.to_string()),
+                            tr("app.mongo.query.builder_group_count").replace(
+                                "%{count}",
+                                &root.group_count().saturating_sub(1).to_string()
+                            ),
+                        ))),
+                ),
+        )
+        .child(mongo_query_builder_add_button(
+            tab_id,
+            path.clone(),
+            builder.condition_count < MONGO_QUERY_BUILDER_MAX_CONDITIONS,
+            colors,
+            cx,
+        ))
+        .child(mongo_query_builder_add_group_button(
+            tab_id,
+            path,
+            builder.can_add_group && builder.condition_count < MONGO_QUERY_BUILDER_MAX_CONDITIONS,
+            colors,
+            cx,
+        ))
+        .child(mongo_query_builder_collapse_button(tab_id, colors, cx));
+    // 内边距放在**内层**：滚动容器自己带内边距时，gpui 会把这段内边距同时算进
+    // 内容尺寸与视口尺寸，`max_offset` 于是恒等于两倍内边距——单个条件也会判成
+    // 「内容溢出」，右侧凭空冒出拖不动的滚动条。滚动容器零内边距，内容多高视口
+    // 就多高，只有真正超出 240px 才有可滚区间。
+    let mut rows = div().w_full().flex().flex_col().gap(px(4.));
+    // 根组自己的子项直接排在树里，不再套一层卡片：根没有「括号」可言，
+    // 套一张卡只是白吃一圈 6px 内边距和一条描边。
+    for (index, node) in root.children.iter().enumerate() {
+        rows = match node {
+            MongoBuilderNode::Condition(condition) => {
+                let Some(row) = &condition.row else { continue };
+                rows.child(mongo_query_builder_row(
+                    tab_id,
+                    vec![index],
+                    row,
+                    colors,
+                    window,
+                    cx,
+                ))
+            }
+            MongoBuilderNode::Group(group) => rows.child(mongo_query_builder_group(
+                tab_id,
+                group,
+                vec![index],
+                builder.condition_count,
+                builder.can_add_group,
+                colors,
+                tone,
+                window,
+                cx,
+            )),
+        };
+    }
+    if root.children.is_empty() {
+        rows = rows.child(
+            div()
+                .text_size(px(10.))
+                .text_color(colors.muted)
+                .child(tr("app.mongo.query.builder_empty")),
+        );
+    }
+    // 滚动条覆盖层必须挂在**滚动容器之外**。
+    //
+    // `vertical_scrollbar` 加的是 `absolute().inset_0()` 的覆盖层。它和
+    // `overflow_y_scroll()` 挂在同一个 div 上时，覆盖层就成了滚动内容的子节点：
+    // 内容滚多远它跟着滚多远，看上去永远是「滚动条不动」。所以照 `Scrollable`
+    // 的结构分两层——外层只有裁剪边界与覆盖层，内层才承接滚动。
+    let tree_area = div()
+        .debug_selector(|| "mongo-query-builder-tree".to_string())
+        .id("mongo-query-builder-tree")
+        // 高度按内容走、被 `max_h` 截住：树在 `flex_col` 里若允许收缩，它会被下面的
+        // 结果区一路挤扁（条件行被裁掉、点都点不到），若保持默认的 `min-height: auto`
+        // 又会被内容撑过 240px。`flex_none` + `max_h` 两者兼得：内容多高就多高，
+        // 到 240px 停住，超出的在树内滚动。
+        .w_full()
+        .max_h(px(MONGO_QUERY_BUILDER_TREE_MAX_HEIGHT))
+        .flex_none()
+        .min_h(px(0.))
+        .track_scroll(&builder.scroll)
+        // 用原生 `overflow_y_scroll()`，不用 `overflow_y_scrollbar()`：后者的根节点
+        // 固定 `size_full()`，在高度按内容的外层里会把自己压成 0 高。
+        .overflow_y_scroll()
+        .child(rows.px(px(10.)).py(px(5.)));
+    // 外层与外层同高（内层被 `max_h` 截住后即视口高度），覆盖层才有正确的视口。
+    let tree = div()
+        .relative()
+        .flex_none()
+        .w_full()
+        .child(tree_area)
+        .vertical_scrollbar(&builder.scroll);
+    let mut section = div()
+        .debug_selector(|| "mongo-query-builder".to_string())
+        .border_t_1()
+        .border_color(colors.border_soft)
         .flex()
         .flex_col()
-        .child(rows)
+        .child(strip)
+        .child(tree);
+    if let Some(error) = &builder.error {
+        section = section.child(
+            div()
+                .px(px(10.))
+                .pb(px(5.))
+                .text_size(px(10.))
+                .text_color(colors.danger)
+                .child(error.clone()),
+        );
+    }
+    section
 }
 
-/// 一行条件：IF/AND | 字段 | 运算符 | 值 | 移除。
 #[allow(clippy::too_many_arguments)]
-fn mongo_query_builder_row(
+fn mongo_query_builder_group(
     tab_id: TabId,
-    index: usize,
-    field: &Entity<EditorState>,
-    operator: MongoQueryOperator,
-    value: &Entity<EditorState>,
-    field_paths: &Rc<[SharedString]>,
+    group: &MongoBuilderGroup,
+    path: MongoBuilderPath,
+    condition_count: usize,
+    can_add_group: bool,
     colors: UiColors,
     tone: MongoQueryTone,
     window: &Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    div()
-        .debug_selector(move || format!("mongo-query-builder-row:{index}"))
+    let selector_path = mongo_builder_path_label(&path);
+    let logic = group.logic;
+    let is_array = logic.is_array();
+    // 组默认折成一行：组头本身就是「这组是什么」的完整摘要，
+    // 展开才铺开子项。这样十个条件也只占十行，不会一展开就吃掉半屏。
+    let mut head = div()
+        .debug_selector({
+            let path = selector_path.clone();
+            move || format!("mongo-query-builder-group-head:{path}")
+        })
+        .h(px(26.))
         .flex()
         .items_center()
         .gap_2()
-        // 逻辑符：所有条件按 AND 组合，第一行写 IF 表示起点。
+        .pl(px(7.))
+        .pr(px(4.))
+        .rounded(px(5.))
+        .border_1()
+        .border_dashed()
+        .border_color(tone.green_line)
+        .bg(tone.mint)
+        .cursor_pointer()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener({
+                let path = path.clone();
+                move |this, _: &MouseDownEvent, window, cx| {
+                    this.toggle_mongo_builder_group(tab_id, path.clone(), window, cx);
+                    cx.stop_propagation();
+                }
+            }),
+        )
         .child(
             div()
-                .w(px(21.))
-                .h(px(18.))
                 .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(4.))
-                .when(index > 0, |this| {
-                    this.border_1().border_color(tone.green_line).bg(tone.green_soft)
-                })
+                .w(px(10.))
                 .text_size(px(8.))
-                .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_color(if index == 0 {
-                    colors.muted
-                } else {
-                    colors.success
-                })
-                .child(if index == 0 { "IF" } else { "AND" }),
+                .text_color(colors.muted)
+                .child(if group.open { "▾" } else { "▸" }),
         )
+        .child(mongo_query_builder_logic_toggle(
+            tab_id,
+            &path,
+            logic,
+            &selector_path,
+            tone,
+            colors,
+            cx,
+        ));
+    if let Some(cell) = group
+        .field_input
+        .as_ref()
+        .map(|cell| mongo_query_builder_array_field_cell(&path, cell, colors, window, cx))
+    {
+        head = head.child(cell);
+    }
+    // 收起时组头自己就是一句摘要（`sku = "A-1" …`），展开时摘要让位给内容。
+    if !group.open {
+        head = head.child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .overflow_hidden()
+                .text_size(px(10.))
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
+                .text_color(colors.muted)
+                .whitespace_nowrap()
+                .child(mongo_builder_group_preview(group)),
+        );
+    } else {
+        head = head.child(div().flex_1());
+    }
+    head = head
+        .child(
+            div()
+                .flex_none()
+                .text_size(px(10.))
+                .text_color(colors.muted)
+                .whitespace_nowrap()
+                .child(SharedString::from(format!(
+                    "{} {}",
+                    group.condition_count(),
+                    tr("app.mongo.query.builder_condition_unit")
+                ))),
+        )
+        .child(mongo_query_builder_add_button(
+            tab_id,
+            path.clone(),
+            condition_count < MONGO_QUERY_BUILDER_MAX_CONDITIONS,
+            colors,
+            cx,
+        ))
+        .child(mongo_query_builder_add_group_button(
+            tab_id,
+            path.clone(),
+            can_add_group && condition_count < MONGO_QUERY_BUILDER_MAX_CONDITIONS,
+            colors,
+            cx,
+        ))
+        .child(mongo_query_builder_remove_group_button(
+            tab_id,
+            path.clone(),
+            &selector_path,
+            colors,
+            cx,
+        ));
+    let container = div()
+        .debug_selector({
+            let path = selector_path.clone();
+            move || format!("mongo-query-builder-group:{path}")
+        })
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(head);
+    if !group.open {
+        return container;
+    }
+    // 展开后子项缩进 11px 并挂一条竖轨，用位置表达括号；
+    // 组头已经画了边界，再套一张卡会多出两圈描边。
+    let mut body = div()
+        .ml(px(MONGO_QUERY_BUILDER_GROUP_INDENT))
+        .pl(px(MONGO_QUERY_BUILDER_GROUP_PADDING))
+        .border_l_2()
+        .border_color(if is_array { tone.green_line } else { colors.border })
+        .flex()
+        .flex_col()
+        .gap(px(4.));
+    for (index, node) in group.children.iter().enumerate() {
+        let mut child_path = path.clone();
+        child_path.push(index);
+        body = match node {
+            MongoBuilderNode::Condition(condition) => {
+                let Some(row) = &condition.row else { continue };
+                body.child(mongo_query_builder_row(
+                    tab_id,
+                    child_path,
+                    row,
+                    colors,
+                    window,
+                    cx,
+                ))
+            }
+            MongoBuilderNode::Group(group) => body.child(mongo_query_builder_group(
+                tab_id,
+                group,
+                child_path,
+                condition_count,
+                can_add_group,
+                colors,
+                tone,
+                window,
+                cx,
+            )),
+        };
+    }
+    if group.children.is_empty() {
+        body = body.child(
+            div()
+                .text_size(px(10.))
+                .text_color(colors.muted)
+                .child(tr("app.mongo.query.builder_empty")),
+        );
+    }
+    container.child(body)
+}
+
+/// 组头摘要：第一条条件 + 条数，收起时唯一能看见的信息。
+///
+/// 只读模型里的纯文本，不碰输入框实体——收起态不渲染子项，没有实体可读。
+fn mongo_builder_group_preview(group: &MongoBuilderGroup) -> SharedString {
+    let Some(first) = group.children.first() else {
+        return tr("app.mongo.query.builder_empty_group");
+    };
+    let text = match first {
+        MongoBuilderNode::Condition(condition) => format!(
+            "{} {} {}",
+            if condition.field.is_empty() {
+                tr("app.mongo.query.builder_element")
+            } else {
+                condition.field.clone().into()
+            },
+            condition.operator.symbol(),
+            condition.value
+        ),
+        MongoBuilderNode::Group(group) => group.logic.short_label().to_string(),
+    };
+    if group.children.len() > 1 {
+        SharedString::from(format!("{text} …"))
+    } else {
+        SharedString::from(text)
+    }
+}
+
+fn mongo_builder_path_label(path: &[usize]) -> String {
+    if path.is_empty() {
+        "root".to_string()
+    } else {
+        path.iter().map(usize::to_string).collect::<Vec<_>>().join("-")
+    }
+}
+
+/// 组的逻辑分段控件（交互稿 `.seg`）：五个组类型全铺开。
+///
+/// 直接铺五段而不是收进下拉：组类型是**结构**差异（NOR 换连接词，ELEM 换作用范围），
+/// 不是样式偏好；藏在二级菜单里每次切换都要多两次点击，还看不出有哪几种可选。
+/// 两段数组组用青灰区分——它们选中的是「作用在某数组上」，不只是换个连接词。
+fn mongo_query_builder_logic_toggle(
+    tab_id: TabId,
+    path: &MongoBuilderPath,
+    current: MongoBuilderLogic,
+    selector_path: &str,
+    tone: MongoQueryTone,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let segments = MongoBuilderLogic::ALL
+        .into_iter()
+        .map(|logic| {
+            let selected = logic == current;
+            let label = logic.short_label();
+            let name = logic.selector();
+            let path = path.clone();
+            Button::new(SharedString::from(format!(
+                "mongo-builder-logic:{name}:{}:{selector_path}",
+                tab_id.0
+            )))
+            .debug_selector({
+                let selector_path = selector_path.to_string();
+                move || format!("mongo-query-builder-logic:{selector_path}:{name}")
+            })
+            .ghost()
+            .small()
+            .h(px(18.))
+            .px(px(6.))
+            .rounded(px(3.))
+            .text_size(px(9.))
+            .font_family(crate::PLATFORM_MONOSPACE_FONT)
+            .when(selected, |this| {
+                this.bg(colors.panel_bg).text_color(colors.success).shadow(vec![
+                    box_shadow(
+                        px(0.),
+                        px(1.),
+                        px(3.),
+                        px(0.),
+                        hsla(0., 0., 0., if colors.is_dark { 0.35 } else { 0.12 }),
+                    ),
+                ])
+            })
+            .when(!selected, |this| {
+                this.text_color(if logic.is_array() {
+                    tone.array_ink
+                } else {
+                    colors.muted
+                })
+            })
+            .label(label)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.set_mongo_builder_logic(tab_id, path.clone(), logic, window, cx);
+                cx.stop_propagation();
+            }))
+        })
+        .collect::<Vec<_>>();
+    div()
+        .debug_selector({
+            let selector_path = selector_path.to_string();
+            move || format!("mongo-query-builder-logic:{selector_path}")
+        })
+        .flex()
+        .items_center()
+        .gap(px(2.))
+        .p(px(2.))
+        .rounded(px(4.))
+        .bg(tone.green_soft)
+        .children(segments)
+}
+
+/// 数组组的字段格：`$elemMatch` 必须知道作用在哪个数组上。
+///
+/// 空字段不产出条件（见模型层的 `mongo_builder_elem_group_json`），
+/// 所以这里把空格标成 danger 描边——它是必填，不是可选项。
+fn mongo_query_builder_array_field_cell(
+    path: &MongoBuilderPath,
+    cell: &Rc<MongoQueryBuilderFieldCell>,
+    colors: UiColors,
+    window: &Window,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let selector_path = mongo_builder_path_label(path);
+    let body_selector = format!("mongo-query-builder-array-field-body:{selector_path}");
+    let focused = cell.input.read(cx).focus_handle(cx).is_focused(window);
+    let empty = cell.input.read(cx).value().trim().is_empty();
+    div()
+        .debug_selector(move || format!("mongo-query-builder-array-field:{selector_path}"))
+        .flex_none()
+        .w(px(150.))
+        .h(px(22.))
+        .rounded(px(4.))
+        .border_1()
+        .border_color(if empty {
+            colors.danger
+        } else {
+            mongo_query_input_border(focused, colors)
+        })
+        .bg(colors.input_bg)
+        .overflow_hidden()
+        .flex()
+        .items_center()
+        .child(mongo_query_input_body(
+            &cell.input,
+            Some(body_selector),
+            10.5,
+            false,
+        ))
+}
+
+/// 收起按钮：交互稿里的「收起 ⌃」。
+fn mongo_query_builder_collapse_button(
+    tab_id: TabId,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Button {
+    Button::new(("mongo-query-builder-collapse", tab_id.0))
+        .debug_selector(|| "mongo-query-builder-collapse".to_string())
+        .ghost()
+        .small()
+        .h(px(22.))
+        .px(px(7.))
+        .text_size(px(10.5))
+        .text_color(colors.success)
+        .label(tr("app.mongo.query.builder_collapse"))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.toggle_mongo_query_builder(tab_id, window, cx);
+            cx.stop_propagation();
+        }))
+}
+
+/// 一行条件：字段 | 运算符 | 值 | 移除。
+///
+/// 字段留空的含义由所属组决定（数组组里是「元素自身」），判断在快照层做，
+/// 这里只负责画。
+#[allow(clippy::too_many_arguments)]
+fn mongo_query_builder_row(
+    tab_id: TabId,
+    path: MongoBuilderPath,
+    row: &Rc<MongoQueryBuilderRow>,
+    colors: UiColors,
+    window: &Window,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let selector_path = mongo_builder_path_label(&path);
+    div()
+        .debug_selector(move || format!("mongo-query-builder-row:{selector_path}"))
+        .flex()
+        .items_center()
+        .gap_2()
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.))
                 .flex()
                 .items_center()
-                // 字段与值按交互稿的 1 : 1.35 分配剩余宽度，两边都从 0 起算
+                // 字段与值按交互稿的 1 : 1.45 分配剩余宽度，两边都从 0 起算
                 // （`flex_1` 的 basis 是 0）。按内容算基数时，字段格子里的 `w_full`
                 // 会以整行宽度作为基准，把值格挤成一条缝。
                 .child(
@@ -747,7 +1385,11 @@ fn mongo_query_builder_row(
                         .flex_1()
                         .min_w(px(MONGO_QUERY_BUILDER_FIELD_MIN_WIDTH))
                         .child(mongo_query_builder_field_cell(
-                            tab_id, index, field, field_paths, colors, window, cx,
+                            path.clone(),
+                            &row.field,
+                            colors,
+                            window,
+                            cx,
                         )),
                 )
                 .child(
@@ -755,69 +1397,37 @@ fn mongo_query_builder_row(
                         .w(px(MONGO_QUERY_BUILDER_OPERATOR_WIDTH))
                         .flex_none()
                         .child(mongo_query_builder_operator_cell(
-                            tab_id, index, operator, colors, cx,
+                            tab_id, path.clone(), row.operator, colors, cx,
                         )),
                 )
                 .child(
                     div()
                         .flex_1()
-                        .flex_grow(1.35)
+                        .flex_grow(1.45)
                         .min_w(px(MONGO_QUERY_BUILDER_VALUE_MIN_WIDTH))
                         .child(mongo_query_builder_value_cell(
-                            index, operator, value, colors, window, cx,
-                        )),
+                            path.clone(), row.operator, &row.value, colors, window, cx,
+                        ))
                 )
                 .child(mongo_query_builder_remove_button(
-                    tab_id, index, colors, cx,
+                    tab_id, path, colors, cx,
                 )),
         )
 }
 
-/// 字段格：可输入任意文档路径，右侧箭头展开字段目录作为候选。
+/// 字段格：可输入任意文档路径，打字时按前缀补全字段。
+///
+/// 外面是统一的外框（`mongo_query_box_at`），里面是代码编辑器——只有
+/// `EditorState` 能挂补全 provider。编辑器外壳负责把行高撑出的那点多余高度裁掉。
 fn mongo_query_builder_field_cell(
-    tab_id: TabId,
-    index: usize,
+    path: MongoBuilderPath,
     field: &Entity<EditorState>,
-    field_paths: &Rc<[SharedString]>,
     colors: UiColors,
     window: &Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let focused = field.read(cx).focus_handle(cx).is_focused(window);
-    let caret = (!field_paths.is_empty()).then(|| {
-        let view = cx.entity().downgrade();
-        let paths = field_paths.clone();
-        Button::new(SharedString::from(format!(
-            "mongo-builder-field-menu:{}:{index}",
-            tab_id.0
-        )))
-        .ghost()
-        .small()
-        .h(px(24.))
-        .w(px(24.))
-        .tooltip(tr("app.mongo.query.builder_field_menu"))
-        .child(app_icon(AppIcon::ChevronDown, 12., colors.muted))
-        // `TopLeft` 才是「贴着触发器下沿往下弹」：本库的 `BottomLeft` 指的是
-        // 「弹层底边对齐触发器顶边」，即向上弹。条件行离窗口顶部还有整片结果区，
-        // 往上弹会盖住正在编辑的条件。
-        .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
-            let mut menu = menu.min_w(px(220.));
-            for path in paths.iter() {
-                let path_text = path.to_string();
-                let view = view.clone();
-                menu = menu.item(PopupMenuItem::new(path.clone()).on_click(move |_, window, cx| {
-                    let Some(view) = view.upgrade() else {
-                        return;
-                    };
-                    let path_text = path_text.clone();
-                    view.update(cx, |this, cx| {
-                        this.set_mongo_builder_field(tab_id, index, path_text, window, cx);
-                    });
-                }));
-            }
-            menu
-        })
-    });
+    let selector_path = mongo_builder_path_label(&path);
     mongo_query_box_at(
         MONGO_QUERY_BUILDER_CONTROL_HEIGHT,
         focused,
@@ -827,36 +1437,29 @@ fn mongo_query_builder_field_cell(
             .w_full()
             .flex()
             .items_center()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .h_full()
-                    // 与 Filter 同一套编辑器外壳（顶边贴内容区顶部、超出裁掉）：
-                    // 条件是裸路径，打字时挂补全，右侧箭头仍是「浏览整个字段目录」。
-                    .child(mongo_query_editor_body(
-                        field,
-                        Some(format!("mongo-query-builder-field-body:{index}")),
-                        11.,
-                        None,
-                    )),
-            )
-            .when_some(caret, |this, caret| this.child(caret)),
+            .child(mongo_query_editor_body(
+                field,
+                Some(format!("mongo-query-builder-field-body:{selector_path}")),
+                11.,
+                Some(MONGO_QUERY_BUILDER_CELL_EDITOR_HEIGHT),
+                false,
+            )),
     )
-    .debug_selector(move || format!("mongo-query-builder-field:{index}"))
+    .debug_selector(move || format!("mongo-query-builder-field:{selector_path}"))
 }
 
 /// 运算符格：固定八项，当前项打勾。
 fn mongo_query_builder_operator_cell(
     tab_id: TabId,
-    index: usize,
+    path: MongoBuilderPath,
     current: MongoQueryOperator,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
     let view = cx.entity().downgrade();
+    let selector_path = mongo_builder_path_label(&path);
     (Button::new(SharedString::from(format!(
-        "mongo-builder-operator:{}:{index}",
+        "mongo-builder-operator:{}:{selector_path}",
         tab_id.0
     )))
     .outline()
@@ -872,6 +1475,7 @@ fn mongo_query_builder_operator_cell(
         let mut menu = menu.min_w(px(200.));
         for operator in MongoQueryOperator::ALL {
             let view = view.clone();
+            let condition_path = path.clone();
             menu = menu.item(
                 PopupMenuItem::new(operator.label())
                     .checked(operator == current)
@@ -880,7 +1484,7 @@ fn mongo_query_builder_operator_cell(
                             return;
                         };
                         view.update(cx, |this, cx| {
-                            this.set_mongo_builder_operator(tab_id, index, operator, window, cx);
+                            this.set_mongo_builder_operator(tab_id, condition_path.clone(), operator, window, cx);
                         });
                     }),
             );
@@ -890,55 +1494,50 @@ fn mongo_query_builder_operator_cell(
     .into_any_element()
 }
 
-/// 值格：`$exists` 时禁用——它的值恒为布尔，不需要输入。
+/// 值格：打字按同行字段的已有取值补全；`$exists` 时禁用——它的值恒为布尔。
 fn mongo_query_builder_value_cell(
-    index: usize,
+    path: MongoBuilderPath,
     operator: MongoQueryOperator,
     value: &Entity<EditorState>,
     colors: UiColors,
     window: &Window,
-    cx: &App,
+    cx: &mut Context<NavicatMain>,
 ) -> Div {
     let focused = value.read(cx).focus_handle(cx).is_focused(window);
+    let selector_path = mongo_builder_path_label(&path);
     mongo_query_box_at(
         MONGO_QUERY_BUILDER_CONTROL_HEIGHT,
         focused,
         colors,
         div()
-            .flex_1()
-            .min_w(px(0.))
             .h_full()
-            .overflow_hidden()
-            .child(
-                div()
-                    .debug_selector(move || format!("mongo-query-builder-value-body:{index}"))
-                    .w_full()
-                    .child(
-                        Editor::new(value)
-                            .appearance(false)
-                            .bordered(false)
-                            .disabled(operator == MongoQueryOperator::Exists)
-                            .w_full()
-                            .text_size(px(11.))
-                            .font_family(crate::PLATFORM_MONOSPACE_FONT),
-                    ),
-            ),
+            .w_full()
+            .flex()
+            .items_center()
+            .child(mongo_query_editor_body(
+                value,
+                Some(format!("mongo-query-builder-value-body:{selector_path}")),
+                11.,
+                Some(MONGO_QUERY_BUILDER_CELL_EDITOR_HEIGHT),
+                operator == MongoQueryOperator::Exists,
+            )),
     )
-    .debug_selector(move || format!("mongo-query-builder-value:{index}"))
+    .debug_selector(move || format!("mongo-query-builder-value:{selector_path}"))
 }
 
 fn mongo_query_builder_remove_button(
     tab_id: TabId,
-    index: usize,
+    path: MongoBuilderPath,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
+    let selector_path = mongo_builder_path_label(&path);
     div().w(px(28.)).flex_none().flex().items_center().justify_center().child(
         Button::new(SharedString::from(format!(
-            "mongo-builder-remove:{}:{index}",
+            "mongo-builder-remove:{}:{selector_path}",
             tab_id.0
         )))
-        .debug_selector(move || format!("mongo-query-builder-remove:{index}"))
+        .debug_selector(move || format!("mongo-query-builder-remove:{selector_path}"))
         .ghost()
         .small()
         .h(px(28.))
@@ -946,20 +1545,50 @@ fn mongo_query_builder_remove_button(
         .tooltip(tr("app.mongo.query.builder_remove"))
         .child(app_icon(AppIcon::Close, 12., colors.muted))
         .on_click(cx.listener(move |this, _, window, cx| {
-            this.remove_mongo_builder_condition(tab_id, index, window, cx);
+            this.remove_mongo_builder_node(tab_id, path.clone(), window, cx);
             cx.stop_propagation();
         })),
     )
 }
 
+fn mongo_query_builder_remove_group_button(
+    tab_id: TabId,
+    path: MongoBuilderPath,
+    selector_path: &str,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Button {
+    let selector = selector_path.to_string();
+    Button::new(SharedString::from(format!(
+        "mongo-builder-remove-group:{}:{selector_path}",
+        tab_id.0
+    )))
+    .debug_selector(move || format!("mongo-query-builder-remove-group:{selector}"))
+    .ghost()
+    .small()
+    .h(px(20.))
+    .w(px(20.))
+    .tooltip(tr("app.mongo.query.builder_remove_group"))
+    .child(app_icon(AppIcon::Close, 11., colors.muted))
+    .on_click(cx.listener(move |this, _, window, cx| {
+        this.remove_mongo_builder_node(tab_id, path.clone(), window, cx);
+        cx.stop_propagation();
+    }))
+}
+
 fn mongo_query_builder_add_button(
     tab_id: TabId,
+    path: MongoBuilderPath,
     enabled: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Button {
-    Button::new(("mongo-query-builder-add", tab_id.0))
-        .debug_selector(|| "mongo-query-builder-add".to_string())
+    let selector_path = mongo_builder_path_label(&path);
+    Button::new(SharedString::from(format!(
+        "mongo-query-builder-add:{}:{selector_path}",
+        tab_id.0
+    )))
+        .debug_selector(move || format!("mongo-query-builder-add:{selector_path}"))
         .ghost()
         .small()
         .h(px(22.))
@@ -969,37 +1598,39 @@ fn mongo_query_builder_add_button(
         .child(app_icon(AppIcon::Plus, 12., colors.success))
         .disabled(!enabled)
         .on_click(cx.listener(move |this, _, window, cx| {
-            this.add_mongo_builder_condition(tab_id, window, cx);
+            this.add_mongo_builder_condition(tab_id, path.clone(), window, cx);
             cx.stop_propagation();
         }))
 }
 
-/// 执行查询的快捷键提示：`kbd` 小方框 + 文案，靠右对齐。
-fn mongo_query_builder_run_hint(colors: UiColors) -> Div {
-    let kbd = |text: &'static str| {
-        div()
-            .px(px(4.))
-            .py(px(1.))
-            .rounded(px(3.))
-            .border_1()
-            .border_color(colors.border)
-            .bg(colors.panel_bg)
-            .text_size(px(9.))
-            .font_family(crate::PLATFORM_MONOSPACE_FONT)
-            .text_color(colors.muted)
-            .child(text)
-    };
-    div()
-        .ml_auto()
-        .flex()
-        .items_center()
-        .gap(px(4.))
-        .text_size(px(9.))
-        .text_color(colors.muted)
-        .child(kbd(if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" }))
-        .child(kbd("↵"))
-        .child(tr("app.mongo.query.builder_run_hint"))
+fn mongo_query_builder_add_group_button(
+    tab_id: TabId,
+    path: MongoBuilderPath,
+    enabled: bool,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Button {
+    let selector_path = mongo_builder_path_label(&path);
+    Button::new(SharedString::from(format!(
+        "mongo-query-builder-add-group:{}:{selector_path}",
+        tab_id.0
+    )))
+    .debug_selector(move || format!("mongo-query-builder-add-group:{selector_path}"))
+    .ghost()
+    .small()
+    .h(px(22.))
+    .text_size(px(10.))
+    .text_color(colors.success)
+    .label(tr("app.mongo.query.builder_add_group"))
+    .child(app_icon(AppIcon::Plus, 12., colors.success))
+    .disabled(!enabled)
+    .on_click(cx.listener(move |this, _, window, cx| {
+        this.add_mongo_builder_group(tab_id, path.clone(), window, cx);
+        cx.stop_propagation();
+    }))
 }
+
+
 
 #[cfg(test)]
 mod mongo_query_builder_tests {
@@ -1040,20 +1671,14 @@ mod mongo_query_builder_tests {
     #[test]
     fn filter_round_trips_through_conditions() {
         let filter = r#"{"code":"500","amount":500,"ok":true,"tags":{"$in":["a","b"]},"note":{"$exists":false}}"#;
-        let conditions = parse_mongo_builder_conditions(filter).expect("supported filter");
-        let mut document = serde_json::Map::new();
-        for (field, operator, text) in conditions {
-            let value = mongo_builder_condition_value(operator, &text).expect("value");
-            document.insert(field, mongo_builder_expression(operator, value));
-        }
-        assert_eq!(serde_json::Value::Object(document).to_string(), filter);
+        let conditions = parse_mongo_builder_filter(filter).expect("supported filter");
+        assert_eq!(mongo_builder_group_json(&conditions).to_string(), filter);
     }
 
-    /// 复杂表达式的判断标准：拆不成「字段 / 运算符 / 值」就拒绝，交给手写 JSON。
+    /// 不支持的字段表达式拒绝；`$or` 的往返由表达式树测试覆盖。
     #[test]
     fn complex_filters_are_rejected() {
         for filter in [
-            r#"{"$or":[{"a":1},{"b":2}]}"#,
             r#"{"a":{"$regex":"^x"}}"#,
             r#"{"a":{"b":1}}"#,
             r#"{"a":{"$gt":1,"$lt":9}}"#,
@@ -1063,11 +1688,11 @@ mod mongo_query_builder_tests {
             r#"[1,2]"#,
         ] {
             assert!(
-                parse_mongo_builder_conditions(filter).is_err(),
+                parse_mongo_builder_filter(filter).is_err(),
                 "{filter} must not be rewritten by the builder"
             );
         }
-        assert!(parse_mongo_builder_conditions("  ").unwrap().is_empty());
+        assert!(parse_mongo_builder_filter("  ").unwrap().children.is_empty());
     }
 
     /// Compass 查询栏常见的宽松写法要能展开：连接器执行时本来就收（先严格 JSON、
@@ -1075,22 +1700,24 @@ mod mongo_query_builder_tests {
     #[test]
     fn relaxed_filter_syntax_parses() {
         // 无引号键（截图里那条）。
-        let conditions = parse_mongo_builder_conditions(r#"{event_type: "page_view"}"#)
+        let group = parse_mongo_builder_filter(r#"{event_type: "page_view"}"#)
             .expect("unquoted key is a Compass-style filter");
-        assert_eq!(conditions.len(), 1);
-        assert_eq!(conditions[0].0, "event_type");
-        assert_eq!(conditions[0].1, MongoQueryOperator::Eq);
-        assert_eq!(conditions[0].2, r#""page_view""#);
+        let MongoBuilderNode::Condition(condition) = &group.children[0] else {
+            panic!("condition");
+        };
+        assert_eq!(condition.field, "event_type");
+        assert_eq!(condition.operator, MongoQueryOperator::Eq);
+        assert_eq!(condition.value, r#""page_view""#);
 
         // 单引号、尾逗号、注释也一并收。
-        let conditions = parse_mongo_builder_conditions(
+        let conditions = parse_mongo_builder_filter(
             "{\n  // 只看已支付\n  status: 'paid',\n  amount: 500,\n}",
         )
         .expect("single quotes, trailing comma and comments are accepted");
-        assert_eq!(conditions.len(), 2);
+        assert_eq!(conditions.children.len(), 2);
 
         // 但 `NaN` 会被读成 null，等于把条件换成「等于 null」——必须拒。
-        assert!(parse_mongo_builder_conditions("{amount: NaN}").is_err());
-        assert!(parse_mongo_builder_conditions("{amount: Infinity}").is_err());
+        assert!(parse_mongo_builder_filter("{amount: NaN}").is_err());
+        assert!(parse_mongo_builder_filter("{amount: Infinity}").is_err());
     }
 }

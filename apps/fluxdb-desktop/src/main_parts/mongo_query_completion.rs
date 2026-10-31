@@ -357,6 +357,116 @@ fn mongo_completions(
     items
 }
 
+/// 条件构建字段格的补全：格子内容是**裸路径**，不是 JSON 片段。
+///
+/// 不能复用 [`mongo_completions`]：那套按「键位 / 值位」决定候选，裸文本没有引号
+/// 也没有冒号，会被一律判成值位，字段格就只冒出 Extended JSON 构造器。
+/// 这里只给字段路径，且原样插入——不加引号、不补冒号。
+fn mongo_builder_field_completions(
+    text: &str,
+    cursor: usize,
+    fields: &[fluxdb_app::MongoField],
+) -> Vec<CompletionItem> {
+    let cursor = mongo_clamp_boundary(text, cursor);
+    let (replace_start, prefix) = mongo_word_before(&text[..cursor]);
+    let prefix = prefix.to_ascii_lowercase();
+    let mut items = Vec::new();
+    for field in fields {
+        if !mongo_completion_matches(&field.path, &prefix) {
+            continue;
+        }
+        let detail = if field.types.is_empty() {
+            tr("app.mongo.completion.field").to_string()
+        } else {
+            field.types.join(" | ")
+        };
+        items.push(mongo_completion_item(
+            &field.path,
+            CompletionItemKind::FIELD,
+            detail,
+            "0",
+            field.path.clone(),
+        ));
+    }
+    finish_mongo_builder_items(&mut items, text, replace_start, cursor);
+    items
+}
+
+/// 条件构建值格的补全：只给**同一行字段格**所指字段出现过的取值。
+///
+/// 字段不在当前页的字段目录里（用户手写了目录外的路径）就给空候选：不去全局
+/// 词表里凑，凑出来的取值大概率属于别的字段。
+fn mongo_builder_value_completions(
+    text: &str,
+    cursor: usize,
+    field_path: &str,
+    fields: &[fluxdb_app::MongoField],
+) -> Vec<CompletionItem> {
+    let cursor = mongo_clamp_boundary(text, cursor);
+    let before = &text[..cursor];
+    // 值可能已经带引号：正敲的 `"pai`，或整段改写的 `"paid"`。引号算进词里，
+    // 否则光标停在收尾引号后会被算成空词，候选追加成 `"paid"active"`——改写变拼接。
+    let start = before
+        .char_indices()
+        .rev()
+        .find(|(_, character)| {
+            !(character.is_alphanumeric() || matches!(character, '_' | '$' | '.' | '"'))
+        })
+        .map(|(index, character)| index + character.len_utf8())
+        .unwrap_or(0);
+    let token = &before[start..];
+    let quoted = token.starts_with('"');
+    let prefix = token.trim_matches('"').to_ascii_lowercase();
+    let mut items = Vec::new();
+    let field = fields.iter().find(|field| field.path == field_path.trim());
+    for value in field.map(|field| field.values.as_slice()).unwrap_or_default() {
+        if !mongo_completion_matches(value, &prefix) {
+            continue;
+        }
+        // 插入时补回收尾引号，否则值格会停在 `"paid` 这半截字符串上。
+        let insert = if quoted {
+            format!("{value}\"")
+        } else {
+            value.clone()
+        };
+        items.push(mongo_completion_item(
+            value,
+            CompletionItemKind::VALUE,
+            tr("app.mongo.completion.word"),
+            "0",
+            insert,
+        ));
+    }
+    // 开引号原地保留：替换范围从它后面开始。
+    let replace_start = if quoted { start + 1 } else { start };
+    finish_mongo_builder_items(&mut items, text, replace_start, cursor);
+    items
+}
+
+/// 排序、截断，并把替换范围写成 `text_edit`（弹层本身不负责替换范围）。
+fn finish_mongo_builder_items(
+    items: &mut Vec<CompletionItem>,
+    text: &str,
+    replace_start: usize,
+    cursor: usize,
+) {
+    items.sort_by(|left, right| {
+        left.sort_text
+            .cmp(&right.sort_text)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    items.truncate(80);
+    for item in items.iter_mut() {
+        item.text_edit = Some(lsp_types::CompletionTextEdit::Edit(lsp_types::TextEdit {
+            range: lsp_types::Range {
+                start: mongo_offset_to_position(text, replace_start),
+                end: mongo_offset_to_position(text, cursor),
+            },
+            new_text: mongo_item_insert_text(item),
+        }));
+    }
+}
+
 /// 候选文本：优先取 `insert_text`（构造器/带冒号的键），否则用标签。
 fn mongo_item_insert_text(item: &CompletionItem) -> String {
     item.insert_text
@@ -582,119 +692,14 @@ const MONGO_VALUE_TEMPLATES: &[(&str, &str)] = &[
     ("MaxKey", "{\"$maxKey\": 1}"),
 ];
 
-/// 条件构建的单格补全：字段格给字段路径，值格给**该字段**出现过的取值。
-///
-/// 两格都不是 JSON 片段（一格是裸路径，一格是裸标量），所以不能走
-/// [`mongo_completions`] 的语法扫描——那套按「键位 / 值位」决定候选，裸文本会被
-/// 一律当成值位，字段格就补不到字段名了。`field_path` 为 `None` 表示字段格。
-fn mongo_builder_completions(
-    text: &str,
-    cursor: usize,
-    field_path: Option<&str>,
-    fields: &[fluxdb_app::MongoField],
-) -> Vec<CompletionItem> {
-    let cursor = mongo_clamp_boundary(text, cursor);
-    let before = &text[..cursor];
-    let mut items = Vec::new();
-
-    match field_path {
-        None => {
-            let (replace_start, prefix) = mongo_word_before(before);
-            let prefix = prefix.to_ascii_lowercase();
-            for field in fields {
-                if !mongo_completion_matches(&field.path, &prefix) {
-                    continue;
-                }
-                let detail = if field.types.is_empty() {
-                    tr("app.mongo.completion.field").to_string()
-                } else {
-                    field.types.join(" | ")
-                };
-                // 字段格是裸键位，不是 JSON 字符串：路径原样插入，不加引号也不补冒号。
-                items.push(mongo_completion_item(
-                    &field.path,
-                    CompletionItemKind::FIELD,
-                    detail,
-                    "0",
-                    field.path.clone(),
-                ));
-            }
-            finish_mongo_builder_items(&mut items, text, replace_start, cursor);
-        }
-        Some(path) => {
-            // 值格的词可能已经带引号：正敲的 `"pai`，或整段改写的 `"page"`。
-            // 引号算进替换范围，否则光标停在收尾引号后面会算出一个空词，
-            // 候选被追加成 `"page"paid"`——改写旧值变成拼接。
-            let start = before
-                .char_indices()
-                .rev()
-                .find(|(_, character)| {
-                    !(character.is_alphanumeric() || matches!(character, '_' | '$' | '.' | '"'))
-                })
-                .map(|(index, character)| index + character.len_utf8())
-                .unwrap_or(0);
-            let token = &before[start..];
-            let quoted = token.starts_with('"');
-            let prefix = token.trim_matches('"').to_ascii_lowercase();
-            let field = fields.iter().find(|field| field.path == path);
-            for value in field.map(|field| field.values.as_slice()).unwrap_or_default() {
-                if !mongo_completion_matches(value, &prefix) {
-                    continue;
-                }
-                // 插入时补回收尾引号，否则值格会停在 `"paid` 这半截字符串上。
-                let insert = if quoted {
-                    format!("{value}\"")
-                } else {
-                    value.clone()
-                };
-                items.push(mongo_completion_item(
-                    value,
-                    CompletionItemKind::VALUE,
-                    tr("app.mongo.completion.word"),
-                    "0",
-                    insert,
-                ));
-            }
-            // 开引号原地保留：替换范围从它后面开始。
-            let replace_start = if quoted { start + 1 } else { start };
-            finish_mongo_builder_items(&mut items, text, replace_start, cursor);
-        }
-    }
-    items
-}
-
-/// 排序、截断，并把替换范围写成 `text_edit`（弹层本身不负责替换范围）。
-fn finish_mongo_builder_items(
-    items: &mut Vec<CompletionItem>,
-    text: &str,
-    replace_start: usize,
-    cursor: usize,
-) {
-    items.sort_by(|left, right| {
-        left.sort_text
-            .cmp(&right.sort_text)
-            .then_with(|| left.label.cmp(&right.label))
-    });
-    items.truncate(80);
-    for item in items.iter_mut() {
-        item.text_edit = Some(lsp_types::CompletionTextEdit::Edit(lsp_types::TextEdit {
-            range: lsp_types::Range {
-                start: mongo_offset_to_position(text, replace_start),
-                end: mongo_offset_to_position(text, cursor),
-            },
-            new_text: mongo_item_insert_text(item),
-        }));
-    }
-}
-
 /// 补全挂在哪个输入框上。
 #[derive(Clone)]
 enum MongoCompletionTarget {
     /// 查询/聚合编辑器：按 JSON 语法位置给候选。
     Query(MongoCompletionMode),
-    /// 条件构建的字段格：裸路径。
+    /// 条件构建的字段格：只给字段路径（裸文本）。
     BuilderField,
-    /// 条件构建的值格：只给同一行字段格所指字段的取值，所以要拿到字段格本身。
+    /// 条件构建的值格：只给同一行字段格所指字段的取值，所以要拿到字段格实体。
     BuilderValue {
         field: gpui::WeakEntity<EditorState>,
     },
@@ -722,21 +727,47 @@ pub(crate) fn configure_mongo_completion(
     );
 }
 
-/// 给条件构建的格子装上补全。`field` 只在值格上传：值候选要按这一行的字段查，
-/// 否则 `status` 会冒出文档里任何位置出现过的手机号。
-pub(crate) fn configure_mongo_builder_completion(
+/// 给条件构建的字段格装上补全。
+///
+/// 格子里是裸字段路径：打字即出候选，选中直接填空。右侧那个「浏览字段目录」的
+/// 下拉箭头已去掉——补全占了同一个用途，多一个入口只会分叉。
+pub(crate) fn configure_mongo_builder_field_completion(
     editor: &mut EditorState,
-    field: Option<gpui::WeakEntity<EditorState>>,
     view: gpui::WeakEntity<NavicatMain>,
     tab_id: TabId,
     window: &mut gpui::Window,
     cx: &mut gpui::Context<EditorState>,
 ) {
-    let target = match field {
-        Some(field) => MongoCompletionTarget::BuilderValue { field },
-        None => MongoCompletionTarget::BuilderField,
-    };
-    install_mongo_completion(editor, target, view, tab_id, window, cx);
+    install_mongo_completion(
+        editor,
+        MongoCompletionTarget::BuilderField,
+        view,
+        tab_id,
+        window,
+        cx,
+    );
+}
+
+/// 给条件构建的值格装上补全。
+///
+/// `field` 是同一行的字段格：值候选按它指的字段查，否则 `status` 会冒出文档里
+/// 任何位置出现过的手机号。字段为空或不在目录里时给空候选。
+pub(crate) fn configure_mongo_builder_value_completion(
+    editor: &mut EditorState,
+    field: gpui::WeakEntity<EditorState>,
+    view: gpui::WeakEntity<NavicatMain>,
+    tab_id: TabId,
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<EditorState>,
+) {
+    install_mongo_completion(
+        editor,
+        MongoCompletionTarget::BuilderValue { field },
+        view,
+        tab_id,
+        window,
+        cx,
+    );
 }
 
 fn install_mongo_completion(
@@ -751,8 +782,8 @@ fn install_mongo_completion(
     // 行号同理——面板里是 30px 高的工具条，不是代码文件。
     editor.set_folding(false, window, cx);
     editor.set_line_number(false, window, cx);
-    // 条件构建的格子是裸路径 / 裸标量，不是 JSON 片段：套 JSON 高亮会把 `paid`
-    // 当成非法 token 染色，反而不如纯文本。
+    // 条件构建的格子是裸路径 / 裸标量，不是 JSON 片段：套 JSON 高亮会把
+    // `customer.tier`、`paid` 当成非法 token 染色，反而不如纯文本。
     if matches!(target, MongoCompletionTarget::Query(_)) {
         editor.set_highlighter(crate::JSON_HIGHLIGHT_LANGUAGE, cx);
     }
@@ -795,14 +826,14 @@ impl CompletionProvider for MongoCompletionProvider {
             match &self.target {
                 MongoCompletionTarget::Query(mode) => mongo_completions(&text, offset, *mode, fields),
                 MongoCompletionTarget::BuilderField => {
-                    mongo_builder_completions(&text, offset, None, fields)
+                    mongo_builder_field_completions(&text, offset, fields)
                 }
                 MongoCompletionTarget::BuilderValue { field } => {
                     let path = field
                         .upgrade()
                         .map(|editor| editor.read(cx).value().trim().to_string())
                         .unwrap_or_default();
-                    mongo_builder_completions(&text, offset, Some(&path), fields)
+                    mongo_builder_value_completions(&text, offset, &path, fields)
                 }
             }
         });
@@ -894,6 +925,58 @@ mod mongo_completion_tests {
     }
 
     #[test]
+    fn builder_field_completes_bare_paths() {
+        let items = mongo_builder_field_completions("addr", 4, &fields());
+        assert_eq!(labels(&items), vec!["address.city".to_string()]);
+        // 裸路径原样插入：不加引号、不补冒号，否则字段格会变成 `"address.city": `。
+        assert_eq!(mongo_item_insert_text(&items[0]), "address.city");
+
+        // 只给字段，不给运算符 / Extended JSON 构造器：这一格不是 JSON 片段。
+        let items = mongo_builder_field_completions("", 0, &fields());
+        let labels = labels(&items);
+        assert!(labels.contains(&"status".to_string()));
+        assert!(!labels.iter().any(|label| label.starts_with('$')));
+        assert!(!labels.contains(&"ObjectId".to_string()));
+    }
+
+    #[test]
+    fn builder_value_completes_only_its_row_field_values() {
+        let items = mongo_builder_value_completions("", 0, "status", &fields());
+        assert_eq!(labels(&items), vec!["active".to_string(), "paid".to_string()]);
+
+        // 字段不在当前页目录里（用户手写了别的路径）就没有候选，不去全局词表凑。
+        assert!(mongo_builder_value_completions("", 0, "unknown.field", &fields()).is_empty());
+        assert!(mongo_builder_value_completions("", 0, "", &fields()).is_empty());
+
+        // 目录里有这个字段、但这一页没采到值时同样为空。
+        assert!(mongo_builder_value_completions("", 0, "address.city", &fields()).is_empty());
+    }
+
+    #[test]
+    fn builder_value_replaces_quoted_token_including_its_closing_quote() {
+        // 光标停在收尾引号后：整段 `"pai"` 都算替换范围，否则候选会被追加成
+        // `"paid"active"`——改写旧值变成拼接。
+        let items = mongo_builder_value_completions("\"pai\"", 5, "status", &fields());
+        assert_eq!(labels(&items), vec!["paid".to_string()]);
+        let edit = items[0].text_edit.as_ref().expect("replace range");
+        let lsp_types::CompletionTextEdit::Edit(edit) = edit else {
+            panic!("builder value uses a plain text edit");
+        };
+        assert_eq!((edit.range.start.character, edit.range.end.character), (1, 5));
+        // 开引号留在原地、插入补回收尾引号，整格仍是 `"paid"`。
+        assert_eq!(edit.new_text, "paid\"");
+
+        // 半截字符串：开引号留在原地，插入时补回收尾引号。
+        let items = mongo_builder_value_completions("\"ac", 3, "status", &fields());
+        let edit = items[0].text_edit.as_ref().expect("replace range");
+        let lsp_types::CompletionTextEdit::Edit(edit) = edit else {
+            panic!("builder value uses a plain text edit");
+        };
+        assert_eq!((edit.range.start.character, edit.range.end.character), (1, 3));
+        assert_eq!(edit.new_text, "active\"");
+    }
+
+    #[test]
     fn strings_complete_only_the_enclosing_field_values() {
         let items = completions("{\"status\": \"ac", MongoCompletionMode::Query);
         assert_eq!(labels(&items), vec!["active".to_string()]);
@@ -945,72 +1028,6 @@ mod mongo_completion_tests {
             MongoCompletionMode::Aggregation,
         );
         assert!(labels(&items).contains(&"$sum".to_string()));
-    }
-
-    #[test]
-    fn builder_field_cell_completes_bare_paths() {
-        // 字段格是裸文本，没有 JSON 的键位/值位之分：直接把光标当键位补。
-        let items = mongo_builder_completions("sta", 3, None, &fields());
-        assert!(labels(&items).contains(&"status".to_string()));
-        let status = items
-            .iter()
-            .find(|item| item.label == "status")
-            .expect("status candidate");
-        // 不带引号也不补冒号：插进去就是条件行里那一格的值。
-        assert_eq!(mongo_item_insert_text(status), "status");
-        // 点分路径照原样插入（`address.city` 存的就是这个路径）。
-        let items = mongo_builder_completions("address.", 8, None, &fields());
-        assert_eq!(labels(&items), vec!["address.city".to_string()]);
-        // 已经完整的路径再补一个候选不该把冒号或引号塞进去。
-        let items = mongo_builder_completions("address.city", 12, None, &fields());
-        assert_eq!(mongo_item_insert_text(&items[0]), "address.city");
-    }
-
-    #[test]
-    fn builder_value_cell_completes_only_its_own_field_values() {
-        let items = mongo_builder_completions("pai", 3, Some("status"), &fields());
-        assert_eq!(labels(&items), vec!["paid".to_string()]);
-        // 别的字段的取值不能出现：`status` 上面没有手机号。
-        let items = mongo_builder_completions("", 0, Some("status"), &fields());
-        assert!(
-            !labels(&items).iter().any(|label| label.starts_with("139")),
-            "{:?}",
-            labels(&items)
-        );
-        // 字段格还没填时不猜字段：宁可空候选，也别按全局词表乱给。
-        assert!(mongo_builder_completions("pai", 3, Some(""), &fields()).is_empty());
-        // 没采集到取值的字段给空。
-        assert!(mongo_builder_completions("", 0, Some("_id"), &fields()).is_empty());
-    }
-
-    #[test]
-    fn builder_value_cell_keeps_the_opening_quote() {
-        // 用户已经敲了开引号：只替换引号里那截词，插入时补回收尾引号。
-        let items = mongo_builder_completions("\"pai", 4, Some("status"), &fields());
-        assert_eq!(mongo_item_insert_text(&items[0]), "paid\"");
-        let edit = match items[0].text_edit.as_ref().expect("text edit") {
-            lsp_types::CompletionTextEdit::Edit(edit) => edit,
-            _ => panic!("expected plain edit"),
-        };
-        // 替换范围从引号之后开始，开引号原地保留。
-        assert_eq!(edit.range.start, mongo_offset_to_position("\"pai", 1));
-        assert_eq!(edit.range.end, mongo_offset_to_position("\"pai", 4));
-
-        // 已经闭合的旧值（`"pai"`）连收尾引号一起被替换，而不是追加成 `"pai"paid"`。
-        let text = "\"pai\"";
-        let items = mongo_builder_completions(text, text.len(), Some("status"), &fields());
-        assert_eq!(mongo_item_insert_text(&items[0]), "paid\"");
-        let edit = match items[0].text_edit.as_ref().expect("text edit") {
-            lsp_types::CompletionTextEdit::Edit(edit) => edit,
-            _ => panic!("expected plain edit"),
-        };
-        assert_eq!(edit.range.start, mongo_offset_to_position(text, 1));
-        assert_eq!(
-            edit.range.end,
-            mongo_offset_to_position(text, text.len()),
-            "the trailing quote is inside the replaced range"
-        );
-        assert_eq!(edit.new_text, "paid\"");
     }
 
     #[test]

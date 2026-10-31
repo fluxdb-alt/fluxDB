@@ -480,14 +480,6 @@ fn mongo_query_panel(
     // 两层各自收起时都看不见自己的格子，角标是「条件还在生效」的唯一提示：
     // 首层收起 → 汇总两层个数；首层展开而第二层收起 → 只标第二层。
     let (common_count, advanced_count) = mongo_query_option_counts(&state.applied_query);
-    // 字段候选来自补全用的字段目录（抽样采集）；目录为空时字段格退化成纯输入。
-    let field_paths: Vec<SharedString> = state
-        .field_catalog
-        .fields
-        .iter()
-        .map(|field| SharedString::from(field.path.clone()))
-        .collect();
-
     div()
         .px_3()
         .py_2()
@@ -551,7 +543,6 @@ fn mongo_query_panel(
                     this.child(mongo_query_builder_section(
                         tab_id,
                         &builder,
-                        &field_paths,
                         colors,
                         tone,
                         window,
@@ -585,6 +576,7 @@ fn mongo_query_panel(
                                     .child(div().flex_none().child(mongo_query_builder_toggle(
                                         tab_id,
                                         builder_expanded,
+                                        builder.root.group_count(),
                                         tone,
                                         colors,
                                         cx,
@@ -823,35 +815,41 @@ fn mongo_query_input(
                 Some(selector),
                 12.,
                 Some(height - 2. * MONGO_QUERY_BOX_BORDER),
+                false,
             )),
     )
 }
 
-/// 编辑器本体：顶边贴住内容区顶部，超出一行的高度由外层裁掉。
+/// 编辑器本体：盒子在内容区里垂直居中，超出的高度由外层裁掉。
+///
+/// Filter 与条件构建的两格用这一层（都要挂补全）。附加条件仍是单行输入，
+/// 走 [`mongo_query_input_body`]。
 ///
 /// `selector` 只给布局测试用；附加条件里的编辑器不需要单独测量。
 /// `text_size` 由调用方给：Filter 是主入口用 12px，附加格子用 11px 压扁高度。
-/// `height` 只给会增高的 Filter：给了就把编辑器钉成这块高度，超出部分由编辑器
-/// 自己滚动（`Editor` 自带滚动条与滚轮处理），而不是被外层裁掉——裁掉的话光标
-/// 能跑到看不见的地方。附加格子与条件构建格仍是不定高、外层裁。
+/// `height` 给「内容区有多高就该落多高」的调用方：Filter 给整块框高，超出部分由
+/// 编辑器自己滚动（`Editor` 自带滚动条与滚轮处理），而不是被外层裁掉——裁掉的话
+/// 光标能跑到看不见的地方；条件构建的两格给 `2 × 上内边距 + 一行`，居中后首行
+/// 正好落在 28px 格子的中线上。
+/// `disabled` 只给条件构建的值格：`$exists` 的取值恒为布尔，不需要输入。
 fn mongo_query_editor_body(
     input: &Entity<EditorState>,
     selector: Option<String>,
     text_size: f32,
     height: Option<f32>,
+    disabled: bool,
 ) -> Div {
-    // 编辑器**顶边贴在内容区顶部**，不做垂直居中。
+    // 编辑器盒子在内容区里**垂直居中**，多出的部分被 `overflow_hidden` 裁掉。
     //
-    // 编辑器盒子高度随内容行数变化（实测 `{}` 时就有两行、52px），所以
-    // 「把盒子居中」等于让首行的起点随行数上下漂：两行时字形中心比中线低
-    // 9px，行数一变又是另一个偏差。
-    //
-    // 顶对齐则与行数无关：首行字形中心 = 内容区顶 + 8px 内边距 + 行高/2。
-    // Filter 取 36px（1 + 8 + 18/2 = 18 = 36/2），附加格子取 32px（8 + 16.5/2 ≈ 16 = 32/2）；
-    // 更长的内容往下排、超出部分由 `overflow_hidden` 裁掉。
+    // 编辑器自己不会居中（它总是从盒子顶边往下排，顶部还压着 8px 内边距），
+    // 所以盒子高度必须让「首行」正好落在容器中线上：调用方把 `height` 给成
+    // `2 × 上内边距 + 一行`，居中后首行既不会顶到上边框，也不会比中线低。
+    // 不给 `height` 时盒子仍按内容长高，与之前一样贴顶排版。
     div()
         .w_full()
         .h_full()
+        .flex()
+        .items_center()
         .overflow_hidden()
         .child(
             div()
@@ -863,6 +861,7 @@ fn mongo_query_editor_body(
                     Editor::new(input)
                         .appearance(false)
                         .bordered(false)
+                        .disabled(disabled)
                         .w_full()
                         .text_size(px(text_size))
                         // 查询语句是 JSON 片段，等宽才对得齐括号与缩进。
@@ -872,7 +871,43 @@ fn mongo_query_editor_body(
         )
 }
 
-/// 附加条件里的编辑器格子（投影 / 排序 / 排序规则 / 索引提示）。
+/// 单行输入本体：竖向居中，撑满格子剩余宽度。
+///
+/// 单行 `Input` 在 `request_layout` 里自建 `Style`，只认自己的行高，
+/// 外面给的 `h_full` 进不去；不额外居中就会贴住格子顶边。
+fn mongo_query_input_body(
+    input: &Entity<InputState>,
+    selector: Option<String>,
+    text_size: f32,
+    disabled: bool,
+) -> Div {
+    div()
+        .flex_1()
+        .min_w(px(0.))
+        .h_full()
+        .flex()
+        .items_center()
+        .child(
+            div()
+                .w_full()
+                .when_some(selector, |this, selector| {
+                    this.debug_selector(move || selector.clone())
+                })
+                .child(
+                    Input::new(input)
+                        .small()
+                        .appearance(false)
+                        .focus_bordered(false)
+                        .disabled(disabled)
+                        .w_full()
+                        .px_2()
+                        .text_size(px(text_size))
+                        .font_family(crate::PLATFORM_MONOSPACE_FONT),
+                ),
+        )
+}
+
+/// 附加条件里的输入格子（投影 / 排序 / 排序规则 / 索引提示）。
 ///
 /// `field` 只用于测试选择器：格子外面还包着尺寸层（`mongo_query_option_cell`），
 /// 断言输入框本身没变形要单独量这一层。
@@ -882,7 +917,7 @@ fn mongo_query_editor_body(
 #[allow(clippy::too_many_arguments)]
 fn mongo_query_editor_box(
     field: &'static str,
-    input: &Entity<EditorState>,
+    input: &Entity<InputState>,
     label: SharedString,
     hint: Option<SharedString>,
     tone: MongoQueryTone,
@@ -897,14 +932,7 @@ fn mongo_query_editor_box(
         colors,
         mongo_query_cell_label(label, hint, tone, colors),
     )
-    .child(
-        div()
-            .flex_1()
-            .min_w(px(0.))
-            .h_full()
-            .overflow_hidden()
-            .child(mongo_query_editor_body(input, None, 11., None)),
-    )
+    .child(mongo_query_input_body(input, None, 11., false))
     .debug_selector(move || format!("mongo-query-editor-box:{field}"))
 }
 
@@ -1234,6 +1262,7 @@ fn mongo_query_options_button(
 fn mongo_query_builder_toggle(
     tab_id: TabId,
     expanded: bool,
+    group_count: usize,
     tone: MongoQueryTone,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
@@ -1248,7 +1277,16 @@ fn mongo_query_builder_toggle(
         .when(expanded, |this| {
             this.bg(tone.green_soft).text_color(colors.success)
         })
-        .label(tr("app.mongo.query.builder"))
+        .label(if group_count > 1 {
+            SharedString::from(format!(
+                "{} · {} {}",
+                tr("app.mongo.query.builder"),
+                group_count,
+                tr("app.mongo.query.builder_groups")
+            ))
+        } else {
+            tr("app.mongo.query.builder")
+        })
         .child(app_icon(
             AppIcon::Filter,
             12.,
