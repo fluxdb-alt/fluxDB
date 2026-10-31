@@ -5718,16 +5718,6 @@
       "unit_ms": "ms",
       "limit_placeholder": "每页条数",
       "aggregation_placeholder": "[ { \"$match\": {} } ]",
-      "op": {
-        "eq": "等于",
-        "ne": "不等于",
-        "gt": "大于",
-        "gte": "大于等于",
-        "lt": "小于",
-        "lte": "小于等于",
-        "in": "包含任一",
-        "exists": "字段存在"
-      },
       "builder_match_none": "以下条件一个都不满足",
       "builder_match_element": "数组里至少有一个元素满足",
       "builder_match_no_element": "数组里没有任何元素满足",

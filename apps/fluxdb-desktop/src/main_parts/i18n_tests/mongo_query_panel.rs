@@ -481,6 +481,48 @@ fn mongo_query_panel_keeps_filter_row_and_collapses_options(cx: &mut TestAppCont
         (cursor_row.center().y - field_cell.center().y).abs() <= gpui::px(1.5),
         "the field text sits on its cell's center line: cursor={cursor_row:?} cell={field_cell:?}"
     );
+    // 运算符下拉必须真的能选：点开 → 键盘移到第二项 → 回车。
+    //
+    // 运算符格以前显示 `等于 · =` 这种「中文 + 符号」，单看下拉项分不清选中了谁；
+    // 现在项上只有运算符本身，这项交互就是它唯一的可见证据。
+    let operator_cell = cx
+        .debug_bounds("mongo-query-builder-operator:0")
+        .expect("operator cell renders");
+    cx.simulate_click(operator_cell.center(), Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 菜单打开时 `selected_index` 是 `None`：第一次 `down` 落到第 0 项（`$eq`），
+    // 第二次才到 `$ne`——所以这里是两个 `down`。
+    cx.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let operator = cx.update(|_, cx| {
+        view.read(cx)
+            .mongo_query_builders
+            .get(&tab_id)
+            .and_then(|builder| builder.condition(&[0]))
+            .map(|condition| condition.operator)
+            .expect("first condition")
+    });
+    assert_eq!(
+        operator,
+        crate::MongoQueryOperator::Ne,
+        "picking the second menu item switches the condition's operator"
+    );
+    // 选回等值，下面「空行不进 Filter」的断言仍然成立。
+    let operator_cell = cx
+        .debug_bounds("mongo-query-builder-operator:0")
+        .expect("operator cell renders");
+    cx.simulate_click(operator_cell.center(), Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let eq_point = gpui::point(
+        operator_cell.origin.x + gpui::px(40.),
+        operator_cell.bottom() + gpui::px(4. + 4. + 13.),
+    );
+    cx.simulate_click(eq_point, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
     // 新行默认空值：不写进 JSON，Filter 仍是空对象——加了一行还没填不该把结果查空。
     let filter_value = cx.update(|_, cx| {
         view.read(cx)

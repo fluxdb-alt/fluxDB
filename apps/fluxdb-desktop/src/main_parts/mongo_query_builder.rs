@@ -31,20 +31,6 @@ impl MongoQueryOperator {
         Self::Exists,
     ];
 
-    /// 文案 key 后缀，与语言包里 `app.mongo.query.op.*` 一一对应。
-    fn label_key(self) -> &'static str {
-        match self {
-            Self::Eq => "app.mongo.query.op.eq",
-            Self::Ne => "app.mongo.query.op.ne",
-            Self::Gt => "app.mongo.query.op.gt",
-            Self::Gte => "app.mongo.query.op.gte",
-            Self::Lt => "app.mongo.query.op.lt",
-            Self::Lte => "app.mongo.query.op.lte",
-            Self::In => "app.mongo.query.op.in",
-            Self::Exists => "app.mongo.query.op.exists",
-        }
-    }
-
     /// 写进 JSON 的查询运算符；`eq` 平铺成 `{ "field": value }`，没有 `$eq`。
     fn json_operator(self) -> Option<&'static str> {
         match self {
@@ -59,13 +45,23 @@ impl MongoQueryOperator {
         }
     }
 
-    /// 下拉里的符号，与中文名拼成 `等于 · =` / `不等于 · $ne`。
+    /// 运算符格与下拉里显示的写法：`$eq` / `$ne` / `$gte`。
+    ///
+    /// 等值也显示 `$eq`，八项统一成一种记号；它写进 JSON 仍是平铺的
+    /// `{ "field": value }`（见 [`Self::json_operator`]），显示与序列化是两回事。
     fn symbol(self) -> &'static str {
-        self.json_operator().unwrap_or("=")
+        match self {
+            Self::Eq => "$eq",
+            _ => self.json_operator().unwrap_or("="),
+        }
     }
 
+    /// 下拉与运算符格上显示的就是运算符本身。
+    ///
+    /// 不拼中文名：`$ne` 已经是它写进 JSON 的样子，比「不等于」更短，也就不会
+    /// 把 140px 的运算符列撑成半句中文。
     fn label(self) -> SharedString {
-        SharedString::from(format!("{} · {}", tr(self.label_key()), self.symbol()))
+        SharedString::from(self.symbol())
     }
 
     fn from_json_operator(operator: &str) -> Option<Self> {
@@ -203,14 +199,13 @@ fn build_mongo_builder_group(
                 let row = view.new_mongo_builder_row(
                     tab_id,
                     condition.field.clone(),
-                    condition.operator,
                     condition.value.clone(),
                     window,
                     cx,
                 );
                 MongoBuilderNode::Condition(MongoBuilderCondition {
                     field: String::new(),
-                    operator: row.operator,
+                    operator: condition.operator,
                     value: String::new(),
                     row: Some(row),
                 })
@@ -231,15 +226,17 @@ fn build_mongo_builder_group(
             .then(|| view.new_mongo_builder_field_cell(tab_id, model.field.clone(), window, cx)),
     }
 }
-/// 构建器里的一行条件。字段与值由输入框实体持有，模型只保留运算符。
+/// 构建器里的一行条件。字段与值由输入框实体持有，运算符只存在树里的条件上。
 ///
 /// 两格都是 `EditorState`：只有代码编辑器能挂 `Lsp.completion_provider`，
 /// 而两格都要补全——字段补路径，值补同一行字段的取值。两者的滚动条问题
 /// 用同一招压掉，见 `new_mongo_builder_row`。
+///
+/// 行里不存运算符副本：下拉改的是 [`MongoBuilderCondition::operator`]，
+/// 渲染再读行里的副本就会永远显示旧值。
 #[derive(Debug)]
 struct MongoQueryBuilderRow {
     field: Entity<EditorState>,
-    operator: MongoQueryOperator,
     value: Entity<EditorState>,
     /// 两个输入框的改动都要回写 JSON；订阅随行一起释放。
     _field_subscription: Subscription,
@@ -314,7 +311,6 @@ impl NavicatMain {
         &mut self,
         tab_id: TabId,
         field: String,
-        operator: MongoQueryOperator,
         value: String,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -369,7 +365,6 @@ impl NavicatMain {
         );
         Rc::new(MongoQueryBuilderRow {
             field: field_input,
-            operator,
             value: value_input,
             _field_subscription: field_subscription,
             _value_subscription: value_subscription,
@@ -419,14 +414,7 @@ impl NavicatMain {
         if !can_add {
             return;
         }
-        let row = self.new_mongo_builder_row(
-            tab_id,
-            String::new(),
-            MongoQueryOperator::Eq,
-            String::new(),
-            window,
-            cx,
-        );
+        let row = self.new_mongo_builder_row(tab_id, String::new(), String::new(), window, cx);
         row.value
             .update(cx, |input, cx| input.focus_handle(cx).focus(window, cx));
         if let Some(group) = self
@@ -519,6 +507,9 @@ impl NavicatMain {
             condition.operator = operator;
         }
         self.sync_mongo_query_builder(tab_id, window, cx);
+        // 运算符存在树上、不在输入框实体里，编辑器的 Change 事件不会替这里重绘：
+        // 不通知的话格子与下拉里的勾都停在旧值，看起来就是「选了没反应」。
+        cx.notify();
     }
 
     pub(crate) fn set_mongo_builder_logic(
@@ -927,6 +918,7 @@ fn mongo_query_builder_section(
                     tab_id,
                     vec![index],
                     row,
+                    condition.operator,
                     colors,
                     window,
                     cx,
@@ -1153,6 +1145,7 @@ fn mongo_query_builder_group(
                     tab_id,
                     child_path,
                     row,
+                    condition.operator,
                     colors,
                     window,
                     cx,
@@ -1361,6 +1354,7 @@ fn mongo_query_builder_row(
     tab_id: TabId,
     path: MongoBuilderPath,
     row: &Rc<MongoQueryBuilderRow>,
+    operator: MongoQueryOperator,
     colors: UiColors,
     window: &Window,
     cx: &mut Context<NavicatMain>,
@@ -1394,10 +1388,14 @@ fn mongo_query_builder_row(
                 )
                 .child(
                     div()
+                        .debug_selector({
+                            let path = mongo_builder_path_label(&path);
+                            move || format!("mongo-query-builder-operator:{path}")
+                        })
                         .w(px(MONGO_QUERY_BUILDER_OPERATOR_WIDTH))
                         .flex_none()
                         .child(mongo_query_builder_operator_cell(
-                            tab_id, path.clone(), row.operator, colors, cx,
+                            tab_id, path.clone(), operator, colors, cx,
                         )),
                 )
                 .child(
@@ -1406,7 +1404,7 @@ fn mongo_query_builder_row(
                         .flex_grow(1.45)
                         .min_w(px(MONGO_QUERY_BUILDER_VALUE_MIN_WIDTH))
                         .child(mongo_query_builder_value_cell(
-                            path.clone(), row.operator, &row.value, colors, window, cx,
+                            path.clone(), operator, &row.value, colors, window, cx,
                         ))
                 )
                 .child(mongo_query_builder_remove_button(

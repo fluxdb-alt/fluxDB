@@ -65,6 +65,8 @@ FLUXDB_PROFILE=dev cargo test --locked -p fluxdb-desktop --bin fluxdb-desktop \
 
 同一段还断言 `builder.scroll.max_offset() == 0`：只有一个条件时树不该有可滚区间。滚动容器自带内边距时 gpui 会把它算两遍，单行也判成溢出并画出滚动条。
 
+运算符下拉也在这段里走真实点击：点 `mongo-query-builder-operator:0` 开菜单，`down down enter` 选第二项（菜单打开时 `selected_index` 是 `None`，第一个 `down` 落在第 0 项），再断言模型里那条条件的运算符变成 `$ne`。格子画的与模型读的是同一份 `condition.operator`（行里不再存副本，改完调 `cx.notify()` 重绘），所以模型断言即覆盖显示。选完点回第 0 项还原，后面「空行不进 Filter」的断言才成立。
+
 同一段还断言两格的 `lsp().completion_provider` 都存在：候选内容依赖真实集合的字段目录，无库环境是空的，所以这里只锁「接线没断」，筛选规则由 `mongo_completion_tests` 覆盖（含值格只取同行字段取值、目录外路径给空候选）。
 
 工具条是单行流式布局，所以在点「添加子组」前先断言它的中心落在 `window.bounds()` 内：内容超宽会把右侧按钮推出窗口，而窗口外的点击被 gpui 静默丢弃，症状是「点了没反应」而不是报错。

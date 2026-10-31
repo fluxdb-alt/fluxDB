@@ -5718,16 +5718,6 @@
       "unit_ms": "ms",
       "limit_placeholder": "Documents per page",
       "aggregation_placeholder": "[ { \"$match\": {} } ]",
-      "op": {
-        "eq": "equals",
-        "ne": "not equal",
-        "gt": "greater than",
-        "gte": "greater or equal",
-        "lt": "less than",
-        "lte": "less or equal",
-        "in": "in",
-        "exists": "field exists"
-      },
       "builder_match_none": "None of these conditions may match",
       "builder_match_element": "At least one array element matches",
       "builder_match_no_element": "No array element matches",
