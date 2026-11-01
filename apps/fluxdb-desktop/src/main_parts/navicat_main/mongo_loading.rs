@@ -71,59 +71,6 @@ impl NavicatMain {
         self._mongo_load_tasks.insert(tab_id.0, task);
     }
 
-    /// 执行聚合管道。管道文本优先取面板输入框，其次取标签页草稿。
-    pub(crate) fn run_mongo_aggregation(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
-        let pipeline = self
-            .mongo_query_inputs
-            .get(&tab_id)
-            .map(|inputs| inputs.read(cx).aggregation.read(cx).value().to_string())
-            .filter(|pipeline| !pipeline.trim().is_empty())
-            .unwrap_or_else(MongoCollectionState::default_aggregation_pipeline);
-        let event = self.dispatch(
-            AppCommand::UpdateMongoAggregation {
-                tab_id,
-                pipeline: pipeline.clone(),
-            },
-            cx,
-        );
-        if !matches!(event, AppEvent::TabActivated(_)) {
-            return;
-        }
-        let AppEvent::MongoAggregationStarted { generation, .. } =
-            self.controller.dispatch(AppCommand::BeginMongoAggregation(tab_id))
-        else {
-            return;
-        };
-        let task = self.spawn_controller_command(
-            AppCommand::RunMongoAggregation {
-                tab_id,
-                generation,
-                pipeline,
-            },
-            move |this, event, cx| {
-                this._mongo_aggregation_tasks.remove(&tab_id.0);
-                if matches!(event, AppEvent::MongoLoadDiscarded { .. }) {
-                    return;
-                }
-                let result = match event {
-                    AppEvent::MongoAggregationLoaded(_, page) => Ok(page),
-                    AppEvent::Failed(error) => Err(error),
-                    _ => Err(mongo_load_error()),
-                };
-                if tab_exists(this.controller.state(), tab_id) {
-                    let event = this.controller.dispatch(AppCommand::FinishMongoAggregation {
-                        tab_id,
-                        generation,
-                        result,
-                    });
-                    this.apply_app_event(&event, cx);
-                }
-            },
-            cx,
-        );
-        self._mongo_aggregation_tasks.insert(tab_id.0, task);
-    }
-
     /// 抽样采集补全字段：每个标签页只跑一次，失败就保持空目录（补全仍给运算符与构造器）。
     ///
     /// 与集合页其他加载解耦：采样结果只影响补全候选，不进 `LoadState`，因此失败时

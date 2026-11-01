@@ -114,7 +114,6 @@ const MONGO_DISPLAY_MODES: [(MongoDisplayMode, &str); 3] = [
 #[derive(Clone, Copy)]
 enum MongoRetry {
     Documents,
-    Aggregation,
     Info,
     Indexes,
 }
@@ -135,7 +134,7 @@ impl NavicatMain {
                 self.mongo_documents_section(tab_id, state, inputs, colors, window, cx)
             }
             MongoSection::Aggregation => {
-                self.mongo_aggregation_section(tab_id, state, inputs, colors, cx)
+                self.mongo_aggregation_section(tab_id, colors, window, cx)
             }
             MongoSection::Indexes => mongo_indexes_section(tab_id, state, colors, cx),
             MongoSection::Info => mongo_info_section(tab_id, state, colors, cx),
@@ -271,88 +270,47 @@ impl NavicatMain {
     fn mongo_aggregation_section(
         &mut self,
         tab_id: TabId,
-        state: &MongoCollectionState,
-        inputs: Entity<MongoQueryInputs>,
         colors: UiColors,
+        window: &mut Window,
         cx: &mut Context<NavicatMain>,
     ) -> Div {
-        let running = matches!(state.aggregation, LoadState::Loading);
-        let pipeline = inputs.read(cx).aggregation.clone();
-        // 管道是多行结构（每个 stage 一行），这里用代码编辑器并保留软换行：
-        // stage 模板补进来就是多行，硬撑着不换行会横向滚走。
-        let editor = div()
-            .h(px(150.))
-            .border_b_1()
-            .border_color(colors.border)
-            .p_2()
-            .child(
-                Editor::new(&pipeline)
-                    .appearance(false)
-                    .bordered(false)
-                    .h(px(138.))
-                    .text_size(px(12.))
-                    .font_family(crate::PLATFORM_MONOSPACE_FONT),
-            );
-        let bar = div()
-            .h(px(MONGO_QUERY_ROW_HEIGHT))
-            .px_2()
-            .flex()
-            .items_center()
-            .gap_2()
-            .border_b_1()
-            .border_color(colors.border)
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(colors.muted)
-                    .child(if running {
-                        tr("app.mongo.loading")
-                    } else {
-                        tr("app.mongo.aggregation.hint")
-                    }),
-            )
-            .child(div().flex_1())
-            .child(backup_text_button(
-                tr("app.mongo.aggregation.run"),
-                colors,
-                cx.listener(move |this, _, _, cx| {
-                    this.run_mongo_aggregation(tab_id, cx);
-                    cx.stop_propagation();
-                }),
-            ));
-
-        let body = match &state.aggregation {
-            LoadState::Loading => center_loading_message(tr("app.mongo.loading"), colors),
-            LoadState::Failed(error) => {
-                mongo_error_block(tab_id, MongoRetry::Aggregation, error, colors, cx)
-            }
-            LoadState::Loaded(page) if !page.documents.is_empty() => div()
-                .flex_1()
-                .min_h(px(0.))
-                .child(div().overflow_y_scrollbar().flex().flex_col().children(
-                    page.documents.iter().map(|document| {
-                        let mut component = JsonComponent::new(JsonEditorConfig::default());
-                        component.load(&document.json);
-                        div()
-                            .p_2()
-                            .border_b_1()
-                            .border_color(colors.border_soft)
-                            .child(component.render_preview(colors))
-                    }),
-                )),
-            LoadState::Loaded(_) | LoadState::NotLoaded => {
-                center_message(tr("app.mongo.aggregation.empty"), colors)
-            }
-        };
+        // 卡片状态懒建：首次进入聚合页才解析管道，没进来过就不解析。
+        self.mongo_aggregation_builder(tab_id, window, cx);
+        let view = mongo_aggregation_view(
+            &self.mongo_aggregation_builders,
+            tab_id,
+            std::rc::Rc::new(
+                self.mongo_expanded_fields
+                    .get(&tab_id)
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        );
+        // 没有工具条，也没有底部的整条管道结果区（对齐 Compass）：输出看每张卡右栏的
+        // 单阶段预览。这里只在存储里的文本解析不了时给一行错误。
+        let error_line = view.error.clone().map(|error| {
+            div()
+                .h(px(MONGO_QUERY_ROW_HEIGHT))
+                .px_2()
+                .flex()
+                .items_center()
+                .border_b_1()
+                .border_color(colors.border)
+                .overflow_hidden()
+                .text_size(px(11.))
+                .text_color(colors.danger)
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(error)
+        });
 
         div()
             .flex_1()
             .min_h(px(0.))
             .flex()
             .flex_col()
-            .child(editor)
-            .child(bar)
-            .child(body)
+            .children(error_line)
+            .child(mongo_aggregation_cards(tab_id, &view, colors, cx))
     }
 }
 

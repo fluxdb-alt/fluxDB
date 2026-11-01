@@ -5730,9 +5730,22 @@
       "builder_collapse": "收起"
     },
     "aggregation": {
-      "hint": "聚合管道（Extended JSON 数组）",
-      "run": "执行",
-      "empty": "管道没有返回文档"
+      "preview_results": "输出预览（%{count} 条文档）",
+      "body_placeholder": "阶段参数（JSON）",
+      "parse_error": "管道不是合法的 stage 数组，请修正后再切到卡片",
+      "no_stages": "还没有阶段",
+      "add_stage": "添加阶段",
+      "stage": "阶段",
+      "invalid_body": "JSON 非法",
+      "toggle_stage": "启用 / 停用阶段",
+      "preview": "预览这一阶段",
+      "preview_empty": "这一步没有输出文档",
+      "move_up": "上移",
+      "move_down": "下移",
+      "remove_stage": "移除阶段",
+      "preview_write_stage": "写库阶段（$out / $merge）不能预览",
+      "collapse_stage": "折叠 / 展开阶段",
+      "search_stage": "搜索运算符"
     },
     "section": {
       "documents": "文档",
@@ -5970,6 +5983,39 @@
       "value": "BSON 构造器",
       "word": "字段取值",
       "reference": "字段引用"
+    },
+    "stage": {
+      "match": "按条件过滤文档",
+      "project": "选择/计算输出字段",
+      "group": "分组聚合",
+      "sort": "排序",
+      "limit": "限制条数（整数）",
+      "skip": "跳过条数（整数）",
+      "unwind": "展开数组（字段路径）",
+      "lookup": "关联其它集合",
+      "add_fields": "新增计算字段",
+      "set": "新增/覆盖字段",
+      "unset": "删除字段（字段名或数组）",
+      "count": "统计文档数（输出字段名）",
+      "facet": "多分支并行聚合",
+      "bucket": "按边界分桶",
+      "bucket_auto": "自动分桶",
+      "replace_root": "替换根文档",
+      "replace_with": "替换根文档",
+      "sample": "随机抽样",
+      "sort_by_count": "按值计数排序",
+      "graph_lookup": "图式递归关联",
+      "union_with": "合并其它集合",
+      "out": "写出到集合",
+      "merge": "合并写入集合",
+      "index_stats": "索引使用统计",
+      "coll_stats": "集合统计",
+      "geo_near": "地理距离查询",
+      "redact": "按表达式裁剪",
+      "densify": "补全缺失序列",
+      "fill": "填充缺失值",
+      "documents": "常量文档源",
+      "set_window_fields": "窗口函数"
     }
   }
 }

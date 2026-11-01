@@ -63,7 +63,10 @@ impl AppController {
             | AppCommand::UpdateMongoAggregation { .. }
             | AppCommand::BeginMongoAggregation(_)
             | AppCommand::RunMongoAggregation { .. }
-            | AppCommand::FinishMongoAggregation { .. }) => self.dispatch_mongo_command(command),
+            | AppCommand::FinishMongoAggregation { .. }
+            | AppCommand::RunMongoAggregationPreview { .. }) => {
+                self.dispatch_mongo_command(command)
+            }
             command @ (AppCommand::PrepareBackup { .. }
             | AppCommand::RunBackup(_)
             | AppCommand::PrepareRestore(_)

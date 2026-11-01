@@ -141,6 +141,9 @@ impl AppController {
                 generation,
                 result,
             } => self.finish_mongo_aggregation(tab_id, generation, result),
+            AppCommand::RunMongoAggregationPreview { tab_id, pipeline } => {
+                self.run_mongo_aggregation_preview(tab_id, pipeline)
+            }
             _ => self.fail(Error::new(ErrorKind::Internal, "非 MongoDB 命令")),
         }
     }
@@ -314,6 +317,28 @@ impl AppController {
         {
             Ok(page) => AppEvent::MongoAggregationLoaded(tab_id, page),
             Err(error) => AppEvent::Failed(UserFacingError::from(error)),
+        }
+    }
+
+    /// 单阶段预览：与正式聚合走同一个连接器，但不分配令牌、不写 `aggregation`。
+    ///
+    /// 预览是「看一眼这一步输出什么」的辅助手段，改了参数就重跑；把它写进标签页
+    /// 状态会让结果区显示一段用户没点「执行」的管道。
+    fn run_mongo_aggregation_preview(&mut self, tab_id: TabId, pipeline: String) -> AppEvent {
+        let Some(state) = self.find_mongo_collection_mut(tab_id) else {
+            return self.fail(Error::new(ErrorKind::Internal, "集合标签页不存在"));
+        };
+        let object = state.object.clone();
+        let Some(config) = self.connection_config(object.connection_id).cloned() else {
+            return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+        };
+        let result = connector_for(&config)
+            .and_then(|connector| connector.mongo_aggregate(&object, &pipeline))
+            .map_err(UserFacingError::from);
+        AppEvent::MongoAggregationPreviewLoaded {
+            tab_id,
+            pipeline,
+            result,
         }
     }
 

@@ -732,6 +732,8 @@ struct NavicatMain {
     pub(crate) mongo_query_builder_expanded: BTreeMap<TabId, bool>,
     /// 条件构建器的条件行（按标签页缓存，切走再切回来不丢草稿）。
     pub(crate) mongo_query_builders: BTreeMap<TabId, MongoQueryBuilder>,
+    /// 聚合管道的卡片视图（按标签页缓存；卡片/文本模式与 stage 参数编辑器都在这里）。
+    pub(crate) mongo_aggregation_builders: BTreeMap<TabId, MongoAggregationBuilder>,
     /// 已折叠的文档卡片，按「标签页 → 文档身份（`_id`，缺失时 `#下标`）」记录。
     pub(crate) mongo_collapsed_documents: BTreeMap<TabId, BTreeSet<String>>,
     /// 已展开的嵌套字段，键为 `{文档身份}/{字段路径}`；默认全收起，与原型一致。
@@ -759,7 +761,6 @@ struct NavicatMain {
     pending_mongo_import: Option<MongoImportForm>,
     _mongo_import_task: Option<Task<()>>,
     _mongo_load_tasks: BTreeMap<u64, Task<()>>,
-    _mongo_aggregation_tasks: BTreeMap<u64, Task<()>>,
     _mongo_info_tasks: BTreeMap<u64, Task<()>>,
     _mongo_index_tasks: BTreeMap<u64, Task<()>>,
     /// 补全字段的抽样任务：每个集合标签页只跑一次，失败不重试（补全降级为仅运算符）。

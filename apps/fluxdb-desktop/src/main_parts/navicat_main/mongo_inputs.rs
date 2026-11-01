@@ -303,7 +303,6 @@ impl NavicatMain {
     ) {
         match retry {
             MongoRetry::Documents => self.run_mongo_query(tab_id, cx),
-            MongoRetry::Aggregation => self.run_mongo_aggregation(tab_id, cx),
             MongoRetry::Info => self.load_mongo_collection_info(tab_id, cx),
             MongoRetry::Indexes => self.load_mongo_indexes(tab_id, cx),
         }
@@ -355,12 +354,13 @@ impl NavicatMain {
         self.mongo_query_advanced_expanded.remove(&tab_id);
         self.mongo_query_builder_expanded.remove(&tab_id);
         self.mongo_query_builders.remove(&tab_id);
+        // 卡片里挂着参数编辑器与在途预览任务，移除即一并释放。
+        self.mongo_aggregation_builders.remove(&tab_id);
         self.mongo_collapsed_documents.remove(&tab_id);
         self.mongo_expanded_fields.remove(&tab_id);
         self.mongo_json_fold_toggles.remove(&tab_id);
         self.mongo_document_cache.remove(&tab_id);
         self._mongo_load_tasks.remove(&tab_id.0);
-        self._mongo_aggregation_tasks.remove(&tab_id.0);
         self._mongo_info_tasks.remove(&tab_id.0);
         self._mongo_index_tasks.remove(&tab_id.0);
         self._mongo_field_sample_tasks.remove(&tab_id.0);
@@ -413,9 +413,12 @@ pub(crate) fn mongo_query_option_counts(query: &MongoQueryDraft) -> (usize, usiz
     (common, advanced)
 }
 
-/// 输入框初值：已执行查询 + 聚合管道；无标签页状态时给默认值。
+/// 输入框初值：已执行查询 + 聚合管道；没有标签页状态或管道还是空的时候给默认值。
+///
+/// 空管道也必须补默认值：执行时空串会退回默认管道，面板却显示空框，
+/// 用户看到的是「没东西」而跑出来的是 `$group`，两边对不上。
 fn mongo_query_seed(state: &AppState, tab_id: TabId) -> (MongoQueryDraft, String) {
-    state
+    let (query, pipeline) = state
         .tabs
         .iter()
         .find(|tab| tab.id == tab_id)
@@ -429,7 +432,13 @@ fn mongo_query_seed(state: &AppState, tab_id: TabId) -> (MongoQueryDraft, String
         .unwrap_or_else(|| {
             (
                 MongoQueryDraft::new(state.settings.page_size),
-                MongoCollectionState::default_aggregation_pipeline(),
+                String::new(),
             )
-        })
+        });
+    let pipeline = if pipeline.trim().is_empty() {
+        MongoCollectionState::default_aggregation_pipeline()
+    } else {
+        pipeline
+    };
+    (query, pipeline)
 }

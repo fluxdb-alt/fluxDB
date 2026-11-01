@@ -276,7 +276,7 @@ fn mongo_completions(
             }
         }
         MongoCompletionKind::Stage => {
-            for (stage, _) in MONGO_STAGE_NAMES {
+            for (stage, _, _) in MONGO_STAGE_NAMES {
                 if !mongo_completion_matches(stage, &prefix) {
                     continue;
                 }
@@ -572,40 +572,87 @@ const MONGO_QUERY_OPERATORS: &[&str] = &[
     "$minDistance",
 ];
 
-/// 聚合 stage 名（插入时补成 `"$match": `，用户接着写参数）。
-const MONGO_STAGE_NAMES: &[(&str, &str)] = &[
-    ("$match", "按条件过滤文档"),
-    ("$project", "选择/计算输出字段"),
-    ("$group", "分组聚合"),
-    ("$sort", "排序"),
-    ("$limit", "限制条数"),
-    ("$skip", "跳过条数"),
-    ("$unwind", "展开数组"),
-    ("$lookup", "关联其它集合"),
-    ("$addFields", "新增计算字段"),
-    ("$set", "新增/覆盖字段"),
-    ("$unset", "删除字段"),
-    ("$count", "统计文档数"),
-    ("$facet", "多分支并行聚合"),
-    ("$bucket", "按边界分桶"),
-    ("$bucketAuto", "自动分桶"),
-    ("$replaceRoot", "替换根文档"),
-    ("$replaceWith", "替换根文档"),
-    ("$sample", "随机抽样"),
-    ("$sortByCount", "按值计数排序"),
-    ("$graphLookup", "图式递归关联"),
-    ("$unionWith", "合并其它集合"),
-    ("$out", "写出到集合"),
-    ("$merge", "合并写入集合"),
-    ("$indexStats", "索引使用统计"),
-    ("$collStats", "集合统计"),
-    ("$geoNear", "地理距离查询"),
-    ("$redact", "按表达式裁剪"),
-    ("$densify", "补全缺失序列"),
-    ("$fill", "填充缺失值"),
-    ("$documents", "常量文档源"),
-    ("$setWindowFields", "窗口函数"),
+/// 聚合 stage 名 + 说明文案 key + 参数模板。补全、卡片下拉、新卡片初值都用这一份来源。
+///
+/// 说明是语言包 key（`app.mongo.stage.*`），不是中文字面量：卡头和下拉都会显示它，
+/// 字面量会让英文界面里冒出中文。
+///
+/// 模板是「选中这个运算符后参数框里该写什么」的最小骨架：用户不必去查文档，
+/// 也知道这里要的是整数、字符串还是对象。参数框已有内容时不覆盖（见
+/// `set_mongo_aggregation_stage_key`），避免误点下拉冲掉手写的东西。
+pub(crate) const MONGO_STAGE_NAMES: &[(&str, &str, &str)] = &[
+    ("$match", "app.mongo.stage.match", "{}"),
+    ("$project", "app.mongo.stage.project", "{ \"field\": 1 }"),
+    ("$group", "app.mongo.stage.group", "{ \"_id\": null }"),
+    ("$sort", "app.mongo.stage.sort", "{ \"field\": 1 }"),
+    ("$limit", "app.mongo.stage.limit", "10"),
+    ("$skip", "app.mongo.stage.skip", "0"),
+    ("$unwind", "app.mongo.stage.unwind", "\"$array\""),
+    (
+        "$lookup",
+        "app.mongo.stage.lookup",
+        "{ \"from\": \"other\", \"localField\": \"a\", \"foreignField\": \"b\", \"as\": \"joined\" }",
+    ),
+    ("$addFields", "app.mongo.stage.add_fields", "{ \"field\": 1 }"),
+    ("$set", "app.mongo.stage.set", "{ \"field\": 1 }"),
+    ("$unset", "app.mongo.stage.unset", "\"field\""),
+    ("$count", "app.mongo.stage.count", "\"total\""),
+    ("$facet", "app.mongo.stage.facet", "{}"),
+    (
+        "$bucket",
+        "app.mongo.stage.bucket",
+        "{ \"groupBy\": \"$field\", \"boundaries\": [0, 10, 20] }",
+    ),
+    (
+        "$bucketAuto",
+        "app.mongo.stage.bucket_auto",
+        "{ \"groupBy\": \"$field\", \"buckets\": 5 }",
+    ),
+    ("$replaceRoot", "app.mongo.stage.replace_root", "{ \"newRoot\": {} }"),
+    ("$replaceWith", "app.mongo.stage.replace_with", "{}"),
+    ("$sample", "app.mongo.stage.sample", "{ \"size\": 10 }"),
+    ("$sortByCount", "app.mongo.stage.sort_by_count", "\"$field\""),
+    (
+        "$graphLookup",
+        "app.mongo.stage.graph_lookup",
+        "{ \"from\": \"other\", \"startWith\": \"$a\", \"connectFromField\": \"a\", \"connectToField\": \"b\", \"as\": \"path\" }",
+    ),
+    ("$unionWith", "app.mongo.stage.union_with", "\"other\""),
+    ("$out", "app.mongo.stage.out", "\"target\""),
+    ("$merge", "app.mongo.stage.merge", "{ \"into\": \"target\" }"),
+    ("$indexStats", "app.mongo.stage.index_stats", "{}"),
+    ("$collStats", "app.mongo.stage.coll_stats", "{ \"storageStats\": {} }"),
+    (
+        "$geoNear",
+        "app.mongo.stage.geo_near",
+        "{ \"near\": { \"type\": \"Point\", \"coordinates\": [0, 0] }, \"distanceField\": \"distance\" }",
+    ),
+    ("$redact", "app.mongo.stage.redact", "\"$$KEEP\""),
+    (
+        "$densify",
+        "app.mongo.stage.densify",
+        "{ \"field\": \"field\", \"range\": { \"step\": 1, \"unit\": \"day\" } }",
+    ),
+    ("$fill", "app.mongo.stage.fill", "{}"),
+    ("$documents", "app.mongo.stage.documents", "[]"),
+    ("$setWindowFields", "app.mongo.stage.set_window_fields", "{}"),
 ];
+
+/// 运算符的说明文案 key（卡片参数框的占位提示、卡头说明、下拉第二行）。
+pub(crate) fn mongo_stage_hint(key: &str) -> Option<&'static str> {
+    MONGO_STAGE_NAMES
+        .iter()
+        .find(|(stage, _, _)| *stage == key)
+        .map(|(_, hint, _)| *hint)
+}
+
+/// 运算符的参数模板（新建卡片 / 切换运算符时填进参数框）。
+pub(crate) fn mongo_stage_template(key: &str) -> Option<&'static str> {
+    MONGO_STAGE_NAMES
+        .iter()
+        .find(|(stage, _, _)| *stage == key)
+        .map(|(_, _, template)| *template)
+}
 
 /// stage 内部键位可用的运算符：累加器 + 常用表达式运算符。
 const MONGO_STAGE_OPERATORS: &[&str] = &[

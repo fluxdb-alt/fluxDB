@@ -160,6 +160,8 @@ include!("main_parts/mongo_collection.rs");
 include!("main_parts/mongo_query_completion.rs");
 include!("main_parts/mongo_query_builder_model.rs");
 include!("main_parts/mongo_query_builder.rs");
+include!("main_parts/mongo_aggregation_model.rs");
+include!("main_parts/mongo_aggregation_builder.rs");
 include!("main_parts/mongo_documents.rs");
 include!("main_parts/backup_tab.rs");
 include!("main_parts/er/canvas.rs");

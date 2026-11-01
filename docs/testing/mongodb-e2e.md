@@ -14,6 +14,7 @@
 | 刷新替换语义 | `crates/fluxdb-app/src/parts/table_info.rs` 内 `replace_loaded_children_tests` | 否 |
 | 连接器端到端 | `crates/fluxdb-connectors/tests/mongo_live.rs` | 是 |
 | 查询面板与嵌套条件构建（生产视图） | `apps/fluxdb-desktop/src/main_parts/i18n_tests/mongo_query_panel.rs` | 否 |
+| 聚合管道卡片视图（生产视图） | `apps/fluxdb-desktop/src/main_parts/i18n_tests/mongo_aggregation_cards.rs` | 否 |
 | UI 端到端（生产视图） | `apps/fluxdb-desktop/src/main_parts/mongo_sidebar_tests.rs` | 是 |
 
 ## 2. 凭据注入
@@ -86,6 +87,29 @@ cargo test --locked -p fluxdb-desktop mongo_query_builder_model_tests
 封顶这条用例的树从 Filter 文本反向展开（根 `$or` 四个子组、每组三条条件），不逐条点「添加条件」：加满第一个子组后，后一个子组的按钮已被滚出封顶视口，窗口外的点击被 gpui 静默丢弃，用例会卡在「按钮点了没反应」而不是报错。树高用 `mongo-query-builder-tree` 的实测边界量，再发三次滚轮事件断言最后一行上移——滚动条与滚轮同属原生 `overflow_y_scroll`，滚不动就说明树被压成 0 高或没有可滚区间。
 
 滚完还要断言 `scrollbar-overlay` 的边界**没变**、且高度等于树的可视区：覆盖层是视口覆盖层，跟内容一起滚时拇指就在原地不动，正是「往下滚滚动条不动」那个 bug。
+
+## 4.1 聚合管道卡片视图（无需真实数据库）
+
+```bash
+FLUXDB_PROFILE=dev cargo test --locked -p fluxdb-desktop --bin fluxdb-desktop \
+  mongo_aggregation_cards_edit_the_pipeline -- --exact
+```
+
+同样由生产 View 的无头点击驱动：切到聚合分节 → 断言默认管道摊成一张卡 → 点 `mongo-aggregation-add` 追加 `$match` 并检查管道文本；新卡的参数框已是「说明注释 + `{}`」，且注释**没有**跟着进管道文本 → 停用第一张卡（卡片仍在、`$group` 从文本里消失）→ 下移换序 → 上移在首位是空操作 → 断言预览区（右栏，常驻）与卡头运行按钮都在窗口内 → 手动摆一个「已有预览」再点停用触发管道重写，断言预览被置回 `NotLoaded` → 折叠/展开卡片（卡身消失又回来，卡片与管道都不动）→ 删除 → 运算符下拉：点 `mongo-aggregation-key:1` 开下拉，敲 `l i m` 再回车，断言选中的是 `$limit`（筛选没生效的话回车会落在第一项 `$match`）且没动过的默认参数跟着换成 `$limit` 的模板；再把参数框改成手写 JSON，换成 `$skip`，断言参数原样保留。
+
+下拉是 `Select`（可输入筛选），键盘直接打进弹出的搜索框；点开卡片区的第二张卡之前先收起第一张——卡片区封顶 320px，两张展开的卡会把第二张卡头挤出视口，而窗口外的点击被 gpui 静默丢弃。
+
+预览结果（`LoadState::Loaded`）摆进用例后断言 `mongo-aggregation-preview-card:0` 与 `mongo-document-fields:0` 同时存在：预览每条文档渲染成文档页同一套字段列表卡片，而不是整段 JSON 文本。
+
+预览请求本身在这里**不点**：它会真的建连，无服务时驱动要等服务端选择超时（默认 30s）才失败。预览与正式聚合共用 `mongo_aggregate`，链路归连接器用例；追加 `$limit: 10` 与 `$out` / `$merge` 拒绝预览在 `run_mongo_aggregation_stage_preview` 里，走到即需要真实连接，本地不覆盖。
+
+管道 ↔ stage 数组的纯转换由同 crate 单测覆盖，不依赖视图：
+
+```bash
+cargo test --locked -p fluxdb-desktop mongo_aggregation_model_tests
+```
+
+锁的是：空文本等价空管道、往返不改数字类型（`$limit: 10` 仍是整数）、嵌套参数缩进、停用 stage 保留但不写进管道、非法参数原样内联（不静默丢 stage）、多键对象与非 `$` 键被拒绝、参数编辑器高度夹在 2–8 行、默认参数是「注释 + 可跑的合法 JSON」且注释不进管道、每个运算符的说明 key 在英文与中文语言包里都存在。
 
 ## 5. UI 端到端（`apps/fluxdb-desktop/src/main_parts/mongo_sidebar_tests.rs`）
 
