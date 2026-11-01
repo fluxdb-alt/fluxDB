@@ -1796,6 +1796,185 @@ mod mongo_sidebar_tests {
         });
     }
 
+    /// MongoDB 命令工作台：库行右键 → 「Command workbench」→ 输入语句 → 运行。
+    ///
+    /// 断言的是用户能看到的层：标签页类型是 `MongoWorkbench`、结果区渲染出该条语句的卡片、
+    /// 卡片里是连接器真实返回的文本。不直接调处理函数。
+    #[gpui::test]
+    fn mongo_workbench_runs_a_statement_from_the_right_click_menu(cx: &mut TestAppContext) {
+        let Some(config) = live_connection() else {
+            eprintln!("跳过：未设置 FLUXDB_MONGO_URI");
+            return;
+        };
+        let connection_id = config.id;
+        let database = live_database(&config);
+        let (view, cx) = launch_app(cx, config);
+        let database_selector = connect_and_wait_database(cx, connection_id, &database);
+
+        // 1. 库行右键 → 「Command workbench」（文案走语言包，按真实文案定位）。
+        let database_row = redraw_and_bounds(cx, database_selector).expect("库行必须渲染");
+        cx.simulate_event(MouseDownEvent {
+            position: database_row.center(),
+            modifiers: Modifiers::default(),
+            button: MouseButton::Right,
+            click_count: 1,
+            first_mouse: false,
+        });
+        let menu_item = wait_until(cx, "库右键菜单出现", |cx| {
+            redraw_and_bounds(
+                cx,
+                selector("database-menu-item:Command workbench".to_string()),
+            )
+        });
+        cx.simulate_click(menu_item.center(), Modifiers::default());
+
+        // 2. 标签页必须建起来，并指向当前连接 / 当前库。
+        wait_until(cx, "命令工作台标签页", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .any(|tab| {
+                        matches!(&tab.kind, TabKind::MongoWorkbench(workbench)
+                            if workbench.connection_id == connection_id
+                                && workbench.database == database)
+                    })
+                    .then_some(())
+            })
+        });
+
+        // 3. 把语句写进编辑器并点「运行」。编辑器文本走真实输入事件，
+        //    与用户打字同一条链路（Changed → UpdateMongoWorkbenchText）。
+        let editor = wait_until(cx, "语句编辑器渲染", |cx| {
+            redraw_and_bounds(cx, selector("mongo-workbench-editor".to_string()))
+        });
+        cx.simulate_click(editor.center(), Modifiers::default());
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        cx.simulate_input("show dbs");
+
+        let run_button = wait_until(cx, "运行按钮可用", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .any(|tab| {
+                        matches!(&tab.kind, TabKind::MongoWorkbench(workbench)
+                            if workbench.text.trim() == "show dbs")
+                    })
+                    .then_some(())
+            })
+            .and_then(|()| redraw_and_bounds(cx, selector("mongo-workbench-run".to_string())))
+        });
+        cx.simulate_click(run_button.center(), Modifiers::default());
+
+        // 3.5 `db.events.stats()` 的输出有几百行，是「长结果必须能在卡片内滚动」的真实样本。
+        //     先跑它，再回来验证滚动；`show dbs` 负责内容断言。
+        let type_and_run = |cx: &mut VisualTestContext, statement: &str| {
+            let editor = redraw_and_bounds(cx, selector("mongo-workbench-editor".to_string()))
+                .expect("编辑器必须还在");
+            cx.simulate_click(editor.center(), Modifiers::default());
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            });
+            cx.simulate_input(statement);
+            let run = wait_until(cx, "运行按钮可用", |cx| {
+                redraw_and_bounds(cx, selector("mongo-workbench-run".to_string()))
+            });
+            cx.simulate_click(run.center(), Modifiers::default());
+        };
+        type_and_run(cx, "db.events.stats()");
+        wait_until(cx, "stats 记录落地", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .find_map(|tab| match &tab.kind {
+                        TabKind::MongoWorkbench(workbench) => Some((
+                            workbench.executions.len(),
+                            workbench.running,
+                        )),
+                        _ => None,
+                    })
+            })
+            .filter(|(count, running)| *count == 2 && !*running)
+        });
+
+        // 长结果必须在卡片内滚：正文内容比容器高，且滚轮能改变滚动偏移。
+        let body_selector = selector("mongo-workbench-record-body:2".to_string());
+        let content_selector =
+            selector("mongo-workbench-record-body-content:2".to_string());
+        let (body, content) = wait_until(cx, "长结果卡片渲染", |cx| {
+            let body = redraw_and_bounds(cx, body_selector)?;
+            let content = redraw_and_bounds(cx, content_selector)?;
+            (f32::from(content.size.height) > f32::from(body.size.height) + 40.).then_some((body, content))
+        });
+        assert!(
+            f32::from(body.size.height) <= 320. + 1.,
+            "正文容器必须封顶在 max_h 内，实际 {body:?}"
+        );
+        assert!(
+            f32::from(content.size.height) > 320.,
+            "样本必须真的超出一屏，实际内容高 {:?}",
+            content.size.height
+        );
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: body.center(),
+            delta: gpui::ScrollDelta::Lines(gpui::point(0., -5.)),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        // 滚轮之后内容必须整体上移：卡片内滚动生效，而不是被外层吞掉。
+        let scrolled = redraw_and_bounds(cx, content_selector).expect("内容仍在");
+        assert!(
+            scrolled.origin.y < content.origin.y,
+            "滚轮没有滚动卡片正文：{} -> {}",
+            content.origin.y,
+            scrolled.origin.y
+        );
+
+        // 4. 再跑 `show dbs`：卡片正文必须来自连接器（至少列出 admin 与目标库）。
+        type_and_run(cx, "show dbs");
+        wait_until(cx, "show dbs 记录落地", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .find_map(|tab| match &tab.kind {
+                        TabKind::MongoWorkbench(workbench)
+                            if workbench.executions.len() == 3 && !workbench.running =>
+                        {
+                            let execution = &workbench.executions[2];
+                            assert!(execution.is_success(), "show dbs 必须成功");
+                            assert_eq!(execution.text, "show dbs");
+                            let output = execution.output.as_deref().unwrap_or_default();
+                            assert!(output.contains("admin"), "结果里没有 admin：{output}");
+                            assert!(
+                                output.contains(&database),
+                                "结果里没有目标库 {database}：{output}"
+                            );
+                            Some(())
+                        }
+                        _ => None,
+                    })
+            })
+        });
+        // 第三条记录卡片真的渲染出来（不是只在状态里）。
+        let record = wait_until(cx, "记录卡片渲染", |cx| {
+            visible_bounds(cx, selector("mongo-workbench-record:3".to_string()))
+        });
+        assert!(record.size.height > px(1.), "记录卡片必须有实际高度");
+    }
+
     /// 本页首篇文档的 `(可读 id, 完整 JSON)`。
     fn first_document(
         cx: &mut VisualTestContext,

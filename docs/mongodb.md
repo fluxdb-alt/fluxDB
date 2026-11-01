@@ -26,7 +26,7 @@
 
 ### 1.3 库右键菜单
 
-创建集合 / 删除数据库 / 命令行终端 / 刷新。
+创建集合 / 删除数据库 / 命令行终端 / 命令工作台 / 刷新。
 
 「创建数据库」要求同时填写**库名与首个集合名**：MongoDB 的库由首个集合隐式创建，只有库名会得到一个不存在的空库，因此连接器直接拒绝空集合名。
 
@@ -264,7 +264,9 @@ Filter / 投影 / 排序三框与聚合管道都从单行 `InputState` 换成 `E
   - 单格渲染贴 Compass：ObjectId/UUID 转十六进制、Binary 转 base64、`$numberLong` 等取内层标量、日期转 ISO，其余用紧凑 JSON；以 `= + - @` 开头的值前置单引号，防 Excel 公式注入；文件头写 UTF-8 BOM，Windows Excel 打开中文不乱码。
 - **落盘**：先写 `<目标>.partial`，全部成功后才改名到目标路径；取消或失败删除临时文件（CSV 的中间 `.ejsonl` 同样清理），不留半截数据。运行中可「取消导出」，取消标记每页检查一次；运行中不允许关闭弹框（只能取消或等待）。
 
-## 4. 命令行终端（MongoDB shell）
+## 4. Shell 与命令工作台
+
+### 4.1 命令行终端（MongoDB shell）
 
 库右键「命令行终端」，或在库工作区页签条空白区双击，都会打开 `MongoCli` 标签页，复用内置终端组件（历史 + 补全）。空白区双击按连接类型路由（`open_query_for_context`）：Redis 开 Workbench，MongoDB 开 Shell，其余开 SQL 查询编辑器——MongoDB 没有 SQL 编辑器，路由漏了这里双击就等于没反应。写的是 shell 语法，不是命令 JSON：
 
@@ -310,6 +312,19 @@ db.getCollectionNames()
 - 分层：解析与执行在 `crates/fluxdb-connectors/src/parts/mongo/shell.rs`（`Connector::mongo_shell`），行编辑与回显在 `crates/fluxdb-app/src/parts/terminal_mongo.rs`，渲染复用既有终端组件。
 
 原来的命令对象写法（`{"ping": 1}`）已移除——终端只接受 shell 语法，混着两种写法会让「为什么这条能跑那条不能」变成谜。连接器的 `mongo_run_command` 仍保留给查询编辑器与测试使用。
+
+### 4.2 命令工作台（库级执行台）
+
+库右键「命令工作台」打开 `MongoWorkbench` 标签页。定位对齐 Redis Workbench：一条语句 = 一张可回看的记录卡片，和 CLI 的分工是「即敲即得」对「翻回去看」。
+
+- **库级、跨集合**：一个连接 + 一个库只有一个标签页，重复打开复用并激活。语句在连接器的 `mongo_shell` 里执行，语法与只读边界和 4.1 完全同源——工作台不是第二个解析器。
+- **执行链路**：`Begin`（主线程置运行态、清空草稿）→ `Run`（后台线程的控制器副本执行，文本按 `execution_id` 从状态取，不接 UI 传值）→ `Finish`（主线程写记录）。编辑器文本回写走 `UpdateMongoWorkbenchText`，回车与「运行」按钮同一条路径。
+- **失败也入记录**：报错留在结果区，用户能看到是哪条语句、错在哪；空语句直接回空结果，不发起数据库往返，也不记成一次失败。
+- **`use <db>` 只切本标签页的会话库**，不写回连接配置（同 4.1）。
+- **结果按 SGR 上色**：连接器按终端排版输出（键蓝 / 字符串绿 / 数字橙 / 布尔青 / null 灰）。`mongo_workbench_color_segments` 把 CSI 序列解析成「纯文本 + 着色段」，颜色映射到 JSON 查看器同一套 `JsonEditorTheme` 色板，再由 `StyledText` 逐段上色——既不会把 `[34m` 当正文显示，也不会丢掉类型区分。
+- **长结果在卡片内滚动**：正文用原生 `overflow_y_scroll()` + 显式 `vertical_scrollbar()`，不用 `Scrollable` 封装。后者的根节点是 `size_full()`，塞进 auto 高度的卡片里会被压成内容高度，`max_h` 之外的溢出既没有可滚范围也不画滚动条（实测整段被裁掉、滚轮无效）。
+- **AI 上下文只发定位与状态**（库名、运行中、记录条数），草稿与结果区内容一律不进首条消息——结果区里是查询回来的文档内容。
+- 分层：状态机在 `crates/fluxdb-app/src/parts/controller/dispatch_mongo_workbench.rs`，页面在 `apps/fluxdb-desktop/src/main_parts/mongo_workbench.rs`。
 
 ## 5. 实现要点
 

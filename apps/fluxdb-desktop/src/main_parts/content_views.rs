@@ -138,6 +138,14 @@ fn content(
             };
             mongo_cli_content(tab.id, cli, this, window, colors, cx)
         }
+        Some(tab) if matches!(tab.kind, TabKind::MongoWorkbench(_)) => {
+            let TabKind::MongoWorkbench(workbench) = &tab.kind else {
+                unreachable!();
+            };
+            div().size_full().min_h(px(0.)).flex().flex_col().child(
+                mongo_workbench_content(tab.id, workbench, this, window, colors, cx),
+            )
+        }
         Some(tab) if matches!(tab.kind, TabKind::MongoCollection(_)) => {
             let TabKind::MongoCollection(collection) = &tab.kind else {
                 unreachable!();

@@ -351,6 +351,7 @@ fn statusbar_active_connection_id(state: &AppState) -> Option<ConnectionId> {
         TabKind::RedisWorkbench(workbench) => Some(workbench.connection_id),
         TabKind::RedisCli(cli) => Some(cli.connection_id),
         TabKind::MongoCli(cli) => Some(cli.connection_id),
+        TabKind::MongoWorkbench(workbench) => Some(workbench.connection_id),
         TabKind::RedisPubSub(pubsub) => Some(pubsub.connection_id),
         TabKind::CreateTable(create) => Some(create.connection_id),
         TabKind::UserAdmin(admin) => Some(admin.connection_id),
@@ -418,6 +419,12 @@ fn statusbar_context(state: &AppState) -> Option<String> {
             cli.connection_id,
             Some(&cli.database),
             Some("MongoDB Shell"),
+        ),
+        TabKind::MongoWorkbench(workbench) => connection_statusbar_context(
+            state,
+            workbench.connection_id,
+            Some(&workbench.database),
+            Some(tr("app.statusbar.mongo.workbench").as_ref()),
         ),
         TabKind::CreateTable(create) => {
             let table_kind = if create.is_design() {

@@ -812,6 +812,73 @@ impl NavicatMain {
         editor
     }
 
+    /// 获取（或惰性创建）MongoDB 命令工作台的语句编辑器，并把文本变更同步回状态。
+    ///
+    /// 与 Redis Workbench 同构：一个多行编辑器 + Changed 同步 + Execute（Ctrl/Cmd+Enter）执行。
+    /// 不加语法高亮/补全：shell 语句是「放宽了引号的 JSON + 方法链」，用 JSON 高亮会误染，
+    /// 而工作台的定位是执行台，输入体验交给旁边的 CLI。
+    pub(crate) fn mongo_workbench_state(
+        &mut self,
+        tab_id: TabId,
+        workbench: &MongoWorkbenchState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<editor_component::Editor> {
+        if let Some(editor) = self.mongo_workbench_inputs.get(&tab_id) {
+            let editor = editor.clone();
+            // 执行后 workbench.text 被清空，需同步清掉编辑器残留文本（同 Redis Workbench）。
+            if workbench.text.is_empty() && !editor.read(cx).text().is_empty() {
+                editor.update(cx, |editor, cx| editor.sync_text_silent("", cx));
+            }
+            return editor;
+        }
+
+        let mut profile = fluxdb_editor_core::EditorProfile::default();
+        profile.language_id = "plain".to_string();
+        profile.show_line_numbers = true;
+        profile.show_folding = false;
+        let config = fluxdb_editor_core::EditorConfig {
+            profile,
+            font: editor_component::EDITOR_FONT.to_string(),
+            font_size: 13.0,
+            line_height: 18.0,
+            gutter_line_numbers: true,
+        };
+        let editor = cx.new(|cx| {
+            editor_component::Editor::new(
+                workbench.text.clone(),
+                editor_component::Providers::default(),
+                Some(config),
+                window,
+                cx,
+            )
+        });
+        let editor_theme = self.editor_theme_for(cx);
+        editor.update(cx, |editor, ecx| editor.set_theme(editor_theme, ecx));
+
+        let subscription = cx.subscribe_in(
+            &editor,
+            window,
+            move |this, editor, event, _window, cx| match event {
+                editor_component::EditorEvent::Changed(_) => {
+                    let text = editor.read(cx).text();
+                    this.dispatch(
+                        AppCommand::UpdateMongoWorkbenchText { tab_id, text },
+                        cx,
+                    );
+                }
+                editor_component::EditorEvent::Execute { .. } => {
+                    this.run_mongo_workbench(tab_id, None, cx);
+                }
+                _ => {}
+            },
+        );
+        self.mongo_workbench_inputs.insert(tab_id, editor.clone());
+        self._mongo_workbench_input_subscriptions
+            .insert(tab_id, subscription);
+        editor
+    }
+
     /// 获取（或惰性创建）查询页查找/替换输入框；文本变更时同步回编辑器 find 状态。
     #[allow(dead_code)] // 查找面板尚未接入宿主渲染，该方法及其两个 apply 一并预留。
     fn query_find_state(

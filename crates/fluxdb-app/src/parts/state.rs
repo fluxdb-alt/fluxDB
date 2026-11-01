@@ -757,6 +757,10 @@ impl TabState {
                     .clone()
                     .unwrap_or_else(|| "main".to_string()),
             }),
+            TabKind::MongoWorkbench(workbench) => Some(TabWorkspace {
+                connection_id: workbench.connection_id,
+                database: workbench.database.clone(),
+            }),
             TabKind::Settings(_) => None,
             TabKind::AiChat { workspace } => workspace.clone(),
         }
@@ -793,6 +797,8 @@ pub enum TabKind {
     ErDiagram(ErDiagramState),
     /// MongoDB 集合工作台（文档 / 聚合 / 索引 / 集合信息）。
     MongoCollection(MongoCollectionState),
+    /// MongoDB 命令工作台（库级、跨集合的 shell 语句执行台）。
+    MongoWorkbench(MongoWorkbenchState),
 }
 
 /// 备份列表 tab 的标识状态：仅记录连接 + 库；行数据由 UI 侧渲染时

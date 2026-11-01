@@ -175,6 +175,10 @@ fn tab_belongs_to_database(tab: &TabState, connection_id: ConnectionId, database
         }
         // MongoDB 命令行按「连接 + 库」归属。
         TabKind::MongoCli(cli) => cli.connection_id == connection_id && cli.database == database,
+        // MongoDB 命令工作台同样按「连接 + 库」归属。
+        TabKind::MongoWorkbench(workbench) => {
+            workbench.connection_id == connection_id && workbench.database == database
+        }
         // 备份列表 tab 按「连接 + 库」归属（与侧边栏备份节点一一对应）。
         TabKind::BackupList(list) => {
             list.connection_id == connection_id && list.database == database
@@ -214,6 +218,7 @@ fn tab_belongs_to_connection(tab: &TabState, connection_id: ConnectionId) -> boo
         TabKind::RedisCli(cli) => cli.connection_id == connection_id,
         TabKind::RedisPubSub(pubsub) => pubsub.connection_id == connection_id,
         TabKind::MongoCli(cli) => cli.connection_id == connection_id,
+        TabKind::MongoWorkbench(workbench) => workbench.connection_id == connection_id,
         TabKind::CreateTable(create) => create.connection_id == connection_id,
         TabKind::UserAdmin(admin) => admin.connection_id == connection_id,
         TabKind::BackupList(list) => list.connection_id == connection_id,

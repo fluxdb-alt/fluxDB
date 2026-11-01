@@ -450,6 +450,7 @@ fn tab_width(tab: &TabState, compact: bool) -> f32 {
         TabKind::RedisWorkbench(_) => 210.,
         TabKind::RedisCli(_) => 210.,
         TabKind::MongoCli(_) => 210.,
+        TabKind::MongoWorkbench(_) => 210.,
         TabKind::RedisPubSub(_) => 210.,
         TabKind::CreateTable(_) => 210.,
         TabKind::UserAdmin(_) => 180.,
@@ -505,6 +506,8 @@ fn localized_tab_title(tab: &TabState) -> String {
             .replace("%{database}", &cli.database.to_string()),
         TabKind::MongoCli(cli) => tr("app.tabs.mongo_cli")
             .replace("%{database}", &cli.database),
+        TabKind::MongoWorkbench(workbench) => tr("app.tabs.mongo_workbench")
+            .replace("%{database}", &workbench.database),
         TabKind::RedisPubSub(pubsub) => tr("app.tabs.redis_pubsub")
             .replace("%{database}", &pubsub.database.to_string()),
         TabKind::BackupList(list) => tr("app.tabs.backup")
@@ -538,7 +541,7 @@ fn tab_icon(
         TabKind::QueryEditor(_) | TabKind::RedisWorkbench(_) | TabKind::RedisCli(_) => {
             AppIcon::Query
         }
-        TabKind::MongoCli(_) => AppIcon::Query,
+        TabKind::MongoCli(_) | TabKind::MongoWorkbench(_) => AppIcon::Query,
         TabKind::RedisPubSub(_) => AppIcon::Broadcast,
         TabKind::UserAdmin(_) => AppIcon::Users,
         TabKind::Settings(_) => AppIcon::Settings,

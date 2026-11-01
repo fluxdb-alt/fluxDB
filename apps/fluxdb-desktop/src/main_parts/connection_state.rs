@@ -140,6 +140,8 @@ enum DatabaseMenuAction {
     NewCollection,
     /// 打开 MongoDB 命令行终端（仅 MongoDB 数据库显示）。
     MongoCli,
+    /// 打开 MongoDB 命令工作台（仅 MongoDB 数据库显示）。
+    MongoWorkbench,
 }
 
 /// PostgreSQL schema 右键菜单动作：全部 schema 作用域，不与数据库/表动作混淆。

@@ -1074,6 +1074,18 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
         TabKind::RedisCli(cli) => TabKind::RedisCli(cli.clone()),
         // MongoDB 命令行同理：只记连接 + 库，REPL 会话在桌面端。
         TabKind::MongoCli(cli) => TabKind::MongoCli(cli.clone()),
+        // 命令工作台快照丢掉执行记录，只保留定位与草稿。
+        TabKind::MongoWorkbench(workbench) => {
+            TabKind::MongoWorkbench(MongoWorkbenchState {
+                text: String::new(),
+                executions: Vec::new(),
+                error: workbench.error.clone(),
+                saved_fingerprint: None,
+                next_execution_id: 1,
+                collapsed: std::collections::BTreeSet::new(),
+                ..workbench.clone()
+            })
+        }
         // Redis Pub/Sub 状态很轻量（仅 connection_id + database），快照直接克隆。
         TabKind::RedisPubSub(pubsub) => TabKind::RedisPubSub(pubsub.clone()),
 

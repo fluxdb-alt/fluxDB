@@ -25,19 +25,19 @@ use fluxdb_app::{
     CreateTablePartitionField, CreateTableState, CreateTableTab, CreateTableTrigger,
     CreateTableTriggerEvent, CreateTableTriggerField, DataEditorState, ErDiagramState,
     ErLayoutResult, ForeignKeyCheckMode, LoadState, MongoCollectionState, MongoDisplayMode,
-    MongoQueryDraft, MongoSection, ObjectListState, OracleGrantKind, OracleUserAdminState,
-    OracleUserAdminTab, PgDraftAttrField, PgGrantEditOp, PgGrantObjectKind, PgRoleDraftUiExt,
-    PgRoleSaveStatus, PgUserAdminTab, QueryEditorState, QueryHistoryEntry, QueryHistoryKind,
-    QueryHistoryTransactionState, QueryOrigin, RedisAddKeyKind, RedisAddKeyRequest,
-    RedisConnectionOverview, RedisListDirection, RedisWorkbenchState, SqlServerSecurityFormField,
-    SqlServerSecurityFormFlag, SqlServerSecurityFormKind, SqlServerSecurityListFilter,
-    SqlServerSecuritySaveStatus, SqlServerSecurityState, SqlServerUserAdminTab, TabId, TabKind,
-    TabState, TabWorkspace, TableInfoState, TableInfoTab, UserAdminDetailTab, UserAdminMySqlTab,
-    UserAdminState, compress_sql_text, copy_table_requires_source_ddl,
-    copy_table_sql_preview_with_source_ddl, create_table_common_type_options,
-    create_table_provider, create_table_special_type_options, drop_table_sql_preview,
-    er_neighborhood_included_tables, er_place_avoiding_overlaps, er_relation_layout,
-    format_sql_text_for_dialect, mongo_query_limit, rename_table_sql_preview,
+    MongoQueryDraft, MongoSection, MongoWorkbenchExecution, MongoWorkbenchState, ObjectListState,
+    OracleGrantKind, OracleUserAdminState, OracleUserAdminTab, PgDraftAttrField, PgGrantEditOp,
+    PgGrantObjectKind, PgRoleDraftUiExt, PgRoleSaveStatus, PgUserAdminTab, QueryEditorState,
+    QueryHistoryEntry, QueryHistoryKind, QueryHistoryTransactionState, QueryOrigin,
+    RedisAddKeyKind, RedisAddKeyRequest, RedisConnectionOverview, RedisListDirection,
+    RedisWorkbenchState, SqlServerSecurityFormField, SqlServerSecurityFormFlag,
+    SqlServerSecurityFormKind, SqlServerSecurityListFilter, SqlServerSecuritySaveStatus,
+    SqlServerSecurityState, SqlServerUserAdminTab, TabId, TabKind, TabState, TabWorkspace,
+    TableInfoState, TableInfoTab, UserAdminDetailTab, UserAdminMySqlTab, UserAdminState,
+    compress_sql_text, copy_table_requires_source_ddl, copy_table_sql_preview_with_source_ddl,
+    create_table_common_type_options, create_table_provider, create_table_special_type_options,
+    drop_table_sql_preview, er_neighborhood_included_tables, er_place_avoiding_overlaps,
+    er_relation_layout, format_sql_text_for_dialect, mongo_query_limit, rename_table_sql_preview,
     truncate_table_sql_preview,
 };
 use fluxdb_core::{
@@ -160,6 +160,7 @@ include!("main_parts/mongo_collection.rs");
 include!("main_parts/mongo_query_completion.rs");
 include!("main_parts/mongo_query_builder.rs");
 include!("main_parts/mongo_documents.rs");
+include!("main_parts/mongo_workbench.rs");
 include!("main_parts/backup_tab.rs");
 include!("main_parts/er/canvas.rs");
 include!("main_parts/er/model.rs");

@@ -354,6 +354,15 @@ fn database_context_menu(
                     colors,
                     cx,
                 ))
+                .child(database_menu_item(
+                    tr("app.connection_menu.mongo_workbench").to_string(),
+                    "query",
+                    false,
+                    DatabaseMenuAction::MongoWorkbench,
+                    menu.clone(),
+                    colors,
+                    cx,
+                ))
                 .child(connection_menu_separator(colors))
                 .child(database_menu_item(
                     tr("app.connection_menu.refresh").to_string(),
