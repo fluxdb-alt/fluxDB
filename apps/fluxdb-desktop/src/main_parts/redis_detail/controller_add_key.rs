@@ -39,8 +39,7 @@ impl NavicatMain {
         }
         self.redis_add_key_string_input
             .update(cx, |input, cx| input.set_value("", window, cx));
-        self.redis_add_key_json_input
-            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.redis_add_key_json_editor.set_edit_text("", window, cx);
         self.redis_add_key_stream_id_input
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.redis_add_key_list_direction = RedisListDirection::Tail;
@@ -72,8 +71,7 @@ impl NavicatMain {
                     .update(cx, |input, cx| input.set_value("", window, cx));
             }
             RedisAddKeyKind::Json => {
-                self.redis_add_key_json_input
-                    .update(cx, |input, cx| input.set_value("", window, cx));
+                self.redis_add_key_json_editor.set_edit_text("", window, cx);
             }
             RedisAddKeyKind::Hash => {
                 self.redis_add_key_hash_rows = vec![new_add_key_hash_row(window, cx)];
@@ -168,12 +166,11 @@ impl NavicatMain {
 
     /// JSON 格式化/粘贴助手：读取 JSON 输入，合法则美化回填，否则提示错误。
     fn format_redis_add_key_json(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let value = self.redis_add_key_json_input.read(cx).value().to_string();
+        let value = self.redis_add_key_json_editor.edit_text(cx);
         match redis_pretty_json(&value) {
             Ok(formatted) => {
-                self.redis_add_key_json_input.update(cx, |input, cx| {
-                    input.set_value(formatted, window, cx);
-                });
+                self.redis_add_key_json_editor
+                    .set_edit_text(formatted, window, cx);
                 self.show_message(tr("app.redis.add_key.toast.json_formatted").as_ref(), AppMessageKind::Success, cx);
             }
             Err(_) => {
@@ -259,7 +256,7 @@ impl NavicatMain {
                 (value, Vec::new(), None, None, None)
             }
             RedisAddKeyKind::Json => {
-                let value = self.redis_add_key_json_input.read(cx).value().trim().to_string();
+                let value = self.redis_add_key_json_editor.edit_text(cx).trim().to_string();
                 if value.is_empty() || serde_json::from_str::<serde_json::Value>(&value).is_err() {
                     self.show_message(tr("app.redis.add_key.error.json_invalid").as_ref(), AppMessageKind::Warning, cx);
                     return;

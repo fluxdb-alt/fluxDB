@@ -894,8 +894,13 @@ fn navicat_main_new(
             this.redis_add_key_applying = false;
         },
     );
-    let redis_add_key_json_input =
-        cx.new(|cx| InputState::new(window, cx).placeholder(tr("app.placeholder.json_object")));
+    // JSON 值用 JSON 组件编辑：内部多行编辑器带语法高亮与软换行，比纯文本输入更易读。
+    let redis_add_key_json_editor =
+        JsonComponent::new_with_mode(JsonEditorConfig::default(), JsonMode::Edit, window, cx);
+    let redis_add_key_json_input = redis_add_key_json_editor
+        .input()
+        .expect("JSON 组件应持有编辑框")
+        .clone();
     let redis_add_key_json_subscription = cx.subscribe_in(
         &redis_add_key_json_input,
         window,
@@ -2968,7 +2973,7 @@ fn navicat_main_new(
         _redis_add_key_ttl_subscription: redis_add_key_ttl_subscription,
         redis_add_key_string_input,
         _redis_add_key_string_subscription: redis_add_key_string_subscription,
-        redis_add_key_json_input,
+        redis_add_key_json_editor,
         _redis_add_key_json_subscription: redis_add_key_json_subscription,
         redis_add_key_hash_rows: Vec::new(),
         redis_add_key_zset_rows: Vec::new(),

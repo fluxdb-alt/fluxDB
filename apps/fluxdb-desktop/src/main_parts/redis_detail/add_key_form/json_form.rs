@@ -3,7 +3,7 @@
 // 对齐 RedisInsight AddKey 的 JSON 粘贴编辑形态。
 
 fn redis_add_key_json_form(
-    json_input: &Entity<InputState>,
+    json_editor: &JsonComponent,
     applying: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
@@ -25,30 +25,10 @@ fn redis_add_key_json_form(
         .child(
             div()
                 .w_full()
-                .h(px(180.))
-                .min_h(px(180.))
-                .rounded(colors.radius)
-                .border_1()
-                .border_color(colors.border)
-                .bg(colors.input_bg)
-                .overflow_hidden()
-                .child(
-                    Input::new(json_input)
-                        .appearance(false)
-                        .focus_bordered(false)
-                        .disabled(applying)
-                        .w_full()
-                        .h_full()
-                        .px_2()
-                        .py_2()
-                        .text_size(px(13.)),
-                ),
-        )
-        .child(
-            div()
-                .text_size(px(11.))
-                .text_color(colors.muted)
-                .child(tr("app.redis.add_key.form.json_hint")),
+                .h(px(420.))
+                .min_h(px(420.))
+                // 组件自带边框/背景/多行编辑器（JSON 语法高亮），这里只给高度。
+                .child(json_editor.render_edit_body(colors, applying)),
         )
 }
 

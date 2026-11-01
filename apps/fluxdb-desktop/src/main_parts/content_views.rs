@@ -967,7 +967,7 @@ fn data_editor_content(
                 }
                 RedisAddKeyKind::Json => {
                     redis_add_key_json_form(
-                        &this.redis_add_key_json_input,
+                        &this.redis_add_key_json_editor,
                         add_key_applying,
                         colors,
                         cx,

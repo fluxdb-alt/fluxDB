@@ -85,7 +85,6 @@
     "sort_fields": "<Field> ASC, <Field> DESC",
     "line_height_example": "14",
     "radius_example": "6",
-    "json_object": "{}",
     "maxlen": "MAXLEN"
   },
   "context": {
@@ -3948,7 +3947,6 @@
         "insert_direction": "Insert direction",
         "add_items": "Add items",
         "json_value": "JSON value",
-        "json_hint": "Paste JSON directly; use Format/Validate above to beautify and validate it.",
         "add_row": "+ Add row",
         "stream_id": "Entry ID (optional; leave blank to generate)",
         "add_fields": "Add fields",
