@@ -13,6 +13,7 @@ include!("controller/dispatch_oracle_user_admin.rs");
 include!("controller/query_execution.rs");
 include!("controller/dispatch_table.rs");
 include!("controller/dispatch_mongo.rs");
+include!("controller/dispatch_mongo_workbench.rs");
 include!("controller/tabs.rs");
 include!("controller/data_loading.rs");
 include!("controller/cell_content.rs");

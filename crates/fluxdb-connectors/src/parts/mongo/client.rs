@@ -16,7 +16,7 @@ fn mongo_runtime() -> &'static tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .expect("创建 MongoDB tokio runtime 失败")
+            .expect("failed to create the MongoDB tokio runtime")
     })
 }
 
@@ -44,13 +44,13 @@ fn mongo_run<T: Send>(label: &str, future: impl Future<Output = T> + Send) -> fl
             .map_err(|error| {
                 Error::new(
                     ErrorKind::Internal,
-                    format!("启动 MongoDB 工作线程失败：{error}"),
+                    format!("Failed to start a MongoDB worker thread: {error}"),
                 )
             })?;
         worker.join().map_err(|_| {
             Error::new(
                 ErrorKind::Internal,
-                format!("{label}工作线程异常退出（多为栈溢出）"),
+                format!("The {label} worker thread died unexpectedly (usually a stack overflow)"),
             )
         })
     })
@@ -125,7 +125,7 @@ fn mongo_connect(config: &ConnectionConfig) -> fluxdb_core::Result<MongoClient> 
             Endpoint::Uri { uri } => uri.clone(),
             Endpoint::Tcp { host, port, .. } => format!("mongodb://{host}:{port}"),
             Endpoint::SqliteFile { .. } => {
-                return Err(Error::new(ErrorKind::Connection, "MongoDB 不支持文件型连接"))
+                return Err(Error::new(ErrorKind::Connection, "MongoDB does not support file-based connections"))
             }
         },
     };
@@ -174,11 +174,11 @@ fn mongo_build_client(uri: &str) -> fluxdb_core::Result<MongoClient> {
             let _ = tx.send(client);
         })
         .map_err(|error| {
-            Error::new(ErrorKind::Internal, format!("启动 MongoDB 解析线程失败：{error}"))
+            Error::new(ErrorKind::Internal, format!("Failed to start the MongoDB URI parse thread: {error}"))
         })?;
 
     rx.recv_timeout(Duration::from_secs(MONGO_URI_PARSE_TIMEOUT_SECS))
-        .map_err(|_| Error::new(ErrorKind::Timeout, "解析 MongoDB 连接串超时（DNS 或 SRV 查询无响应）"))?
+        .map_err(|_| Error::new(ErrorKind::Timeout, "Timed out parsing the MongoDB connection string (no response from the DNS or SRV lookup)"))?
 }
 
 /// 解析连接串（含 SRV 查询）的墙钟上限。
@@ -202,7 +202,7 @@ fn mongo_block_on<T: Send>(
     mongo_run(label, async move {
         tokio::time::timeout(Duration::from_secs(seconds), future)
             .await
-            .map_err(|_| Error::new(ErrorKind::Timeout, format!("{label}超时")))?
+            .map_err(|_| Error::new(ErrorKind::Timeout, format!("{label} timed out")))?
             .map_err(mongo_error)
     })
     .and_then(std::convert::identity)
@@ -251,11 +251,11 @@ fn mongo_error_message(error: &MongoError) -> String {
             text
         }
         MongoErrorKind::Authentication { .. } => {
-            "MongoDB 认证失败：请检查用户名、密码与 authSource".to_string()
+            "MongoDB authentication failed: check the username, password and authSource".to_string()
         }
-        MongoErrorKind::DnsResolve { message, .. } => format!("解析 MongoDB 主机失败：{message}"),
-        MongoErrorKind::ServerSelection { message, .. } => format!("无法选择 MongoDB 节点：{message}"),
-        MongoErrorKind::Io(io) => format!("MongoDB 网络错误：{io}"),
+        MongoErrorKind::DnsResolve { message, .. } => format!("Failed to resolve the MongoDB host: {message}"),
+        MongoErrorKind::ServerSelection { message, .. } => format!("No MongoDB server could be selected: {message}"),
+        MongoErrorKind::Io(io) => format!("MongoDB network error: {io}"),
         _ => {
             let text = error.to_string();
             // 驱动会把连接串回显到错误里；密码已由 `to_uri` 编码，但错误文本仍可能含 userinfo，
@@ -308,7 +308,7 @@ fn mongo_parse_json(label: &str, text: &str, relaxed: bool) -> fluxdb_core::Resu
     if !relaxed {
         return Err(Error::new(
             ErrorKind::Query,
-            format!("{label} 不是合法 JSON：{strict_error}"),
+            format!("{label} is not valid JSON: {strict_error}"),
         ));
     }
     // JSON5 独有的非有限数字会被 serde_json 读成 null，等于把查询条件悄悄换掉。
@@ -317,13 +317,13 @@ fn mongo_parse_json(label: &str, text: &str, relaxed: bool) -> fluxdb_core::Resu
     if text.contains("NaN") || text.contains("Infinity") {
         return Err(Error::new(
             ErrorKind::Query,
-            format!("{label} 不支持 NaN / Infinity"),
+            format!("{label} does not support NaN / Infinity"),
         ));
     }
     // 失败时报严格 JSON 的错：JSON5 的错误位置对用户更难对上号，
     // 而触发退化的写法本身通常就落在严格 JSON 报的那个位置上。
     json5::from_str::<serde_json::Value>(text)
-        .map_err(|_| Error::new(ErrorKind::Query, format!("{label} 不是合法 JSON：{strict_error}")))
+        .map_err(|_| Error::new(ErrorKind::Query, format!("{label} is not valid JSON: {strict_error}")))
 }
 
 /// 解析 Extended JSON 对象；非对象输入直接报错（`find` 的 filter/projection/sort 都是对象）。
@@ -345,7 +345,7 @@ fn mongo_parse_object_inner(label: &str, text: &str, relaxed: bool) -> fluxdb_co
     if !value.is_object() {
         return Err(Error::new(
             ErrorKind::Query,
-            format!("{label} 必须是 JSON 对象"),
+            format!("{label} must be a JSON object"),
         ));
     }
     // Extended JSON（Canonical / Relaxed 都接受）。
@@ -353,11 +353,11 @@ fn mongo_parse_object_inner(label: &str, text: &str, relaxed: bool) -> fluxdb_co
         Ok(Bson::Document(document)) => Ok(document),
         Ok(_) => Err(Error::new(
             ErrorKind::Query,
-            format!("{label} 必须是 JSON 对象"),
+            format!("{label} must be a JSON object"),
         )),
         Err(error) => Err(Error::new(
             ErrorKind::Query,
-            format!("{label} 不是合法的 Extended JSON：{error}"),
+            format!("{label} is not valid Extended JSON: {error}"),
         )),
     }
 }
@@ -440,7 +440,7 @@ mod mongo_wire_tests {
     #[test]
     fn parses_extended_json_object_and_rejects_non_object() {
         let document = mongo_parse_object("filter", r#"{"a": {"$oid": "671700000000000000000001"}}"#)
-            .expect("应解析 Extended JSON");
+            .expect("should parse as Extended JSON");
         assert!(matches!(document.get("a"), Some(Bson::ObjectId(_))));
 
         assert!(mongo_parse_object("filter", "[1,2]").is_err());

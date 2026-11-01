@@ -562,6 +562,11 @@ pub enum AppCommand {
         connection_id: ConnectionId,
         database: String,
     },
+    /// 打开（或复用）MongoDB 命令工作台标签页（库级、跨集合）。
+    OpenMongoWorkbench {
+        connection_id: ConnectionId,
+        database: String,
+    },
     OpenRedisPubSub {
         connection_id: ConnectionId,
         database: u32,
@@ -1771,5 +1776,41 @@ pub enum AppCommand {
     RunMongoAggregationPreview {
         tab_id: TabId,
         pipeline: String,
+    },
+
+    // —— MongoDB 命令工作台 ——
+    /// 回写工作台顶部输入框草稿，不执行。
+    UpdateMongoWorkbenchText {
+        tab_id: TabId,
+        text: String,
+    },
+    /// 准备一次执行：主线程同步置运行态并按需清空草稿。
+    /// `execution_id` 为 `Some` 表示重跑结果区里的某条记录。
+    BeginMongoWorkbenchExecution {
+        tab_id: TabId,
+        execution_id: Option<u64>,
+    },
+    /// 后台线程执行语句（不写标签页状态），结果经 `FinishMongoWorkbenchExecution` 回写。
+    RunMongoWorkbench {
+        tab_id: TabId,
+        execution_id: Option<u64>,
+    },
+    /// 主线程落执行结果；`result` 携带实际执行的语句文本，失败也要能写进记录。
+    FinishMongoWorkbenchExecution {
+        tab_id: TabId,
+        text: String,
+        result: std::result::Result<MongoShellResult, UserFacingError>,
+    },
+    /// 删除一条执行记录。
+    DeleteMongoWorkbenchRecord {
+        tab_id: TabId,
+        execution_id: u64,
+    },
+    /// 清空结果区全部记录（不影响历史与草稿）。
+    ClearMongoWorkbenchResults(TabId),
+    /// 切换单条记录的折叠态。
+    ToggleMongoWorkbenchRecordCollapse {
+        tab_id: TabId,
+        execution_id: u64,
     },
 }

@@ -901,15 +901,19 @@ fn table_tab_row(
 }
 
 fn query_tab_blank_area(scope: Option<WorkspaceScope>, cx: &mut Context<NavicatMain>) -> Div {
-    div().flex_1().h_full().on_mouse_down(
-        MouseButton::Left,
-        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-            if event.click_count >= 2 {
-                this.open_new_query(scope.clone(), cx);
-                cx.stop_propagation();
-            }
-        }),
-    )
+    div()
+        .debug_selector(|| "table-tab-blank-area".into())
+        .flex_1()
+        .h_full()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                if event.click_count >= 2 {
+                    this.open_new_query(scope.clone(), cx);
+                    cx.stop_propagation();
+                }
+            }),
+        )
 }
 
 fn tab_switcher_button(

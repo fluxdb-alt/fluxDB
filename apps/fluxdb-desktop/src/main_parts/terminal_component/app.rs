@@ -122,14 +122,16 @@ impl NavicatMain {
             mongo_profile: None,
             oracle_profile: None,
         });
+        // 会话状态（当前库 + 集合名）由 adapter 与 REPL 共享：`use` 之后 prompt 与补全
+        // 必须同时更新，否则光标换算与候选会停在旧库上。
+        let session = fluxdb_app::MongoCliSession::new(cli.database.clone());
         let adapter: Box<dyn TerminalSessionAdapter> =
-            Box::new(fluxdb_app::MongoCliAdapter::new(&adapter_config, cli.database.clone()));
+            Box::new(fluxdb_app::MongoCliAdapter::new(&adapter_config, session.clone()));
         let completion: Box<dyn TerminalCompletionAdapter> =
-            Box::new(fluxdb_app::MongoCliCompletion);
+            Box::new(fluxdb_app::MongoCliCompletion::new(session.clone()));
         let component = cx.new(|child_cx| TerminalComponent::new(adapter, completion, child_cx));
-        let database = cli.database.clone();
-        component.update(cx, |session, session_cx| {
-            session.spawn_mongo_repl(adapter_config.clone(), database, session_cx);
+        component.update(cx, |session_component, session_cx| {
+            session_component.spawn_mongo_repl(adapter_config.clone(), session, session_cx);
         });
         self.terminal_sessions.insert(tab_id, component.clone());
         component

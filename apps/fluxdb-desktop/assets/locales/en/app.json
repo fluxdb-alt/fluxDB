@@ -174,7 +174,8 @@
     "mongo_info": "Show connection info",
     "mongo_performance": "View performance metrics",
     "new_collection": "Create collection",
-    "mongo_cli": "Command line"
+    "mongo_cli": "Command line",
+    "mongo_workbench": "Command workbench"
   },
   "confirm": {
     "apply_changes_summary": "About to submit %{changes} changes and run %{statements} SQL statements.",
@@ -4149,7 +4150,8 @@
     "backup_list": "Backup list",
     "er_diagram": "ER diagram",
     "mongo": {
-      "collection": "MongoDB collection"
+      "collection": "MongoDB collection",
+      "workbench": "MongoDB command"
     }
   },
   "terminal": {
@@ -4163,7 +4165,8 @@
       "danger_confirmed": "Dangerous command confirmed",
       "danger_pending": "Dangerous command pending confirmation: %{line}"
     },
-    "danger_banner": "ⓘ Dangerous command pending: %{command}    Enter to confirm · Esc to cancel"
+    "danger_banner": "ⓘ Dangerous command pending: %{command}    Enter to confirm · Esc to cancel",
+    "clear_screen": "Clear screen"
   },
   "editor": {
     "completion": {
@@ -4231,7 +4234,8 @@
     "design_table_named": "Design table: %{table}",
     "redis_pubsub": "Redis Pub/Sub - DB %{database}",
     "global": "Global",
-    "mongo_cli": "MongoDB Shell - %{database}"
+    "mongo_cli": "MongoDB Shell - %{database}",
+    "mongo_workbench": "MongoDB Workbench - %{database}"
   },
   "backend_error": {
     "sqlserver_connection_task_failed": "SQL Server connection task terminated unexpectedly",
@@ -5674,6 +5678,12 @@
     "error": {
       "title": "MongoDB load failed",
       "no_result": "Background task returned no result. Try again."
+    },
+    "workbench": {
+      "hint": "Read-only: use / show / find / aggregate",
+      "empty": "Type a statement and press Run; results are appended in execution order",
+      "rerun": "Run again",
+      "running": "A statement is already running"
     },
     "loading": "Loading…",
     "empty": "No documents matched",

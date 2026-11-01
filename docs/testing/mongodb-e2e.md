@@ -44,6 +44,7 @@ cargo test --locked -p fluxdb-connectors --test mongo_live -- --test-threads=1
 | `mongo_live_server_info_reports_real_topology` | `buildInfo.version`、拓扑判定、`listDatabases` |
 | `mongo_live_import_documents_from_csv_and_json` | 导入链路：CSV 列类型推断（`_id`→objectId、int32/double/boolean/date）→ 重复 `_id` 只失败一条（`ordered:false`）→ 按 `$oid` 复查确认主键是 ObjectId → JSON 数组（`$oid`/`$date` 还原）→ JSONL（一行坏 JSON 跳过，错误带行号） |
 | `mongo_live_operations_survive_small_caller_stack` | **栈回归**：192 KiB 栈线程里跑建连 + 集合列表 + `find` 游标解码 |
+| `mongo_live_shell_statements` | shell 语法全链路：`show dbs` / `show collections` / `use` 切库 / `find`（带 filter、sort、projection、limit）/ `findOne` / `countDocuments` / `distinct` / `aggregate` / `getIndexes` / `stats` / `getCollectionNames`；`ObjectId("…")` 等构造器改写；写方法在解析层被拒（用例实测 `deleteMany`，其余写方法由 `mongo_shell_tests` 单测覆盖） |
 
 每个用例自建 `fluxdb_smoke_*` 集合并在结束时删除，不触碰既有数据。
 
@@ -153,7 +154,36 @@ cargo test --locked -p fluxdb-desktop --bin fluxdb-desktop \
 
 断言既有可观察反馈（debug 选择器边界），也有业务结果（返回条数 > 0）。第 9–11 步都要先比对目标中心点是否在窗口内——越界点击会被 gpui 静默丢弃；卡片正文很高，所以要先把展开的卡片收起，否则第二张卡片只有卡头露出视口外。第 11 步的保存由真实按钮触发，但替换全文走编辑器实体（`set_value` 不产生 Change 事件，按钮可用性由编辑框的 Change 订阅驱动重绘）；若当前集合没有可改的顶层标量字段，用例打印原因后提前返回，不谎报通过。未保存切换的断言不再允许跳过：探针文档保证窗口内至少有两只可点的编辑按钮，缺任何一只都会让用例失败。
 
-## 6. 无凭据时
+## 6. 命令行终端
+
+```bash
+cargo test --locked -p fluxdb-desktop --bin fluxdb-desktop \
+  mongo_cli_runs_shell_statements_from_keyboard
+```
+
+同样走真实生产视图，输入全部是无头键盘事件（`simulate_input` + `simulate_keystrokes("enter")`），断言落在终端 grid 的可视文本与标签页状态上：
+
+1. 库行右键 → 等 `database-menu-item:Command line`（界面文案来自语言包，按钮按真实文案定位）→ 点击 → 等标签页状态出现指向该连接 / 该库的 `TabKind::MongoCli`
+2. 点 `terminal-surface` 取焦点，再画一帧——输入 handler 只在本帧绘制时挂到窗口，不重画则 `simulate_input` 无处可去
+3. 等 grid 出现 `<库名>> ` 提示符（开场不打 banner，第一行就是提示符）
+4. Tab 补全：敲 `sh` → **等 `> sh` 回显上屏** → `tab` → 等 `terminal-completion-popup` 出现 → 回车 → 等输入行变成 `show dbs` 且浮层消失 → 再回车 → 等输出含 `admin`（来自真实服务端）。这条同时证明 Tab 没被 Root 的焦点切换绑定抢走。
+	- 等回显不能省：补全读的是 grid 已回显的输入行，REPL 回显走 30ms 泵。立刻按 Tab 会按空行算候选（全量），回车写回的首个候选是 `use ` 而不是 `show dbs`。
+5. `db.`（等回显）→ 等 `terminal-completion-popup` 自己出现：这条走的是**服务端集合列表**，与方法白名单是两条完全不同的数据来源，只测方法名会让「集合名一直读不到」照样全绿。必须在切库前做——`use admin` 之后当前库换成 admin，它本来没有用户集合。→ 退格删空这半行，等浮层自己收起（空行不提示）
+	- 浮层断言用 `visible_bounds`（非零尺寸 + 中心点在窗口内），不能用 `debug_bounds` 判存在：后者对零尺寸与窗口外元素同样返回 `Some`。曾经因此漏掉真 bug——候选算出来了，浮层却整块落在窗口下方被裁掉。这条在「面板比窗口高」的布局（`completion_popup_top` 的上限夹取、画布绝对定位）回退时会立刻失败。
+	- 同时断言**单条候选的浮层高度落在 34–60px**：上限抓「空黑板」——只写 `max_h` 时绝对定位元素仍被拉到上限，一条候选也撑成 180×260；下限抓「空白细条」——外层高度小于实际内容高度时整块文字被裁掉。两条都真实发生过，所以在 `completion_popup_height` 被删、改回 `max_h`，或行高常量与候选行不一致时会失败。
+	- 浮层左上角必须落在**光标所在行之后**（`bounds.top() > 终端内容区顶部`）：锚点早先钉在面板左边缘，光标跑到行尾时浮层离光标半个屏幕。这条在 `completion_popup_anchor` 退回固定左边缘时失败。
+	- 还要断言**候选行整行落在浮层内**、**候选文字整块落在行框内**（`terminal-completion-row:0` / `terminal-completion-label:0`）：浮层没写 `text_size` 时会继承根字号 16px，比终端 12px 大，30px 的行框装不下，`overflow_y_scrollbar` 上下各切一刀——盒子和行都没问题，只有字被裁，截图上就是「use 只剩半截」。这条在 `completion_popup` 丢掉 `text_size` 时失败。
+	- 终端没有绑 `ctrl-u`，清行只能用退格；这也是「浮层跟着输入行走」的断言。
+6. 敲 `use admn` → `left` → 敲 `i` → 回车 → 等 `switched to db admin` 且提示符变成 `admin> `（同时验证 ← 移光标与中途插入；只靠行尾追加拼不出正确语句）
+7. `db.demo.insertOne({…})` → 等 `read-only`（只读边界真的上屏；终端报错一律英文，对齐 mongosh）
+8. `db.demo.unknownMethod()` → 等 `Unknown method`（单行提示，不是整块用法清单）
+9. `db.demo.co`（等回显）→ **不按 Tab**，等 `terminal-completion-popup` 自己出现（边打字边提示是 Compass 的行为，也是这条最容易回退的点）→ `tab` → **`down` 后点第二行** → 等输入行变成方括号写法且浮层消失（鼠标点候选等于选中后回车）→ 退格清行 → 重新敲 `db.demo.co` 等浮层出现 → `escape` → 等浮层消失且输入行原样保留（候选来自方法白名单：`db["demo"].find(` 等方括号形式，不依赖服务端集合名）。
+	- 点之前先断言第二行落在窗口内：越界点击会被 gpui 静默丢弃，用例会以「等待超时」失败而不是看清原因。
+	- `down` 不能省：它证明浮层打开时方向键被浮层吃掉（移动高亮），而不是透传给 PTY 翻了历史行——透传时整行输入会被换掉，之后点候选写回的内容也对不上。
+
+终端键位在用例里显式注册（`register_terminal_shortcuts`）：平时由 app boot 的 `register_shortcuts` 完成，用例直接建视图时缺这一步回车不会变成 `TermEnter`。`terminal-surface` 与 `terminal-completion-popup` 都是 `debug_selector`，只在调试构建记录，不改变生产行为。
+
+## 7. 无凭据时
 
 - `cargo test -p fluxdb-connectors --test mongo_live` → 5 个用例全部跳过（0.00s）。
 - `cargo test -p fluxdb-desktop --bin fluxdb-desktop` → Mongo E2E 跳过，其余 117 个用例照常运行（本机实测 116 passed + 2 ignored）。

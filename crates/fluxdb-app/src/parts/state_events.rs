@@ -463,5 +463,12 @@ pub enum AppEvent {
         command: String,
         result: String,
     },
+    /// MongoDB 命令工作台后台执行完成。失败也用本事件回传，让实际执行的语句文本
+    /// 随结果一起回到主线程写记录。
+    MongoWorkbenchRan {
+        tab_id: TabId,
+        text: String,
+        result: std::result::Result<MongoShellResult, UserFacingError>,
+    },
     Failed(UserFacingError),
 }

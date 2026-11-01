@@ -174,7 +174,8 @@
     "mongo_info": "显示连接信息",
     "mongo_performance": "查看性能指标",
     "new_collection": "创建集合",
-    "mongo_cli": "命令行终端"
+    "mongo_cli": "命令行终端",
+    "mongo_workbench": "命令工作台"
   },
   "confirm": {
     "apply_changes_summary": "即将提交 %{changes} 处修改，执行 %{statements} 条 SQL。",
@@ -4149,7 +4150,8 @@
     "backup_list": "备份列表",
     "er_diagram": "ER 关系图",
     "mongo": {
-      "collection": "MongoDB 集合"
+      "collection": "MongoDB 集合",
+      "workbench": "MongoDB 命令"
     }
   },
   "terminal": {
@@ -4163,7 +4165,8 @@
       "danger_confirmed": "危险命令已确认执行",
       "danger_pending": "危险命令待确认: %{line}"
     },
-    "danger_banner": "ⓘ 危险命令待确认: %{command}    Enter 确认 · Esc 取消"
+    "danger_banner": "ⓘ 危险命令待确认: %{command}    Enter 确认 · Esc 取消",
+    "clear_screen": "清屏"
   },
   "editor": {
     "completion": {
@@ -4231,7 +4234,8 @@
     "design_table_named": "设计表: %{table}",
     "redis_pubsub": "Redis Pub/Sub - DB %{database}",
     "global": "全局",
-    "mongo_cli": "MongoDB 命令行 - %{database}"
+    "mongo_cli": "MongoDB 命令行 - %{database}",
+    "mongo_workbench": "MongoDB 命令工作台 - %{database}"
   },
   "backend_error": {
     "sqlserver_connection_task_failed": "SQL Server 连接任务异常结束",
@@ -5674,6 +5678,12 @@
     "error": {
       "title": "MongoDB 加载失败",
       "no_result": "后台任务未返回结果，请重试"
+    },
+    "workbench": {
+      "hint": "支持 use / show / find / aggregate 等只读语句",
+      "empty": "输入语句后点击「运行」，结果会按执行顺序追加在这里",
+      "rerun": "重新执行",
+      "running": "正在执行，请等待当前语句结束"
     },
     "loading": "加载中…",
     "empty": "没有匹配的文档",

@@ -34,6 +34,15 @@ impl TerminalBackend {
         }
     }
 
+    /// 后端是否按字符编辑。
+    ///
+    /// `redis-cli` 的 linenoise 按 UTF-8 **字节**编辑，所以中文要连发 3 个退格才删干净；
+    /// 进程内 REPL 自己按字符维护输入行，重发会把一个中文删成三个字符。调用方据此决定
+    /// 是否按字节数放大按键。
+    fn edits_by_char(&self) -> bool {
+        matches!(self, Self::Repl(_))
+    }
+
     /// 取一条读事件；`None` 表示暂无输出。
     fn try_recv(&mut self) -> Option<TerminalTransportEvent> {
         match self {

@@ -111,6 +111,79 @@ impl MongoQueryDraft {
     }
 }
 
+/// MongoDB 命令工作台标签页：库级（跨集合）的 shell 语句执行台。
+///
+/// 与 `MongoCollectionState`（单集合的文档/聚合页）和 `MongoCliState`（真实终端 REPL）分开：
+/// 这里只做「输入一条语句 → 追加一条执行记录」，形态对齐 Redis Workbench。
+/// 语句语法与只读边界完全复用连接器的 `mongo_shell`，不在这里另写一套解析。
+#[derive(Clone, Debug, PartialEq)]
+pub struct MongoWorkbenchState {
+    pub connection_id: ConnectionId,
+    /// 当前库；`use <db>` 只改这里，不写回连接配置。
+    pub database: String,
+    /// 顶部输入框草稿。执行后清空，语句文本进入 `executions`。
+    pub text: String,
+    pub running: bool,
+    /// 本次会话内的执行记录，按执行顺序追加（一条语句一条记录）。
+    pub executions: Vec<MongoWorkbenchExecution>,
+    pub error: Option<UserFacingError>,
+    /// 最近一次已执行文本的指纹，用于标签页脏标记。
+    pub saved_fingerprint: Option<QueryFingerprint>,
+    /// 为 `executions` 分配 `id` 的单调递增计数器。
+    pub next_execution_id: u64,
+    /// 折叠态记录 ID 集合（仅 UI 展示，会话内有效）。
+    pub collapsed: std::collections::BTreeSet<u64>,
+}
+
+impl MongoWorkbenchState {
+    pub fn new(connection_id: ConnectionId, database: String) -> Self {
+        Self {
+            connection_id,
+            database,
+            text: String::new(),
+            running: false,
+            executions: Vec::new(),
+            error: None,
+            saved_fingerprint: None,
+            next_execution_id: 1,
+            collapsed: std::collections::BTreeSet::new(),
+        }
+    }
+
+    /// 是否有未执行（未保存）的语句改动；判定口径与 Redis Workbench 一致。
+    pub fn has_unsaved_text(&self) -> bool {
+        match self.saved_fingerprint {
+            Some(saved) => saved != QueryFingerprint::for_text(&self.text),
+            None => !self.text.trim().is_empty(),
+        }
+    }
+}
+
+/// 工作台里的一条执行记录。
+#[derive(Clone, Debug, PartialEq)]
+pub struct MongoWorkbenchExecution {
+    /// App 层分配的记录 ID（重跑 / 删除按它定位）。
+    pub id: u64,
+    /// 实际执行的语句原文。
+    pub text: String,
+    /// 执行时所在的库（`use` 之后的值）。
+    pub database: String,
+    /// 成功时连接器返回的回显文本（含 ANSI 颜色，按 shell 风格排版）；
+    /// 失败时为 `None`，错误原因见 `error`。
+    pub output: Option<String>,
+    pub error: Option<UserFacingError>,
+    /// 执行耗时（毫秒）。
+    pub elapsed_ms: u64,
+    /// 执行时刻（Unix 秒）。
+    pub started_at_unix_secs: u64,
+}
+
+impl MongoWorkbenchExecution {
+    pub fn is_success(&self) -> bool {
+        self.error.is_none()
+    }
+}
+
 /// 集合工作台标签页。
 #[derive(Clone, Debug, PartialEq)]
 pub struct MongoCollectionState {
