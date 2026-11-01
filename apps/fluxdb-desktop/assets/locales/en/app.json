@@ -5827,7 +5827,49 @@
       "unique": "Unique",
       "sparse": "Sparse",
       "building": "Building",
-      "empty": "No indexes"
+      "ready": "Ready",
+      "partial": "Partial",
+      "ttl": "TTL",
+      "collation": "Collation",
+      "hidden": "Hidden",
+      "compound": "Compound",
+      "empty": "No indexes",
+      "stats_node_note": "IndexStats are based off only the currently connected node",
+      "partial_filter": "Partial filter expression",
+      "size_unknown": "—",
+      "usage_unavailable": "Usage data unavailable",
+      "usage_since": "%{count} (since %{since})",
+      "usage_count_only": "%{count} hits",
+      "rate_unavailable": "Rate unavailable",
+      "rate_below_one": "< 1/min",
+      "rate_per_minute": "%{count}/min",
+      "rate_with_since": "%{rate} (since %{since})",
+      "drop": {
+        "action": "Drop index",
+        "title": "Drop Index",
+        "description": "Are you sure you want to drop index \"%{name}\"? Queries that rely on it fall back to a collection scan, and rebuilding takes time.",
+        "confirm": "Drop",
+        "done": "Index %{name} dropped",
+        "failed": "Failed to drop index: %{error}"
+      },
+      "column": {
+        "name": "Name & Definition",
+        "type": "Type",
+        "size": "Size",
+        "usage": "Usage",
+        "usage_rate": "Avg. rate of usage",
+        "properties": "Properties",
+        "status": "Status"
+      },
+      "type": {
+        "regular": "Regular",
+        "geospatial": "Geospatial",
+        "hashed": "Hashed",
+        "text": "Text",
+        "wildcard": "Wildcard",
+        "columnstore": "Columnstore",
+        "clustered": "Clustered"
+      }
     },
     "info": {
       "name": "Name",

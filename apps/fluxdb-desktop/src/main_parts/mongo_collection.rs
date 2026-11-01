@@ -136,7 +136,9 @@ impl NavicatMain {
             MongoSection::Aggregation => {
                 self.mongo_aggregation_section(tab_id, colors, window, cx)
             }
-            MongoSection::Indexes => mongo_indexes_section(tab_id, state, colors, cx),
+            MongoSection::Indexes => {
+                self.mongo_indexes_section(tab_id, state, colors, cx)
+            }
             MongoSection::Info => mongo_info_section(tab_id, state, colors, cx),
         };
 
@@ -329,7 +331,16 @@ fn mongo_section_bar(
     let view = cx.entity().downgrade();
     let tab_bar = MONGO_SECTIONS
         .iter()
-        .map(|(_, label)| Tab::from(tr(label)))
+        .map(|(section, label)| {
+            // 与 Compass 一致：索引页签直接带索引数量，不再另占页面右上角。
+            match (*section == MongoSection::Indexes)
+                .then(|| mongo_index_count(state))
+                .flatten()
+            {
+                Some(count) => Tab::from(SharedString::from(format!("{} {count}", tr(label)))),
+                None => Tab::from(tr(label)),
+            }
+        })
         .fold(
             TabBar::new(("mongo-section-tabs", tab_id.0))
                 .segmented()
@@ -367,14 +378,6 @@ fn mongo_section_bar(
                     .text_size(px(11.))
                     .text_color(colors.warning)
                     .child(tr("app.mongo.read_only")),
-            )
-        })
-        .when_some(mongo_index_count(state), |this, count| {
-            this.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(colors.muted)
-                    .child(SharedString::from(count.to_string())),
             )
         })
 }
@@ -1712,102 +1715,875 @@ fn mongo_pager(
         )
 }
 
-fn mongo_indexes_section(
+/// 索引表行高：与 Compass 索引表一致的单行高度，展开定义时另起一行。
+const MONGO_INDEX_ROW_HEIGHT: f32 = 40.;
+/// 操作列宽度：只放一个删除图标按钮。
+const MONGO_INDEX_ACTION_WIDTH: f32 = 44.;
+
+/// 索引表可排序的列，顺序与表头一致。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MongoIndexSort {
+    Name,
+    Type,
+    Size,
+    Usage,
+    Rate,
+    Properties,
+    Status,
+}
+
+impl MongoIndexSort {
+    /// 稳定的列标识：调试选择器与测试都按它定位表头。
+    fn key(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Type => "type",
+            Self::Size => "size",
+            Self::Usage => "usage",
+            Self::Rate => "rate",
+            Self::Properties => "properties",
+            Self::Status => "status",
+        }
+    }
+}
+
+/// 索引表的一列：表头和数据行共用同一份定义，宽度或伸缩权重只在这里改。
+struct MongoIndexColumn {
+    /// 列对应的排序字段。
+    sort: MongoIndexSort,
+    /// 固定宽度；`None` 表示按 `grow` 平分剩余宽度。
+    width: Option<f32>,
+    /// 平分剩余宽度时的权重，定宽列填 0。
+    grow: f32,
+    /// 表头文案的国际化 key。
+    label_key: &'static str,
+}
+
+/// 表头与数据行的列顺序 / 列宽，两边都从这里取，避免表头和数据各算各的。
+const MONGO_INDEX_COLUMNS: [MongoIndexColumn; 7] = [
+    MongoIndexColumn {
+        sort: MongoIndexSort::Name,
+        width: None,
+        grow: 2.,
+        label_key: "app.mongo.indexes.column.name",
+    },
+    MongoIndexColumn {
+        sort: MongoIndexSort::Type,
+        width: Some(80.),
+        grow: 0.,
+        label_key: "app.mongo.indexes.column.type",
+    },
+    MongoIndexColumn {
+        sort: MongoIndexSort::Size,
+        width: Some(72.),
+        grow: 0.,
+        label_key: "app.mongo.indexes.column.size",
+    },
+    MongoIndexColumn {
+        sort: MongoIndexSort::Usage,
+        width: None,
+        grow: 3.,
+        label_key: "app.mongo.indexes.column.usage",
+    },
+    MongoIndexColumn {
+        sort: MongoIndexSort::Rate,
+        width: None,
+        grow: 3.,
+        label_key: "app.mongo.indexes.column.usage_rate",
+    },
+    MongoIndexColumn {
+        sort: MongoIndexSort::Properties,
+        width: Some(106.),
+        grow: 0.,
+        label_key: "app.mongo.indexes.column.properties",
+    },
+    MongoIndexColumn {
+        sort: MongoIndexSort::Status,
+        width: Some(68.),
+        grow: 0.,
+        label_key: "app.mongo.indexes.column.status",
+    },
+];
+
+/// 统计缺失的索引排在最后：把「没有数据」当成 0 会挤到最前，误导用户以为从没用过。
+fn mongo_index_option_cmp<T: Ord>(left: Option<T>, right: Option<T>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (left, right) {
+        (Some(left), Some(right)) => left.cmp(&right),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+/// 按当前排序列比较两条索引；属性列按展示顺序里的第一个属性比较（同 Compass）。
+fn mongo_index_sort_cmp(
+    column: MongoIndexSort,
+    left: &fluxdb_core::MongoIndexInfo,
+    right: &fluxdb_core::MongoIndexInfo,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match column {
+        MongoIndexSort::Name => left.name.cmp(&right.name),
+        MongoIndexSort::Type => left.index_type.cmp(&right.index_type),
+        MongoIndexSort::Size => mongo_index_option_cmp(left.size_bytes, right.size_bytes),
+        MongoIndexSort::Usage => mongo_index_option_cmp(left.usage_count, right.usage_count),
+        MongoIndexSort::Rate => {
+            let left = mongo_index_rate_per_minute(left);
+            let right = mongo_index_rate_per_minute(right);
+            match (left, right) {
+                (Some(left), Some(right)) => left.partial_cmp(&right).unwrap_or(Ordering::Equal),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            }
+        }
+        MongoIndexSort::Properties => {
+            let left = mongo_index_properties(left);
+            let right = mongo_index_properties(right);
+            left.first().map(|value| value.as_ref()).cmp(&right.first().map(|value| value.as_ref()))
+        }
+        MongoIndexSort::Status => left.ready.cmp(&right.ready),
+    }
+}
+
+/// 当前排序下的索引行；未设排序时保持服务端返回的名称顺序。
+fn mongo_index_sorted_rows(
+    indexes: &[fluxdb_core::MongoIndexInfo],
+    sort: Option<(MongoIndexSort, bool)>,
+) -> Vec<&fluxdb_core::MongoIndexInfo> {
+    let mut rows = indexes.iter().collect::<Vec<_>>();
+    if let Some((column, descending)) = sort {
+        rows.sort_by(|left, right| {
+            let ordering = mongo_index_sort_cmp(column, left, right);
+            if descending {
+                ordering.reverse()
+            } else {
+                ordering
+            }
+        });
+    }
+    rows
+}
+
+impl NavicatMain {
+    /// 索引页：工具条 + 统计口径提示 + 表头 + 索引行（按 Compass 的列布局）。
+    ///
+    /// 只读：本页不提供创建 / 删除索引，工具条只留刷新。
+    fn mongo_indexes_section(
+        &self,
+        tab_id: TabId,
+        state: &MongoCollectionState,
+        colors: UiColors,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let container = div().flex_1().min_h(px(0.)).flex().flex_col();
+        let loading = matches!(state.indexes, LoadState::Loading | LoadState::NotLoaded);
+        match &state.indexes {
+            LoadState::Loading | LoadState::NotLoaded => {
+                // 提示靠 flex_1 撑满：容器不开 flex 时只按文本高度布局而贴顶。
+                container.child(center_loading_message(tr("app.mongo.loading"), colors))
+            }
+            LoadState::Failed(error) => container.child(mongo_error_block(
+                tab_id,
+                MongoRetry::Indexes,
+                error,
+                colors,
+                cx,
+            )),
+            LoadState::Loaded(indexes) if indexes.is_empty() => container
+                .child(mongo_indexes_toolbar(tab_id, loading, cx))
+                .child(div().flex_1().flex().child(center_message(
+                    tr("app.mongo.indexes.empty"),
+                    colors,
+                ))),
+            LoadState::Loaded(indexes) => {
+                let expanded = self.mongo_expanded_indexes.get(&tab_id);
+                let sort = self.mongo_index_sort.get(&tab_id).copied();
+                container
+                    .child(mongo_indexes_toolbar(tab_id, loading, cx))
+                    .child(mongo_indexes_stats_banner(colors))
+                    .child(mongo_indexes_header(tab_id, sort, colors, cx))
+                    .child(
+                        div()
+                            .id(("mongo-indexes-rows", tab_id.0))
+                            .flex_1()
+                            .min_h(px(0.))
+                            .overflow_y_scrollbar()
+                            .flex()
+                            .flex_col()
+                            .children(mongo_index_sorted_rows(indexes, sort).into_iter().map(
+                                |index| {
+                                    let is_expanded =
+                                        expanded.is_some_and(|set| set.contains(&index.name));
+                                    mongo_index_row(tab_id, index, is_expanded, colors, cx)
+                                },
+                            )),
+                    )
+            }
+        }
+    }
+
+    /// 展开 / 收起一条索引的键定义。
+    pub(crate) fn toggle_mongo_index_expanded(
+        &mut self,
+        tab_id: TabId,
+        name: String,
+        cx: &mut Context<Self>,
+    ) {
+        let expanded = self.mongo_expanded_indexes.entry(tab_id).or_default();
+        if !expanded.remove(&name) {
+            expanded.insert(name);
+        }
+        cx.notify();
+    }
+
+    /// 点表头切换排序：同一列再点一次翻转方向，换列则从升序开始。
+    pub(crate) fn toggle_mongo_index_sort(
+        &mut self,
+        tab_id: TabId,
+        column: MongoIndexSort,
+        cx: &mut Context<Self>,
+    ) {
+        match self.mongo_index_sort.get_mut(&tab_id) {
+            Some(entry) if entry.0 == column => entry.1 = !entry.1,
+            Some(entry) => *entry = (column, false),
+            None => {
+                self.mongo_index_sort.insert(tab_id, (column, false));
+            }
+        }
+        cx.notify();
+    }
+
+    /// 删除索引前必弹确认框：误删会让相关查询退回全表扫描，代价要用户自己确认。
+    pub(crate) fn request_drop_mongo_index(
+        &mut self,
+        tab_id: TabId,
+        index_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.entity().downgrade();
+        let title = tr("app.mongo.indexes.drop.title").to_string();
+        let description = tr("app.mongo.indexes.drop.description")
+            .replace("%{name}", &index_name)
+            .to_string();
+        let confirm = tr("app.mongo.indexes.drop.confirm").to_string();
+        let cancel = tr("app.common.cancel").to_string();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let view = view.clone();
+            let index_name = index_name.clone();
+            dialog
+                .title(title.clone())
+                .close_button(true)
+                .overlay_closable(true)
+                .keyboard(true)
+                .child(div().text_size(px(13.)).child(description.clone()))
+                .footer(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("mongo-index-drop-cancel")
+                                .debug_selector(|| "mongo-index-drop-cancel".into())
+                                .cursor_pointer()
+                                .child(cancel.clone())
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            Button::new("mongo-index-drop-confirm")
+                                .debug_selector(|| "mongo-index-drop-confirm".into())
+                                .danger()
+                                .cursor_pointer()
+                                .child(confirm.clone())
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(gpui_component::dialog::Confirm {
+                                            secondary: false,
+                                        }),
+                                        cx,
+                                    )
+                                }),
+                        ),
+                )
+                .on_ok(move |_, _, cx| {
+                    let _ = view.update(cx, |this, cx| {
+                        this.start_drop_mongo_index(tab_id, index_name.clone(), cx)
+                    });
+                    true
+                })
+        });
+    }
+
+    /// 后台删除索引；成功后重取整表，因为大小与使用统计都挂在索引上。
+    fn start_drop_mongo_index(
+        &mut self,
+        tab_id: TabId,
+        index_name: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self._mongo_drop_index_tasks.contains_key(&tab_id.0) {
+            return;
+        }
+        let Some(state) = mongo_collection_state(self.controller.state(), tab_id) else {
+            return;
+        };
+        let object = state.object.clone();
+        let Some(database) = object.database.clone() else {
+            return;
+        };
+        let task = self.spawn_controller_command(
+            AppCommand::DropMongoIndex {
+                connection_id: object.connection_id,
+                database,
+                collection: object.name.clone(),
+                index: index_name.clone(),
+            },
+            move |this, event, cx| {
+                this._mongo_drop_index_tasks.remove(&tab_id.0);
+                match event {
+                    AppEvent::MongoIndexDropped { index, .. } => {
+                        if let Some(expanded) = this.mongo_expanded_indexes.get_mut(&tab_id) {
+                            expanded.remove(&index);
+                        }
+                        this.show_message(
+                            tr("app.mongo.indexes.drop.done").replace("%{name}", &index),
+                            AppMessageKind::Success,
+                            cx,
+                        );
+                        this.retry_mongo_load(tab_id, MongoRetry::Indexes, cx);
+                    }
+                    AppEvent::Failed(error) => {
+                        this.show_message(
+                            tr("app.mongo.indexes.drop.failed")
+                                .replace("%{error}", &error.message),
+                            AppMessageKind::Error,
+                            cx,
+                        );
+                    }
+                    _ => {}
+                }
+            },
+            cx,
+        );
+        self._mongo_drop_index_tasks.insert(tab_id.0, task);
+    }
+}
+
+/// 索引页工具条：只读视图只有刷新；与 Compass 一致放在左上角。
+fn mongo_indexes_toolbar(
     tab_id: TabId,
-    state: &MongoCollectionState,
+    loading: bool,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    div()
+        .px_3()
+        .py_2()
+        .flex()
+        .items_center()
+        .child(
+            Button::new(("mongo-indexes-refresh", tab_id.0))
+                .debug_selector(|| "mongo-indexes-refresh".to_string())
+                .small()
+                .outline()
+                .loading(loading)
+                .disabled(loading)
+                .icon(gpui_component::Icon::default().path(app_icon_path(AppIcon::Refresh)))
+                .label(tr("app.common.refresh"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.retry_mongo_load(tab_id, MongoRetry::Indexes, cx);
+                    cx.stop_propagation();
+                })),
+        )
+}
+
+/// 统计口径提示：`$indexStats` 只反映当前连接节点的计数（同 Compass）。
+fn mongo_indexes_stats_banner(colors: UiColors) -> Div {
+    div()
+        .px_3()
+        .pb_2()
+        .flex()
+        .items_center()
+        .gap_2()
+        .text_size(px(11.))
+        .text_color(colors.warning)
+        .child(app_icon(AppIcon::TriangleAlert, 12., colors.warning))
+        .child(tr("app.mongo.indexes.stats_node_note"))
+}
+
+/// 表头固定不参与滚动，列宽与数据行共用 [`mongo_index_cell`]；可排序列点击切换。
+fn mongo_indexes_header(
+    tab_id: TabId,
+    sort: Option<(MongoIndexSort, bool)>,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let container = div().flex_1().min_h(px(0.));
-    match &state.indexes {
-        LoadState::Loading | LoadState::NotLoaded => {
-            // 提示靠 flex_1 撑满：容器不开 flex 时只按文本高度布局而贴顶。
-            container
-                .flex()
-                .child(center_loading_message(tr("app.mongo.loading"), colors))
-        }
-        LoadState::Failed(error) => container.child(mongo_error_block(
-            tab_id,
-            MongoRetry::Indexes,
-            error,
-            colors,
-            cx,
-        )),
-        LoadState::Loaded(indexes) if indexes.is_empty() => container
+    div()
+        .h(px(34.))
+        .px_3()
+        .flex()
+        .items_center()
+        .border_t_1()
+        .border_b_1()
+        .border_color(colors.border)
+        .bg(colors.panel_alt)
+        .text_size(px(11.))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(colors.muted)
+        .children(
+            MONGO_INDEX_COLUMNS
+                .iter()
+                .map(|column| mongo_index_header_cell(tab_id, column, sort, colors, cx)),
+        )
+        // 操作列没有标题，只为与数据行的删除按钮对齐。
+        .child(mongo_index_cell(
+            Some(MONGO_INDEX_ACTION_WIDTH),
+            0.,
+            div(),
+        ))
+}
+
+/// 可排序表头单元格：箭头只在当前排序列上点亮，其余列给一个弱化的上下箭头示意。
+fn mongo_index_header_cell(
+    tab_id: TabId,
+    column: &MongoIndexColumn,
+    sort: Option<(MongoIndexSort, bool)>,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let sort_column = column.sort;
+    let key = sort_column.key();
+    let selector = SharedString::from(format!("mongo-index-sort:{key}"));
+    let active = sort.filter(|(sorted, _)| *sorted == sort_column);
+    let icon_color = if active.is_some() {
+        colors.text
+    } else {
+        colors.muted.opacity(0.55)
+    };
+    let icon = match active {
+        Some((_, true)) => AppIcon::ArrowDown,
+        Some((_, false)) => AppIcon::ArrowUp,
+        None => AppIcon::ArrowUpDown,
+    };
+    let label = tr(column.label_key);
+    mongo_index_cell(
+        column.width,
+        column.grow,
+        div()
+            .id(SharedString::from(format!(
+                "mongo-index-sort:{key}:{}",
+                tab_id.0
+            )))
+            .w_full()
             .flex()
-            .child(center_message(tr("app.mongo.indexes.empty"), colors)),
-        LoadState::Loaded(indexes) => container.child(
+            .items_center()
+            .gap_1()
+            .cursor_pointer()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.toggle_mongo_index_sort(tab_id, sort_column, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .child(label)
+            .child(app_icon(icon, 11., icon_color)),
+    )
+    .debug_selector(move || selector.to_string())
+}
+
+/// 单元格尺寸层：定宽列不参与拉伸，其余列按 `grow` 平分剩余宽度。
+fn mongo_index_cell(
+    width: Option<f32>,
+    grow: f32,
+    child: impl IntoElement,
+) -> Div {
+    let cell = div().min_w(px(0.)).px_2().overflow_hidden().child(child);
+    match width {
+        Some(width) => cell.w(px(width)).flex_none(),
+        // 名称列吃掉剩余宽度，但不允许缩到只剩一个省略号。
+        None => cell.flex_1().flex_grow(grow).min_w(px(110.)),
+    }
+}
+
+/// 一个数据单元格的内容；列宽由 [`MONGO_INDEX_COLUMNS`] 统一给出，这里只管值。
+fn mongo_index_row_cell(
+    tab_id: TabId,
+    index: &fluxdb_core::MongoIndexInfo,
+    column: MongoIndexSort,
+    expanded: bool,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> AnyElement {
+    match column {
+        MongoIndexSort::Name => {
+            let name = index.name.clone();
+            let toggle_selector =
+                SharedString::from(format!("mongo-index-toggle:{}", index.name));
+            let toggle_id = SharedString::from(format!(
+                "mongo-index-toggle:{}:{}",
+                tab_id.0, index.name
+            ));
             div()
-                .overflow_y_scrollbar()
+                .id(toggle_id)
+                .debug_selector(move || toggle_selector.to_string())
+                .w_full()
                 .flex()
-                .flex_col()
-                .p_2()
-                .gap_1()
-                .children(indexes.iter().map(|index| {
+                .items_center()
+                .gap_2()
+                .cursor_pointer()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        this.toggle_mongo_index_expanded(tab_id, name.clone(), cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(app_icon(
+                    if expanded {
+                        AppIcon::ChevronDown
+                    } else {
+                        AppIcon::ChevronRight
+                    },
+                    13.,
+                    colors.muted,
+                ))
+                .child(
                     div()
-                        .rounded(colors.radius)
-                        .border_1()
-                        .border_color(colors.border)
-                        .p_2()
+                        .min_w(px(0.))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_size(px(13.))
+                        .text_color(colors.text)
+                        .child(SharedString::from(index.name.clone())),
+                )
+                .into_any_element()
+        }
+        MongoIndexSort::Type => mongo_index_badge(
+            mongo_index_type_label(&index.index_type),
+            colors.muted,
+            colors,
+        )
+        .into_any_element(),
+        MongoIndexSort::Size => {
+            mongo_index_muted_text(mongo_index_size_text(index.size_bytes), colors)
+                .into_any_element()
+        }
+        MongoIndexSort::Usage => {
+            mongo_index_muted_text(mongo_index_usage_text(index), colors).into_any_element()
+        }
+        MongoIndexSort::Rate => {
+            mongo_index_muted_text(mongo_index_rate_text(index), colors).into_any_element()
+        }
+        MongoIndexSort::Properties => div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .overflow_hidden()
+            .children(
+                mongo_index_properties(index)
+                    .into_iter()
+                    .map(|badge| mongo_index_badge(badge, colors.muted, colors)),
+            )
+            .into_any_element(),
+        MongoIndexSort::Status => mongo_index_status_pill(index.ready, colors).into_any_element(),
+    }
+}
+
+/// 一条索引：主行 + 展开后的键定义。
+fn mongo_index_row(
+    tab_id: TabId,
+    index: &fluxdb_core::MongoIndexInfo,
+    expanded: bool,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+ ) -> Div {
+    let row_selector = SharedString::from(format!("mongo-index-row:{}", index.name));
+    div()
+        .flex()
+        .flex_col()
+        .border_b_1()
+        .border_color(colors.border_soft)
+        .debug_selector(move || row_selector.to_string())
+        .when(expanded, |this| this.bg(colors.panel_alt))
+        .child(
+            div()
+                .h(px(MONGO_INDEX_ROW_HEIGHT))
+                .px_3()
+                .flex()
+                .items_center()
+                .hover(|style| style.bg(colors.hover))
+                .children(MONGO_INDEX_COLUMNS.iter().map(|column| {
+                    let content =
+                        mongo_index_row_cell(tab_id, index, column.sort, expanded, colors, cx);
+                    let cell_name = index.name.clone();
+                    let key = column.sort.key();
+                    mongo_index_cell(column.width, column.grow, content)
+                        .debug_selector(move || format!("mongo-index-cell:{cell_name}:{key}"))
+                }))
+                .child(mongo_index_cell(
+                    Some(MONGO_INDEX_ACTION_WIDTH),
+                    0.,
+                    mongo_index_drop_action(tab_id, index, colors, cx),
+                )),
+        )
+        .when(expanded, |this| {
+            this.child(mongo_index_expanded_definition(index, colors))
+        })
+}
+
+/// 操作列：只有可删除的索引才画删除按钮；`_id_` 是集合固有的索引，删不掉。
+fn mongo_index_drop_action(
+    tab_id: TabId,
+    index: &fluxdb_core::MongoIndexInfo,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> AnyElement {
+    if index.name == "_id_" {
+        return div().into_any_element();
+    }
+    let name = index.name.clone();
+    let selector = SharedString::from(format!("mongo-index-drop:{}", index.name));
+    div()
+        .id(SharedString::from(format!(
+            "mongo-index-drop:{}:{}",
+            tab_id.0, index.name
+        )))
+        .debug_selector(move || selector.to_string())
+        .size(px(24.))
+        .rounded(colors.radius)
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(|style| style.bg(colors.hover))
+        .child(app_icon(AppIcon::Trash, 13., colors.muted))
+        .tooltip({
+            let label = tr("app.mongo.indexes.drop.action");
+            move |window, cx| Tooltip::new(label.clone()).build(window, cx)
+        })
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, window, cx| {
+                this.request_drop_mongo_index(tab_id, name.clone(), window, cx);
+                cx.stop_propagation();
+            }),
+        )
+        .into_any_element()
+}
+
+/// 键方向图标：1 / -1 用上下箭头，其余（text、hashed、2dsphere…）原样加括号。
+fn mongo_index_key_direction(value: &str, colors: UiColors) -> AnyElement {
+    match value {
+        "1" => app_icon(AppIcon::ArrowUp, 11., colors.muted).into_any_element(),
+        "-1" => app_icon(AppIcon::ArrowDown, 11., colors.muted).into_any_element(),
+        other => div()
+            .text_size(px(10.))
+            .text_color(colors.muted)
+            .child(SharedString::from(format!("({other})")))
+            .into_any_element(),
+    }
+}
+
+/// 展开行：键定义按 Compass 的样张排成圆角胶囊（字段名 + 方向箭头），部分索引另附过滤条件。
+fn mongo_index_expanded_definition(
+    index: &fluxdb_core::MongoIndexInfo,
+    colors: UiColors,
+) -> Div {
+    let selector = SharedString::from(format!("mongo-index-keys:{}", index.name));
+    div()
+        .debug_selector(move || selector.to_string())
+        .px(px(28.))
+        .pt_1()
+        .pb_2()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .flex_wrap()
+                .children(index.fields.iter().map(|field| {
+                    div()
                         .flex()
-                        .flex_col()
+                        .items_center()
                         .gap_1()
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .text_size(px(12.))
-                                .text_color(colors.text)
-                                .child(SharedString::from(index.name.clone()))
-                                .when(index.unique, |this| {
-                                    this.child(mongo_index_badge(
-                                        tr("app.mongo.indexes.unique"),
-                                        colors.info,
-                                        colors,
-                                    ))
-                                })
-                                .when(index.sparse, |this| {
-                                    this.child(mongo_index_badge(
-                                        tr("app.mongo.indexes.sparse"),
-                                        colors.muted,
-                                        colors,
-                                    ))
-                                })
-                                .when(!index.ready, |this| {
-                                    this.child(mongo_index_badge(
-                                        tr("app.mongo.indexes.building"),
-                                        colors.warning,
-                                        colors,
-                                    ))
-                                }),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(colors.muted)
-                                .child(SharedString::from(index.keys_json.clone())),
-                        )
-                        .when_some(index.partial_filter.clone(), |this, filter| {
-                            this.child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(colors.muted)
-                                    .child(SharedString::from(filter)),
-                            )
-                        })
+                        .px_2()
+                        .py_0p5()
+                        .rounded(px(999.))
+                        .border_1()
+                        .border_color(colors.border_soft)
+                        .bg(colors.panel_alt)
+                        .font_family(crate::PLATFORM_MONOSPACE_FONT)
+                        .text_size(px(11.))
+                        .text_color(colors.text)
+                        .child(SharedString::from(field.field.clone()))
+                        .child(mongo_index_key_direction(&field.value, colors))
                 })),
+        )
+        .when_some(index.partial_filter.clone(), |this, filter| {
+            this.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child(SharedString::from(format!(
+                        "{}: {filter}",
+                        tr("app.mongo.indexes.partial_filter")
+                    ))),
+            )
+        })
+}
+
+/// 类型徽标文案：未知类型直接原样展示，不吞掉服务端返回值。
+fn mongo_index_type_label(index_type: &str) -> SharedString {
+    match index_type {
+        "regular" => tr("app.mongo.indexes.type.regular"),
+        "geospatial" => tr("app.mongo.indexes.type.geospatial"),
+        "hashed" => tr("app.mongo.indexes.type.hashed"),
+        "text" => tr("app.mongo.indexes.type.text"),
+        "wildcard" => tr("app.mongo.indexes.type.wildcard"),
+        "columnstore" => tr("app.mongo.indexes.type.columnstore"),
+        "clustered" => tr("app.mongo.indexes.type.clustered"),
+        other => SharedString::from(other.to_string()),
+    }
+}
+
+/// 属性徽标：与 Compass 同序（unique / sparse / partial / ttl / collation / hidden / compound）。
+fn mongo_index_properties(index: &fluxdb_core::MongoIndexInfo) -> Vec<SharedString> {
+    let mut properties = Vec::new();
+    if index.unique || index.name == "_id_" {
+        properties.push(tr("app.mongo.indexes.unique"));
+    }
+    if index.sparse {
+        properties.push(tr("app.mongo.indexes.sparse"));
+    }
+    if index.partial_filter.is_some() {
+        properties.push(tr("app.mongo.indexes.partial"));
+    }
+    if index.expire_after_seconds.is_some() {
+        properties.push(tr("app.mongo.indexes.ttl"));
+    }
+    if index.has_collation {
+        properties.push(tr("app.mongo.indexes.collation"));
+    }
+    if index.hidden {
+        properties.push(tr("app.mongo.indexes.hidden"));
+    }
+    if index.fields.len() > 1 {
+        properties.push(tr("app.mongo.indexes.compound"));
+    }
+    properties
+}
+
+/// 索引大小：与集合信息页同一套字节格式；拿不到时不显示数字。
+fn mongo_index_size_text(size: Option<u64>) -> SharedString {
+    match size {
+        Some(bytes) => SharedString::from(mongo_human_bytes(bytes)),
+        None => tr("app.mongo.indexes.size_unknown"),
+    }
+}
+
+/// 使用次数：`$indexStats` 的 `accesses.ops` 与统计起点。
+fn mongo_index_usage_text(index: &fluxdb_core::MongoIndexInfo) -> SharedString {
+    let Some(count) = index.usage_count else {
+        return tr("app.mongo.indexes.usage_unavailable");
+    };
+    match index.usage_since.and_then(mongo_index_since_text) {
+        Some(since) => SharedString::from(
+            tr("app.mongo.indexes.usage_since")
+                .replace("%{count}", &count.to_string())
+                .replace("%{since}", &since),
+        ),
+        None => SharedString::from(
+            tr("app.mongo.indexes.usage_count_only")
+                .replace("%{count}", &count.to_string()),
         ),
     }
 }
 
+/// 平均使用频率：`ops / 统计分钟数`。统计起点缺失或时间倒挂时不编造频率。
+fn mongo_index_rate_text(index: &fluxdb_core::MongoIndexInfo) -> SharedString {
+    let Some(rate) = mongo_index_rate_per_minute(index) else {
+        return tr("app.mongo.indexes.rate_unavailable");
+    };
+    let formatted = if rate > 0.0 && rate < 1.0 {
+        tr("app.mongo.indexes.rate_below_one")
+    } else {
+        SharedString::from(
+            tr("app.mongo.indexes.rate_per_minute")
+                .replace("%{count}", &format!("{rate:.0}")),
+        )
+    };
+    match index.usage_since.and_then(mongo_index_since_text) {
+        Some(since) => SharedString::from(
+            tr("app.mongo.indexes.rate_with_since")
+                .replace("%{rate}", formatted.as_ref())
+                .replace("%{since}", &since),
+        ),
+        None => formatted,
+    }
+}
+
+fn mongo_index_rate_per_minute(index: &fluxdb_core::MongoIndexInfo) -> Option<f64> {
+    let usage = index.usage_count? as f64;
+    let period_ms = chrono::Utc::now().timestamp_millis() - index.usage_since?;
+    if period_ms <= 0 {
+        return None;
+    }
+    Some(usage / period_ms as f64 * 60_000.)
+}
+
+/// 统计起点按 UTC 展示（与服务端 `$indexStats` 口径一致，避免本地时区跨日）。
+fn mongo_index_since_text(millis: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp_millis(millis)
+        .map(|since| since.format("%a %b %d %Y").to_string())
+}
+
+/// 状态药丸：就绪（绿）/ 构建中（黄）。
+fn mongo_index_status_pill(ready: bool, colors: UiColors) -> Div {
+    let (label, color) = if ready {
+        (tr("app.mongo.indexes.ready"), colors.success)
+    } else {
+        (tr("app.mongo.indexes.building"), colors.warning)
+    };
+    div()
+        .px_1p5()
+        .py_0p5()
+        .rounded(px(999.))
+        .bg(color.opacity(0.14))
+        .text_size(px(10.))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(color)
+        .child(label)
+}
+
+fn mongo_index_muted_text(text: SharedString, colors: UiColors) -> Div {
+    div()
+        .min_w(px(0.))
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
+        .text_size(px(11.))
+        .text_color(colors.muted)
+        .child(text)
+}
+
+/// 小徽标：类型、属性共用。
 fn mongo_index_badge(label: SharedString, color: gpui::Rgba, colors: UiColors) -> Div {
     div()
+        .flex_none()
         .px_1()
         .rounded(colors.radius)
-        .bg(colors.panel_alt)
+        .border_1()
+        .border_color(colors.border)
+        .bg(colors.panel_bg)
         .text_size(px(10.))
         .text_color(color)
+        .whitespace_nowrap()
         .child(label)
 }
 

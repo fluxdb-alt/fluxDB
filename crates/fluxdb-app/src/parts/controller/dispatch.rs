@@ -61,6 +61,7 @@ impl AppController {
             | AppCommand::LoadMongoServerInfo(_)
             | AppCommand::CreateMongoCollection { .. }
             | AppCommand::DropMongoCollection { .. }
+            | AppCommand::DropMongoIndex { .. }
             | AppCommand::RenameMongoCollection { .. }
             | AppCommand::MongoRunCommand { .. }
             | AppCommand::SelectMongoSection { .. }

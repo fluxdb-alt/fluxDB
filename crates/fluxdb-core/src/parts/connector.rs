@@ -683,6 +683,17 @@ pub trait Connector {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持索引元数据"))
     }
 
+    /// 删除指定索引。`_id_` 不可删除，由服务端拒绝；调用方应在界面上隐藏该操作。
+    fn mongo_drop_index(
+        &self,
+        _: ConnectionId,
+        _database: &str,
+        _collection: &str,
+        _name: &str,
+    ) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持删除索引"))
+    }
+
     /// 用 `after_json` 整篇替换一篇已存在的文档（`_id` 必须与原文档一致）。
     ///
     /// 以原文档的 `_id` 作为定位条件，而不是解析后的可读 id：`_id` 可能是 ObjectId、

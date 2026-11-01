@@ -68,7 +68,21 @@ fn mongo_collection_info(
     Ok(info)
 }
 
+/// `$indexStats` 里一个索引的使用统计。
+#[derive(Default)]
+struct MongoIndexUsage {
+    usage_count: Option<u64>,
+    /// `accesses.since`（epoch 毫秒）。
+    usage_since: Option<i64>,
+    /// `$indexStats.building`：仅在索引构建期间出现。
+    building: bool,
+}
+
 /// 列出集合索引。
+///
+/// 除 `listIndexes` 的定义与选项外，再补两类统计：`collStats.indexSizes` 给大小、
+/// `$indexStats` 给使用次数与统计起点。两级统计都允许失败（权限不足、服务端不支持），
+/// 失败时字段留 `None`，索引列表本身照常返回。
 fn mongo_indexes(
     config: &ConnectionConfig,
     database: &str,
@@ -80,25 +94,152 @@ fn mongo_indexes(
         collection_handle.list_indexes().await
     })?;
 
+    let sizes = mongo_index_sizes(&client, database, collection);
+    let usages = mongo_index_usage(&client, database, collection);
+
     let mut indexes = mongo_collect_cursor(cursor)?
         .into_iter()
         .map(|model| {
             let options = model.options.unwrap_or_default();
+            let name = options.name.clone().unwrap_or_default();
+            let usage = usages.get(&name);
             MongoIndexInfo {
-                name: options.name.clone().unwrap_or_default(),
+                index_type: mongo_index_type(&model.keys, &options).to_string(),
+                fields: model
+                    .keys
+                    .iter()
+                    .map(|(field, value)| MongoIndexField {
+                        field: field.clone(),
+                        value: mongo_index_key_text(value),
+                    })
+                    .collect(),
                 keys_json: mongo_json_text(Bson::Document(model.keys)),
                 unique: options.unique.unwrap_or(false),
                 sparse: options.sparse.unwrap_or(false),
                 partial_filter: options
                     .partial_filter_expression
                     .map(|filter| mongo_json_text(Bson::Document(filter))),
-                // `listIndexes` 不返回构建进度；缺字段视为已就绪，不臆造"构建中"状态。
-                ready: true,
+                expire_after_seconds: options
+                    .expire_after
+                    .and_then(|duration| i64::try_from(duration.as_secs()).ok()),
+                has_collation: options.collation.is_some(),
+                hidden: options.hidden.unwrap_or(false),
+                size_bytes: sizes.get(&name).copied(),
+                usage_count: usage.and_then(|usage| usage.usage_count),
+                usage_since: usage.and_then(|usage| usage.usage_since),
+                // 没有 `$indexStats` 时无法判定构建态，按已就绪处理，不臆造"构建中"。
+                ready: !usage.is_some_and(|usage| usage.building),
+                name,
             }
         })
         .collect::<Vec<_>>();
     indexes.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(indexes)
+}
+
+/// `collStats.indexSizes`：按索引名取字节数。
+///
+/// 独立部署与副本集可用；权限不足或分片集群元数据缺失时整段返回空表。
+fn mongo_index_sizes(
+    client: &MongoClient,
+    database: &str,
+    collection: &str,
+) -> HashMap<String, u64> {
+    let command = doc! {"collStats": collection};
+    let stats = mongo_block_on(30, "读取索引大小", async {
+        client.database(database).run_command(command).await
+    })
+    .ok();
+    let Some(stats) = stats else {
+        return HashMap::new();
+    };
+    let Some(Bson::Document(sizes)) = stats.get("indexSizes") else {
+        return HashMap::new();
+    };
+    sizes
+        .iter()
+        .filter_map(|(name, value)| {
+            mongo_bson_u64(Some(value)).map(|size| (name.clone(), size))
+        })
+        .collect()
+}
+
+/// `$indexStats`：按索引名取使用次数、统计起点与构建状态。
+fn mongo_index_usage(
+    client: &MongoClient,
+    database: &str,
+    collection: &str,
+) -> HashMap<String, MongoIndexUsage> {
+    let collection_handle = client.database(database).collection::<Document>(collection);
+    let cursor = mongo_block_on(30, "读取索引使用统计", async move {
+        collection_handle.aggregate(vec![doc! {"$indexStats": {}}]).await
+    })
+    .ok();
+    let Some(cursor) = cursor else {
+        return HashMap::new();
+    };
+    let Ok(documents) = mongo_collect_cursor(cursor) else {
+        return HashMap::new();
+    };
+    documents
+        .into_iter()
+        .filter_map(|document| {
+            let name = document.get_str("name").ok()?.to_string();
+            let accesses = document.get_document("accesses").ok();
+            let usage = MongoIndexUsage {
+                usage_count: accesses.and_then(|accesses| mongo_bson_u64(accesses.get("ops"))),
+                usage_since: accesses.and_then(|accesses| match accesses.get("since") {
+                    Some(Bson::DateTime(since)) => Some(since.timestamp_millis()),
+                    _ => None,
+                }),
+                building: matches!(document.get("building"), Some(Bson::Boolean(true))),
+            };
+            Some((name, usage))
+        })
+        .collect()
+}
+
+/// 索引键值转展示文本：数字方向与字符串类型都直接转文本。
+fn mongo_index_key_text(value: &Bson) -> String {
+    match value {
+        Bson::Int32(number) => number.to_string(),
+        Bson::Int64(number) => number.to_string(),
+        Bson::Double(number) if number.fract() == 0.0 => format!("{number:.0}"),
+        Bson::Double(number) => number.to_string(),
+        Bson::String(text) => text.clone(),
+        other => mongo_json_text(other.clone()),
+    }
+}
+
+/// 索引类型判定，口径与 Compass `getIndexType` 一致。
+fn mongo_index_type(keys: &Document, options: &IndexOptions) -> &'static str {
+    let key_value = |expected: &str| {
+        keys.values()
+            .any(|value| matches!(value, Bson::String(text) if text == expected))
+    };
+    if options.sphere_2d_index_version.is_some()
+        || key_value("2d")
+        || key_value("2dsphere")
+        || key_value("geoHaystack")
+    {
+        "geospatial"
+    } else if key_value("hashed") {
+        "hashed"
+    } else if options.text_index_version.is_some() {
+        "text"
+    } else if key_value("columnstore") {
+        // 列存储键是通配索引的特例，必须先于 wildcard 判断。
+        "columnstore"
+    } else if keys
+        .keys()
+        .any(|field| field == "$**" || field.contains(".$**"))
+    {
+        "wildcard"
+    } else if options.clustered() == Some(true) {
+        "clustered"
+    } else {
+        "regular"
+    }
 }
 
 /// 连接信息：「显示连接信息」弹框的数据。
