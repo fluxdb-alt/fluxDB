@@ -426,6 +426,12 @@ pub enum AppEvent {
     },
     /// 聚合结果。
     MongoAggregationLoaded(TabId, MongoDocumentsPage),
+    /// 单阶段预览结果。`pipeline` 原样回带，调用方据此丢弃过期结果。
+    MongoAggregationPreviewLoaded {
+        tab_id: TabId,
+        pipeline: String,
+        result: std::result::Result<MongoDocumentsPage, UserFacingError>,
+    },
     /// 连接信息加载完成（`Err` 为读取失败）。
     MongoServerInfoLoaded(
         ConnectionId,

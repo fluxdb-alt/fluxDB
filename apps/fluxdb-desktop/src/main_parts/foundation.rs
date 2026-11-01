@@ -130,12 +130,11 @@ fn apply_component_theme_colors(mode: ThemeMode, cx: &mut App) {
     component_colors.popover = colors.panel_bg.into();
     component_colors.popover_foreground = colors.text.into();
 
-    component_colors.primary = accent_hsla;
-    component_colors.primary_hover = accent_hsla.opacity(0.88);
-    component_colors.primary_active = accent_hsla.opacity(0.78);
-    component_colors.primary_foreground = rgb(0xffffff).into();
-    component_colors.accent = accent_hsla;
-    component_colors.accent_foreground = rgb(0xffffff).into();
+    // `primary` / `accent` 与它们的前景色沿用主题文件里成对的取值，这里不改。
+    // 组件的悬停底色取 `tokens.accent`、悬停文字取 `accent_foreground`；只改一半就会
+    // 不成对——ghost 按钮（「添加条件」「条件构建」）在浅色主题下因此变成白字落近白底，
+    // 悬停直接看不见。`primary_foreground` 同理不能写死白色：暗色默认主题的 `primary`
+    // 本身接近白色，会被涂成白底白字。
 
     component_colors.list = colors.panel_bg.into();
     component_colors.list_head = colors.panel_alt.into();

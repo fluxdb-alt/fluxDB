@@ -1772,6 +1772,11 @@ pub enum AppCommand {
         generation: u64,
         result: std::result::Result<MongoDocumentsPage, UserFacingError>,
     },
+    /// 单阶段预览：跑一段管道前缀，结果只回给发起的卡片，不进标签页状态。
+    RunMongoAggregationPreview {
+        tab_id: TabId,
+        pipeline: String,
+    },
 
     // —— MongoDB 命令工作台 ——
     /// 回写工作台顶部输入框草稿，不执行。

@@ -3,8 +3,13 @@
 // 面板文本只在执行查询那一刻被读取（见 `mongo_loading`），平时不写回标签页状态：
 // 这样输入框就是唯一草稿来源，不需要每个按键都走一次派发。
 //
-// 三个查询框与聚合管道都用 `EditorState` 而不是单行 `InputState`：只有代码编辑器能挂
-// 补全 provider（`Lsp.completion_provider`），单行输入框没有这个入口。
+// 只有 Filter 和聚合管道用 `EditorState`：多行编辑器总会画滚动条
+// （`shows_scrollbar() == is_multi_line()`，且代码编辑器恒定预留底部空白），
+// 32px 高的附加格子里就会塞进一根拖不动的滑块。附加条件都是单行输入，
+// 因此用单行 `InputState`——它靠自身偏移跟随光标，永远没有滚动条。
+//
+// 代价：单行输入框没有 `Lsp.completion_provider` 入口，投影/排序等格子不再给
+// 字段补全；Filter 与聚合管道不受影响。
 
 use std::cell::Cell;
 
@@ -14,11 +19,11 @@ pub(crate) struct MongoQueryInputs {
     /// Filter 增行时把面板叫醒重算高度。行数只在跨档（1↔2↔3↔4）时变，
     /// 逐键都通知会把整个主视图多排一帧。
     _filter_rows_subscription: Subscription,
-    pub(crate) projection: Entity<EditorState>,
-    pub(crate) sort: Entity<EditorState>,
-    /// 排序规则（对象）与索引提示（对象或字符串）：都要补全，用编辑器。
-    pub(crate) collation: Entity<EditorState>,
-    pub(crate) hint: Entity<EditorState>,
+    /// 附加条件（投影 / 排序 / 排序规则 / 索引提示）都是单行输入。
+    pub(crate) projection: Entity<InputState>,
+    pub(crate) sort: Entity<InputState>,
+    pub(crate) collation: Entity<InputState>,
+    pub(crate) hint: Entity<InputState>,
     /// 纯数字格：起始位置、条数、执行上限。
     pub(crate) skip: Entity<InputState>,
     pub(crate) limit: Entity<InputState>,
@@ -74,38 +79,32 @@ impl NavicatMain {
             window,
             cx,
         );
-        let projection = editor(
+        // 附加条件：单行输入，不再挂补全（单行输入框没有 provider 入口）。
+        let single = |value: &str,
+                      placeholder: &'static str,
+                      window: &mut Window,
+                      cx: &mut Context<NavicatMain>| {
+            let value = value.to_string();
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(tr(placeholder))
+                    .default_value(value)
+            })
+        };
+        let projection = single(
             &query.projection,
             "app.mongo.query.projection_placeholder",
-            MongoCompletionMode::Query,
-            view.clone(),
             window,
             cx,
         );
-        let sort = editor(
-            &query.sort,
-            "app.mongo.query.sort_placeholder",
-            MongoCompletionMode::Query,
-            view.clone(),
-            window,
-            cx,
-        );
-        let collation = editor(
+        let sort = single(&query.sort, "app.mongo.query.sort_placeholder", window, cx);
+        let collation = single(
             &query.collation,
             "app.mongo.query.collation_placeholder",
-            MongoCompletionMode::Query,
-            view.clone(),
             window,
             cx,
         );
-        let hint = editor(
-            &query.hint,
-            "app.mongo.query.hint_placeholder",
-            MongoCompletionMode::Query,
-            view.clone(),
-            window,
-            cx,
-        );
+        let hint = single(&query.hint, "app.mongo.query.hint_placeholder", window, cx);
         let aggregation = editor(
             &pipeline,
             "app.mongo.query.aggregation_placeholder",
@@ -273,21 +272,19 @@ impl NavicatMain {
         let (editors, numbers) = {
             let inputs = inputs.read(cx);
             (
+                [(inputs.filter.clone(), draft.filter.clone())],
                 [
-                    (inputs.filter.clone(), draft.filter.clone()),
                     (inputs.projection.clone(), draft.projection.clone()),
                     (inputs.sort.clone(), draft.sort.clone()),
                     (inputs.collation.clone(), draft.collation.clone()),
                     (inputs.hint.clone(), draft.hint.clone()),
-                ],
-                [
                     (inputs.skip.clone(), draft.skip.clone()),
                     (inputs.limit.clone(), draft.limit.clone()),
                     (inputs.max_time_ms.clone(), draft.max_time_ms.clone()),
                 ],
             )
         };
-        // 编辑器与单行输入框是两种状态类型，分开写。
+        // 多行编辑器与单行输入框是两种状态类型，分开写。
         for (input, value) in editors {
             input.update(cx, |input, cx| input.set_value(value, window, cx));
         }
@@ -306,7 +303,6 @@ impl NavicatMain {
     ) {
         match retry {
             MongoRetry::Documents => self.run_mongo_query(tab_id, cx),
-            MongoRetry::Aggregation => self.run_mongo_aggregation(tab_id, cx),
             MongoRetry::Info => self.load_mongo_collection_info(tab_id, cx),
             MongoRetry::Indexes => self.load_mongo_indexes(tab_id, cx),
         }
@@ -358,12 +354,13 @@ impl NavicatMain {
         self.mongo_query_advanced_expanded.remove(&tab_id);
         self.mongo_query_builder_expanded.remove(&tab_id);
         self.mongo_query_builders.remove(&tab_id);
+        // 卡片里挂着参数编辑器与在途预览任务，移除即一并释放。
+        self.mongo_aggregation_builders.remove(&tab_id);
         self.mongo_collapsed_documents.remove(&tab_id);
         self.mongo_expanded_fields.remove(&tab_id);
         self.mongo_json_fold_toggles.remove(&tab_id);
         self.mongo_document_cache.remove(&tab_id);
         self._mongo_load_tasks.remove(&tab_id.0);
-        self._mongo_aggregation_tasks.remove(&tab_id.0);
         self._mongo_info_tasks.remove(&tab_id.0);
         self._mongo_index_tasks.remove(&tab_id.0);
         self._mongo_field_sample_tasks.remove(&tab_id.0);
@@ -416,9 +413,12 @@ pub(crate) fn mongo_query_option_counts(query: &MongoQueryDraft) -> (usize, usiz
     (common, advanced)
 }
 
-/// 输入框初值：已执行查询 + 聚合管道；无标签页状态时给默认值。
+/// 输入框初值：已执行查询 + 聚合管道；没有标签页状态或管道还是空的时候给默认值。
+///
+/// 空管道也必须补默认值：执行时空串会退回默认管道，面板却显示空框，
+/// 用户看到的是「没东西」而跑出来的是 `$group`，两边对不上。
 fn mongo_query_seed(state: &AppState, tab_id: TabId) -> (MongoQueryDraft, String) {
-    state
+    let (query, pipeline) = state
         .tabs
         .iter()
         .find(|tab| tab.id == tab_id)
@@ -432,7 +432,13 @@ fn mongo_query_seed(state: &AppState, tab_id: TabId) -> (MongoQueryDraft, String
         .unwrap_or_else(|| {
             (
                 MongoQueryDraft::new(state.settings.page_size),
-                MongoCollectionState::default_aggregation_pipeline(),
+                String::new(),
             )
-        })
+        });
+    let pipeline = if pipeline.trim().is_empty() {
+        MongoCollectionState::default_aggregation_pipeline()
+    } else {
+        pipeline
+    };
+    (query, pipeline)
 }

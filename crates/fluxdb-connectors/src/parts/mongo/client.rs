@@ -56,13 +56,63 @@ fn mongo_run<T: Send>(label: &str, future: impl Future<Output = T> + Send) -> fl
     })
 }
 
+/// 已建好的客户端：同一连接的多次操作复用同一个连接池。
+struct CachedMongoClient {
+    /// 建这个 client 时用的 URI 指纹。配置换了 URI 就自然重建，不依赖调用方记得失效。
+    fingerprint: u64,
+    client: MongoClient,
+}
+
+/// 全进程的客户端缓存（每个连接最多一份）。
+///
+/// 复用是压缩往返次数的关键：驱动 client 自带连接池，而每次操作重建 client 会额外付
+/// 3 条 TCP 握手（有认证再加 SCRAM），实测 30ms RTT 下同一 `find` 从 174ms 涨到 387ms、
+/// 打开集合页从 ~400ms 涨到 ~870ms。Compass 也是整连接只持有一个 client。
+///
+/// `ponytail:` 缓存不设空闲 TTL，只随断开 / 编辑配置 / 删除连接释放（见
+/// `mongo_close_connection_client`）；一个 client 就是一个连接池，长期存活的连接本来就该
+/// 留着。若将来出现「连了几百个连接都不断开」的占用问题，再按最近使用时间淘汰。
+fn mongo_clients() -> &'static Mutex<HashMap<ConnectionId, CachedMongoClient>> {
+    static CLIENTS: OnceLock<Mutex<HashMap<ConnectionId, CachedMongoClient>>> = OnceLock::new();
+    CLIENTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 释放某连接缓存的客户端（断开 / 编辑配置 / 删除连接时调用）。
+///
+/// 只从缓存移除引用：驱动在最后一个引用 drop 后关闭连接池里的连接。
+pub fn mongo_close_connection_client(connection_id: ConnectionId) {
+    let Ok(mut clients) = mongo_clients().lock() else {
+        return;
+    };
+    if clients.remove(&connection_id).is_some() {
+        tracing::info!(
+            target: "fluxdb_connectors",
+            connection_id = ?connection_id,
+            "MongoDB 客户端已随连接释放"
+        );
+    }
+}
+
+/// URI 指纹：只用于判断「配置是否换了目标」，不回显、不落日志。
+fn mongo_uri_fingerprint(uri: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    uri.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// 取缓存的客户端；没有或 URI 已变时返回 `None`。
+fn mongo_cached_client(connection_id: ConnectionId, fingerprint: u64) -> Option<MongoClient> {
+    let clients = mongo_clients().lock().ok()?;
+    clients
+        .get(&connection_id)
+        .filter(|cached| cached.fingerprint == fingerprint)
+        .map(|cached| cached.client.clone())
+}
+
 /// 建连：优先使用结构化档案现场拼 URI（密码不落盘），缺失时退回 `endpoint`。
 ///
-/// 超时由驱动自身的 `connectTimeoutMS` / `serverSelectionTimeoutMS` 控制。
-/// `ClientOptions::parse` 的 SRV/TXT 解析会落到 runtime 的阻塞线程池，单纯的
-/// `tokio::time::timeout` 只能取消 future、无法中断已经卡住的 DNS 调用（实测可
-/// 无限挂住），所以整段解析放到独立线程，调用方按墙钟等待并在超时后放弃该线程。
-/// 解析与客户端构造必须在同一次大栈执行里：两者都要 poll 驱动代码。
+/// 同一连接（同一 URI）复用已建好的 client；只有首次或配置变了才真正建池。
 fn mongo_connect(config: &ConnectionConfig) -> fluxdb_core::Result<MongoClient> {
     let uri = match config.mongo_profile.as_ref() {
         Some(profile) => {
@@ -80,6 +130,35 @@ fn mongo_connect(config: &ConnectionConfig) -> fluxdb_core::Result<MongoClient> 
         },
     };
 
+    let fingerprint = mongo_uri_fingerprint(&uri);
+    if let Some(client) = mongo_cached_client(config.id, fingerprint) {
+        return Ok(client);
+    }
+
+    let client = mongo_build_client(&uri)?;
+    // 并发冷启动（如同时发起 find 与字段抽样）可能各自建出一个池，后写覆盖先写：
+    // 多出来的那个池随最后一个引用 drop 关闭，浪费只发生在首屏一次。
+    if let Ok(mut clients) = mongo_clients().lock() {
+        clients.insert(
+            config.id,
+            CachedMongoClient {
+                fingerprint,
+                client: client.clone(),
+            },
+        );
+    }
+    Ok(client)
+}
+
+/// 真正建一个客户端（解析 URI + 构造，均需在大栈线程里跑）。
+///
+/// 超时由驱动自身的 `connectTimeoutMS` / `serverSelectionTimeoutMS` 控制。
+/// `ClientOptions::parse` 的 SRV/TXT 解析会落到 runtime 的阻塞线程池，单纯的
+/// `tokio::time::timeout` 只能取消 future、无法中断已经卡住的 DNS 调用（实测可
+/// 无限挂住），所以整段解析放到独立线程，调用方按墙钟等待并在超时后放弃该线程。
+/// 解析与客户端构造必须在同一次大栈执行里：两者都要 poll 驱动代码。
+fn mongo_build_client(uri: &str) -> fluxdb_core::Result<MongoClient> {
+    let uri = uri.to_string();
     // 解析线程：SRV/TXT 查询可能卡在系统解析器里，调用方不能跟着一起等。
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
@@ -307,6 +386,48 @@ fn mongo_command_text(document: Document) -> String {
 #[cfg(test)]
 mod mongo_wire_tests {
     use super::*;
+
+    #[test]
+    fn cached_client_is_reused_until_released() {
+        // 复用与失效是这次改动唯一的行为契约：URI 不变就命中，URI 变了或连接被释放就重建。
+        // 构造走 `mongo_build_client`（自带大栈线程）：测试线程栈同样放不下驱动代码。
+        let uri = "mongodb://127.0.0.1:27017";
+        let client = mongo_build_client(uri).expect("构造客户端");
+        let connection_id = ConnectionId(4_242);
+        let fingerprint = mongo_uri_fingerprint(uri);
+
+        assert!(mongo_cached_client(connection_id, fingerprint).is_none());
+        mongo_clients().lock().expect("缓存锁").insert(
+            connection_id,
+            CachedMongoClient {
+                fingerprint,
+                client,
+            },
+        );
+        assert!(mongo_cached_client(connection_id, fingerprint).is_some());
+        // 同 id 但 URI 变了：必须按新 URI 重建，不能复用旧池。
+        assert!(mongo_cached_client(connection_id, fingerprint ^ 1).is_none());
+
+        mongo_close_connection_client(connection_id);
+        assert!(mongo_cached_client(connection_id, fingerprint).is_none());
+    }
+
+    #[test]
+    fn uri_fingerprint_tracks_every_uri_difference() {
+        // 主机/库/参数任一变化都要换指纹，否则改了配置仍会连到旧目标。
+        assert_ne!(
+            mongo_uri_fingerprint("mongodb://h1:27017/db"),
+            mongo_uri_fingerprint("mongodb://h2:27017/db")
+        );
+        assert_ne!(
+            mongo_uri_fingerprint("mongodb://h:27017/db"),
+            mongo_uri_fingerprint("mongodb://h:27017/other")
+        );
+        assert_eq!(
+            mongo_uri_fingerprint("mongodb://h:27017/db"),
+            mongo_uri_fingerprint("mongodb://h:27017/db")
+        );
+    }
 
     #[test]
     fn redacts_password_in_uri_like_text() {

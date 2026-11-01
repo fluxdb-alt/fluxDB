@@ -158,7 +158,10 @@ include!("main_parts/create_table.rs");
 include!("main_parts/content_views.rs");
 include!("main_parts/mongo_collection.rs");
 include!("main_parts/mongo_query_completion.rs");
+include!("main_parts/mongo_query_builder_model.rs");
 include!("main_parts/mongo_query_builder.rs");
+include!("main_parts/mongo_aggregation_model.rs");
+include!("main_parts/mongo_aggregation_builder.rs");
 include!("main_parts/mongo_documents.rs");
 include!("main_parts/mongo_workbench.rs");
 include!("main_parts/backup_tab.rs");
@@ -218,6 +221,8 @@ include!("main_parts/tabs_workspace_tests.rs");
 include!("main_parts/sidebar_refresh_tests.rs");
 #[cfg(test)]
 include!("main_parts/mongo_sidebar_tests.rs");
+#[cfg(test)]
+include!("main_parts/theme_tests.rs");
 #[cfg(test)]
 include!("main_parts/terminal_menu_tests.rs");
 #[cfg(test)]
