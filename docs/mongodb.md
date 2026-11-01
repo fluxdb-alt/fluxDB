@@ -266,7 +266,7 @@ Filter / 投影 / 排序三框与聚合管道都从单行 `InputState` 换成 `E
 
 ## 4. 命令行终端（MongoDB shell）
 
-库右键「命令行终端」打开 `MongoCli` 标签页，复用内置终端组件（历史 + 补全）。写的是 shell 语法，不是命令 JSON：
+库右键「命令行终端」，或在库工作区页签条空白区双击，都会打开 `MongoCli` 标签页，复用内置终端组件（历史 + 补全）。空白区双击按连接类型路由（`open_query_for_context`）：Redis 开 Workbench，MongoDB 开 Shell，其余开 SQL 查询编辑器——MongoDB 没有 SQL 编辑器，路由漏了这里双击就等于没反应。写的是 shell 语法，不是命令 JSON：
 
 ```text
 use fluxdb_demo

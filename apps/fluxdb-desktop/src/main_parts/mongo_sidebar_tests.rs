@@ -1697,6 +1697,105 @@ mod mongo_sidebar_tests {
         });
     }
 
+    /// 双击页签条空白区：MongoDB 库必须开出 Shell，而不是 SQL 查询编辑器。
+    ///
+    /// 空白区双击原本无条件 `open_new_query`，MongoDB 没有 SQL 编辑器，双击等于没反应。
+    /// 这里走真实鼠标事件 + 真实页签条空白区命中框，断言的是标签页种类与提示符上屏。
+    #[gpui::test]
+    fn mongo_double_click_tab_blank_area_opens_shell(cx: &mut TestAppContext) {
+        let Some(config) = live_connection() else {
+            eprintln!("跳过：未设置 FLUXDB_MONGO_URI");
+            return;
+        };
+        let connection_id = config.id;
+        let database = live_database(&config);
+        let (view, cx) = launch_app(cx, config);
+        let database_selector = connect_and_wait_database(cx, connection_id, &database);
+
+        // 1. 展开库 → 集合分组 → 点一个集合，让「库工作区」页签条出现（第二级页签行）。
+        let database_row = redraw_and_bounds(cx, database_selector).expect("库行必须渲染");
+        cx.simulate_click(database_row.center(), Modifiers::default());
+        let group_selector = selector(format!("object-group-row:collections:{database}"));
+        wait_until(cx, "库展开", |cx| redraw_and_bounds(cx, group_selector));
+        let group_row = redraw_and_bounds(cx, group_selector).expect("集合分组行必须渲染");
+        cx.simulate_click(group_row.center(), Modifiers::default());
+        let collection = wait_until(cx, "集合列表加载", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .connections
+                    .iter()
+                    .find(|connection| connection.config.id == connection_id)
+                    .and_then(|connection| {
+                        connection
+                            .objects
+                            .iter()
+                            .find(|object| {
+                                object.path.kind == ObjectKind::Collection
+                                    && object.path.database.as_deref() == Some(database.as_str())
+                            })
+                            .map(|object| object.path.name.clone())
+                    })
+            })
+        });
+        let collection_row =
+            redraw_and_bounds(cx, selector(format!("table-tree-row:{collection}")))
+                .expect("集合行必须渲染");
+        cx.simulate_click(collection_row.center(), Modifiers::default());
+        wait_until(cx, "集合页渲染", |cx| {
+            redraw_and_bounds(cx, selector(format!("mongo-collection-page:{database}/{collection}")))
+        });
+
+        // 2. 双击页签条空白区（集合页右侧那段空白）。
+        let blank = wait_until(cx, "页签空白区", |cx| {
+            visible_bounds(cx, selector("table-tab-blank-area".to_string()))
+        });
+        // 越界点击会被 gpui 静默丢弃：先断言点在窗口内且不在页签本身上。
+        let click_at = gpui::point(blank.right() - px(12.), blank.center().y);
+        assert!(
+            blank.contains(&click_at),
+            "双击点必须落在空白区内：点 {click_at:?} 区域 {blank:?}"
+        );
+        cx.simulate_event(MouseDownEvent {
+            position: click_at,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 2,
+            first_mouse: false,
+        });
+        cx.run_until_parked();
+
+        // 3. 必须开出 MongoDB Shell 页签，且提示符上屏（不是 SQL 查询编辑器）。
+        wait_until(cx, "MongoDB Shell 页签", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .any(|tab| matches!(&tab.kind, TabKind::MongoCli(cli) if cli.database == database))
+                    .then_some(())
+            })
+        });
+        assert!(
+            !cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .any(|tab| matches!(tab.kind, TabKind::QueryEditor(_)))
+            }),
+            "MongoDB 双击空白区不应开出 SQL 查询编辑器"
+        );
+        wait_until(cx, "Shell 提示符", |cx| {
+            shell_screen(cx, &view)
+                .contains(&format!("{database}> "))
+                .then_some(())
+        });
+    }
+
     /// 本页首篇文档的 `(可读 id, 完整 JSON)`。
     fn first_document(
         cx: &mut VisualTestContext,

@@ -168,21 +168,22 @@ impl NavicatMain {
     }
 
     /// 根据目标连接的数据库类型分发「新建查询」：
-    /// Redis 连接打开独立 Workbench 面板，其余数据库走 SQL 查询编辑器。
+    /// Redis 连接打开独立 Workbench 面板，MongoDB 打开 Shell，其余数据库走 SQL 查询编辑器。
     fn open_query_for_context(
         &mut self,
         connection_id: ConnectionId,
         database: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let is_redis = self
+        let kind = self
             .controller
             .state()
             .connections
             .iter()
             .find(|connection| connection.config.id == connection_id)
-            .map(|connection| connection.config.kind == DatabaseKind::Redis)
-            .unwrap_or(false);
+            .map(|connection| connection.config.kind);
+
+        let is_redis = kind == Some(DatabaseKind::Redis);
 
         if is_redis {
             // Redis 的数据库即 DB 编号；解析失败或缺失时默认 0 号库。
@@ -191,6 +192,30 @@ impl NavicatMain {
                 .unwrap_or(0);
             self.dispatch(
                 AppCommand::OpenRedisWorkbench {
+                    connection_id,
+                    database,
+                },
+                cx,
+            );
+            return;
+        }
+
+        if kind == Some(DatabaseKind::MongoDb) {
+            // MongoDB 没有 SQL 编辑器：双击页签空白区按 mongosh 语义打开 Shell。
+            // 库名缺失时退回连接配置里的默认库，再不行才用 admin（mongosh 的默认库）。
+            let database = database
+                .or_else(|| self.current_query_scope().and_then(|(_, database)| database))
+                .or_else(|| {
+                    self.controller
+                        .state()
+                        .connections
+                        .iter()
+                        .find(|connection| connection.config.id == connection_id)
+                        .and_then(|connection| connection_default_database(&connection.config))
+                })
+                .unwrap_or_else(|| "admin".to_string());
+            self.dispatch(
+                AppCommand::OpenMongoCli {
                     connection_id,
                     database,
                 },
