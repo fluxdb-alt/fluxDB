@@ -220,3 +220,5 @@ include!("main_parts/sidebar_refresh_tests.rs");
 include!("main_parts/mongo_sidebar_tests.rs");
 #[cfg(test)]
 include!("main_parts/terminal_menu_tests.rs");
+#[cfg(test)]
+include!("main_parts/terminal_completion_tests.rs");

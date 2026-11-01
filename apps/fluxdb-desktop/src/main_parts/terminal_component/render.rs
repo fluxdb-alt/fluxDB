@@ -282,6 +282,9 @@ fn completion_popup(
                 // 按下即应用（与编辑器补全一致：点一下就写回输入行，不用再按回车）。
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| click(i, cx))
                 .h(px(row_h))
+                // 不锁住收缩，候选超出行数时 flex 会把每行压扁去「塞进」max_h，
+                // 永远不产生溢出，滚动条也就永远不会出现。
+                .flex_shrink_0()
                 .px_2()
                 .rounded(px(3.0))
                 .cursor_pointer()
@@ -350,17 +353,33 @@ fn completion_popup(
         .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
         // 候选行直接作为滚动区的子元素：`ScrollHandle::scroll_to_item` 按直接子元素的下标
         // 滚动，多包一层 flex 容器就只有 0 号子元素，键盘选到第 9 项以后浮层不会跟着滚。
+        //
+        // 这里用原生 `overflow_y_scroll()` + 显式 `Scrollbar`，不能用
+        // `overflow_y_scrollbar()`（`Scrollable` 封装）：它会丢掉调用方传进来的
+        // `track_scroll` 句柄、换成自己的内部句柄，于是 `scroll_to_item` 全部失效
+        // （方向键越过可见区后浮层不动）；而且它渲染的滚动条是随设置自动隐藏的，
+        // 候选超出被裁掉时静态画面上等于「没有滚动条」。
         .child(
             div()
-                .id("terminal-completion-scroll")
+                .relative()
                 .w_full()
-                .max_h(px(height - 8.0))
-                .flex()
-                .flex_col()
-                .track_scroll(scroll)
-                .overflow_y_scrollbar()
-                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-                .children(rows),
+                .child(
+                    div()
+                        .id("terminal-completion-scroll")
+                        .w_full()
+                        .max_h(px(height - 8.0))
+                        .flex()
+                        .flex_col()
+                        .track_scroll(scroll)
+                        .overflow_y_scroll()
+                        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                        .children(rows),
+                )
+                // 超出即常驻显示：浮层被裁掉时必须让人看出「下面还有候选」。
+                .child(div().absolute().inset_0().child(
+                    Scrollbar::vertical(scroll)
+                        .mode(gpui_component::scroll::ScrollbarMode::Always),
+                )),
         )
 }
 

@@ -297,6 +297,7 @@ db.getCollectionNames()
 	- **浮层跟着光标走**（`completion_popup_anchor()`）：锚点是光标所在单元格的正下方，横坐标按 `cursor_cell_x()` 算——展示提示符替换了后端提示符，不能直接用 `grid.cursor().x`，否则 `fluxdb_demo> ` 这种长前缀下浮层偏左若干格。下方放不下就翻到光标上方，最后夹进内容区；右侧越界由 `anchored().snap_to_window_with_margin(8px)` 兜底。
 	- **用 `deferred(anchored())` 画在容器裁剪之外**（与 `filter_ui/popover.rs` 同一套）：终端面板是 `overflow_hidden`，浮层写成它的子元素时超出行高的部分会被切掉，表现为「只露出一条边」。终端画布也必须自己绝对定位并铺满——它若留在流内，绝对定位浮层会以画布底边为静态基准。
 	- **候选行用 gpui-component 的 `ListItem`**：悬停 / 选中底色、内边距、无障碍名由组件按主题给，与编辑器补全浮层同一套观感。浮层与滚动区都 `stop_propagation` 吞掉鼠标按下与滚轮，否则点候选会同时开始终端选区、滚浮层会翻走终端历史。
+	- **滚动区用原生 `overflow_y_scroll()` + 显式常驻 `Scrollbar`，不用 `overflow_y_scrollbar()`**：后者返回 gpui-component 的 `Scrollable`，它在 `render()` 里用 `scroll_handle_for(&self.id, …)` 换掉调用方 `track_scroll` 传进来的句柄，于是 `completion_scroll.scroll_to_item()` 全部失效——方向键越过可见区后浮层不动；它画的滚动条还跟随主题设置自动隐藏，候选被裁掉时静态画面上等于「没有滚动条」。显式 `Scrollbar::vertical(scroll).mode(Always)` 叠在滚动区上（外层 `relative` + `absolute().inset_0()`），保证有溢出就一定看得见滚动条。候选行必须是滚动区的**直接**子元素，且 `.flex_shrink_0()` 锁住行高：`scroll_to_item` 按下标滚动，多包一层容器就只剩 0 号子元素；不锁收缩则 flex 会把每行压扁塞进 `max_h`，永远不产生溢出。
 	- **配色走组件主题，不写死**：背景 `muted`、文字 `popover_foreground`、边框 `border`、圆角 `radius_lg`。终端面板随主题走，浮层写死深色会在浅色主题里变成一块突兀的黑板。
 	- **背景不能用 `popover`**：浅色主题里 `popover` 就是纯白，与终端面板（写死 `0xffffff`）同色，浮层只剩一条边框——截图上就是「显示出了一点」。`muted` 浅色为 `neutral-100`、深色为 `neutral-800`，两个主题下都比面板深一档。
 	- **字号必须显式给**（浮层与每个 `ListItem` 都写 `.text_size(TERMINAL_FONT_SIZE)`）：`Root` 会 `set_rem_size(theme.font_size)`（默认 16px），`ListItem` 自己还写死了 `text_base()`；不覆盖就比终端 12px 大，行框定高 30px 装不下，上下各切一刀，表现为「use 只剩半截」。
