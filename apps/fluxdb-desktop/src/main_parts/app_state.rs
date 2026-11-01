@@ -1626,15 +1626,24 @@ struct SidebarResizeStart {
     width: f32,
 }
 
-/// Redis Workbench 分栏拖动起点。分栏尺寸是全局设置（非按 tab），
+/// 上下分栏拖拽的目标工作台：决定松手时把尺寸写回哪个持久化设置。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkbenchSplitTarget {
+    Redis,
+    Mongo,
+}
+
+/// Workbench 分栏拖动起点。分栏尺寸是全局设置（非按 tab），
 /// 故无需 tab_id（对齐 RedisInsight 的全局 panelSizes 语义）。
 ///
-/// **必须把 `placement` 一起记下来**，不能在拖动时读实时的全局值：`Div::on_mouse_up`
-/// 只在指针仍悬停在手柄上时才触发（gpui 的 hover 判定），正常拖拽手势在结果区松手，
-/// 于是起点常常不被清理。若此时布局被工具栏切过，残留的「高度」会被当成「宽度」用。
-/// 连 `x`/`y` 一起记录，可保证起点记录的三元组（轴、基准、尺寸）自洽。
+/// **必须把 `target` / `placement` 一起记下来**，不能在拖动时读实时的全局值：
+/// `Div::on_mouse_up` 只在指针仍悬停在手柄上时才触发（gpui 的 hover 判定），
+/// 正常拖拽手势在结果区松手，于是起点常常不被清理。若此时布局被工具栏切过，
+/// 残留的「高度」会被当成「宽度」用；跨工作台时也会写错设置字段。
+/// 连 `x`/`y` 一起记录，可保证起点记录的四元组（目标、轴、基准、尺寸）自洽。
 #[derive(Clone, Copy, Debug)]
-struct RedisWorkbenchPanelResizeStart {
+struct WorkbenchPanelResizeStart {
+    target: WorkbenchSplitTarget,
     placement: ResultsPlacement,
     x: f32,
     y: f32,

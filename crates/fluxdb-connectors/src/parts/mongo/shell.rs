@@ -19,6 +19,29 @@
 /// shell 单次最多返回的文档数：与集合工作台共用同一产品上限。
 const MONGO_SHELL_LIMIT: i64 = fluxdb_core::MONGO_MAX_DOCUMENTS_PER_QUERY as i64;
 
+/// shell 内部执行产物：文本之外还要把文档结构、条数与截断状态带回给工作台。
+///
+/// 终端（CLI）只取 `text`；工作台用 `documents` 渲染字段卡片，用计数与截断提示说明完整性，
+/// 因此不能只返回 `String`。
+#[derive(Default)]
+struct MongoShellOutput {
+    text: String,
+    document_count: Option<u64>,
+    truncated: bool,
+    /// 同一批结果的文档结构，供工作台渲染字段卡片；CLI 只用 `text`。
+    documents: Vec<fluxdb_core::MongoDocument>,
+}
+
+impl MongoShellOutput {
+    /// 非文档结果（`show dbs`、`count` 等）：只有文本，不冒充文档计数。
+    fn text(text: String) -> Self {
+        Self {
+            text,
+            ..Default::default()
+        }
+    }
+}
+
 /// shell 里还会遇到的写 / 管理方法：单独识别是为了给出「本终端不支持写」而不是「拼错了」。
 const MONGO_SHELL_WRITE_METHODS: &[&str] = &[
     "insert",
@@ -102,6 +125,7 @@ fn mongo_shell(
                 // 与真实 shell 的提示语一致，界面上不需要再翻译一次。
                 output: format!("switched to db {name}"),
                 database: Some(name),
+                ..Default::default()
             });
         }
         MongoShellStatement::Show(MongoShellShow::Databases) => mongo_shell_databases(config)?,
@@ -121,8 +145,11 @@ fn mongo_shell(
         }
     };
     Ok(fluxdb_core::MongoShellResult {
-        output,
+        output: output.text,
         database: None,
+        document_count: output.document_count,
+        truncated: output.truncated,
+        documents: output.documents,
     })
 }
 
@@ -399,7 +426,7 @@ fn mongo_shell_require_database(database: &str) -> fluxdb_core::Result<String> {
 }
 
 /// `show dbs`：库名 + 磁盘占用，与 mongosh 一致；拿不到占用就只列库名。
-fn mongo_shell_databases(config: &ConnectionConfig) -> fluxdb_core::Result<String> {
+fn mongo_shell_databases(config: &ConnectionConfig) -> fluxdb_core::Result<MongoShellOutput> {
     let client = mongo_connect(config)?;
     let admin = client.database("admin");
     let reply = mongo_block_on(30, "listDatabases", async move {
@@ -412,7 +439,7 @@ fn mongo_shell_databases(config: &ConnectionConfig) -> fluxdb_core::Result<Strin
             client.list_database_names().await
         })?;
         names.sort();
-        return Ok(names.join("\n"));
+        return Ok(MongoShellOutput::text(names.join("\n")));
     };
     let entries = reply
         .get_array("databases")
@@ -432,7 +459,7 @@ fn mongo_shell_databases(config: &ConnectionConfig) -> fluxdb_core::Result<Strin
         })
         .collect();
     lines.sort();
-    Ok(lines.join("\n"))
+    Ok(MongoShellOutput::text(lines.join("\n")))
 }
 
 /// 字节数写成 mongosh 风格（`1.000GB` / `20.5MB` / `512B`）。
@@ -454,7 +481,7 @@ fn mongo_shell_bytes(bytes: f64) -> String {
 fn mongo_shell_collection_names(
     config: &ConnectionConfig,
     database: &str,
-) -> fluxdb_core::Result<String> {
+) -> fluxdb_core::Result<MongoShellOutput> {
     let client = mongo_connect(config)?;
     let database = database.to_string();
     let names = mongo_block_on(30, "listCollections", async move {
@@ -465,7 +492,7 @@ fn mongo_shell_collection_names(
         .filter(|name| !name.starts_with("system."))
         .collect();
     names.sort();
-    Ok(names.join("\n"))
+    Ok(MongoShellOutput::text(names.join("\n")))
 }
 
 fn mongo_shell_run(
@@ -475,7 +502,7 @@ fn mongo_shell_run(
     method: MongoShellMethod,
     args: &[String],
     chain: &[MongoShellChainCall],
-) -> fluxdb_core::Result<String> {
+) -> fluxdb_core::Result<MongoShellOutput> {
     match method {
         MongoShellMethod::Find => mongo_shell_find(config, database, collection, args, chain),
         _ if !chain.is_empty() => Err(mongo_shell_error(
@@ -497,10 +524,17 @@ fn mongo_shell_find(
     collection: &str,
     positional: &[String],
     chain: &[MongoShellChainCall],
-) -> fluxdb_core::Result<String> {
+) -> fluxdb_core::Result<MongoShellOutput> {
     let request = mongo_shell_find_request(collection, positional, chain)?;
     let page = mongo_find(config, database, &request, &|| false)?;
-    Ok(mongo_shell_documents_text(&page.documents))
+    let text = mongo_shell_documents_text(&page.documents);
+    Ok(MongoShellOutput {
+        text,
+        document_count: Some(page.returned),
+        // `has_more` 同时覆盖「超过 500 条」和「触到字节预算」，两者都意味着还有结果没取回。
+        truncated: page.has_more,
+        documents: page.documents,
+    })
 }
 
 fn mongo_shell_find_one(
@@ -508,7 +542,7 @@ fn mongo_shell_find_one(
     database: &str,
     collection: &str,
     positional: &[String],
-) -> fluxdb_core::Result<String> {
+) -> fluxdb_core::Result<MongoShellOutput> {
     let rewrite = |text: Option<&String>| {
         mongo_shell_rewrite_constructors(text.map(String::as_str).unwrap_or(""))
     };
@@ -520,10 +554,17 @@ fn mongo_shell_find_one(
         ..Default::default()
     };
     let page = mongo_find(config, database, &request, &|| false)?;
-    Ok(match page.documents.first() {
+    let document = page.documents.into_iter().next();
+    let text = match document.as_ref() {
         Some(document) => mongo_shell_pretty(&mongo_shell_parse_text("Result", &document.json)?, 0),
         // mongosh 的 findOne 无结果时打印 null。
         None => "null".to_string(),
+    };
+    Ok(MongoShellOutput {
+        text,
+        document_count: Some(u64::from(document.is_some())),
+        truncated: false,
+        documents: document.into_iter().collect(),
     })
 }
 
@@ -576,7 +617,7 @@ fn mongo_shell_count(
     database: &str,
     collection: &str,
     positional: &[String],
-) -> fluxdb_core::Result<String> {
+) -> fluxdb_core::Result<MongoShellOutput> {
     let filter = mongo_shell_document("Filter", positional.first().map(String::as_str).unwrap_or(""))?;
     let client = mongo_connect(config)?;
     let database = database.to_string();
@@ -588,14 +629,14 @@ fn mongo_shell_count(
             .count_documents(filter)
             .await
     })?;
-    Ok(count.to_string())
+    Ok(MongoShellOutput::text(count.to_string()))
 }
 
 fn mongo_shell_estimate(
     config: &ConnectionConfig,
     database: &str,
     collection: &str,
-) -> fluxdb_core::Result<String> {
+) -> fluxdb_core::Result<MongoShellOutput> {
     let client = mongo_connect(config)?;
     let database = database.to_string();
     let collection = collection.to_string();
@@ -606,7 +647,7 @@ fn mongo_shell_estimate(
             .estimated_document_count()
             .await
     })?;
-    Ok(count.to_string())
+    Ok(MongoShellOutput::text(count.to_string()))
 }
 
 fn mongo_shell_distinct(
@@ -614,7 +655,7 @@ fn mongo_shell_distinct(
     database: &str,
     collection: &str,
     positional: &[String],
-) -> fluxdb_core::Result<String> {
+) -> fluxdb_core::Result<MongoShellOutput> {
     let Some(field) = positional.first().map(|arg| unquote(arg.trim()).to_string()) else {
         return Err(mongo_shell_error("Usage: distinct(\"field\", [filter])"));
     };
@@ -629,7 +670,7 @@ fn mongo_shell_distinct(
             .distinct(&field, filter)
             .await
     })?;
-    Ok(mongo_shell_array(&values, 0))
+    Ok(MongoShellOutput::text(mongo_shell_array(&values, 0)))
 }
 
 fn mongo_shell_aggregate(
@@ -637,34 +678,70 @@ fn mongo_shell_aggregate(
     database: &str,
     collection: &str,
     positional: &[String],
-) -> fluxdb_core::Result<String> {
+) -> fluxdb_core::Result<MongoShellOutput> {
     let stages = mongo_shell_pipeline(positional.first().map(String::as_str).unwrap_or("[]"))?;
     let client = mongo_connect(config)?;
     let database = database.to_string();
     let collection = collection.to_string();
-    let cursor = mongo_block_on(60, "aggregate", async move {
-        client
+    // 边读边排版并同时卡条数 / 字节预算：聚合可以先产出海量文档，
+    // 先 `collect` 再 `take(500)` 会在截断前就把整份结果堆进内存。
+    let (text, documents, count, truncated) = mongo_block_on(60, "aggregate", async move {
+        use futures_util::TryStreamExt as _;
+        let mut cursor = client
             .database(&database)
             .collection::<Document>(&collection)
             .aggregate(stages)
-            .await
+            .await?;
+        let limit = MONGO_SHELL_LIMIT as usize;
+        let mut out = String::from("[\n");
+        let mut documents = Vec::new();
+        let mut truncated = false;
+        while let Some(document) = cursor.try_next().await? {
+            if documents.len() >= limit {
+                truncated = true;
+                break;
+            }
+            let piece = mongo_shell_pretty(&Bson::Document(document.clone()), 2);
+            // 至少保留第一篇：单篇就超过预算时也要让用户看到内容，而不是回一个空数组。
+            if !documents.is_empty()
+                && out.len() + piece.len() > fluxdb_core::MONGO_MAX_RESULT_BYTES
+            {
+                truncated = true;
+                break;
+            }
+            // 结构化形态与文本同一批文档：工作台据此渲染字段卡片。
+            documents.push(fluxdb_core::MongoDocument {
+                id: mongo_document_id(&document),
+                json: mongo_json_text(Bson::Document(document)),
+            });
+            if documents.len() > 1 {
+                // 与 `find` 一致：文档之间空一行，长结果里也能一眼看出边界。
+                out.push_str(",\n\n");
+            }
+            out.push_str("  ");
+            out.push_str(&piece);
+        }
+        let count = documents.len() as u64;
+        if count == 0 {
+            out = "[]".to_string();
+        } else {
+            out.push_str("\n]");
+        }
+        Ok((out, documents, count, truncated))
     })?;
-    let documents = mongo_collect_cursor(cursor)?;
-    let limited: Vec<Document> = documents
-        .into_iter()
-        .take(MONGO_SHELL_LIMIT as usize)
-        .collect();
-    Ok(mongo_shell_array(
-        &limited.into_iter().map(Bson::Document).collect::<Vec<_>>(),
-        0,
-    ))
+    Ok(MongoShellOutput {
+        text,
+        document_count: Some(count),
+        truncated,
+        documents,
+    })
 }
 
 fn mongo_shell_indexes(
     config: &ConnectionConfig,
     database: &str,
     collection: &str,
-) -> fluxdb_core::Result<String> {
+) -> fluxdb_core::Result<MongoShellOutput> {
     let client = mongo_connect(config)?;
     let database = database.to_string();
     let collection = collection.to_string();
@@ -684,14 +761,14 @@ fn mongo_shell_indexes(
                 .and_then(|value| Bson::try_from(value).ok())
         })
         .collect();
-    Ok(mongo_shell_array(&values, 0))
+    Ok(MongoShellOutput::text(mongo_shell_array(&values, 0)))
 }
 
 fn mongo_shell_stats(
     config: &ConnectionConfig,
     database: &str,
     collection: &str,
-) -> fluxdb_core::Result<String> {
+) -> fluxdb_core::Result<MongoShellOutput> {
     let client = mongo_connect(config)?;
     let database = database.to_string();
     let collection = collection.to_string();
@@ -701,7 +778,7 @@ fn mongo_shell_stats(
             .run_command(doc! {"collStats": collection})
             .await
     })?;
-    Ok(mongo_shell_pretty(&Bson::Document(stats), 0))
+    Ok(MongoShellOutput::text(mongo_shell_pretty(&Bson::Document(stats), 0)))
 }
 
 // —— 参数解析 ——
@@ -820,7 +897,12 @@ fn mongo_shell_rewrite_constructors(text: &str) -> String {
 
 fn mongo_shell_documents_text(documents: &[fluxdb_core::MongoDocument]) -> String {
     let mut out = String::new();
-    for document in documents {
+    for (position, document) in documents.iter().enumerate() {
+        // 多篇文档之间留空行：工作台是一整块文本，紧贴着排会让人分不清
+        // 上一篇的 `}` 和下一篇的 `{` 属于两条记录。
+        if position > 0 {
+            out.push('\n');
+        }
         match mongo_shell_parse_text("Result", &document.json) {
             Ok(value) => {
                 out.push_str(&mongo_shell_pretty(&value, 0));
@@ -1098,6 +1180,23 @@ mod mongo_shell_tests {
         assert!(text.contains("duration_ms: 20"), "{text}");
         assert!(text.contains("nested: {"), "嵌套对象要折行: {text}");
         assert!(text.contains("path: '/'"), "{text}");
+    }
+
+    #[test]
+    fn documents_are_separated_by_a_blank_line() {
+        let documents = vec![
+            fluxdb_core::MongoDocument {
+                id: "1".into(),
+                json: r#"{"_id": 1}"#.into(),
+            },
+            fluxdb_core::MongoDocument {
+                id: "2".into(),
+                json: r#"{"_id": 2}"#.into(),
+            },
+        ];
+        let text = plain(&mongo_shell_documents_text(&documents));
+        // 两条记录之间必须是空行，不能是 `}\n{` 紧贴。
+        assert!(text.contains("}\n\n{"), "{text}");
     }
 
     #[test]

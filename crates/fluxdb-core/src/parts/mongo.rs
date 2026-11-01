@@ -11,6 +11,12 @@
 /// 用的是同一个数，否则用户能填进去一个执行时被静默改小的值。
 pub const MONGO_MAX_DOCUMENTS_PER_QUERY: u64 = 500;
 
+/// 单次查询结果文本的字节上限（8 MiB）。
+///
+/// 只限条数挡不住内存：MongoDB 单篇文档最大 16 MB，500 篇理论上是 8 GB。
+/// 连接器按此预算提前停止读取并标记截断，避免把整段结果留在内存里再交给 UI 排版。
+pub const MONGO_MAX_RESULT_BYTES: usize = 8 * 1024 * 1024;
+
 /// 一次 `find` 请求。所有 JSON 字段都是 **Extended JSON 文本**，由连接器解析成 BSON。
 ///
 /// 空字符串等价于未提供：`filter` 为空表示 `{}`，其余为空表示不限制。
@@ -161,6 +167,17 @@ pub struct MongoShellResult {
     pub output: String,
     /// 语句切换后的当前库；`None` 表示库未变化。
     pub database: Option<String>,
+    /// 返回的文档数（仅 `find` / `aggregate` 这类文档结果有值）。
+    ///
+    /// 用于工作台卡片头展示「N 条」，也让「0 条」能和「没有输出」区分开。
+    pub document_count: Option<u64>,
+    /// 结果是否因条数或字节预算被截断；`true` 时 UI 要提示用户只看到了一部分。
+    pub truncated: bool,
+    /// 结构化的文档结果（`find` / `findOne` / `aggregate`）。
+    ///
+    /// 工作台据此渲染字段卡片；非文档语句（`show`、`count` 等）为空，UI 退回文本展示。
+    /// 与 `output` 是同一批文档的两种形态：文本供 CLI 逐行回显与复制，结构化数据供卡片视图。
+    pub documents: Vec<MongoDocument>,
 }
 
 /// 连接信息里的单个数据库条目。

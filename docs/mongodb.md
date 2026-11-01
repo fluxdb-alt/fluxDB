@@ -366,7 +366,7 @@ db.getCollectionNames()
 	- 写回整行时退格次数按后端语义算：redis-cli 按字节、进程内 REPL 按字符（`backend_edits_by_char()`）。两者混用会让中文输入多删字符。
 - **报错只回一行，且是英文**（对齐 mongosh）：`Unknown method: x` / `Unrecognized statement: x` / `Usage: show dbs | show collections`。终端是 shell 环境，沿用 mongosh 的英文错误，不跟界面语言包走；多行「支持：…」清单不再打印——终端里是一整块红字，可用写法按 Tab 看得更快。`show` 的多余 token（`show dbs | show collections`）现在直接报错，不再被当成 `show dbs` 静默执行。
 	- 同一原则覆盖终端可达的全部错误来源：shell 解析器、`mongo_find` 的 Filter/Projection 解析、连接与驱动错误（`client.rs`）。`mongo_find` 的 Sort / Collation / Hint 校验同时服务集合工作台，报错文案保持中文不动——同一句校验只有一份，不为终端再复制一套。集合工作台 / 导入弹窗的报错同样仍是中文。
-- 单次最多返回 `MONGO_MAX_DOCUMENTS_PER_QUERY`（500）篇文档；`countDocuments` 用真实 `count` 命令，不受该上限影响。
+- 单次最多返回 `MONGO_MAX_DOCUMENTS_PER_QUERY`（500）篇文档，同时受 `MONGO_MAX_RESULT_BYTES`（8 MiB）文本预算约束；`find` / `aggregate` 边读游标边累计字节，超预算立即停止并把 `has_more` / `truncated` 置真，不再先读空整个游标再截断。`countDocuments` 用真实 `count` 命令，不受这两项上限影响。
 - 分层：解析与执行在 `crates/fluxdb-connectors/src/parts/mongo/shell.rs`（`Connector::mongo_shell`），行编辑与回显在 `crates/fluxdb-app/src/parts/terminal_mongo.rs`，渲染复用既有终端组件。
 
 原来的命令对象写法（`{"ping": 1}`）已移除——终端只接受 shell 语法，混着两种写法会让「为什么这条能跑那条不能」变成谜。连接器的 `mongo_run_command` 仍保留给查询编辑器与测试使用。
@@ -379,8 +379,18 @@ db.getCollectionNames()
 - **执行链路**：`Begin`（主线程置运行态、清空草稿）→ `Run`（后台线程的控制器副本执行，文本按 `execution_id` 从状态取，不接 UI 传值）→ `Finish`（主线程写记录）。编辑器文本回写走 `UpdateMongoWorkbenchText`，回车与「运行」按钮同一条路径。
 - **失败也入记录**：报错留在结果区，用户能看到是哪条语句、错在哪；空语句直接回空结果，不发起数据库往返，也不记成一次失败。
 - **`use <db>` 只切本标签页的会话库**，不写回连接配置（同 4.1）。
-- **结果按 SGR 上色**：连接器按终端排版输出（键蓝 / 字符串绿 / 数字橙 / 布尔青 / null 灰）。`mongo_workbench_color_segments` 把 CSI 序列解析成「纯文本 + 着色段」，颜色映射到 JSON 查看器同一套 `JsonEditorTheme` 色板，再由 `StyledText` 逐段上色——既不会把 `[34m` 当正文显示，也不会丢掉类型区分。
-- **长结果在卡片内滚动**：正文用原生 `overflow_y_scroll()` + 显式 `vertical_scrollbar()`，不用 `Scrollable` 封装。后者的根节点是 `size_full()`，塞进 auto 高度的卡片里会被压成内容高度，`max_h` 之外的溢出既没有可滚范围也不画滚动条（实测整段被裁掉、滚轮无效）。
+- **补全与 CLI 同源**：编辑器接 `MongoShellEditorAdapter`，候选直接调用 `mongo_shell_completions`（与 4.1 共用形状识别、方括号规范化与前缀过滤），只在光标所在行替换；库名 / 集合名由共享的 `MongoCliSession` 在后台刷新，输入时不阻塞。
+- **上下分栏可拖动**：中间手柄拖动改编辑器 / 结果区高度，比例持久化到 `mongo_workbench_editor_ratio`；两侧都有像素下限（编辑器 100px、结果区 120px），窗口偏矮时编辑器允许收缩而不是把结果区压没。
+- **补全浮层自适应高度**：最多同屏 8 行、最少 3 行，超出在浮层内滚动；矮编辑器（本页只有一百多像素）里浮层越过编辑器边界盖到结果区上，不再被编辑器根裁剪。
+- **文档结果按字段卡片展示**：`find` / `findOne` / `aggregate` 的结果同时带回结构化文档（`MongoShellResult::documents`），工作台优先渲染成集合页同款卡片——卡头是折叠箭头 + 序号 + `_id`，正文复用 `mongo_field_list`（BSON 类型着色、嵌套对象/数组可展开）。非文档语句（`show`、`count`、`distinct` 等）没有结构化结果，仍按文本展示。
+	- **卡头右侧切换文档 / JSON**：按钮显示「切过去之后」的视图（文档模式给 JSON 图标，JSON 模式给文档列表图标），JSON 视图复用 `json_fold_view`（行号、语法配色、节点逐层折叠）。切换键带记录前缀，不同记录里同 `_id` 的文档各管各的状态。
+	- **卡头右侧复制**：复制当前文档的 Relaxed Extended JSON 原文，点击时才按记录 ID + 下标取文档，不在每帧 clone；成功后给出「已复制」提示。
+	- **解析结果按记录缓存**：文档快照与 `serde_json` 解析结果放在窗口的 keyed state 里，记录落地后不可变，重绘只重建元素，不重复解析整批文档。
+- **文本仍保留完整分隔与上色**：复制与纯文本回退使用连接器输出。`find` 的文档之间留空行，`aggregate` 数组元素之间是 `,\n\n`；`mongo_workbench_color_segments` 把 CSI 序列解析成「纯文本 + 着色段」，颜色映射到 JSON 查看器同一套 `JsonEditorTheme` 色板，再由 `StyledText` 逐段上色——既不会把 `[34m` 当正文显示，也不会丢掉类型区分。
+- **文本回退在卡片内滚动**：正文用原生 `overflow_y_scroll()` + 显式 `vertical_scrollbar()`，不用 `Scrollable` 封装。后者的根节点是 `size_full()`，塞进 auto 高度的卡片里会被压成内容高度，`max_h` 之外的溢出既没有可滚范围也不画滚动条（实测整段被裁掉、滚轮无效）。
+- **卡片头给出完整度与成本**：成功记录显示文档数（`document_count`）、输出大小、真实耗时（`Begin` 起算）与「已截断」标记。`document_count` 只对 `find` / `aggregate` 有值，避免把 `count` 的标量输出冒充文档数。
+- **纯文本正文只排版前缀**：连接器单条结果虽已压到 8 MiB，`StyledText` 仍会为整段做字形整形；文本回退最多取前 64 KiB（退到字符/行边界，约一千行，足够 320px 卡片滚动浏览），超出时在正文上方提示并保留完整结果给「复制」。卡片头复制按钮点击时才按记录 ID 取全文（不在每帧 clone），复制前去掉 ANSI 转义，避免剪贴板里带 `[34m`。
+- **结果区有界**：记录最多保留 100 条、单条结果按 32 MiB 总额度回收，超出丢最旧的记录并清理折叠态。文本与结构化文档是同一批数据的两种形态，按较大者计量，避免同一条 8 MiB 结果被算成 16 MiB 而把历史额度减半。
 - **AI 上下文只发定位与状态**（库名、运行中、记录条数），草稿与结果区内容一律不进首条消息——结果区里是查询回来的文档内容。
 - 分层：状态机在 `crates/fluxdb-app/src/parts/controller/dispatch_mongo_workbench.rs`，页面在 `apps/fluxdb-desktop/src/main_parts/mongo_workbench.rs`。
 

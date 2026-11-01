@@ -117,12 +117,21 @@ impl Editor {
             (row_height * rows as f32 + px(10.)).max(px(COMPLETION_POPUP_MIN_HEIGHT));
 
         // 放在光标下方；若越界则上移。
+        // 纵向边界取**窗口**而不是编辑器视口：MongoDB 工作台的编辑器只有一百多像素高，
+        // 按编辑器底边判断会误以为放不下而翻到上方、盖住正在输入的行；浮层本来就该
+        // 越过编辑器边界盖到结果区上（编辑器根不再裁剪），只要不越出窗口即可。
+        let window_size = window.viewport_size();
+        let window_width = px(f32::from(window_size.width));
+        let window_height = px(f32::from(window_size.height));
         let mut top = cursor_bounds.bottom() + px(4.);
-        if top + height > viewport.bottom() {
-            top = (cursor_bounds.top() - height - px(4.)).max(viewport.top());
+        if top + height > window_height {
+            top = (cursor_bounds.top() - height - px(4.)).max(px(0.));
         }
-        let left = cursor_bounds.left().min(viewport.right() - width - px(8.));
-        // 视口本地坐标：作为编辑器根 `.absolute()` 子节点偏移。
+        let left = cursor_bounds
+            .left()
+            .min(window_width - width - px(8.))
+            .max(px(0.));
+        // 视口本地坐标：render() 再加回视口原点，作为 `deferred(anchored())` 的窗口坐标。
         let origin = GPoint::new(left - viewport.left(), top - viewport.top());
         Some((origin, Size::new(width, height)))
     }
@@ -182,7 +191,8 @@ fn completion_index_after_step(current: usize, len: usize, delta: isize) -> usiz
     ((current as isize + delta).rem_euclid(len as isize)) as usize
 }
 
-const COMPLETION_POPUP_VISIBLE_ROWS: usize = 10;
+/// 浮层最多同时展示的候选行数；超出后在浮层内滚动（最少仍按 3 行高度展示）。
+const COMPLETION_POPUP_VISIBLE_ROWS: usize = 8;
 const COMPLETION_POPUP_CONTENT_PADDING: f32 = 118.;
 /// F005：右侧 metadata 详情面板固定宽度（像素）。
 const COMPLETION_DOC_WIDTH: f32 = 300.;

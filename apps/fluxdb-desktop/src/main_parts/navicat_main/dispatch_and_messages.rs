@@ -896,6 +896,7 @@ impl NavicatMain {
                 self.redis_workbench_inputs.remove(tab_id);
                 self._redis_workbench_input_subscriptions.remove(tab_id);
                 self.mongo_workbench_inputs.remove(tab_id);
+                self.mongo_workbench_completion.remove(tab_id);
                 self._mongo_workbench_input_subscriptions.remove(tab_id);
                 // 关掉 Redis CLI 终端：终止 PTY 子进程并释放对应终端会话实体。
                 if let Some(session) = self.terminal_sessions.remove(tab_id) {
@@ -904,7 +905,7 @@ impl NavicatMain {
                 // 关闭 Redis Pub/Sub 会话：随模型 drop 断开订阅连接，停止后续轮询派发。
                 self.close_pubsub_session(*tab_id);
                 // 上下分栏为全局状态，标签页关闭时一并复位拖动，避免残留中断态。
-                self.redis_workbench_panel_resize_start = None;
+                self.workbench_panel_resize_start = None;
                 if self
                     .pending_dangerous_redis_command
                     .as_ref()

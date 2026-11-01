@@ -207,6 +207,10 @@ pub struct Settings {
     /// 用整数百分比而非 f32，保持 `Settings` 结构体可派生 `Eq`。
     #[serde(default = "default_redis_workbench_editor_ratio")]
     pub redis_workbench_editor_ratio: u8,
+    /// MongoDB Workbench 编辑器区（上方）相对分栏可用高度的占比（0-100），
+    /// 记住并恢复上下分栏的拖动结果。与 Redis 的分栏比例相互独立。
+    #[serde(default = "default_mongo_workbench_editor_ratio")]
+    pub mongo_workbench_editor_ratio: u8,
     /// 查询结果区的默认停靠位置（下方 / 右侧）。同时驱动 SQL 编辑器的查询结果面板
     /// 与 Redis Workbench 的结果区；工具栏上的切换按钮只改运行时值，不改这里。
     #[serde(default)]
@@ -281,6 +285,7 @@ impl Default for Settings {
             dangerous_sql_actions: default_dangerous_sql_actions(),
             enable_completion_index: default_completion_index_enabled(),
             redis_workbench_editor_ratio: default_redis_workbench_editor_ratio(),
+            mongo_workbench_editor_ratio: default_mongo_workbench_editor_ratio(),
             results_placement: ResultsPlacement::default(),
             redis_workbench_editor_width: default_redis_workbench_editor_width(),
             custom_keybindings: BTreeMap::new(),
@@ -390,6 +395,11 @@ fn default_dark_theme() -> String {
 fn default_redis_workbench_editor_ratio() -> u8 {
     // 结果区默认占分栏 37.5% ⇒ editor 占分栏 ≈ 62.5%。
     63
+}
+
+/// MongoDB Workbench 编辑器区默认占比（≈ 旧的固定 160px，按常见窗口高度折算）。
+fn default_mongo_workbench_editor_ratio() -> u8 {
+    20
 }
 
 /// Redis Workbench 右侧布局下编辑器区的默认宽度（像素）。

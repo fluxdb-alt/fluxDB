@@ -815,8 +815,8 @@ impl NavicatMain {
     /// 获取（或惰性创建）MongoDB 命令工作台的语句编辑器，并把文本变更同步回状态。
     ///
     /// 与 Redis Workbench 同构：一个多行编辑器 + Changed 同步 + Execute（Ctrl/Cmd+Enter）执行。
-    /// 不加语法高亮/补全：shell 语句是「放宽了引号的 JSON + 方法链」，用 JSON 高亮会误染，
-    /// 而工作台的定位是执行台，输入体验交给旁边的 CLI。
+    /// 补全复用 CLI 的 shell 候选（库名 / 集合名 / 方法名），但不做语法高亮：
+    /// shell 语句是「放宽了引号的 JSON + 方法链」，用 JSON 高亮会误染。
     pub(crate) fn mongo_workbench_state(
         &mut self,
         tab_id: TabId,
@@ -824,6 +824,10 @@ impl NavicatMain {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<editor_component::Editor> {
+        if let Some(adapter) = self.mongo_workbench_completion.get(&tab_id) {
+            // 执行 `use <db>` 后工作台库会变，集合候选必须跟着换库。
+            adapter.set_database(&workbench.database);
+        }
         if let Some(editor) = self.mongo_workbench_inputs.get(&tab_id) {
             let editor = editor.clone();
             // 执行后 workbench.text 被清空，需同步清掉编辑器残留文本（同 Redis Workbench）。
@@ -837,6 +841,8 @@ impl NavicatMain {
         profile.language_id = "plain".to_string();
         profile.show_line_numbers = true;
         profile.show_folding = false;
+        profile.completion_trigger = fluxdb_editor_core::CompletionTrigger::Auto;
+        profile.completion_trigger_chars = vec!['.', '[', ' '];
         let config = fluxdb_editor_core::EditorConfig {
             profile,
             font: editor_component::EDITOR_FONT.to_string(),
@@ -844,10 +850,34 @@ impl NavicatMain {
             line_height: 18.0,
             gutter_line_numbers: true,
         };
+        // 连接已删除时仍可打开工作台（执行时才报错），但没有连接配置就不装补全，
+        // 否则补全适配器会拿一份空配置去建连。
+        let completion = self
+            .controller
+            .state()
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == workbench.connection_id)
+            .map(|connection| {
+                std::sync::Arc::new(MongoShellEditorAdapter::new(
+                    connection.config.clone(),
+                    workbench.database.clone(),
+                ))
+            });
+        if let Some(adapter) = completion.as_ref() {
+            self.mongo_workbench_completion
+                .insert(tab_id, adapter.clone());
+        }
+        let providers = editor_component::Providers {
+            completion: completion.map(|adapter| {
+                adapter as std::sync::Arc<dyn fluxdb_editor_core::CompletionProvider>
+            }),
+            ..Default::default()
+        };
         let editor = cx.new(|cx| {
             editor_component::Editor::new(
                 workbench.text.clone(),
-                editor_component::Providers::default(),
+                providers,
                 Some(config),
                 window,
                 cx,

@@ -29,6 +29,7 @@ mod i18n_e2e_tests {
     include!("i18n_tests/mongo_collection_menu.rs");
     include!("i18n_tests/mongo_query_panel.rs");
     include!("i18n_tests/mongo_aggregation_cards.rs");
+    include!("i18n_tests/mongo_workbench_cards.rs");
     include!("i18n_tests/sqlserver_table_context.rs");
     include!("i18n_tests/user_admin_toolbar.rs");
     // 新建用户一次保存的真实库端到端测试（MySQL/PG/Oracle/达梦，`#[ignore]` + 环境变量门控）。

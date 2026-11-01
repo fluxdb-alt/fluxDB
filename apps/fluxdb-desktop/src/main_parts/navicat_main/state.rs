@@ -773,6 +773,9 @@ struct NavicatMain {
     _mongo_workbench_tasks: BTreeMap<u64, Task<()>>,
     /// MongoDB 命令工作台的输入编辑器（按 tab 缓存，随 tab 关闭移除）。
     pub(crate) mongo_workbench_inputs: BTreeMap<TabId, Entity<editor_component::Editor>>,
+    /// 工作台补全适配器：持有 shell 补全用的库 / 集合缓存，`use` 后需同步当前库。
+    mongo_workbench_completion:
+        BTreeMap<TabId, std::sync::Arc<MongoShellEditorAdapter>>,
     _mongo_workbench_input_subscriptions: BTreeMap<TabId, Subscription>,
     _sql_file_execute_tasks: BTreeMap<u64, Task<()>>,
     _sql_file_cancel_flags: BTreeMap<u64, Arc<AtomicBool>>,
@@ -981,10 +984,10 @@ struct NavicatMain {
     pubsub_sessions: BTreeMap<TabId, PubSubSessionModel>,
     // 周期消费各 Pub/Sub 会话消息并合并进 UI 的后台任务（首开会话时懒创建，drop 即停止）。
     _pubsub_pump: Option<gpui::Task<()>>,
-    // Redis Workbench 上下分栏拖动状态（全局，跨 tab 共享同一分栏占比）。
+    // Workbench 上下分栏拖动状态（全局，Redis / MongoDB 共用；目标决定写回哪个比例）。
     // 注：Workbench 历史持久化已移除，只保留当前会话态；后期恢复历史时在此
     // 新增「按连接 + DB 分组」的会话历史与持久化入口，不复用 SQL 历史。
-    redis_workbench_panel_resize_start: Option<RedisWorkbenchPanelResizeStart>,
+    workbench_panel_resize_start: Option<WorkbenchPanelResizeStart>,
     query_output_tabs: BTreeMap<TabId, QueryOutputTab>,
     collapsed_query_outputs: BTreeSet<TabId>,
     results_placement: ResultsPlacement,

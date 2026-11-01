@@ -5683,7 +5683,12 @@
       "hint": "支持 use / show / find / aggregate 等只读语句",
       "empty": "输入语句后点击「运行」，结果会按执行顺序追加在这里",
       "rerun": "重新执行",
-      "running": "正在执行，请等待当前语句结束"
+      "running": "正在执行，请等待当前语句结束",
+      "document_count": "%{count} 条",
+      "elapsed": "%{ms} ms",
+      "truncated": "已截断",
+      "preview_truncated": "仅显示前 %{preview}（完整结果 %{size}），可点击复制获取全部",
+      "no_output": "无输出"
     },
     "loading": "加载中…",
     "empty": "没有匹配的文档",

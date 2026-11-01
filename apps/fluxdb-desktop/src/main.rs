@@ -158,6 +158,7 @@ include!("main_parts/create_table.rs");
 include!("main_parts/content_views.rs");
 include!("main_parts/mongo_collection.rs");
 include!("main_parts/mongo_query_completion.rs");
+include!("main_parts/mongo_shell_editor_adapter.rs");
 include!("main_parts/mongo_query_builder_model.rs");
 include!("main_parts/mongo_query_builder.rs");
 include!("main_parts/mongo_aggregation_model.rs");

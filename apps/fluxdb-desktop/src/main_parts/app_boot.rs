@@ -3219,6 +3219,7 @@ fn navicat_main_new(
         _redis_workbench_tasks: BTreeMap::new(),
         _mongo_workbench_tasks: BTreeMap::new(),
         mongo_workbench_inputs: BTreeMap::new(),
+        mongo_workbench_completion: BTreeMap::new(),
         _mongo_workbench_input_subscriptions: BTreeMap::new(),
         _sql_file_execute_tasks: BTreeMap::new(),
         _sql_file_cancel_flags: BTreeMap::new(),
@@ -3389,7 +3390,7 @@ fn navicat_main_new(
         _terminal_session_pump: None,
         pubsub_sessions: BTreeMap::new(),
         _pubsub_pump: None,
-        redis_workbench_panel_resize_start: None,
+        workbench_panel_resize_start: None,
         query_output_tabs: BTreeMap::new(),
         collapsed_query_outputs: BTreeSet::new(),
         // 启动时的结果区布局取自持久化设置（「查询结果默认布局」）；

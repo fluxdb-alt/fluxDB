@@ -186,7 +186,11 @@ struct MongoPageData {
 
 impl MongoPageData {
     fn build(page: Option<&fluxdb_core::MongoDocumentsPage>) -> Self {
-        let documents = page.map_or_else(Vec::new, |page| page.documents.clone());
+        Self::from_documents(page.map_or_else(Vec::new, |page| page.documents.clone()))
+    }
+
+    /// 从任意一批文档建快照；工作台的结果不走 `MongoDocumentsPage`，共用同一套解析与表格列。
+    fn from_documents(documents: Vec<fluxdb_core::MongoDocument>) -> Self {
         let values = documents
             .iter()
             .map(|document| serde_json::from_str::<JsonValue>(&document.json).ok())
@@ -556,7 +560,7 @@ fn mongo_document_card(
     let body = if collapsed {
         div()
     } else if context.display == MongoDisplayMode::Json {
-        mongo_json_block(view, index, document, value, &document_key, cx)
+        mongo_json_block(view, index, document, value, &document_key, "mongo-document", cx)
     } else {
         mongo_field_list(view, index, document, value, &document_key, cx)
     };
@@ -653,9 +657,12 @@ fn mongo_json_block(
     document: &fluxdb_core::MongoDocument,
     value: Option<&JsonValue>,
     document_key: &str,
+    // 视图作用域：同一页可能有多个宿主（集合页、工作台多条记录）同时渲染第 0 篇文档，
+    // 元素 id 必须带上宿主前缀，否则不同卡片的折叠行会共用全局状态。
+    id_scope: &str,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let selector = format!("mongo-document-json:{index}");
+    let selector = format!("{id_scope}-json:{index}");
     let colors = view.colors;
     // 用户点过的节点（去掉文档身份前缀）。默认态是「根展开、嵌套全收起」，
     // 与默认相反的节点才会出现在这里，因此空集合直接等于完整默认态。
@@ -699,8 +706,8 @@ fn mongo_json_block(
                     highlight: true,
                     indent_size: MONGO_JSON_INDENT,
                     error_line: None,
-                    selector_prefix: Some(format!("mongo-json-fold:{index}")),
-                    id_salt: format!("mongo-json-fold:{index}").into(),
+                    selector_prefix: Some(format!("{id_scope}-json-fold:{index}")),
+                    id_salt: format!("{id_scope}-json-fold:{index}").into(),
                 },
                 colors,
                 move |path, _window, cx| {
