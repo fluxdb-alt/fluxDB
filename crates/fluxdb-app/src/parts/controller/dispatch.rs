@@ -38,6 +38,16 @@ impl AppController {
             | AppCommand::BeginAiTableQuery { .. }
             | AppCommand::LoadAiTablePage { .. }) => self.dispatch_ai_table_page(command),
             AppCommand::AiConversation(command) => return self.dispatch_ai_conversation(command),
+            command @ (AppCommand::OpenMongoWorkbench { .. }
+            | AppCommand::UpdateMongoWorkbenchText { .. }
+            | AppCommand::BeginMongoWorkbenchExecution { .. }
+            | AppCommand::RunMongoWorkbench { .. }
+            | AppCommand::FinishMongoWorkbenchExecution { .. }
+            | AppCommand::DeleteMongoWorkbenchRecord { .. }
+            | AppCommand::ClearMongoWorkbenchResults(..)
+            | AppCommand::ToggleMongoWorkbenchRecordCollapse { .. }) => {
+                self.dispatch_mongo_workbench_command(command)
+            }
             command @ (AppCommand::OpenMongoCli { .. }
             | AppCommand::LoadMongoFieldSample { .. }
             | AppCommand::OpenMongoCollection { .. }

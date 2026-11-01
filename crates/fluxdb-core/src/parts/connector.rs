@@ -764,7 +764,7 @@ pub trait Connector {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持删除数据库"))
     }
 
-    /// 执行任意数据库命令并返回其 Extended JSON 结果（命令行终端用）。
+    /// 执行任意数据库命令并返回其 Extended JSON 结果（命令行终端 / 查询编辑器用）。
     fn mongo_run_command(
         &self,
         _: ConnectionId,
@@ -772,6 +772,15 @@ pub trait Connector {
         _command: &str,
     ) -> Result<String> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持执行数据库命令"))
+    }
+
+    /// 执行一条 MongoDB shell 语句（命令行终端用）。
+    ///
+    /// 支持 `use <db>`、`show dbs|collections`、`db.<coll>.<method>(...)` 这类只读语句；
+    /// 返回 shell 风格的排版文本，以及 `use` 带来的库切换。语法不支持时报
+    /// `ErrorKind::Query`，由终端原样提示。
+    fn mongo_shell(&self, _: ConnectionId, _database: &str, _input: &str) -> Result<MongoShellResult> {
+        Err(Error::new(ErrorKind::Unsupported, "暂不支持 MongoDB shell 语句"))
     }
 
     /// 连接信息（「显示连接信息」弹框）：拓扑、版本、成员与库大小。

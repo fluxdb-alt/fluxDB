@@ -895,6 +895,8 @@ impl NavicatMain {
                 self._query_editor_subscriptions.remove(tab_id);
                 self.redis_workbench_inputs.remove(tab_id);
                 self._redis_workbench_input_subscriptions.remove(tab_id);
+                self.mongo_workbench_inputs.remove(tab_id);
+                self._mongo_workbench_input_subscriptions.remove(tab_id);
                 // 关掉 Redis CLI 终端：终止 PTY 子进程并释放对应终端会话实体。
                 if let Some(session) = self.terminal_sessions.remove(tab_id) {
                     session.update(cx, |comp, comp_cx| comp.shutdown(comp_cx));

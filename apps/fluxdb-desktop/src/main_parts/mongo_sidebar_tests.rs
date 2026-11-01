@@ -15,6 +15,7 @@ mod mongo_sidebar_tests {
     use fluxdb_storage::{FileStorage, Storage as _};
     use gpui::{
         AppContext as _, Modifiers, MouseButton, MouseDownEvent, TestAppContext, VisualTestContext,
+        px,
     };
     use gpui_component::Root;
 
@@ -180,15 +181,30 @@ mod mongo_sidebar_tests {
         cx.debug_bounds(selector)
     }
 
-    #[gpui::test]
-    fn mongo_database_expands_and_collection_opens_workspace(cx: &mut TestAppContext) {
-        let Some(config) = live_connection() else {
-            eprintln!("跳过：未设置 FLUXDB_MONGO_URI");
-            return;
-        };
-        let connection_id = config.id;
-        let database = live_database(&config);
+    /// 元素是否**真的可见**：有非零尺寸，且中心点落在窗口内。
+    ///
+    /// `debug_bounds` 对零尺寸或窗口外元素同样返回 `Some`，只用它判「存在」会把
+    /// 「浮层被裁掉 / 缩成一条线」当成通过——实测就是这样漏掉过一次：候选算出来了，
+    /// 浮层却落在窗口下方（面板比窗口高，绝对定位以画布底边为基准）。
+    fn visible_bounds(
+        cx: &mut VisualTestContext,
+        selector: &'static str,
+    ) -> Option<gpui::Bounds<gpui::Pixels>> {
+        let bounds = redraw_and_bounds(cx, selector)?;
+        if f32::from(bounds.size.width) < 1.0 || f32::from(bounds.size.height) < 1.0 {
+            return None;
+        }
+        let window_bounds = cx.update(|window, _| window.bounds());
+        window_bounds.contains(&bounds.center()).then_some(bounds)
+    }
 
+    /// 起一个隔离 profile 的生产视图，返回 `NavicatMain` 与可视化测试上下文。
+    ///
+    /// 每个用例独立临时目录：共享 profile 会让后台存储任务跨用例互相干扰。
+    fn launch_app(
+        cx: &mut TestAppContext,
+        config: ConnectionConfig,
+    ) -> (gpui::Entity<NavicatMain>, &mut VisualTestContext) {
         cx.background_executor.allow_parking();
         let temp = tempfile::tempdir().expect("isolated profile");
         let storage = FileStorage::new(temp.path().join("profile"));
@@ -206,10 +222,13 @@ mod mongo_sidebar_tests {
         let mut controller = AppController::new();
         controller.set_ai_storage(storage.clone());
         controller.dispatch(AppCommand::SaveSettings(settings));
-        controller.dispatch(AppCommand::ReplaceConnections(vec![config.clone()]));
+        controller.dispatch(AppCommand::ReplaceConnections(vec![config]));
         cx.update(|cx| {
             extend_component_i18n();
             gpui_component::init(cx);
+            // 终端键位平时由 app boot 的 register_shortcuts 注册；用例直接建视图，
+            // 少了这一步回车不会变成 `TermEnter`，命令敲不进去。
+            crate::register_terminal_shortcuts(cx);
         });
         let profile = storage.clone();
         let (_, cx) = cx.add_window_view(move |window, cx| {
@@ -239,8 +258,15 @@ mod mongo_sidebar_tests {
                 .downcast::<NavicatMain>()
                 .expect("production view")
         });
+        (view, cx)
+    }
 
-        // 1. 双击连接行 = 建立连接（单击只展开/收起）。
+    /// 双击连接行并等库行出现（单击只展开/收起，不建连）。
+    fn connect_and_wait_database(
+        cx: &mut VisualTestContext,
+        connection_id: ConnectionId,
+        database: &str,
+    ) -> &'static str {
         let connection_row =
             redraw_and_bounds(cx, selector(format!("connection-row:{}", connection_id.0)))
                 .expect("连接行必须渲染");
@@ -255,6 +281,65 @@ mod mongo_sidebar_tests {
         wait_until(cx, "连接打开", |cx| {
             redraw_and_bounds(cx, database_selector)
         });
+        database_selector
+    }
+
+    /// 当前终端 grid 的可视文本（渲染唯一事实来源，等于用户看到的内容）。
+    fn shell_screen(cx: &mut VisualTestContext, view: &gpui::Entity<NavicatMain>) -> String {
+        cx.update(|_, cx| {
+            view.read(cx)
+                .terminal_sessions
+                .values()
+                .next()
+                .map(|session| session.read(cx).grid.visible_lines().join("\n"))
+                .unwrap_or_default()
+        })
+    }
+
+    /// 在终端里敲一行并回车（走真实键盘事件与输入 handler）。
+    fn type_in_terminal(cx: &mut VisualTestContext, line: &str) {
+        cx.simulate_input(line);
+        cx.simulate_keystrokes("enter");
+    }
+
+    /// 敲一行并等回显上屏。
+    ///
+    /// 补全读的是 grid 里的回显，而 REPL 输出要等 30ms 泵才进 grid。敲完立刻按 Tab
+    /// 会按空输入行算候选（全量），测试必须像人一样先看到自己敲的字。
+    fn type_in_terminal_echo(
+        cx: &mut VisualTestContext,
+        view: &gpui::Entity<NavicatMain>,
+        line: &str,
+    ) {
+        cx.simulate_input(line);
+        wait_until(cx, "输入回显", |cx| {
+            shell_screen(cx, view).contains(line).then_some(())
+        });
+    }
+
+    /// 去掉所有空白后的终端内容。
+    ///
+    /// grid 里每个宽字符后面跟一个填充空格（占 2 单元），直接按原文匹配中文会永远不中；
+    /// 断言中文提示时统一用这一版。
+    fn shell_screen_compact(cx: &mut VisualTestContext, view: &gpui::Entity<NavicatMain>) -> String {
+        shell_screen(cx, view)
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect()
+    }
+
+    #[gpui::test]
+    fn mongo_database_expands_and_collection_opens_workspace(cx: &mut TestAppContext) {
+        let Some(config) = live_connection() else {
+            eprintln!("跳过：未设置 FLUXDB_MONGO_URI");
+            return;
+        };
+        let connection_id = config.id;
+        let database = live_database(&config);
+        let (view, cx) = launch_app(cx, config);
+
+        // 1. 双击连接行 = 建立连接（单击只展开/收起）。
+        let database_selector = connect_and_wait_database(cx, connection_id, &database);
 
         // 2. 点击库行展开集合分组。
         let database_row = redraw_and_bounds(cx, database_selector).expect("库行必须渲染");
@@ -1356,6 +1441,538 @@ mod mongo_sidebar_tests {
             })
             .then_some(())
         });
+    }
+
+    /// MongoDB 命令行：库行右键 → 菜单打开终端 → 键盘输入真实语句。
+    ///
+    /// 断言分两层：终端 grid 里用户真正看到的文本（banner / prompt / 结果 / 只读拒绝），
+    /// 以及标签页状态里确实存在 `MongoCli`。不直接调 REPL 或处理函数。
+    #[gpui::test]
+    fn mongo_cli_runs_shell_statements_from_keyboard(cx: &mut TestAppContext) {
+        let Some(config) = live_connection() else {
+            eprintln!("跳过：未设置 FLUXDB_MONGO_URI");
+            return;
+        };
+        let connection_id = config.id;
+        let database = live_database(&config);
+        let (view, cx) = launch_app(cx, config);
+        let database_selector = connect_and_wait_database(cx, connection_id, &database);
+
+        // 1. 库行右键 → 「Command line」（界面文案走语言包，按真实文案定位）。
+        let database_row = redraw_and_bounds(cx, database_selector).expect("库行必须渲染");
+        cx.simulate_event(MouseDownEvent {
+            position: database_row.center(),
+            modifiers: Modifiers::default(),
+            button: MouseButton::Right,
+            click_count: 1,
+            first_mouse: false,
+        });
+        let menu_item = wait_until(cx, "库右键菜单出现", |cx| {
+            redraw_and_bounds(
+                cx,
+                selector("database-menu-item:Command line".to_string()),
+            )
+        });
+        cx.simulate_click(menu_item.center(), Modifiers::default());
+
+        // 2. 标签页必须真的建起来，并且指向当前连接 / 当前库。
+        wait_until(cx, "命令行标签页", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .find_map(|tab| match &tab.kind {
+                        TabKind::MongoCli(cli)
+                            if cli.connection_id == connection_id && cli.database == database =>
+                        {
+                            Some(())
+                        }
+                        _ => None,
+                    })
+            })
+        });
+
+        // 3. 点终端表面取焦点：键盘输入只发给聚焦的输入 handler。
+        let surface = wait_until(cx, "终端表面渲染", |cx| {
+            redraw_and_bounds(cx, selector("terminal-surface".to_string()))
+        });
+        cx.simulate_click(surface.center(), Modifiers::default());
+        // 聚焦后要再画一帧，输入 handler 才会挂到窗口上（否则 `simulate_input` 无处可去）。
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+
+        // 4. 开场只有提示符（不打 banner），格式是 `<库名>> `（Compass / mongosh 风格）。
+        let prompt = format!("{database}> ");
+        wait_until(cx, "提示符", |cx| {
+            shell_screen(cx, &view).contains(&prompt).then_some(())
+        });
+
+        // 5. Tab 补全：敲 `sh` 按 Tab 必须真的弹出候选浮层（不是静默透传），
+        //    回车把首个候选写成整行 `show dbs`，再回车执行。
+        cx.simulate_input("sh");
+        wait_until(cx, "输入回显", |cx| {
+            shell_screen(cx, &view).contains("> sh").then_some(())
+        });
+        cx.simulate_keystrokes("tab");
+        wait_until(cx, "补全浮层", |cx| {
+            visible_bounds(cx, selector("terminal-completion-popup".to_string()))
+        });
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, "候选写回输入行", |cx| {
+            (shell_screen(cx, &view).contains("> show dbs")
+                && redraw_and_bounds(cx, selector("terminal-completion-popup".to_string()))
+                    .is_none())
+            .then_some(())
+        });
+
+        // 6. 回车执行补全出来的整行：结果来自真实服务端，`admin` 必然存在。
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, "show dbs 结果", |cx| {
+            shell_screen(cx, &view).contains("admin").then_some(())
+        });
+
+        // 6.5 敲到 `db.` 就要出集合名候选：这条走的是**服务端集合列表**，与方法白名单是
+        //     两条完全不同的数据来源。只测方法名会让「集合名一直读不到」照样全绿。
+        //     必须在这里做：第 7 步 `use admin` 之后当前库换成 admin，它本来就没有集合。
+        type_in_terminal_echo(cx, &view, "db.");
+        // 浮层尺寸必须跟着候选数走：只有一个集合（`events`）时就该是一行高的小卡片，
+        // 不能像早先那样固定 `min_w(320) + max_h(260)` 撑成一块空黑板。
+        wait_until(cx, "db. 出集合名候选", |cx| {
+            (visible_bounds(cx, selector("terminal-completion-popup".to_string())).is_some()
+                && shell_screen(cx, &view).contains("db."))
+                .then_some(())
+        });
+        let bounds = visible_bounds(cx, selector("terminal-completion-popup".to_string()))
+            .expect("浮层必须可见");
+        // 上下都要卡：撑满 260 是一块空黑板，压到一行高以下则文字被裁掉——
+        // 这两种都真实发生过，截图里表现为「一个大黑框」和「一个空白小框」。
+        let height = f32::from(bounds.size.height);
+        assert!(
+            (34.0..60.0).contains(&height),
+            "单条候选的高度应为一行 + 内边距（约 38px），实际 {height}px：{bounds:?}"
+        );
+        // 宽度同理：只有一个三字母候选时不该被拉成一条宽卡片（截图里是 365px 的白板）。
+        let width = f32::from(bounds.size.width);
+        assert!(
+            width < 200.0,
+            "单条 'use' 候选应贴合内容（约 60-120px），实际 {width}px：{bounds:?}"
+        );
+        // 盒子高度对了不代表字看得见：行内容比外壳高时，GPUI 只裁掉溢出部分，
+        // 截图上就是「use」只剩上半截。必须断言候选行整行落在浮层内。
+        let row = visible_bounds(cx, selector("terminal-completion-row:0".to_string()))
+            .expect("候选行必须可见");
+        assert!(
+            row.top() >= bounds.top() && row.bottom() <= bounds.bottom(),
+            "候选行必须整行落在浮层内（截图中被裁成半截字）：行 {row:?} 浮层 {bounds:?}"
+        );
+        // 文字本身也要落在行框里。浮层没有显式 `text_size` 时会继承根字号（16px），
+        // 比终端 12px 大，行框只有 30px 时装不下，上下各切一刀——截图里就是「use 只剩半截」。
+        // 这条在 `completion_popup` 丢掉 `text_size` 时失败。
+        let label = visible_bounds(cx, selector("terminal-completion-label:0".to_string()))
+            .expect("候选文字必须可见");
+        assert!(
+            label.top() >= row.top() && label.bottom() <= row.bottom(),
+            "候选文字必须整块落在行框内（字号继承根字号会被裁掉）：字 {label:?} 行 {row:?}"
+        );
+        // 横向也必须跟着光标：锚点早先钉在面板左边缘，光标在行尾时浮层离光标半个屏幕。
+        // 提示符 `fluxdb_demo> ` 就占 13 格，浮层左缘必然明显在面板左缘之内。
+        let surface = visible_bounds(cx, selector("terminal-surface".to_string()))
+            .expect("终端表面必须可见");
+        assert!(
+            bounds.left() > surface.left() + px(40.),
+            "浮层应贴着光标列而不是面板左缘：浮层 {bounds:?} 面板 {surface:?}"
+        );
+        // 清掉这半行：终端没有绑 `ctrl-u`，用退格逐个删。删空后候选必须自己收起
+        // （空行不提示），这本身也是「浮层跟着输入行走」的断言。
+        for _ in 0..3 {
+            cx.simulate_keystrokes("backspace");
+        }
+        wait_until(cx, "清空半行后浮层收起", |cx| {
+            redraw_and_bounds(cx, selector("terminal-completion-popup".to_string()))
+                .is_none()
+                .then_some(())
+        });
+
+        // 7. 光标可左右移动：敲 `use admn`，← 一次把光标移到 n 前，补 i 成 `use admin`。
+        //    这条同时验证「中途插入」——只靠行尾追加是拼不出正确语句的。
+        cx.simulate_input("use admn");
+        cx.simulate_keystrokes("left");
+        cx.simulate_input("i");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, "use 切库", |cx| {
+            let screen = shell_screen(cx, &view);
+            (screen.contains("switched to db admin") && screen.contains("admin> ")).then_some(())
+        });
+
+        // 8. 只读边界：写命令必须被拒，且错误文本真的上屏。
+        type_in_terminal(cx, "db.demo.insertOne({ name: \"fluxdb\" })");
+        wait_until(cx, "写命令被拒", |cx| {
+            shell_screen_compact(cx, &view)
+                .contains("read-only")
+                .then_some(())
+        });
+
+        // 9. 未知方法：单行英文报错，且真的上屏。
+        //    `shell_screen_compact` 已去掉空白，匹配文本也不能带空格（长句会跨行折行）。
+        type_in_terminal(cx, "db.demo.unknownMethod()");
+        wait_until(cx, "unknown method message", |cx| {
+            shell_screen_compact(cx, &view)
+                .contains("Unknownmethod")
+                .then_some(())
+        });
+
+        // 10. 边打字边出候选：敲到 `db.demo.co` 不按 Tab，浮层就该自己出来（Compass 行为）。
+        //     集合名不必真实存在——候选来自方法白名单，不依赖服务端数据。
+        type_in_terminal_echo(cx, &view, "db.demo.co");
+        wait_until(cx, "打字即出候选", |cx| {
+            visible_bounds(cx, selector("terminal-completion-popup".to_string()))
+        });
+        cx.simulate_keystrokes("tab");
+        wait_until(cx, "方法补全浮层", |cx| {
+            visible_bounds(cx, selector("terminal-completion-popup".to_string()))
+        });
+        // 10.1 浮层打开时 ↑/↓ 在候选间移动高亮，而不是把方向键透传给 PTY 去翻历史行。
+        //      `db.demo.co` 的候选按方法白名单过滤后是 `count` / `countDocuments` 两条，
+        //      ↓ 之后回车写回的是第二条——写回 `countDocuments(` 才算方向键真的生效。
+        cx.simulate_keystrokes("down");
+        // 方向键被浮层吃掉：输入行仍是刚敲的 `db.demo.co`。透传给 PTY 时 REPL 会去翻历史行，
+        // 整行输入被换成上一条命令——这条断言就是它的探针。
+        wait_until(cx, "方向键不翻历史", |cx| {
+            shell_screen(cx, &view).contains("db.demo.co").then_some(())
+        });
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, "↓ 后回车写回第二条候选", |cx| {
+            shell_screen_compact(cx, &view)
+                .contains("db[\"demo\"].countDocuments")
+                .then_some(())
+        });
+
+        // 10.2 鼠标：划过候选行即改高亮，按下即写回。清干净后重来一次。
+        for _ in 0..40 {
+            cx.simulate_keystrokes("backspace");
+        }
+        wait_until(cx, "清行", |cx| {
+            shell_screen_compact(cx, &view).ends_with("admin>").then_some(())
+        });
+        type_in_terminal_echo(cx, &view, "db.demo.co");
+        wait_until(cx, "再次出候选", |cx| {
+            visible_bounds(cx, selector("terminal-completion-popup".to_string()))
+        });
+        let first_row = visible_bounds(cx, selector("terminal-completion-row:0".to_string()))
+            .expect("候选行必须可见");
+        // 行中心落在窗口内：越界点击会被 gpui 静默丢弃，先断言再点。
+        assert!(
+            first_row.size.width > px(0.) && first_row.size.height > px(0.),
+            "候选行必须有尺寸：{first_row:?}"
+        );
+        cx.simulate_mouse_move(first_row.center(), None, Modifiers::default());
+        cx.run_until_parked();
+        cx.simulate_click(first_row.center(), Modifiers::default());
+        wait_until(cx, "点候选写回输入行", |cx| {
+            let screen = shell_screen_compact(cx, &view);
+            (redraw_and_bounds(cx, selector("terminal-completion-popup".to_string())).is_none()
+                && screen.contains("db[\"demo\"].count(")
+                && !screen.contains("countDocuments"))
+            .then_some(())
+        });
+        // 清掉写回的候选，回到干净状态，接着验证 Esc。
+        for _ in 0..40 {
+            cx.simulate_keystrokes("backspace");
+        }
+        wait_until(cx, "清行", |cx| {
+            shell_screen_compact(cx, &view).ends_with("admin>").then_some(())
+        });
+        type_in_terminal_echo(cx, &view, "db.demo.co");
+        wait_until(cx, "第三次出候选", |cx| {
+            visible_bounds(cx, selector("terminal-completion-popup".to_string()))
+        });
+        cx.simulate_keystrokes("escape");
+        wait_until(cx, "Esc 关闭补全", |cx| {
+            (redraw_and_bounds(cx, selector("terminal-completion-popup".to_string())).is_none()
+                && shell_screen(cx, &view).contains("db.demo.co"))
+            .then_some(())
+        });
+    }
+
+    /// 双击页签条空白区：MongoDB 库必须开出 Shell，而不是 SQL 查询编辑器。
+    ///
+    /// 空白区双击原本无条件 `open_new_query`，MongoDB 没有 SQL 编辑器，双击等于没反应。
+    /// 这里走真实鼠标事件 + 真实页签条空白区命中框，断言的是标签页种类与提示符上屏。
+    #[gpui::test]
+    fn mongo_double_click_tab_blank_area_opens_shell(cx: &mut TestAppContext) {
+        let Some(config) = live_connection() else {
+            eprintln!("跳过：未设置 FLUXDB_MONGO_URI");
+            return;
+        };
+        let connection_id = config.id;
+        let database = live_database(&config);
+        let (view, cx) = launch_app(cx, config);
+        let database_selector = connect_and_wait_database(cx, connection_id, &database);
+
+        // 1. 展开库 → 集合分组 → 点一个集合，让「库工作区」页签条出现（第二级页签行）。
+        let database_row = redraw_and_bounds(cx, database_selector).expect("库行必须渲染");
+        cx.simulate_click(database_row.center(), Modifiers::default());
+        let group_selector = selector(format!("object-group-row:collections:{database}"));
+        wait_until(cx, "库展开", |cx| redraw_and_bounds(cx, group_selector));
+        let group_row = redraw_and_bounds(cx, group_selector).expect("集合分组行必须渲染");
+        cx.simulate_click(group_row.center(), Modifiers::default());
+        let collection = wait_until(cx, "集合列表加载", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .connections
+                    .iter()
+                    .find(|connection| connection.config.id == connection_id)
+                    .and_then(|connection| {
+                        connection
+                            .objects
+                            .iter()
+                            .find(|object| {
+                                object.path.kind == ObjectKind::Collection
+                                    && object.path.database.as_deref() == Some(database.as_str())
+                            })
+                            .map(|object| object.path.name.clone())
+                    })
+            })
+        });
+        let collection_row =
+            redraw_and_bounds(cx, selector(format!("table-tree-row:{collection}")))
+                .expect("集合行必须渲染");
+        cx.simulate_click(collection_row.center(), Modifiers::default());
+        wait_until(cx, "集合页渲染", |cx| {
+            redraw_and_bounds(cx, selector(format!("mongo-collection-page:{database}/{collection}")))
+        });
+
+        // 2. 双击页签条空白区（集合页右侧那段空白）。
+        let blank = wait_until(cx, "页签空白区", |cx| {
+            visible_bounds(cx, selector("table-tab-blank-area".to_string()))
+        });
+        // 越界点击会被 gpui 静默丢弃：先断言点在窗口内且不在页签本身上。
+        let click_at = gpui::point(blank.right() - px(12.), blank.center().y);
+        assert!(
+            blank.contains(&click_at),
+            "双击点必须落在空白区内：点 {click_at:?} 区域 {blank:?}"
+        );
+        cx.simulate_event(MouseDownEvent {
+            position: click_at,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 2,
+            first_mouse: false,
+        });
+        cx.run_until_parked();
+
+        // 3. 必须开出 MongoDB Shell 页签，且提示符上屏（不是 SQL 查询编辑器）。
+        wait_until(cx, "MongoDB Shell 页签", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .any(|tab| matches!(&tab.kind, TabKind::MongoCli(cli) if cli.database == database))
+                    .then_some(())
+            })
+        });
+        assert!(
+            !cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .any(|tab| matches!(tab.kind, TabKind::QueryEditor(_)))
+            }),
+            "MongoDB 双击空白区不应开出 SQL 查询编辑器"
+        );
+        wait_until(cx, "Shell 提示符", |cx| {
+            shell_screen(cx, &view)
+                .contains(&format!("{database}> "))
+                .then_some(())
+        });
+    }
+
+    /// MongoDB 命令工作台：库行右键 → 「Command workbench」→ 输入语句 → 运行。
+    ///
+    /// 断言的是用户能看到的层：标签页类型是 `MongoWorkbench`、结果区渲染出该条语句的卡片、
+    /// 卡片里是连接器真实返回的文本。不直接调处理函数。
+    #[gpui::test]
+    fn mongo_workbench_runs_a_statement_from_the_right_click_menu(cx: &mut TestAppContext) {
+        let Some(config) = live_connection() else {
+            eprintln!("跳过：未设置 FLUXDB_MONGO_URI");
+            return;
+        };
+        let connection_id = config.id;
+        let database = live_database(&config);
+        let (view, cx) = launch_app(cx, config);
+        let database_selector = connect_and_wait_database(cx, connection_id, &database);
+
+        // 1. 库行右键 → 「Command workbench」（文案走语言包，按真实文案定位）。
+        let database_row = redraw_and_bounds(cx, database_selector).expect("库行必须渲染");
+        cx.simulate_event(MouseDownEvent {
+            position: database_row.center(),
+            modifiers: Modifiers::default(),
+            button: MouseButton::Right,
+            click_count: 1,
+            first_mouse: false,
+        });
+        let menu_item = wait_until(cx, "库右键菜单出现", |cx| {
+            redraw_and_bounds(
+                cx,
+                selector("database-menu-item:Command workbench".to_string()),
+            )
+        });
+        cx.simulate_click(menu_item.center(), Modifiers::default());
+
+        // 2. 标签页必须建起来，并指向当前连接 / 当前库。
+        wait_until(cx, "命令工作台标签页", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .any(|tab| {
+                        matches!(&tab.kind, TabKind::MongoWorkbench(workbench)
+                            if workbench.connection_id == connection_id
+                                && workbench.database == database)
+                    })
+                    .then_some(())
+            })
+        });
+
+        // 3. 把语句写进编辑器并点「运行」。编辑器文本走真实输入事件，
+        //    与用户打字同一条链路（Changed → UpdateMongoWorkbenchText）。
+        let editor = wait_until(cx, "语句编辑器渲染", |cx| {
+            redraw_and_bounds(cx, selector("mongo-workbench-editor".to_string()))
+        });
+        cx.simulate_click(editor.center(), Modifiers::default());
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        cx.simulate_input("show dbs");
+
+        let run_button = wait_until(cx, "运行按钮可用", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .any(|tab| {
+                        matches!(&tab.kind, TabKind::MongoWorkbench(workbench)
+                            if workbench.text.trim() == "show dbs")
+                    })
+                    .then_some(())
+            })
+            .and_then(|()| redraw_and_bounds(cx, selector("mongo-workbench-run".to_string())))
+        });
+        cx.simulate_click(run_button.center(), Modifiers::default());
+
+        // 3.5 `db.events.stats()` 的输出有几百行，是「长结果必须能在卡片内滚动」的真实样本。
+        //     先跑它，再回来验证滚动；`show dbs` 负责内容断言。
+        let type_and_run = |cx: &mut VisualTestContext, statement: &str| {
+            let editor = redraw_and_bounds(cx, selector("mongo-workbench-editor".to_string()))
+                .expect("编辑器必须还在");
+            cx.simulate_click(editor.center(), Modifiers::default());
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            });
+            cx.simulate_input(statement);
+            let run = wait_until(cx, "运行按钮可用", |cx| {
+                redraw_and_bounds(cx, selector("mongo-workbench-run".to_string()))
+            });
+            cx.simulate_click(run.center(), Modifiers::default());
+        };
+        type_and_run(cx, "db.events.stats()");
+        wait_until(cx, "stats 记录落地", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .find_map(|tab| match &tab.kind {
+                        TabKind::MongoWorkbench(workbench) => Some((
+                            workbench.executions.len(),
+                            workbench.running,
+                        )),
+                        _ => None,
+                    })
+            })
+            .filter(|(count, running)| *count == 2 && !*running)
+        });
+
+        // 长结果必须在卡片内滚：正文内容比容器高，且滚轮能改变滚动偏移。
+        let body_selector = selector("mongo-workbench-record-body:2".to_string());
+        let content_selector =
+            selector("mongo-workbench-record-body-content:2".to_string());
+        let (body, content) = wait_until(cx, "长结果卡片渲染", |cx| {
+            let body = redraw_and_bounds(cx, body_selector)?;
+            let content = redraw_and_bounds(cx, content_selector)?;
+            (f32::from(content.size.height) > f32::from(body.size.height) + 40.).then_some((body, content))
+        });
+        assert!(
+            f32::from(body.size.height) <= 320. + 1.,
+            "正文容器必须封顶在 max_h 内，实际 {body:?}"
+        );
+        assert!(
+            f32::from(content.size.height) > 320.,
+            "样本必须真的超出一屏，实际内容高 {:?}",
+            content.size.height
+        );
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: body.center(),
+            delta: gpui::ScrollDelta::Lines(gpui::point(0., -5.)),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        // 滚轮之后内容必须整体上移：卡片内滚动生效，而不是被外层吞掉。
+        let scrolled = redraw_and_bounds(cx, content_selector).expect("内容仍在");
+        assert!(
+            scrolled.origin.y < content.origin.y,
+            "滚轮没有滚动卡片正文：{} -> {}",
+            content.origin.y,
+            scrolled.origin.y
+        );
+
+        // 4. 再跑 `show dbs`：卡片正文必须来自连接器（至少列出 admin 与目标库）。
+        type_and_run(cx, "show dbs");
+        wait_until(cx, "show dbs 记录落地", |cx| {
+            cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .tabs
+                    .iter()
+                    .find_map(|tab| match &tab.kind {
+                        TabKind::MongoWorkbench(workbench)
+                            if workbench.executions.len() == 3 && !workbench.running =>
+                        {
+                            let execution = &workbench.executions[2];
+                            assert!(execution.is_success(), "show dbs 必须成功");
+                            assert_eq!(execution.text, "show dbs");
+                            let output = execution.output.as_deref().unwrap_or_default();
+                            assert!(output.contains("admin"), "结果里没有 admin：{output}");
+                            assert!(
+                                output.contains(&database),
+                                "结果里没有目标库 {database}：{output}"
+                            );
+                            Some(())
+                        }
+                        _ => None,
+                    })
+            })
+        });
+        // 第三条记录卡片真的渲染出来（不是只在状态里）。
+        let record = wait_until(cx, "记录卡片渲染", |cx| {
+            visible_bounds(cx, selector("mongo-workbench-record:3".to_string()))
+        });
+        assert!(record.size.height > px(1.), "记录卡片必须有实际高度");
     }
 
     /// 本页首篇文档的 `(可读 id, 完整 JSON)`。

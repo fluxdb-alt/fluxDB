@@ -905,6 +905,85 @@ impl NavicatMain {
         self._redis_workbench_tasks.insert(tab_id.0, task);
         cx.notify();
     }
+
+    /// MongoDB 命令工作台执行入口：与 Redis Workbench 同一套三段式
+    /// （Begin 主线程置运行态 → Run 在控制器副本上跑 → Finish 回主线程落记录）。
+    ///
+    /// `execution_id` 为 `Some` 表示重跑结果区里的某条记录。
+    pub(crate) fn run_mongo_workbench(
+        &mut self,
+        tab_id: TabId,
+        execution_id: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
+        if self._mongo_workbench_tasks.contains_key(&tab_id.0) {
+            self.show_message(
+                tr("app.mongo.workbench.running").as_ref(),
+                AppMessageKind::Warning,
+                cx,
+            );
+            return;
+        }
+        // 副本必须在 Begin 之前取：Begin 会清空草稿，后台要按清空前的快照解析语句。
+        let mut controller = self.controller.clone();
+        self.dispatch(
+            AppCommand::BeginMongoWorkbenchExecution {
+                tab_id,
+                execution_id,
+            },
+            cx,
+        );
+
+        let task = cx.spawn(async move |view, cx| {
+            let event = cx
+                .background_spawn(async move {
+                    controller.dispatch(AppCommand::RunMongoWorkbench {
+                        tab_id,
+                        execution_id,
+                    })
+                })
+                .await;
+            let (text, result) = match event {
+                AppEvent::MongoWorkbenchRan { text, result, .. } => (text, result),
+                AppEvent::Failed(error) => (String::new(), Err(error)),
+                _ => (
+                    String::new(),
+                    Err(fluxdb_core::UserFacingError {
+                        title: tr("app.query.error.execution").to_string(),
+                        message: tr("app.mongo.error.no_result").to_string(),
+                        detail: None,
+                        retryable: true,
+                    }),
+                ),
+            };
+            let _ = cx.update(|cx| {
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| {
+                    this._mongo_workbench_tasks.remove(&tab_id.0);
+                    let tab_still_exists = this
+                        .controller
+                        .state()
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.id == tab_id);
+                    if tab_still_exists {
+                        this.dispatch(
+                            AppCommand::FinishMongoWorkbenchExecution {
+                                tab_id,
+                                text,
+                                result,
+                            },
+                            cx,
+                        );
+                    }
+                });
+            });
+        });
+        self._mongo_workbench_tasks.insert(tab_id.0, task);
+        cx.notify();
+    }
 }
 
 

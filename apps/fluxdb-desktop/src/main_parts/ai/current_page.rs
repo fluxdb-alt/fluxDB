@@ -450,6 +450,19 @@ impl NavicatMain {
                     "error":workbench.error.as_ref().map(|e|&e.message),"execution_count":workbench.executions.len(),
                     "note":"只发送命令草稿与状态，不自动发送历史回复"});
             }
+            TabKind::MongoWorkbench(workbench) => {
+                // 只发定位与状态：结果区里是查询回来的文档内容，一律不进首条消息，
+                // 需要时由 AI 走有界只读工具自己取。
+                page.snapshot.target = TargetRef {
+                    connection_id: Some(workbench.connection_id.0 as i64),
+                    database: Some(workbench.database.clone()),
+                    ..Default::default()
+                };
+                page.details = serde_json::json!({"running":workbench.running,
+                    "error":workbench.error.as_ref().map(|e|&e.message),
+                    "execution_count":workbench.executions.len(),
+                    "note":"只发送定位与状态，不发送语句草稿与结果区内容"});
+            }
             TabKind::Settings(_) => {
                 page.kind = PageContextKind::Settings;
                 let revision =

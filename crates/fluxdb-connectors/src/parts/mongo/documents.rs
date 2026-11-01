@@ -68,7 +68,7 @@ fn mongo_collect_cursor<T>(cursor: mongodb::Cursor<T>) -> fluxdb_core::Result<Ve
 where
     T: serde::de::DeserializeOwned + Send,
 {
-    mongo_block_on(120, "读取 MongoDB 游标", async move {
+    mongo_block_on(120, "cursor", async move {
         use futures_util::TryStreamExt as _;
         cursor.try_collect::<Vec<T>>().await
     })
@@ -137,8 +137,8 @@ fn mongo_find(
     // 游标读取必须在放大栈的线程里一次做完：驱动解码结果文档的代码同样跑在调用方
     // 线程上，逐条 `block_on` 既会继承小栈，也会退化成「每条文档开一个线程」。
     // 单次读取上限是 `limit + 1`（≤ 501 条），因此取消只在进入前判断即可。
-    let mut cursor = mongo_block_on(60, "MongoDB 查询", async move { find.await })?;
-    let (documents, fetched) = mongo_block_on(60, "读取 MongoDB 游标", async move {
+    let mut cursor = mongo_block_on(60, "find", async move { find.await })?;
+    let (documents, fetched) = mongo_block_on(60, "cursor", async move {
         use futures_util::TryStreamExt as _;
         let mut documents = Vec::new();
         let mut fetched: u64 = 0;

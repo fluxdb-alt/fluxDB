@@ -273,6 +273,15 @@ impl NavicatMain {
                     cx,
                 );
             }
+            DatabaseMenuAction::MongoWorkbench => {
+                self.dispatch(
+                    AppCommand::OpenMongoWorkbench {
+                        connection_id: menu.connection_id,
+                        database: menu.database.clone(),
+                    },
+                    cx,
+                );
+            }
             DatabaseMenuAction::FindInDatabase => {
                 self.show_message(
                     tr("app.connection_action.find_in_database_ready"),

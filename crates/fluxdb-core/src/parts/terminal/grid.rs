@@ -171,24 +171,38 @@ impl TermGrid {
         self.cursor
     }
 
+    /// 可视区首行在「scrollback + screen」拼接序列中的下标（滚回看时向前偏移）。
+    fn visible_start(&self) -> usize {
+        if self.scroll_offset == 0 {
+            return self.scrollback.len();
+        }
+        // scroll_offset 可视行数；滚起时从 scrollback 里挑若干行 + 全部/部分屏幕。
+        if self.scrollback.len() >= self.scroll_offset {
+            self.scrollback.len() - self.scroll_offset
+        } else {
+            (self.scrollback.len() + self.screen.len()).saturating_sub(self.rows as usize)
+        }
+    }
+
+    /// 视口第 `y` 行（含滚回看偏移）的 cell 行。
+    ///
+    /// 选区 / 复制都用视口坐标：滚回看时 `screen[0]` 不是用户看到的第一行，
+    /// 只有走这里才能和渲染出来的内容对上。
+    fn viewport_row(&self, y: usize) -> Option<&TermRow> {
+        let index = self.visible_start().checked_add(y)?;
+        if index < self.scrollback.len() {
+            self.scrollback.get(index)
+        } else {
+            self.screen.get(index - self.scrollback.len())
+        }
+    }
+
     /// 可见内容 = scrollback 的可见部分 + 当前屏幕，按 top→bottom 返回，供渲染。
     /// `follow` 为 true 表示跟随底部（scroll_offset=0）。
     pub fn visible_lines(&self) -> Vec<String> {
         let mut out = Vec::new();
         let total_lines = self.scrollback.len() + self.screen.len();
-        let start = {
-            if self.scroll_offset == 0 {
-                self.scrollback.len()
-            } else {
-                // scroll_offset 可视行数；滚起时从 scrollback 里挑若干行 + 全部/部分屏幕。
-                let visible = self.rows as usize;
-                if self.scrollback.len() >= self.scroll_offset {
-                    self.scrollback.len() - self.scroll_offset.min(self.scrollback.len())
-                } else {
-                    total_lines.saturating_sub(visible)
-                }
-            }
-        };
+        let start = self.visible_start();
         // 保证输出不超过 rows 行，避免渲染器溢出。
         let end = (start + self.rows as usize).min(total_lines);
         for i in start..end {
@@ -213,18 +227,37 @@ impl TermGrid {
     }
 
     /// 用户向上滚动 n 行（不回看时会把底部行推入可视，保证有内容卷动）。
-    pub fn scroll_up(&mut self, n: usize) {
+    /// 返回实际滚动的行数（已到顶时为 0），拖选自动滚动据此同步选区坐标。
+    pub fn scroll_up(&mut self, n: usize) -> usize {
         let max = self.scrollback.len();
+        let before = self.scroll_offset;
         self.scroll_offset = (self.scroll_offset + n).min(if max >= self.rows as usize {
             self.rows as usize
         } else {
             max
         });
+        self.scroll_offset - before
     }
 
-    /// 用户向下滚动 n 行。
-    pub fn scroll_down(&mut self, n: usize) {
+    /// 用户向下滚动 n 行。返回实际滚动的行数（同 `scroll_up`）。
+    pub fn scroll_down(&mut self, n: usize) -> usize {
+        let before = self.scroll_offset;
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
+        before - self.scroll_offset
+    }
+
+    /// 视口内容整体移动 `rows` 行（正 = 内容下移 = 向上回看）后同步选区坐标。
+    ///
+    /// 选区用视口坐标存储，滚回看会让同一段文字落到不同的行号上；自动滚动后
+    /// 不搬坐标的话，选区会“粘”在屏幕位置而不是粘在内容上。
+    pub fn shift_selection_rows(&mut self, rows: i32) {
+        let Some(selection) = self.selection.as_mut() else {
+            return;
+        };
+        let last_row = self.rows.saturating_sub(1) as i32;
+        for point in [&mut selection.anchor, &mut selection.end] {
+            point.y = (point.y as i32 + rows).clamp(0, last_row) as u16;
+        }
     }
 
     // ---- 鼠标选区（内核层状态；渲染 / 复制都消费它） ----
@@ -247,35 +280,106 @@ impl TermGrid {
     }
 
     /// 当前选区是否激活（供渲染高亮）。
+    ///
+    /// 有选区即激活：单字符词（`a`、标点）的 anchor 与 end 相同，不能再靠“两端不同”
+    /// 判断。单击不留选区由桌面端保证——它在越过拖动阈值后才 `begin_selection`。
     pub fn has_selection(&self) -> bool {
         self.selection.is_some()
     }
 
-    /// 规范化选区为 `(左上, 右下)`。
+    /// 规范化选区为 `(左上, 右下)`：按 (行, 列) 排序，反方向拖动也得到同一区间。
     pub fn selection_region(&self) -> Option<(TermPoint, TermPoint)> {
         let sel = self.selection?;
-        let (sx, sy) = (sel.anchor.x.min(sel.end.x), sel.anchor.y.min(sel.end.y));
-        let (ex, ey) = (sel.anchor.x.max(sel.end.x), sel.anchor.y.max(sel.end.y));
-        Some((TermPoint { x: sx, y: sy }, TermPoint { x: ex, y: ey }))
+        if (sel.anchor.y, sel.anchor.x) <= (sel.end.y, sel.end.x) {
+            Some((sel.anchor, sel.end))
+        } else {
+            Some((sel.end, sel.anchor))
+        }
     }
 
     /// 某可视单元格是否落在选区内（用于绘制高亮背景）。
+    ///
+    /// 选区是**线性区间**而非矩形：跨行时首行从锚点列到行尾、中间整行、末行到端点列。
+    /// 早期按矩形判定，高亮范围与 `copy_region` 复制出的文本对不上。
     pub fn is_cell_selected(&self, x: usize, y: usize) -> bool {
-        let Some((tl, br)) = self.selection_region() else {
+        let Some((start, end)) = self.selection_region() else {
             return false;
         };
-        y >= tl.y as usize && y <= br.y as usize && x >= tl.x as usize && x <= br.x as usize
+        let (y, x) = (y as u16, x as u16);
+        if y < start.y || y > end.y {
+            return false;
+        }
+        if start.y == end.y {
+            return x >= start.x && x <= end.x;
+        }
+        if y == start.y {
+            return x >= start.x;
+        }
+        if y == end.y {
+            return x <= end.x;
+        }
+        true
     }
 
-    /// 提取选中文本（复用行列区间的复制语义，行尾空白去除、行间 `\n`）。
-    /// 选区的右下端按“含该列”处理（标准终端选区语义），故 `copy_region` 的末行右界取 `br.x+1`。
+    /// 双击选词：把 `point` 所在“词”的整段设为选区（线性区间，单行）。
+    ///
+    /// 词边界按 alacritty 语义选区的近似规则：空白与常见标点视作分隔符。点在分隔符/
+    /// 空白上时就选中该单个 cell（宽字符占两格全选），不会出现“双击没反应”。
+    /// 返回 false 表示该行取不到内容（超出视口）。
+    pub fn select_word_at(&mut self, point: TermPoint) -> bool {
+        let Some(row) = self.viewport_row(point.y as usize) else {
+            return false;
+        };
+        let chars: Vec<char> = row.iter().map(|c| c.ch).collect();
+        let real = row_real_chars(&chars);
+        let x = point.x as usize;
+        let Some(hit) = real
+            .iter()
+            .position(|rc| (rc.cell..rc.cell + rc.cell_len as usize).contains(&x))
+        else {
+            return false;
+        };
+        // 分隔符 / 空白：只选中它自己。
+        let (first, last) = if !is_word_char(real[hit].c) {
+            (hit, hit)
+        } else {
+            let mut first = hit;
+            while first > 0 && is_word_char(real[first - 1].c) {
+                first -= 1;
+            }
+            let mut last = hit;
+            while last + 1 < real.len() && is_word_char(real[last + 1].c) {
+                last += 1;
+            }
+            (first, last)
+        };
+        let anchor = TermPoint { x: real[first].cell as u16, y: point.y };
+        let end = TermPoint {
+            x: (real[last].cell + real[last].cell_len as usize - 1) as u16,
+            y: point.y,
+        };
+        self.selection = Some(TermSelection { anchor, end });
+        true
+    }
+
+    /// 三击选行：把整行设为选区（首列 → 末列，复制时行尾空白仍会被裁掉）。
+    pub fn select_line_at(&mut self, y: u16) -> bool {
+        if y >= self.rows {
+            return false;
+        }
+        self.selection = Some(TermSelection {
+            anchor: TermPoint { x: 0, y },
+            end: TermPoint { x: self.cols.saturating_sub(1), y },
+        });
+        true
+    }
+
+    /// 提取选中文本（视口坐标、线性区间；行尾空白去除、行间 `\n`）。
     pub fn selected_text(&self) -> String {
         let Some((tl, br)) = self.selection_region() else {
             return String::new();
         };
-        // copy_region 末行右界为“不含”，传入 +1 使包含端点列（内部按行长截断，安全）。
-        let end = TermPoint { x: br.x.saturating_add(1), y: br.y };
-        self.copy_region(tl, end)
+        self.copy_region(tl, br)
     }
 
     /// 打印一个可见字符（覆盖光标处并右移一位，应用 SGR pending 样式；到行尾则折行）。
@@ -529,32 +633,44 @@ impl TermGrid {
         out
     }
 
-    /// 提取行列区间 `(start, end)`（可视区内、行优先）的文本。
-    /// 首期按“行”文本提取：整行时取全部有效字符，部分行裁掉左右列区间之外的部分，行间 `\n`。
+    /// 提取行列区间 `[start, end]`（视口坐标、含两端列）的文本。
+    ///
+    /// 线性区间语义：首行从 `start.x` 到行尾、中间整行、末行从行首到 `end.x`；
+    /// 同一行时取 `start.x..=end.x`。每行去尾部空白，行间 `\n`。
     pub fn copy_region(&self, start: TermPoint, end: TermPoint) -> String {
-        let (sx, sy) = (start.x as usize, start.y as usize);
-        let (ex, ey) = (end.x as usize, end.y as usize);
-        let (y0, y1) = (sy.min(ey), sy.max(ey));
+        let (start, end) = if (start.y, start.x) <= (end.y, end.x) {
+            (start, end)
+        } else {
+            (end, start)
+        };
         let mut out = String::new();
-        for y in y0..=y1 {
-            let row_text = match self.screen.get(y) {
-                Some(row) => row_text(row),
-                None => continue,
+        for y in start.y..=end.y {
+            let Some(row) = self.viewport_row(y as usize) else {
+                continue;
             };
-            let chars: Vec<char> = row_text.chars().collect();
-            // 首/末行的边界列（列区间可视化）：整行时取全行，首行从头、末行截到 ex。
-            let (c0, c1) = if y == y0 {
-                (sx.min(chars.len()), chars.len())
-            } else if y == y1 {
-                (0, ex.min(chars.len()))
+            let chars: Vec<char> = row.iter().map(|c| c.ch).collect();
+            let (c0, c1) = if start.y == end.y {
+                (start.x as usize, end.x as usize + 1)
+            } else if y == start.y {
+                (start.x as usize, chars.len())
+            } else if y == end.y {
+                (0, end.x as usize + 1)
             } else {
                 (0, chars.len())
             };
-            if c0 <= c1 {
-                let seg: String = chars[c0..c1].iter().collect();
+            let c0 = c0.min(chars.len());
+            let c1 = c1.min(chars.len());
+            if c0 < c1 {
+                // 按真实字符取，不按下标切 cell 数组：宽字符占两格，第二格是填充，
+                // 直接切片会把 `中文` 复制成 `中 文`。
+                let seg: String = row_real_chars(&chars)
+                    .into_iter()
+                    .filter(|rc| rc.cell >= c0 && rc.cell < c1)
+                    .map(|rc| rc.c)
+                    .collect();
                 out.push_str(seg.trim_end());
             }
-            if y != y1 {
+            if y != end.y {
                 out.push('\n');
             }
         }
@@ -623,6 +739,20 @@ pub fn byte_cursor_to_cell(cells: &[char], byte_cursor: usize) -> usize {
             .map(|rc| rc.cell + rc.cell_len as usize)
             .unwrap_or(0)
     }
+}
+
+/// 语义选词（双击）用的“词内字符”判定：空白与常见标点视作分隔符。
+///
+/// 对齐 alacritty/Zed 的 `semantic_escape_chars`（Zed 额外把制表线 `─` 当分隔符），
+/// 而不是只按空白切分——否则双击 `db.users.find()` 会把整行当成一个词。
+fn is_word_char(c: char) -> bool {
+    !c.is_whitespace()
+        && !matches!(
+            c,
+            ',' | ';' | ':' | '=' | '+' | '-' | '*' | '/' | '\\' | '|' | '`' | '\'' | '"' | '!'
+                | '?' | '&' | '%' | '$' | '#' | '@' | '~' | '^' | '(' | ')' | '[' | ']' | '{'
+                | '}' | '<' | '>' | '─' | '│' | '.'
+        )
 }
 
 fn is_wide_char(c: char) -> bool {
@@ -701,7 +831,7 @@ pub struct TermPoint {
 }
 
 /// 鼠标选区：anchor（按下点）+ end（当前拖动点），均为可视区内坐标。
-/// 渲染高亮 / `selected_text` 复制都基于规范化后的矩形覆盖。
+/// 高亮与 `selected_text` 都按 (行, 列) 排序后的线性区间解释，反方向拖动也一致。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TermSelection {
     pub anchor: TermPoint,
@@ -718,3 +848,118 @@ pub struct TermRowView {
     pub y: usize,
 }
 
+
+#[cfg(test)]
+mod grid_selection_tests {
+    use super::*;
+
+    /// 造一个 16 列、至少 4 行、内容为指定文本的网格（不足补空格）。
+    fn grid_with(lines: &[&str]) -> TermGrid {
+        let mut grid = TermGrid::new(16, lines.len().max(4) as u16);
+        let mut bytes = String::new();
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                bytes.push_str("\r\n");
+            }
+            bytes.push_str(line);
+        }
+        grid.feed_bytes(bytes.as_bytes());
+        grid
+    }
+
+    fn point(x: u16, y: u16) -> TermPoint {
+        TermPoint { x, y }
+    }
+
+    #[test]
+    fn selection_requires_explicit_begin() {
+        // 内核不替调用方决定“单击算不算选区”（桌面端越过拖动阈值才 begin）：
+        // 没有 begin 时拖动不改任何状态，begin 之后哪怕两端相同也是有效选区。
+        let mut grid = grid_with(&["hello"]);
+        assert!(!grid.has_selection());
+        grid.update_selection(point(4, 0));
+        assert!(!grid.has_selection(), "未开始选区时拖动不应产生选区");
+        grid.begin_selection(point(2, 0));
+        assert!(grid.has_selection(), "单格选区也必须算激活");
+        assert_eq!(grid.selected_text(), "l");
+        grid.update_selection(point(4, 0));
+        assert_eq!(grid.selected_text(), "llo");
+    }
+
+    #[test]
+    fn reversed_drag_copies_same_text() {
+        let mut grid = grid_with(&["hello world"]);
+        grid.begin_selection(point(10, 0));
+        grid.update_selection(point(6, 0));
+        assert_eq!(grid.selected_text(), "world");
+        // 反向拖动的高亮与正向一致：6..=10 列都亮。
+        assert!(grid.is_cell_selected(6, 0));
+        assert!(grid.is_cell_selected(10, 0));
+        assert!(!grid.is_cell_selected(5, 0));
+    }
+
+    #[test]
+    fn multi_line_selection_is_linear_not_rectangular() {
+        let mut grid = grid_with(&["aaaa", "bbbb", "cccc"]);
+        // 从第 0 行第 2 列拖到第 2 行第 1 列。
+        grid.begin_selection(point(2, 0));
+        grid.update_selection(point(1, 2));
+        // 中间整行都亮；首行只从锚点列起，末行只到端点列。
+        assert!(!grid.is_cell_selected(1, 0), "首行锚点左侧不应高亮");
+        assert!(grid.is_cell_selected(2, 0));
+        assert!(grid.is_cell_selected(0, 1));
+        assert!(grid.is_cell_selected(1, 2));
+        assert!(!grid.is_cell_selected(2, 2), "末行端点右侧不应高亮");
+        assert_eq!(grid.selected_text(), "aa\nbbbb\ncc");
+    }
+
+    #[test]
+    fn shift_selection_rows_keeps_selection_on_content() {
+        let mut grid = grid_with(&["hello"]);
+        grid.begin_selection(point(0, 0));
+        grid.update_selection(point(4, 0));
+        // 视口内容下移一行（向上回看）后，选区应跟着落到第 1 行。
+        grid.shift_selection_rows(1);
+        assert!(grid.is_cell_selected(2, 1));
+        assert!(!grid.is_cell_selected(2, 0));
+    }
+
+    #[test]
+    fn select_word_at_stops_at_punctuation() {
+        let mut grid = grid_with(&["db.users.find()"]);
+        // 点在 "users" 中间。
+        assert!(grid.select_word_at(point(5, 0)));
+        assert_eq!(grid.selected_text(), "users");
+        // 边界外侧不亮。
+        assert!(!grid.is_cell_selected(2, 0), "`.` 左侧不应高亮");
+        assert!(!grid.is_cell_selected(11, 0), "`.` 右侧不应高亮");
+    }
+
+    #[test]
+    fn select_word_at_separator_selects_single_cell() {
+        let mut grid = grid_with(&["a b"]);
+        assert!(grid.select_word_at(point(1, 0)));
+        assert!(grid.has_selection());
+        assert_eq!(grid.selected_text(), "");
+        assert_eq!(grid.selection_region(), Some((point(1, 0), point(1, 0))));
+    }
+
+    #[test]
+    fn select_word_at_takes_whole_wide_char() {
+        let mut grid = grid_with(&["中文 ok"]);
+        // 点在宽字符的第二个单元上，仍应选中整个字符（两格）。
+        assert!(grid.select_word_at(point(1, 0)));
+        assert_eq!(grid.selected_text(), "中文");
+        assert!(grid.is_cell_selected(0, 0) && grid.is_cell_selected(3, 0));
+    }
+
+    #[test]
+    fn select_line_at_selects_full_row() {
+        let mut grid = grid_with(&["aaaa", "bbbb"]);
+        assert!(grid.select_line_at(1));
+        assert_eq!(grid.selected_text(), "bbbb");
+        assert!(grid.is_cell_selected(0, 1));
+        assert!(!grid.is_cell_selected(0, 0));
+        assert!(!grid.select_line_at(99), "越界行不应改动选区");
+    }
+}

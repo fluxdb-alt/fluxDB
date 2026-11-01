@@ -35,7 +35,7 @@ impl MongoConnector {
             .ok_or_else(|| Error::new(ErrorKind::Connection, "MongoDB 操作需要连接配置上下文"))
     }
 
-    /// 执行任意数据库命令（命令行终端）。
+    /// 执行任意数据库命令（查询编辑器）。
     pub fn run_command(&self, database: &str, command: &str) -> fluxdb_core::Result<String> {
         let config = self.config()?;
         mongo_run_command(config, database, command)
@@ -242,6 +242,15 @@ impl Connector for MongoConnector {
         command: &str,
     ) -> fluxdb_core::Result<String> {
         mongo_run_command(self.config()?, database, command)
+    }
+
+    fn mongo_shell(
+        &self,
+        _: ConnectionId,
+        database: &str,
+        input: &str,
+    ) -> fluxdb_core::Result<fluxdb_core::MongoShellResult> {
+        mongo_shell(self.config()?, database, input)
     }
 
     fn mongo_server_info(&self, _: ConnectionId) -> fluxdb_core::Result<MongoServerInfo> {

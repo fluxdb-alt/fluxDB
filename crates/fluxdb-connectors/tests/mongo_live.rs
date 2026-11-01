@@ -420,6 +420,120 @@ fn mongo_live_aggregate_and_indexes() {
         .expect("清理集合");
 }
 
+/// 命令行终端的 shell 语句在真库上跑通：`use` / `show dbs` / `show collections` /
+/// `find` / `findOne` / `countDocuments` / `distinct` / `aggregate` / `getIndexes` / `stats`。
+#[test]
+fn mongo_live_shell_statements() {
+    let Some(config) = live_config() else {
+        eprintln!("跳过：未设置 FLUXDB_MONGO_URI");
+        return;
+    };
+    let connection_id = config.id;
+    let database = live_database(&config);
+    let connector = connector_for(&config).expect("connector");
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_millis();
+    let collection = format!("fluxdb_shell_{suffix}");
+    connector
+        .mongo_create_collection(connection_id, &database, &collection)
+        .expect("创建集合");
+    let insert = format!(
+        r#"{{ "insert": "{collection}", "documents": [
+            {{ "_id": "shell-1", "group": "a", "value": 1 }},
+            {{ "_id": "shell-2", "group": "a", "value": 2 }},
+            {{ "_id": "shell-3", "group": "b", "value": 5 }}
+        ] }}"#
+    );
+    connector
+        .mongo_run_command(connection_id, &database, &insert)
+        .expect("插入文档");
+
+    let shell = |text: &str| {
+        connector
+            .mongo_shell(connection_id, &database, text)
+            .unwrap_or_else(|error| panic!("{text} 执行失败: {error:?}"))
+            .output
+    };
+
+    // `use` 只回传切换后的库，不写回连接配置。
+    let switched = connector
+        .mongo_shell(connection_id, &database, "use another_db")
+        .expect("use");
+    assert_eq!(switched.database.as_deref(), Some("another_db"));
+    assert_eq!(switched.output, "switched to db another_db");
+
+    assert!(
+        shell("show dbs").contains(&database),
+        "show dbs 要列出当前库"
+    );
+    assert!(
+        shell("show collections").contains(&collection),
+        "show collections 要列出新建集合"
+    );
+    assert!(shell("db.getCollectionNames()").contains(&collection));
+
+    let found = shell(&format!(
+        r#"db.{collection}.find({{ group: "a" }}).sort({{ value: -1 }}).limit(1)"#
+    ));
+    assert!(found.contains("shell-2"), "排序后取第一条: {found}");
+    assert!(!found.contains("shell-3"), "过滤条件不生效: {found}");
+
+    let one = shell(&format!("db.{collection}.findOne({{ _id: \"shell-3\" }})"));
+    assert!(one.contains("shell-3"), "{one}");
+    assert_eq!(
+        shell(&format!("db.{collection}.findOne({{ _id: \"missing\" }})")),
+        "null"
+    );
+
+    assert_eq!(shell(&format!("db.{collection}.countDocuments()")), "3");
+    assert_eq!(
+        shell(&format!(
+            r#"db.{collection}.countDocuments({{ group: "a" }})"#
+        )),
+        "2"
+    );
+    assert_eq!(
+        shell(&format!("db.{collection}.estimatedDocumentCount()")),
+        "3"
+    );
+
+    let distinct = shell(&format!(r#"db.{collection}.distinct("group")"#));
+    assert!(
+        distinct.contains('a') && distinct.contains('b'),
+        "{distinct}"
+    );
+
+    let aggregated = shell(&format!(
+        r#"db.{collection}.aggregate([{{ "$group": {{ "_id": "$group", "total": {{ "$sum": "$value" }} }} }}])"#
+    ));
+    assert!(
+        aggregated.contains('3') && aggregated.contains('5'),
+        "{aggregated}"
+    );
+
+    let indexes = shell(&format!("db.{collection}.getIndexes()"));
+    assert!(indexes.contains("_id_"), "{indexes}");
+
+    let stats = shell(&format!("db.{collection}.stats()"));
+    assert!(stats.contains("count"), "{stats}");
+
+    // 写方法在解析层拒绝，不能悄悄执行。
+    let write = connector
+        .mongo_shell(
+            connection_id,
+            &database,
+            &format!("db.{collection}.deleteMany({{}})"),
+        )
+        .expect_err("写方法必须拒绝");
+    assert!(write.message.contains("read-only"), "{}", write.message);
+
+    connector
+        .mongo_drop_collection(connection_id, &database, &collection)
+        .expect("清理集合");
+}
+
 /// 回归：驱动操作必须在放大栈的工作线程上执行。
 ///
 /// 曾经的故障是 gpui 后台任务（macOS GCD worker，栈约 512 KiB）里直接

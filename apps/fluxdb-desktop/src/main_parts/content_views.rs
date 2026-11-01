@@ -138,6 +138,14 @@ fn content(
             };
             mongo_cli_content(tab.id, cli, this, window, colors, cx)
         }
+        Some(tab) if matches!(tab.kind, TabKind::MongoWorkbench(_)) => {
+            let TabKind::MongoWorkbench(workbench) = &tab.kind else {
+                unreachable!();
+            };
+            div().size_full().min_h(px(0.)).flex().flex_col().child(
+                mongo_workbench_content(tab.id, workbench, this, window, colors, cx),
+            )
+        }
         Some(tab) if matches!(tab.kind, TabKind::MongoCollection(_)) => {
             let TabKind::MongoCollection(collection) = &tab.kind else {
                 unreachable!();
@@ -1456,10 +1464,10 @@ fn redis_cli_content(
         )
 }
 
-/// MongoDB CLI 终端内容：库内执行 Extended JSON 命令的进程内 REPL。
+/// MongoDB CLI 终端内容：库内执行 shell 语句的进程内 REPL。
 ///
 /// 与 Redis CLI 对称：顶部一条连接/库信息条，交互全部交给 TerminalComponent
-/// （grid、光标、状态栏、危险命令确认、历史与补全）。
+/// （grid、光标、状态栏、历史与补全）。
 fn mongo_cli_content(
     tab_id: TabId,
     cli: &fluxdb_app::MongoCliState,
@@ -1487,7 +1495,7 @@ fn mongo_cli_content(
                 .px_3()
                 .text_size(px(12.))
                 .text_color(colors.muted)
-                .child(format!("{connection} · {} · MongoDB CLI", cli.database)),
+                .child(format!("{connection} · {} · MongoDB Shell", cli.database)),
         )
         .child(div().flex_1().min_h(px(0.)).child(component))
 }

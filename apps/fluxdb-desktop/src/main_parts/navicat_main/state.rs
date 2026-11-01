@@ -768,6 +768,11 @@ struct NavicatMain {
     /// Redis Workbench 命令的后台执行任务，按标签页 id 去重：同一标签页执行中再次触发
     /// （Run / 重跑 / 历史「运行此条」）时直接提示，不并发发起第二条网络请求。
     _redis_workbench_tasks: BTreeMap<u64, Task<()>>,
+    /// MongoDB 命令工作台的后台执行任务，按标签页 id 去重（同一标签页执行中不并发再发一条）。
+    _mongo_workbench_tasks: BTreeMap<u64, Task<()>>,
+    /// MongoDB 命令工作台的输入编辑器（按 tab 缓存，随 tab 关闭移除）。
+    pub(crate) mongo_workbench_inputs: BTreeMap<TabId, Entity<editor_component::Editor>>,
+    _mongo_workbench_input_subscriptions: BTreeMap<TabId, Subscription>,
     _sql_file_execute_tasks: BTreeMap<u64, Task<()>>,
     _sql_file_cancel_flags: BTreeMap<u64, Arc<AtomicBool>>,
     _query_completion_tasks: BTreeMap<(TabId, u64), Task<()>>,

@@ -4,3 +4,4 @@ include!("mongo/connector.rs");
 include!("mongo/documents.rs");
 include!("mongo/import.rs");
 include!("mongo/metadata.rs");
+include!("mongo/shell.rs");

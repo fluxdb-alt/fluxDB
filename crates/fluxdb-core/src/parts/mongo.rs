@@ -151,6 +151,18 @@ pub struct MongoServerInfo {
     pub databases: Vec<MongoDatabaseStat>,
 }
 
+/// MongoDB shell 一次执行的结果。
+///
+/// shell 语句可能切换当前库（`use <db>`），因此结果除了要回显的文本，还要带回切换后的库名：
+/// 库只属于这个终端会话，不能写回连接配置。
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MongoShellResult {
+    /// 终端回显文本（已按 shell 风格排版，可能含 ANSI 颜色；换行用 `\n`）。
+    pub output: String,
+    /// 语句切换后的当前库；`None` 表示库未变化。
+    pub database: Option<String>,
+}
+
 /// 连接信息里的单个数据库条目。
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MongoDatabaseStat {
