@@ -2756,6 +2756,7 @@ fn navicat_main_new(
         redis_key_folder_visible_cache: BTreeMap::new(),
         redis_key_list_loaded: BTreeMap::new(),
         redis_key_metadata_pending: BTreeMap::new(),
+        redis_key_pending_selection: BTreeMap::new(),
         redis_key_search_history: BTreeMap::new(),
         redis_key_search_history_loaded: BTreeMap::new(),
         redis_key_search_history_open: false,

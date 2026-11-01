@@ -171,6 +171,9 @@ struct NavicatMain {
     // Redis Key 元信息惰性补全「请求中」的键名集合，按 tab 隔离：用于并发去重，
     // 避免同一批可见行被重复触发补全请求。
     redis_key_metadata_pending: BTreeMap<TabId, BTreeSet<String>>,
+    // 新建 Key 后待选中的键名，按 tab 隔离：键列表刷新完成（DataLoaded）后再按键名定位并选中，
+    // 避免像 RedisInsight 那样为单个键另开标签页。刷新结果里没有该键时不保留。
+    redis_key_pending_selection: BTreeMap<TabId, String>,
     // Redis Key 搜索历史：按 (连接 ID, DB 索引) 隔离，队首最新，上限 200。
     // `redis_key_search_history_loaded` 标记该 (连接, DB) 是否已从存储惰性加载一次，
     // 避免用户从未打开的连接历史被提前读入。
