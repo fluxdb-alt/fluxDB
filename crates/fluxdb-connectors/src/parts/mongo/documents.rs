@@ -414,6 +414,37 @@ fn mongo_drop_collection(
     .map(|_| ())
 }
 
+/// 删除集合里的一个索引。
+///
+/// `_id_` 索引在服务端不可删除，这里提前拒绝，避免把「服务端命令才能删」的误解
+/// 变成一次必然失败的请求。
+fn mongo_drop_index(
+    config: &ConnectionConfig,
+    database: &str,
+    collection: &str,
+    index: &str,
+) -> fluxdb_core::Result<()> {
+    let index = index.trim();
+    if database.trim().is_empty() || collection.trim().is_empty() || index.is_empty() {
+        return Err(Error::new(ErrorKind::Query, "请指定数据库、集合与索引"));
+    }
+    if index == "_id_" {
+        return Err(Error::new(ErrorKind::Query, "_id_ 索引不可删除"));
+    }
+    let client = mongo_connect(config)?;
+    let database = database.to_string();
+    let collection = collection.to_string();
+    let index = index.to_string();
+    mongo_block_on(30, "删除索引", async move {
+        client
+            .database(&database)
+            .collection::<Document>(&collection)
+            .drop_index(index)
+            .await
+    })
+    .map(|_| ())
+}
+
 /// 重命名集合（同库内）。
 ///
 /// `renameCollection` 只能对 `admin` 库执行，且两个名字都必须带库名前缀；

@@ -1686,6 +1686,13 @@ pub enum AppCommand {
         tab_id: TabId,
         result: std::result::Result<Vec<MongoIndexInfo>, UserFacingError>,
     },
+    /// 删除集合里的一个索引（成功后由界面重取索引列表）。
+    DropMongoIndex {
+        connection_id: ConnectionId,
+        database: String,
+        collection: String,
+        index: String,
+    },
     /// 读取连接信息（「显示连接信息」弹框）。
     LoadMongoServerInfo(ConnectionId),
     /// 在库内创建集合（建库/建集合共用；MongoDB 的库由首个集合隐式创建）。

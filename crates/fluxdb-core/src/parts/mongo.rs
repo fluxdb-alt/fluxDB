@@ -100,17 +100,45 @@ pub struct MongoCollectionInfo {
     pub view_on: Option<String>,
 }
 
+/// 索引键定义的一项：字段名与方向/类型（`1`、`-1`、`text`、`2dsphere` 等）。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MongoIndexField {
+    pub field: String,
+    /// 键值的展示文本；BSON 数值与字符串统一转成文本，无需 UI 再解析 JSON。
+    pub value: String,
+}
+
 /// 一个索引。
+///
+/// 统计类字段（`size_bytes` / `usage_count` / `usage_since`）来自 `collStats` 与
+/// `$indexStats`；命令失败或权限不足时保持 `None`，不用 0 冒充。
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MongoIndexInfo {
     pub name: String,
     /// 键定义（Relaxed Extended JSON 文本，如 `{"_id": {"$numberInt":"1"}}`）。
     pub keys_json: String,
+    /// 键定义的有序字段列表，供展开行展示与复合索引判定使用。
+    pub fields: Vec<MongoIndexField>,
+    /// 索引类型：`regular` / `geospatial` / `hashed` / `text` / `wildcard` /
+    /// `columnstore` / `clustered`，与 Compass 的 IndexDefinition.type 同一口径。
+    pub index_type: String,
     pub unique: bool,
     pub sparse: bool,
     /// 部分索引的过滤条件（Extended JSON）。
     pub partial_filter: Option<String>,
-    /// 索引是否已建好（后台构建期间可能为 false）。
+    /// TTL 索引的过期秒数。
+    pub expire_after_seconds: Option<i64>,
+    /// 是否带 collation。
+    pub has_collation: bool,
+    /// 是否被隐藏（`hidden: true`）。
+    pub hidden: bool,
+    /// `collStats.indexSizes` 里该索引的大小（字节）。
+    pub size_bytes: Option<u64>,
+    /// `$indexStats.accesses.ops`。
+    pub usage_count: Option<u64>,
+    /// `$indexStats.accesses.since`（epoch 毫秒）。
+    pub usage_since: Option<i64>,
+    /// 索引是否已建好（`$indexStats.building` 为 true 时才是 false）。
     pub ready: bool,
 }
 

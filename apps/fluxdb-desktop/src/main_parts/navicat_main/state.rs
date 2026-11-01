@@ -738,6 +738,10 @@ struct NavicatMain {
     pub(crate) mongo_collapsed_documents: BTreeMap<TabId, BTreeSet<String>>,
     /// 已展开的嵌套字段，键为 `{文档身份}/{字段路径}`；默认全收起，与原型一致。
     pub(crate) mongo_expanded_fields: BTreeMap<TabId, BTreeSet<String>>,
+    /// 索引页里已展开定义的索引（按标签页 → 索引名），默认全部收起。
+    pub(crate) mongo_expanded_indexes: BTreeMap<TabId, BTreeSet<String>>,
+    /// 索引表的排序（按标签页 → 列 + 是否降序）；缺省保持服务端返回的名称顺序。
+    pub(crate) mongo_index_sort: BTreeMap<TabId, (MongoIndexSort, bool)>,
     /// JSON 展示下被用户点过的折叠节点，键为 `{文档身份}\u{1e}{折叠路径}`。
     ///
     /// 记录「与默认态相反」的节点而不是折叠结果：默认只有根节点展开、嵌套节点全部收起
@@ -763,6 +767,7 @@ struct NavicatMain {
     _mongo_load_tasks: BTreeMap<u64, Task<()>>,
     _mongo_info_tasks: BTreeMap<u64, Task<()>>,
     _mongo_index_tasks: BTreeMap<u64, Task<()>>,
+    _mongo_drop_index_tasks: BTreeMap<u64, Task<()>>,
     /// 补全字段的抽样任务：每个集合标签页只跑一次，失败不重试（补全降级为仅运算符）。
     _mongo_field_sample_tasks: BTreeMap<u64, Task<()>>,
     _query_execute_tasks: BTreeMap<u64, Task<()>>,
