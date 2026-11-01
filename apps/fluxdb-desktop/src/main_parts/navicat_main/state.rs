@@ -476,7 +476,8 @@ struct NavicatMain {
     // 类型专用子表单：String/JSON 单值多行输入；Hash 每字段带 TTL；ZSet/Stream 名称=值行；Set/List 成员行 + List 方向。
     redis_add_key_string_input: Entity<InputState>,
     _redis_add_key_string_subscription: Subscription,
-    redis_add_key_json_input: Entity<InputState>,
+    // JSON 值复用 JSON 组件（Edit 模式内部持有带语法高亮的多行编辑器）。
+    redis_add_key_json_editor: JsonComponent,
     _redis_add_key_json_subscription: Subscription,
     redis_add_key_hash_rows: Vec<RedisAddKeyHashRow>,
     redis_add_key_zset_rows: Vec<RedisAddKeyNameValueRow>,

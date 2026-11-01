@@ -85,7 +85,6 @@
     "sort_fields": "<Field> ASC, <Field> DESC",
     "line_height_example": "14",
     "radius_example": "6",
-    "json_object": "{}",
     "maxlen": "MAXLEN"
   },
   "context": {
@@ -3948,7 +3947,6 @@
         "insert_direction": "插入方向",
         "add_items": "添加元素",
         "json_value": "JSON 值",
-        "json_hint": "支持直接粘贴 JSON；点击上方「格式化/校验」可美化与校验内容。",
         "add_row": "+ 添加行",
         "stream_id": "Entry ID（可选，留空自动生成）",
         "add_fields": "添加字段",

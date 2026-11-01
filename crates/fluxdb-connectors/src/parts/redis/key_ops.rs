@@ -63,6 +63,17 @@ fn redis_create_key(
     redis_emit_key_create(&mut connection, request.key.as_str(), kind, request, request.ttl.as_str())
 }
 
+/// 服务器是否加载了 RedisJSON：`COMMAND INFO JSON.SET` 未注册命令时返回 nil 元素。
+/// 托管实例可能禁用 COMMAND，探测失败一律按不可用处理，回退到普通字符串存储。
+fn redis_json_module_available(connection: &mut RedisConnection) -> bool {
+    match connection.command(&["COMMAND", "INFO", "JSON.SET"]) {
+        Ok(RedisValue::Array(items)) => items
+            .iter()
+            .any(|item| !matches!(item, RedisValue::Bulk(None))),
+        _ => false,
+    }
+}
+
 /// 新建 Key 核心：EXISTS 防覆盖 → 按类型执行建命令 → 应用 TTL。
 /// `redis_apply_key_insert`（grid 插入）与 `redis_create_key`（新增 Key 抽屉）共用，
 /// 确保两种入口的类型解释与校验完全一致。
@@ -105,7 +116,13 @@ fn redis_emit_key_create(
     match type_name {
         "string" => redis_expect_ok(connection.command(&["SET", key, request.value.as_str()])?)?,
         "json" | "rejson-rl" => {
-            redis_expect_ok(connection.command(&["JSON.SET", key, ".", request.value.as_str()])?)?
+            // 没装 RedisJSON 时 JSON.SET 会报 unknown command：退回普通字符串存 JSON 文本，
+            // 键列表仍按内容把它显示成 json，功能上等价于「JSON 文本键」。
+            if redis_json_module_available(connection) {
+                redis_expect_ok(connection.command(&["JSON.SET", key, ".", request.value.as_str()])?)?
+            } else {
+                redis_expect_ok(connection.command(&["SET", key, request.value.as_str()])?)?
+            }
         }
         "list" => {
             let items = require_lines("List")?;
