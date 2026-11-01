@@ -636,7 +636,7 @@ Key 元信息区域可以刷新、修改键名和 TTL。保存前确认键名不
 
 ![Redis Workbench](screenshots/redis_workbench.png)
 
-1. 输入 Redis 命令。
+1. 输入 Redis 命令；输入过程中光标下方会显示当前命令的参数签名，必填参数填完自动消失，也可按 Esc 关闭。
 2. 点击“运行”。
 3. 每条执行记录会显示命令、状态、执行时间、耗时和响应。
 4. JSON 命令结果可在 Text / JSON 视图间切换。

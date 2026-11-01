@@ -32,6 +32,9 @@ struct RedisCompletionContext {
     /// 光标前已完整键入的 token（大写），首元素是命令名（已识别时）；
     /// 供参数定位器结合已输入参数决定当前应补的 token。
     before_tokens: Vec<String>,
+    /// 光标正落在其中的 token（大写）；光标在空白间隙时为 `None`。
+    /// 一致性命名：只用于判断命令是否已输入完整，不参与参数定位。
+    current_token: Option<String>,
 }
 
 /// 当前应该补全哪一类候选。
@@ -258,6 +261,7 @@ fn redis_completion_context(text: &str, cursor: usize) -> RedisCompletionContext
         command,
         slot,
         before_tokens,
+        current_token: current.map(|token| token.upper.clone()),
     }
 }
 
@@ -493,6 +497,9 @@ pub struct RedisSignatureInfo {
 ///
 /// 复用 `redis_completion_context` 解析命令名与光标前已输入参数，不重复分词；
 /// 支持点号命令（`JSON.GET`）。未知命令 / 未识别命令返回 `None`。
+///
+/// 命令已经输入完整时返回 `None`：否则 `GET demo:ttl` 这类填完的命令会一直挂着
+/// 提示框，只能靠 Esc 手动关。完整性判断见 [`redis_signature_satisfied`]。
 pub fn redis_command_signature(text: &str, cursor: usize) -> Option<RedisSignatureInfo> {
     let ctx = redis_completion_context(text, cursor);
     let before = &ctx.before_tokens;
@@ -526,6 +533,21 @@ pub fn redis_command_signature(text: &str, cursor: usize) -> Option<RedisSignatu
                 }
             }
         };
+
+    // 完整度判断把光标所在 token 也算作已输入：`GET key` 光标停在 key 末尾即算填完，
+    // 而参数高亮仍只用光标前的完整 token（`walk`），不受影响。
+    let mut typed = walk.to_vec();
+    let current_argument = ctx
+        .current_token
+        .as_deref()
+        .filter(|token| !token.is_empty())
+        .filter(|_| ctx.kind == RedisCompletionContextKind::Argument);
+    if let Some(token) = current_argument {
+        typed.push(token.to_string());
+    }
+    if redis_signature_satisfied(args, &typed) {
+        return None;
+    }
 
     let active_parameter = redis_active_arg_index(args, walk);
     let (label, parameter_ranges) = build_signature_label(label_prefix, args);
@@ -571,6 +593,29 @@ fn redis_active_arg_index(args: &[RedisArg], tokens: &[String]) -> usize {
     }
 }
 
+/// 命令是否已经输入完整：所有必填参数都被 token 消费，且没有消费不掉的 token。
+///
+/// 可选参数未触发不算不完整——命令已经能执行；只有可选参数已经开始输入但没写完
+/// （如 `SET k v EX` 缺秒数）才会因为剩余 token 消费不完继续提示。
+fn redis_signature_satisfied(args: &[RedisArg], tokens: &[String]) -> bool {
+    let mut ti = 0usize;
+    for arg in args {
+        if ti >= tokens.len() {
+            // 没有更多 token：剩余必填参数还没填，命令不完整；可选参数跳过即可。
+            if arg.optional {
+                continue;
+            }
+            return false;
+        }
+        match redis_arg_steps(arg, tokens, ti) {
+            Some(next) => ti = next,
+            None if arg.optional => continue,
+            None => return false,
+        }
+    }
+    ti >= tokens.len()
+}
+
 /// 拼接签名 label（前缀 + 各参数 synopsis），同时返回每个顶层参数的 `[start, end)` 范围。
 fn build_signature_label(prefix: String, args: &[RedisArg]) -> (String, Vec<(usize, usize)>) {
     let mut label = prefix;
@@ -587,4 +632,40 @@ fn build_signature_label(prefix: String, args: &[RedisArg]) -> (String, Vec<(usi
         offset += syn.len();
     }
     (label, ranges)
+}
+
+#[cfg(test)]
+mod redis_signature_tests {
+    use super::*;
+
+    #[test]
+    fn signature_shows_while_required_argument_missing() {
+        let sig = redis_command_signature("GET ", 4).expect("key 未填，仍应提示");
+        assert_eq!(sig.label, "GET <key>");
+        assert_eq!(sig.active_parameter, 0);
+
+        // 光标停在 key 后的空白：当前应填的已经是 value。
+        let sig = redis_command_signature("SET demo:key ", 13).expect("value 未填，仍应提示");
+        assert_eq!(sig.active_parameter, 1);
+    }
+
+    #[test]
+    fn signature_hides_once_command_is_complete() {
+        // 光标停在参数末尾也算填完：数据只到 token 末尾，没有额外空格。
+        assert!(redis_command_signature("GET demo:string:ttl", 19).is_none());
+        // 光标在参数后的空白处，token 已完整。
+        assert!(redis_command_signature("GET demo:string:ttl ", 20).is_none());
+        assert!(redis_command_signature("SET demo:key demo:value", 23).is_none());
+        // 无参数命令输完即隐藏。
+        assert!(redis_command_signature("PING", 4).is_none());
+    }
+
+    #[test]
+    fn signature_ignores_unknown_command_and_multiline_commands() {
+        assert!(redis_command_signature("NOSUCHCMD demo", 15).is_none());
+        // 光标在第二行命令里：只按当前行判断，第一行的完整命令不影响提示。
+        let text = "GET done\nSET demo:key ";
+        let sig = redis_command_signature(text, text.len()).expect("第二行 value 未填");
+        assert_eq!(sig.active_parameter, 1);
+    }
 }
