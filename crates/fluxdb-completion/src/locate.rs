@@ -4,8 +4,8 @@
 
 use core::ops::ControlFlow;
 use sqlparser::ast::{
-    Expr, GroupByExpr, JoinConstraint, JoinOperator, OrderByKind, Query, Select, SelectItem,
-    Spanned, TableFactor, Visit, Visitor,
+    Expr, GroupByExpr, JoinConstraint, JoinOperator, NamedWindowDefinition, NamedWindowExpr,
+    OrderByKind, Query, Select, SelectItem, Spanned, TableFactor, Visit, Visitor,
 };
 
 use crate::metadata::TableKey;
@@ -421,6 +421,32 @@ impl Visitor for SlotLocator<'_> {
                     qualifier: None,
                 },
             );
+        }
+        // `WINDOW w AS (PARTITION BY ... ORDER BY ...)`：定义体也是表达式位置，
+        // 不记录就会落到词法兜底而给不出候选。
+        for NamedWindowDefinition(_, window) in &select.named_window {
+            let NamedWindowExpr::WindowSpec(spec) = window else {
+                continue;
+            };
+            for expr in &spec.partition_by {
+                self.record(
+                    expr.span(),
+                    ClauseSlot::Expression {
+                        // 分区表达式不能引用投影别名，按谓词作用域处理。
+                        scope: ExprScope::Where,
+                        qualifier: None,
+                    },
+                );
+            }
+            for expr in &spec.order_by {
+                self.record(
+                    expr.expr.span(),
+                    ClauseSlot::Expression {
+                        scope: ExprScope::OrderBy,
+                        qualifier: None,
+                    },
+                );
+            }
         }
         for table in &select.from {
             self.record(table.relation.span(), ClauseSlot::FromTable { join: false });

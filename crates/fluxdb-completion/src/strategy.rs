@@ -124,7 +124,8 @@ fn table_candidates(join: bool, ctx: &SlotContext<'_>) -> Vec<Candidate> {
 
     // 作用域内的 CTE / 派生表：比物理表更可能是本次要写的关系，排前面。
     if qualifier_schema.is_none() {
-        for (name, _) in ctx.symbols.virtual_bindings() {
+        for binding in ctx.symbols.virtual_bindings() {
+            let name = &binding.name;
             candidates.push(
                 Candidate::new(name.clone(), name.clone(), CandidateKind::Table)
                     .with_sort_text(format!("{SCORE_LOCAL_RELATION}:{name}")),
@@ -248,7 +249,7 @@ fn expression_candidates(
                     .into_iter()
                     .find(|schema| schema.eq_ignore_ascii_case(qualifier))
                 {
-                    return ctx
+                    let mut candidates: Vec<Candidate> = ctx
                         .meta
                         .tables(Some(&schema))
                         .into_iter()
@@ -266,6 +267,15 @@ fn expression_candidates(
                             .with_sort_text(format!("{SCORE_TABLE}:{}", table.name))
                         })
                         .collect();
+                    // 库限定的 UDF（`completion_lab.lab_discount(`）也要能补出来。
+                    candidates.extend(
+                        ctx.meta
+                            .routines(Some(&schema))
+                            .into_iter()
+                            .filter(|routine| routine.kind == RoutineKind::Function)
+                            .map(|routine| routine_candidate(&routine)),
+                    );
+                    return candidates;
                 }
                 // 限定符无法解析：返回空集合（IDE 行为，不再兜底全列）。
                 return Vec::new();
@@ -459,10 +469,10 @@ fn unqualified_column_candidates(ctx: &SlotContext<'_>) -> Vec<Candidate> {
             candidates.push(column_candidate(&column, &key, qualifier, SCORE_COLUMN));
         }
     }
-    for (name, columns) in ctx.symbols.virtual_bindings() {
-        for column in columns {
+    for binding in ctx.symbols.virtual_bindings() {
+        for column in &binding.columns {
             let label = if is_ambiguous(column) {
-                format!("{name}.{column}")
+                format!("{}.{column}", binding.name)
             } else {
                 column.clone()
             };
@@ -491,12 +501,12 @@ fn ambiguous_column_names(ctx: &SlotContext<'_>) -> HashSet<String> {
                 .insert(owner.clone());
         }
     }
-    for (name, columns) in ctx.symbols.virtual_bindings() {
-        for column in columns {
+    for binding in ctx.symbols.virtual_bindings() {
+        for column in &binding.columns {
             owners
                 .entry(column.to_ascii_lowercase())
                 .or_default()
-                .insert(name.to_ascii_lowercase());
+                .insert(binding.name.to_ascii_lowercase());
         }
     }
     owners

@@ -800,6 +800,72 @@ mod tests {
         assert_eq!(items, vec!["id".to_string()], "候选：{items:?}");
     }
 
+    /// CTE 在 FROM 里起别名后，别名仍要能解析到 CTE 的投影列。
+    #[test]
+    fn cte_columns_are_visible_through_from_alias() {
+        let items = labels(
+            "WITH item_totals AS (SELECT id, total FROM order_items) SELECT x.| FROM item_totals x",
+        );
+        assert_eq!(
+            items,
+            vec!["id".to_string(), "total".to_string()],
+            "候选：{items:?}"
+        );
+    }
+
+    /// CTE 的 FROM 别名不是关系名，不能出现在 FROM 候选里。
+    #[test]
+    fn cte_from_alias_is_not_a_from_candidate() {
+        let items = labels(
+            "WITH item_totals AS (SELECT id FROM order_items) SELECT * FROM item_totals x JOIN |",
+        );
+        assert!(!items.contains(&"x".to_string()), "候选：{items:?}");
+        assert!(
+            items.contains(&"item_totals".to_string()),
+            "候选：{items:?}"
+        );
+    }
+
+    /// 集合运算的派生表列名取首分支（SQL 标准）。
+    #[test]
+    fn set_operation_derived_columns_come_from_first_branch() {
+        let items = labels(
+            "SELECT u.| FROM (SELECT id AS entity_id FROM users UNION ALL SELECT id FROM orders) u",
+        );
+        assert!(items.contains(&"entity_id".to_string()), "候选：{items:?}");
+    }
+
+    /// 命名窗口定义体里的表达式也要能补列。
+    #[test]
+    fn named_window_definition_suggests_columns() {
+        let items =
+            labels("SELECT 1 FROM orders o WINDOW w AS (PARTITION BY o.id ORDER BY o.user_|)");
+        assert!(items.contains(&"user_id".to_string()), "候选：{items:?}");
+    }
+
+    /// CTE 内的命名窗口定义同样要能补列。
+    #[test]
+    fn named_window_inside_cte_suggests_columns() {
+        let items = labels(
+            "WITH running AS (SELECT o.tenant_id,o.order_id,SUM(o.user_id) OVER w AS total \
+             FROM orders o WHERE o.tenant_id=1 \
+             WINDOW w AS (PARTITION BY o.tenant_id ORDER BY o.user_|,o.order_id \
+             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) \
+             SELECT r.order_id FROM running r",
+        );
+        assert!(items.contains(&"user_id".to_string()), "候选：{items:?}");
+    }
+
+    /// JSON_TABLE 的 COLUMNS 清单是别名唯一可见的列来源。
+    #[test]
+    fn json_table_columns_are_visible_through_alias() {
+        let items = labels_for(
+            &crate::dialect::MYSQL,
+            "SELECT jt.ta| FROM users u JOIN JSON_TABLE(u.name, '$[*]' COLUMNS (tag VARCHAR(30) PATH '$')) AS jt ON TRUE",
+        );
+        assert!(items.contains(&"tag".to_string()), "候选：{items:?}");
+    }
+
     #[test]
     fn derived_table_columns_are_visible_through_alias() {
         let items = labels("SELECT * FROM (SELECT id, name FROM users) t WHERE t.|");

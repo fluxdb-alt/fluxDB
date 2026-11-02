@@ -8,8 +8,8 @@ use core::ops::ControlFlow;
 use std::collections::{HashMap, HashSet};
 
 use sqlparser::ast::{
-    Expr, ObjectName, ObjectNamePart, Query, Select, SelectItem, SetExpr, Spanned, Statement,
-    TableFactor, Visit, Visitor,
+    Expr, JsonTableColumn, NamedWindowDefinition, NamedWindowExpr, ObjectName, ObjectNamePart,
+    Query, Select, SelectItem, SetExpr, Spanned, Statement, TableFactor, Visit, Visitor,
 };
 use sqlparser::tokenizer::Span;
 
@@ -21,6 +21,17 @@ use crate::parse::LineColIndex;
 pub(crate) struct RelationSymbol {
     pub(crate) key: TableKey,
     pub(crate) alias: Option<String>,
+}
+
+/// CTE / 派生表这类不走宿主元数据的虚拟关系。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VirtualBinding {
+    pub(crate) name: String,
+    pub(crate) columns: Vec<String>,
+    /// CTE 在 FROM 里被起了别名（`FROM item_totals it`）。
+    /// 这类绑定只用于限定符解析与诊断：别名不能当表名写进 FROM，
+    /// 也不能重复计入未限定列候选。
+    pub(crate) is_cte_alias: bool,
 }
 
 /// 投影到某个位置的可见符号。
@@ -35,7 +46,7 @@ pub(crate) struct Symbols {
     /// 限定符名（小写）→ 物理关系。投影时内层先写入，因此内层遮蔽外层。
     bindings: HashMap<String, TableKey>,
     /// 可见的 CTE / 派生表（名字, 投影列），内层在前；列名由子查询推导，不走宿主元数据。
-    virtuals: Vec<(String, Vec<String>)>,
+    virtuals: Vec<VirtualBinding>,
 }
 
 impl Symbols {
@@ -53,13 +64,13 @@ impl Symbols {
         let last = last_segment(qualifier);
         self.virtuals
             .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(&last))
-            .map(|(_, columns)| columns.clone())
+            .find(|binding| binding.name.eq_ignore_ascii_case(&last))
+            .map(|binding| binding.columns.clone())
     }
 
-    /// 可见的 CTE / 派生表（名字, 投影列），内层在前。
-    pub(crate) fn virtual_bindings(&self) -> &[(String, Vec<String>)] {
-        &self.virtuals
+    /// 可作为 FROM 候选的 CTE / 派生表；CTE 的 FROM 别名不算关系名，不暴露。
+    pub(crate) fn virtual_bindings(&self) -> impl Iterator<Item = &VirtualBinding> {
+        self.virtuals.iter().filter(|binding| !binding.is_cte_alias)
     }
 
     /// 可见的全部关系（用于 `SELECT <cursor>` 这类无限定符场景）。
@@ -75,7 +86,7 @@ impl Symbols {
         let last = last_segment(name);
         self.virtuals
             .iter()
-            .any(|(existing, _)| existing.eq_ignore_ascii_case(&last))
+            .any(|binding| binding.name.eq_ignore_ascii_case(&last))
     }
 }
 
@@ -93,7 +104,7 @@ fn last_segment(qualifier: &str) -> String {
 struct Scope {
     relations: Vec<RelationSymbol>,
     /// CTE / 派生表绑定（限定符名小写 → 投影列），按注册顺序保存。
-    virtuals: Vec<(String, Vec<String>)>,
+    virtuals: Vec<VirtualBinding>,
     output_aliases: Vec<String>,
 }
 
@@ -127,9 +138,9 @@ impl ScopeTree {
         let mut claimed: HashSet<String> = HashSet::new();
         for &id in &chain {
             let scope = &self.scopes[id];
-            for (name, columns) in &scope.virtuals {
-                if claimed.insert(name.clone()) {
-                    symbols.virtuals.push((name.clone(), columns.clone()));
+            for binding in &scope.virtuals {
+                if claimed.insert(binding.name.clone()) {
+                    symbols.virtuals.push(binding.clone());
                 }
             }
             for relation in &scope.relations {
@@ -224,6 +235,44 @@ impl SymbolCollector<'_> {
         &mut self.tree.scopes[id]
     }
 
+    /// 把 `WINDOW w AS (...)` 的定义体并入当前作用域范围。
+    ///
+    /// sqlparser 的 `NamedWindowDefinition::span` 只覆盖窗口名（上游仍标记 todo），
+    /// 光标落在窗口定义里时会被判到外层作用域，从而丢掉本层 FROM 关系。
+    fn extend_scope_with_window_specs(&mut self, select: &Select) {
+        let Some(id) = self.stack.last().copied() else {
+            return;
+        };
+        let Some((start, mut end)) = self.tree.ranges[id] else {
+            return;
+        };
+        let mut spans = Vec::new();
+        for NamedWindowDefinition(_, window) in &select.named_window {
+            let NamedWindowExpr::WindowSpec(spec) = window else {
+                continue;
+            };
+            spans.extend(spec.partition_by.iter().map(Spanned::span));
+            spans.extend(spec.order_by.iter().map(|expr| expr.expr.span()));
+        }
+        for span in spans {
+            end = end.max(self.range(span).1);
+        }
+        self.tree.ranges[id] = Some((start, end));
+    }
+
+    /// 由内向外找同名 CTE 的投影列（`FROM cte alias` 用）。
+    /// 只认 CTE 本身，不认已有的 FROM 别名，避免链式别名互相污染。
+    fn visible_virtual_columns(&self, name: &str) -> Option<Vec<String>> {
+        let name = last_segment(name);
+        self.stack.iter().rev().find_map(|&id| {
+            self.tree.scopes[id]
+                .virtuals
+                .iter()
+                .find(|binding| !binding.is_cte_alias && binding.name == name)
+                .map(|binding| binding.columns.clone())
+        })
+    }
+
     /// sqlparser span（1 基 line/col，end 闭区间）→ 字节区间（end 开区间）。
     fn range(&self, span: Span) -> (usize, usize) {
         let start = self.index.offset(span.start);
@@ -251,8 +300,12 @@ impl Visitor for SymbolCollector<'_> {
                         .collect()
                 };
                 let scope = self.scope();
-                if !scope.virtuals.iter().any(|(existing, _)| *existing == name) {
-                    scope.virtuals.push((name, columns));
+                if !scope.virtuals.iter().any(|binding| binding.name == name) {
+                    scope.virtuals.push(VirtualBinding {
+                        name,
+                        columns,
+                        is_cte_alias: false,
+                    });
                 }
             }
         }
@@ -265,6 +318,7 @@ impl Visitor for SymbolCollector<'_> {
     }
 
     fn pre_visit_select(&mut self, select: &Select) -> ControlFlow<Self::Break> {
+        self.extend_scope_with_window_specs(select);
         let aliases: Vec<String> = select
             .projection
             .iter()
@@ -296,8 +350,29 @@ impl Visitor for SymbolCollector<'_> {
                 let name = alias.name.value.to_ascii_lowercase();
                 let columns = projection_columns(subquery);
                 let scope = self.scope();
-                if !scope.virtuals.iter().any(|(existing, _)| *existing == name) {
-                    scope.virtuals.push((name, columns));
+                if !scope.virtuals.iter().any(|binding| binding.name == name) {
+                    scope.virtuals.push(VirtualBinding {
+                        name,
+                        columns,
+                        is_cte_alias: false,
+                    });
+                }
+            }
+            // MySQL `JSON_TABLE(...) AS jt`：列清单由 COLUMNS 子句显式声明，不走元数据。
+            TableFactor::JsonTable {
+                columns,
+                alias: Some(alias),
+                ..
+            } => {
+                let name = alias.name.value.to_ascii_lowercase();
+                let columns = json_table_columns(columns);
+                let scope = self.scope();
+                if !scope.virtuals.iter().any(|binding| binding.name == name) {
+                    scope.virtuals.push(VirtualBinding {
+                        name,
+                        columns,
+                        is_cte_alias: false,
+                    });
                 }
             }
             TableFactor::Table { name, alias, .. } => {
@@ -310,6 +385,25 @@ impl Visitor for SymbolCollector<'_> {
                     .checked_sub(2)
                     .and_then(|index| parts.get(index))
                     .cloned();
+                // CTE 起别名后（`FROM item_totals it`），别名必须能解析到 CTE 的投影列。
+                // 只登记虚拟别名，不写入 relations：否则元数据会按物理表去查同名的 CTE。
+                if let Some(alias) = alias
+                    && let Some(columns) = self.visible_virtual_columns(&table)
+                {
+                    let alias_name = alias.name.value.to_ascii_lowercase();
+                    let scope = self.scope();
+                    if !scope
+                        .virtuals
+                        .iter()
+                        .any(|binding| binding.name == alias_name)
+                    {
+                        scope.virtuals.push(VirtualBinding {
+                            name: alias_name,
+                            columns,
+                            is_cte_alias: true,
+                        });
+                    }
+                }
                 let relation = RelationSymbol {
                     key: TableKey {
                         database: None,
@@ -329,6 +423,19 @@ impl Visitor for SymbolCollector<'_> {
     }
 }
 
+/// `JSON_TABLE` 的 COLUMNS 清单（含 NESTED 子列）→ 列名。
+fn json_table_columns(columns: &[JsonTableColumn]) -> Vec<String> {
+    let mut names = Vec::new();
+    for column in columns {
+        match column {
+            JsonTableColumn::Named(named) => names.push(named.name.value.clone()),
+            JsonTableColumn::ForOrdinality(ident) => names.push(ident.value.clone()),
+            JsonTableColumn::Nested(nested) => names.extend(json_table_columns(&nested.columns)),
+        }
+    }
+    names
+}
+
 /// 关系对外的可用限定符名：表名与别名。
 ///
 /// 严格 SQL 里别名会屏蔽表名，这里两者都认——多给一次机会，代价只是
@@ -345,22 +452,30 @@ fn relation_names(relation: &RelationSymbol) -> Vec<String> {
 }
 
 /// 子查询投影列名：别名优先，其次裸列引用。CTE / 派生表都用它推导可见列。
+///
+/// `UNION ALL` 等集合运算的列名由首分支决定（SQL 标准），因此递归取最左分支。
 fn projection_columns(query: &Query) -> Vec<String> {
-    let SetExpr::Select(select) = query.body.as_ref() else {
-        return Vec::new();
-    };
-    select
-        .projection
-        .iter()
-        .filter_map(|item| match item {
-            SelectItem::ExprWithAlias { alias, .. } => Some(alias.value.clone()),
-            SelectItem::UnnamedExpr(Expr::Identifier(ident)) => Some(ident.value.clone()),
-            SelectItem::UnnamedExpr(Expr::CompoundIdentifier(parts)) => {
-                parts.last().map(|ident| ident.value.clone())
-            }
-            _ => None,
-        })
-        .collect()
+    projection_columns_of(query.body.as_ref())
+}
+
+fn projection_columns_of(body: &SetExpr) -> Vec<String> {
+    match body {
+        SetExpr::Select(select) => select
+            .projection
+            .iter()
+            .filter_map(|item| match item {
+                SelectItem::ExprWithAlias { alias, .. } => Some(alias.value.clone()),
+                SelectItem::UnnamedExpr(Expr::Identifier(ident)) => Some(ident.value.clone()),
+                SelectItem::UnnamedExpr(Expr::CompoundIdentifier(parts)) => {
+                    parts.last().map(|ident| ident.value.clone())
+                }
+                _ => None,
+            })
+            .collect(),
+        SetExpr::Query(query) => projection_columns(query),
+        SetExpr::SetOperation { left, .. } => projection_columns_of(left),
+        _ => Vec::new(),
+    }
 }
 
 /// `ObjectName` 的各段名（去掉引号）。
@@ -452,6 +567,24 @@ mod tests {
             Some(vec!["id".to_string()])
         );
         assert!(symbols.resolve_qualifier("u").is_empty());
+    }
+
+    /// CTE 起 FROM 别名后，别名可解析投影列，且不进入 FROM 候选。
+    #[test]
+    fn cte_from_alias_resolves_columns() {
+        let symbols = at(
+            "WITH item_totals AS (SELECT order_id, SUM(amount) AS total FROM orders) \
+             SELECT |x.total FROM item_totals x",
+        );
+        assert_eq!(
+            symbols.qualifier_virtual_columns("x"),
+            Some(vec!["order_id".to_string(), "total".to_string()])
+        );
+        let from_candidates: Vec<&str> = symbols
+            .virtual_bindings()
+            .map(|binding| binding.name.as_str())
+            .collect();
+        assert_eq!(from_candidates, vec!["item_totals"]);
     }
 
     /// 相关子查询仍看得到外层关系（未限定列可用）。
