@@ -272,6 +272,9 @@ impl Render for NavicatMain {
                     }
                 }),
             )
+            // 文本选择层：零尺寸，挂根节点首位，负责 MongoDB / JSON 展示区的双击、
+            // 拖选与复制。必须在内容之前 prepaint（见 gpui-base `TextSelectionLayer`）。
+            .child(gpui_kit::base::TextSelectionLayer)
             .child(topbar(
                 &state,
                 self.show_connection_browser,

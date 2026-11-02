@@ -618,6 +618,8 @@ pub(crate) struct JsonFoldView<'a> {
     /// 可折叠节点（由 `build_pretty` 按同一份折叠集合产出）。
     pub nodes: &'a [JsonFoldNode],
     pub row_height: f32,
+    /// 折叠行的真实内容（按当前展示行号）：复制时输出它，而不是屏上的 `{ … }`。
+    pub expanded_copy: Option<&'a std::collections::HashMap<usize, String>>,
     /// 行号列宽度；`None` 表示不显示行号列。
     pub line_num_width: Option<f32>,
     pub line_num_text_size: f32,
@@ -629,6 +631,10 @@ pub(crate) struct JsonFoldView<'a> {
     pub indent_size: usize,
     /// 需要标红的行号（非法 JSON 的诊断行）；`None` 表示不高亮任何行。
     pub error_line: Option<usize>,
+    /// 行序基准：该视图首行在窗口选择文档里的序号。
+    ///
+    /// 同一窗口有多份 JSON 视图时，各视图的行序必须错开，否则选区端点比较会误判方向。
+    pub order_base: u64,
     /// 可选的选择器前缀：给出时每个 gutter 行带 `{前缀}:{行号}`，无头用例才能点到折叠箭头。
     pub selector_prefix: Option<String>,
     /// gutter 行元素 id 前缀；同一页面有多份 JSON 视图时必须互不相同。
@@ -646,6 +652,7 @@ impl<'a> JsonFoldView<'a> {
             display,
             nodes,
             row_height: JSON_ROW_HEIGHT,
+            expanded_copy: None,
             line_num_width: Some(JSON_LINE_NUM_WIDTH),
             line_num_text_size: 11.,
             text_size: 13.,
@@ -653,6 +660,7 @@ impl<'a> JsonFoldView<'a> {
             highlight,
             indent_size: 2,
             error_line: None,
+            order_base: 0,
             selector_prefix: None,
             id_salt: "json-fold-panel".into(),
         }
@@ -757,6 +765,36 @@ pub(crate) fn json_fold_view(
                 view.highlight,
                 view.row_height,
                 view.text_size,
+                // 每行一个选择参与者：行号即阅读顺序，跨行拖选与复制按它排。
+                Some(JsonRowSelection {
+                    id: {
+                        let id = gpui::ElementId::NamedInteger(
+                            SharedString::from(format!("{}:row-text", view.id_salt)),
+                            row.line as u64,
+                        );
+                        // 折叠行的复制内容来自展开态；元素 id 带上折叠态，
+                        // 展开/折叠切换后不会继承上一帧的复制回调。
+                        if row.folded {
+                            (id, "folded").into()
+                        } else {
+                            id
+                        }
+                    },
+                    // 行号随折叠变化，序号必须带视图基准，才能与其它视图/卡片错开。
+                    order: view.order_base + row.line as u64,
+                    debug_selector: view
+                        .selector_prefix
+                        .as_ref()
+                        .map(|prefix| format!("{prefix}-text:{}", row.line)),
+                    copy_text: if row.folded {
+                        view.expanded_copy
+                            .and_then(|map| map.get(&row.line))
+                            .cloned()
+                            .map(SharedString::from)
+                    } else {
+                        None
+                    },
+                }),
             )
         }));
     div()
@@ -789,10 +827,22 @@ fn redis_json_text_row(
     indent_size: usize,
     highlight: bool,
 ) -> Div {
-    json_text_row_with_metrics(row, theme, indent_size, highlight, JSON_ROW_HEIGHT, 13.)
+    json_text_row_with_metrics(row, theme, indent_size, highlight, JSON_ROW_HEIGHT, 13., None)
+}
+
+/// 一行文本的选择参数：行内元素 id、阅读顺序、调试选择器与复制内容。
+struct JsonRowSelection {
+    id: gpui::ElementId,
+    order: u64,
+    /// 无头用例定位行内文本的调试选择器；只在测试期记录位置。
+    debug_selector: Option<String>,
+    /// 折叠行的真实内容：复制时用它替换屏上的 `{ … }`。
+    copy_text: Option<SharedString>,
 }
 
 /// 正文行的可配置版本：行高与字号由调用方决定（卡片视图比 Redis 面板小一号）。
+///
+/// `selection` 给出时该行接入文本选择（双击选词、拖选跨行、复制）；`None` 保持纯展示。
 fn json_text_row_with_metrics(
     row: &JsonViewRow,
     theme: JsonEditorTheme,
@@ -800,7 +850,11 @@ fn json_text_row_with_metrics(
     highlight: bool,
     row_height: f32,
     text_size: f32,
+    selection: Option<JsonRowSelection>,
 ) -> Div {
+    let debug_selector = selection
+        .as_ref()
+        .and_then(|selection| selection.debug_selector.clone());
     let toks = json_tokenize_line(&row.text);
     // 13px 等宽字下一层缩进约 8px；其它字号按比例缩放，卡片视图（11px）也保持层级清晰。
     let indent_px = (indent_size as f32) * text_size * (8.0 / 13.0);
@@ -849,16 +903,32 @@ fn json_text_row_with_metrics(
         .bg(row_bg)
         .pl(px(indent_px * (row.depth as f32)))
         .pr_1()
+        .when_some(debug_selector, |this, selector| {
+            this.debug_selector(move || selector)
+        })
         .when(row.is_error, |this| {
             this.border_l_2().border_color(theme.error_border)
         })
-        .child(
-            div()
+        .child({
+            let text_container = div()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_size(px(text_size))
-                .line_height(px(row_height))
-                .child(gpui::StyledText::new(text.clone()).with_highlights(highlights)),
-        )
+                .line_height(px(row_height));
+            match selection {
+                // 可选中版本自己画高亮：`SelectableText` 只吃纯文本，会丢掉 token 配色。
+                Some(selection) => {
+                    let mut element = SelectableStyledText::new(selection.id, text.clone())
+                        .highlights(highlights)
+                        .document_order(selection.order);
+                    if let Some(copy_text) = selection.copy_text {
+                        element = element.copy_text(copy_text);
+                    }
+                    text_container.child(element)
+                }
+                None => text_container
+                    .child(gpui::StyledText::new(text.clone()).with_highlights(highlights)),
+            }
+        })
         // 层级竖线：在当前行左侧按缩进层数画竖条，跨行拼接成连续导线。
         .children((0..row.depth.min(64)).filter(|d| *d > 0).map(move |d| {
             div()

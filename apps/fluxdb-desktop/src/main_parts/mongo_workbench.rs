@@ -484,8 +484,23 @@ fn mongo_workbench_record_row(
             // 文档结果优先用字段卡片展示；文本仍保留在记录里供复制。
             (_, None) if document_page.is_some() => {
                 let page = document_page.clone().expect("文档结果已缓存");
-                mongo_workbench_document_cards(tab_id, execution, page, this, colors, cx)
-                    .into_any_element()
+                // 选择行序接上前面记录：同一页多条记录时，每条记录从 0 开始会让行序重复。
+                let documents_before = workbench
+                    .executions
+                    .iter()
+                    .take_while(|candidate| candidate.id != execution_id)
+                    .map(|candidate| candidate.documents.len() as u64)
+                    .sum::<u64>();
+                mongo_workbench_document_cards(
+                    tab_id,
+                    execution,
+                    page,
+                    documents_before,
+                    this,
+                    colors,
+                    cx,
+                )
+                .into_any_element()
             }
             (Some(output), None) if output.is_empty() => div()
                 .text_color(colors.muted)
@@ -558,6 +573,7 @@ fn mongo_workbench_document_cards(
     tab_id: TabId,
     execution: &MongoWorkbenchExecution,
     page: Rc<MongoPageData>,
+    documents_before: u64,
     this: &NavicatMain,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
@@ -572,6 +588,7 @@ fn mongo_workbench_document_cards(
         expanded_fields: sets(&this.mongo_expanded_fields),
         json_fold_toggles: sets(&this.mongo_json_fold_toggles),
         page,
+        document_order_base: documents_before,
         colors,
     };
     let mut list = div()
@@ -761,7 +778,7 @@ fn mongo_workbench_document_card(
             cx,
         )
     } else {
-        mongo_field_list(view, index, document, value, document_key, cx)
+        mongo_field_list(view, index, document, value, document_key, &id_scope, cx)
     };
 
     div()

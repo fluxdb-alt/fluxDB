@@ -1009,6 +1009,7 @@ fn mongo_aggregation_stage_preview(
                 expanded_fields: expanded_fields.clone(),
                 json_fold_toggles: Rc::new(BTreeSet::new()),
                 page: data.clone(),
+                document_order_base: 0,
                 colors,
             };
             let header = tr("app.mongo.aggregation.preview_results")
@@ -1068,6 +1069,7 @@ fn mongo_aggregation_stage_preview(
                                     document,
                                     document_view.value(document_index),
                                     &document_key,
+                                    &format!("mongo-aggregation:{index}:{document_index}"),
                                     cx,
                                 )),
                         )
