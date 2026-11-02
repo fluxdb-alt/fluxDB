@@ -894,8 +894,13 @@ fn navicat_main_new(
             this.redis_add_key_applying = false;
         },
     );
-    let redis_add_key_json_input =
-        cx.new(|cx| InputState::new(window, cx).placeholder(tr("app.placeholder.json_object")));
+    // JSON 值用 JSON 组件编辑：内部多行编辑器带语法高亮与软换行，比纯文本输入更易读。
+    let redis_add_key_json_editor =
+        JsonComponent::new_with_mode(JsonEditorConfig::default(), JsonMode::Edit, window, cx);
+    let redis_add_key_json_input = redis_add_key_json_editor
+        .input()
+        .expect("JSON 组件应持有编辑框")
+        .clone();
     let redis_add_key_json_subscription = cx.subscribe_in(
         &redis_add_key_json_input,
         window,
@@ -2969,7 +2974,7 @@ fn navicat_main_new(
         _redis_add_key_ttl_subscription: redis_add_key_ttl_subscription,
         redis_add_key_string_input,
         _redis_add_key_string_subscription: redis_add_key_string_subscription,
-        redis_add_key_json_input,
+        redis_add_key_json_editor,
         _redis_add_key_json_subscription: redis_add_key_json_subscription,
         redis_add_key_hash_rows: Vec::new(),
         redis_add_key_zset_rows: Vec::new(),
@@ -3200,6 +3205,8 @@ fn navicat_main_new(
         mongo_aggregation_builders: BTreeMap::new(),
         mongo_collapsed_documents: BTreeMap::new(),
         mongo_expanded_fields: BTreeMap::new(),
+        mongo_expanded_indexes: BTreeMap::new(),
+        mongo_index_sort: BTreeMap::new(),
         mongo_json_fold_toggles: BTreeMap::new(),
         mongo_document_cache: BTreeMap::new(),
         mongo_document_editor: None,
@@ -3214,6 +3221,7 @@ fn navicat_main_new(
         _mongo_load_tasks: BTreeMap::new(),
         _mongo_info_tasks: BTreeMap::new(),
         _mongo_index_tasks: BTreeMap::new(),
+        _mongo_drop_index_tasks: BTreeMap::new(),
         _mongo_field_sample_tasks: BTreeMap::new(),
         _redis_key_value_apply_tasks: BTreeMap::new(),
         _query_execute_tasks: BTreeMap::new(),

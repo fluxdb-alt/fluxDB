@@ -52,6 +52,12 @@ impl AppController {
                 database,
                 collection,
             } => self.drop_mongo_collection(connection_id, database, collection),
+            AppCommand::DropMongoIndex {
+                connection_id,
+                database,
+                collection,
+                index,
+            } => self.drop_mongo_index(connection_id, database, collection, index),
             AppCommand::RenameMongoCollection {
                 connection_id,
                 database,
@@ -654,6 +660,30 @@ impl AppController {
                 }
             }
             Err(error) => self.fail(error),
+        }
+    }
+
+    /// 删除索引：成功后只回事件，索引列表由界面按标签页重取（大小与统计也会变）。
+    fn drop_mongo_index(
+        &mut self,
+        connection_id: ConnectionId,
+        database: String,
+        collection: String,
+        index: String,
+    ) -> AppEvent {
+        let Some(config) = self.connection_config(connection_id).cloned() else {
+            return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+        };
+        if let Err(error) = connector_for(&config).and_then(|connector| {
+            connector.mongo_drop_index(connection_id, &database, &collection, &index)
+        }) {
+            return self.fail(error);
+        }
+        AppEvent::MongoIndexDropped {
+            connection_id,
+            database,
+            collection,
+            index,
         }
     }
 

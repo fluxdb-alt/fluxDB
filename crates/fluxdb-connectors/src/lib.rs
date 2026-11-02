@@ -9,17 +9,17 @@ use fluxdb_core::{
     MongoCollectionKind, MongoDatabaseStat, MongoDocument, MongoDocumentsPage, MongoFindRequest,
     MongoImportField, MongoImportFormat, MongoImportOptions, MongoImportPreview,
     MongoImportPreviewRequest, MongoImportProgress, MongoImportReport, MongoImportRequest,
-    MongoIndexInfo, MongoServerInfo, MongoTopology, ObjectKind, ObjectPath, ObjectSummary,
-    Pagination, QueryExecutionResult, QueryExecutionSummary, QueryRequest, QuerySessionId,
-    QueryStatementKind, RedisHashFieldTtl, RedisServerVersion, Row, RowIdentity, RowUpdate,
-    SortDirection, SortSpec, SqlDialect as _, TableStructure, TriggerInfo, TriggerMeta,
+    MongoIndexField, MongoIndexInfo, MongoServerInfo, MongoTopology, ObjectKind, ObjectPath,
+    ObjectSummary, Pagination, QueryExecutionResult, QueryExecutionSummary, QueryRequest,
+    QuerySessionId, QueryStatementKind, RedisHashFieldTtl, RedisServerVersion, Row, RowIdentity,
+    RowUpdate, SortDirection, SortSpec, SqlDialect as _, TableStructure, TriggerInfo, TriggerMeta,
     UniqueKeyMeta, WriteValue, completion_fuzzy_like_pattern, is_binary_type_name,
     matches_completion_fuzzy, sqlite_attached_databases,
 };
 // MongoDB 驱动类型（crate-root include 作用域共用，避免每文件重复 use）。
 use mongodb::Client as MongoClient;
 use mongodb::bson::{Bson, Document, doc};
-use mongodb::options::{Collation, Hint, ReadPreference, SelectionCriteria};
+use mongodb::options::{Collation, Hint, IndexOptions, ReadPreference, SelectionCriteria};
 use mongodb::results::CollectionType;
 use sqlx::{
     Column as SqlxColumn, ColumnIndex, ConnectOptions as _, Connection as _, MySql, QueryBuilder,

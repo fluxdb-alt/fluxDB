@@ -14,8 +14,8 @@ fn redis_add_key_string_form(
         .child(
             div()
                 .w_full()
-                .min_h(px(140.))
-                .h(px(140.))
+                .min_h(px(420.))
+                .h(px(420.))
                 .rounded(colors.radius)
                 .border_1()
                 .border_color(colors.border)

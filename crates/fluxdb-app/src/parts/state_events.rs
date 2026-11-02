@@ -419,6 +419,13 @@ pub enum AppEvent {
     MongoFieldSampleLoaded(TabId, MongoFieldCatalog),
     /// 索引列表已回写。
     MongoIndexesLoaded(TabId, Vec<MongoIndexInfo>),
+    /// 一个索引已删除（界面据此重取索引列表并提示）。
+    MongoIndexDropped {
+        connection_id: ConnectionId,
+        database: String,
+        collection: String,
+        index: String,
+    },
     /// 聚合开始（携带本次令牌）。
     MongoAggregationStarted {
         tab_id: TabId,
