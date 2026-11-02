@@ -18,7 +18,13 @@ const MONGO_TERM_COLS: u16 = 120;
 const MONGO_TERM_ROWS: u16 = 32;
 
 /// 顶层语句补全候选：与连接器 shell 解析器支持的关键字保持一致。
-const MONGO_SHELL_KEYWORDS: &[&str] = &["use ", "show dbs", "show collections", "db."];
+const MONGO_SHELL_KEYWORDS: &[&str] = &[
+    "use ",
+    "show dbs",
+    "show collections",
+    "db.",
+    "db.getCollectionNames()",
+];
 
 /// 集合方法补全候选（`db.<集合>.` 之后）。
 const MONGO_SHELL_METHODS: &[&str] = &[
@@ -42,8 +48,19 @@ pub struct MongoCliSession {
     database: std::sync::Arc<std::sync::Mutex<String>>,
     /// 当前库的集合名（补全用）；`use` 切换后重新读取。
     collections: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    /// 所有库名（`use <库>` 补全用）；开场读一次。
+    /// 所有库名（`use <库>` 补全用）；每个会话读一次。
     databases: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// 后台列表刷新状态：CLI 与命令工作台共用，避免每次补全都重新建连。
+    refresh: std::sync::Arc<std::sync::Mutex<MongoListRefresh>>,
+}
+
+/// 补全列表的刷新记账。
+#[derive(Default)]
+struct MongoListRefresh {
+    /// 库名是否已经请求过（失败也不重试，避免每按键一次重连）。
+    databases_requested: bool,
+    /// 集合名最近请求过的库；换库才重新请求。
+    collections_for: Option<String>,
 }
 
 impl MongoCliSession {
@@ -52,23 +69,24 @@ impl MongoCliSession {
             database: std::sync::Arc::new(std::sync::Mutex::new(database)),
             collections: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             databases: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            refresh: std::sync::Arc::new(std::sync::Mutex::new(MongoListRefresh::default())),
         }
     }
 
-    fn database(&self) -> String {
+    pub fn database(&self) -> String {
         self.database
             .lock()
             .map(|value| value.clone())
             .unwrap_or_default()
     }
 
-    fn set_database(&self, database: String) {
+    pub fn set_database(&self, database: String) {
         if let Ok(mut current) = self.database.lock() {
             *current = database;
         }
     }
 
-    fn collections(&self) -> Vec<String> {
+    pub fn collections(&self) -> Vec<String> {
         self.collections
             .lock()
             .map(|value| value.clone())
@@ -81,7 +99,7 @@ impl MongoCliSession {
         }
     }
 
-    fn databases(&self) -> Vec<String> {
+    pub fn databases(&self) -> Vec<String> {
         self.databases
             .lock()
             .map(|value| value.clone())
@@ -97,6 +115,99 @@ impl MongoCliSession {
     /// 终端提示符：`<库名>> `，与 Compass / mongosh 的当前库提示一致。
     fn prompt(&self) -> String {
         format!("{}> ", self.database())
+    }
+
+    /// 后台刷新补全用的库名与当前库集合名（CLI 与命令工作台共用）。
+    ///
+    /// 读取列表要建连，可能慢到超时，所以永远不阻塞调用方：本次先用旧候选，
+    /// 结果到了再由下一次补全看到。库名每个会话只请求一次；集合名换库才重读，
+    /// 失败也不重试——补全少几条候选远好过每次按键都重连。
+    pub fn request_refresh(&self, config: &fluxdb_core::ConnectionConfig) {
+        self.refresh_databases(config);
+        self.refresh_collections(config);
+    }
+
+    /// 后台读一次全部库名（`use <库>` 补全用）。
+    fn refresh_databases(&self, config: &fluxdb_core::ConnectionConfig) {
+        {
+            let Ok(mut state) = self.refresh.lock() else {
+                return;
+            };
+            if state.databases_requested {
+                return;
+            }
+            state.databases_requested = true;
+        }
+        let connection_id = config.id;
+        let config = config.clone();
+        let session = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("fluxdb-mongo-cli-databases".to_string())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || {
+                if let Ok(objects) = fluxdb_connectors::connector_for(&config)
+                    .and_then(|connector| connector.list_objects(None))
+                {
+                    session
+                        .set_databases(objects.into_iter().map(|object| object.path.name).collect());
+                }
+            });
+        if spawned.is_err() {
+            tracing::debug!(
+                connection_id = connection_id.0,
+                "MongoDB 无法启动库名读取线程，use 补全退化为无候选"
+            );
+        }
+    }
+
+    /// 后台重读当前库的集合名（补全用）。
+    fn refresh_collections(&self, config: &fluxdb_core::ConnectionConfig) {
+        let database = self.database();
+        if database.trim().is_empty() {
+            return;
+        }
+        {
+            let Ok(mut state) = self.refresh.lock() else {
+                return;
+            };
+            if state.collections_for.as_deref() == Some(database.as_str()) {
+                return;
+            }
+            state.collections_for = Some(database.clone());
+        }
+        let connection_id = config.id;
+        let config = config.clone();
+        let session = self.clone();
+        let requested_database = database.clone();
+        let spawned = std::thread::Builder::new()
+            .name("fluxdb-mongo-cli-collections".to_string())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || {
+                let objects = fluxdb_connectors::connector_for(&config).and_then(|connector| {
+                    connector.list_objects(Some(&fluxdb_core::ObjectPath {
+                        connection_id: config.id,
+                        database: Some(requested_database.clone()),
+                        schema: None,
+                        name: String::new(),
+                        kind: fluxdb_core::ObjectKind::Database,
+                    }))
+                });
+                // 读取期间又切了库：这份结果属于旧库，丢掉，别覆盖新库的候选。
+                if let Ok(objects) = objects
+                    && session.database() == requested_database
+                {
+                    session.set_collections(
+                        objects.into_iter().map(|object| object.path.name).collect(),
+                    );
+                }
+            });
+        if spawned.is_err() {
+            tracing::debug!(
+                connection_id = connection_id.0,
+                database,
+                "MongoDB 无法启动集合名读取线程，集合补全退化为无候选"
+            );
+        }
     }
 }
 
@@ -185,9 +296,6 @@ struct MongoRepl {
     pending: Vec<u8>,
     /// 转义序列中间态（方向键等）。
     escape: Vec<u8>,
-    /// 正在后台读取集合列表的库名；`None` 表示没有在读。
-    /// 连打 `use` 时同一库不重复建连，换库则重新读。
-    refreshing: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl MongoRepl {
@@ -201,7 +309,6 @@ impl MongoRepl {
             history_cursor: 0,
             pending: Vec::new(),
             escape: Vec::new(),
-            refreshing: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -215,89 +322,8 @@ impl MongoRepl {
     fn greet(&mut self, out: &Sender<Vec<u8>>) {
         let prompt = self.prompt();
         let _ = out.send(prompt.into_bytes());
-        // 集合名只影响补全，晚一点到没关系；放到后台读，别让首次提示符等建连。
-        self.refresh_collections();
-        self.refresh_databases();
-    }
-
-    /// 后台读一次全部库名（`use <库>` 补全用）。
-    ///
-    /// 库列表在一次会话里基本不变，开场读一次就够；`use` 切换不重读，避免每次切库都建连。
-    fn refresh_databases(&mut self) {
-        let config = self.config.clone();
-        let session = self.session.clone();
-        let spawned = std::thread::Builder::new()
-            .name("fluxdb-mongo-cli-databases".to_string())
-            .stack_size(8 * 1024 * 1024)
-            .spawn(move || {
-                if let Ok(objects) = fluxdb_connectors::connector_for(&config)
-                    .and_then(|connector| connector.list_objects(None))
-                {
-                    session
-                        .set_databases(objects.into_iter().map(|object| object.path.name).collect());
-                }
-            });
-        if spawned.is_err() {
-            tracing::debug!(
-                connection_id = self.config.id.0,
-                "MongoDB 命令行无法启动库名读取线程，use 补全退化为无候选"
-            );
-        }
-    }
-
-    /// 后台重读当前库的集合名（补全用）。
-    ///
-    /// 读列表要建连，慢的时候能拖到超时；同步做会让 `use` 之后的提示符一直不出现。
-    /// 失败只让补全少几条候选，不影响输入。已有一次在途时直接跳过，避免连打 `use`
-    /// 堆出一串并发读。
-    fn refresh_collections(&mut self) {
-        let database = self.session.database();
-        if database.trim().is_empty() {
-            return;
-        }
-        // 同一个库已在读就直接复用；换了库则必须再发一次，否则新库永远拿不到候选。
-        let refreshing = self.refreshing.clone();
-        match refreshing.lock() {
-            Ok(mut in_flight) if in_flight.as_deref() != Some(database.as_str()) => {
-                *in_flight = Some(database.clone());
-            }
-            _ => return,
-        }
-        let config = self.config.clone();
-        let session = self.session.clone();
-        let spawned = std::thread::Builder::new()
-            .name("fluxdb-mongo-cli-collections".to_string())
-            .stack_size(8 * 1024 * 1024)
-            .spawn(move || {
-                let objects = fluxdb_connectors::connector_for(&config).and_then(|connector| {
-                    connector.list_objects(Some(&fluxdb_core::ObjectPath {
-                        connection_id: config.id,
-                        database: Some(database.clone()),
-                        schema: None,
-                        name: String::new(),
-                        kind: fluxdb_core::ObjectKind::Database,
-                    }))
-                });
-                // 读取期间又切了库：这份结果属于旧库，丢掉，别覆盖新库的候选。
-                if let Ok(objects) = objects
-                    && session.database() == database
-                {
-                    session.set_collections(
-                        objects.into_iter().map(|object| object.path.name).collect(),
-                    );
-                }
-                if let Ok(mut in_flight) = refreshing.lock()
-                    && in_flight.as_deref() == Some(database.as_str())
-                {
-                    *in_flight = None;
-                }
-            });
-        if spawned.is_err() {
-            // 线程起不来就把标记清掉，否则此后同一个库再也不会刷新。
-            if let Ok(mut in_flight) = self.refreshing.lock() {
-                *in_flight = None;
-            }
-        }
+        // 补全列表只影响补全，晚一点到没关系；放到后台读，别让首次提示符等建连。
+        self.session.request_refresh(&self.config);
     }
 
     /// 处理一段按键字节。
@@ -476,7 +502,7 @@ impl MongoRepl {
                 if let Some(database) = result.database {
                     // `use` 只切换本会话的库：prompt 与补全列表跟着换，连接配置不动。
                     self.session.set_database(database);
-                    self.refresh_collections();
+                    self.session.request_refresh(&self.config);
                 }
                 if !result.output.is_empty() {
                     // 连接器给的排版文本用 `\n`；终端里必须补 `\r`，否则下一行会接着上一行的列。
@@ -697,104 +723,125 @@ impl MongoCliCompletion {
     pub fn new(session: MongoCliSession) -> Self {
         Self { session }
     }
+}
 
-    /// 当前 token 的替换区间：输入行末尾连续标识符字符。
-    fn token_range(input: &str) -> (usize, usize) {
-        let end = input.len();
-        let start = input
-            .char_indices()
-            .rev()
-            .take_while(|(_, ch)| ch.is_alphanumeric() || *ch == '_')
-            .last()
-            .map(|(index, _)| index)
-            .unwrap_or(end);
-        (start, end)
-    }
+/// 当前 token 的替换区间：输入行末尾连续标识符字符。
+fn mongo_shell_token_range(input: &str) -> (usize, usize) {
+    let end = input.len();
+    let start = input
+        .char_indices()
+        .rev()
+        .take_while(|(_, ch)| ch.is_alphanumeric() || *ch == '_')
+        .last()
+        .map(|(index, _)| index)
+        .unwrap_or(end);
+    (start, end)
+}
 
-    /// 按输入行的形状给出候选（只补名字，不猜参数）。
-    ///
-    /// 集合名一律用 `db["name"]` 方括号形式（与 Compass 一致）：集合名里合法地可以带点，
-    /// `db.a.b.find(` 在解析器眼里是「集合 a、方法 b」，只有方括号能无歧义表达。
-    fn candidates(&self, input: &str) -> Vec<String> {
-        // `use fl`：补库名（后面还有别的词就说明库名写完了）。
-        if let Some(rest) = input.strip_prefix("use ")
-            && !rest.contains(char::is_whitespace)
-        {
-            return self
-                .session
-                .databases()
-                .into_iter()
-                .map(|name| format!("use {name}"))
-                .collect();
-        }
-        if let Some(rest) = input.strip_prefix("db[") {
-            return Self::bracket_candidates(self, rest);
-        }
-        if let Some(rest) = input.strip_prefix("db.") {
-            if let Some(dot) = rest.find('.') {
-                let collection = &rest[..dot];
-                let after = &rest[dot + 1..];
-                // 走到 `(` 之后就不给候选了：参数结构没法按名字猜。
-                if !collection.is_empty() && !after.contains('(') {
-                    return MONGO_SHELL_METHODS
-                        .iter()
-                        .map(|name| format!("db[\"{collection}\"].{name}("))
-                        .collect();
-                }
-            }
-            // `db.eve` / `db.`：补集合名。
-            return self
-                .session
-                .collections()
-                .into_iter()
-                .map(|name| format!("db[\"{name}\"]."))
-                .collect();
-        }
-        MONGO_SHELL_KEYWORDS
+/// 按输入行的形状给出候选（只补名字，不猜参数）。
+///
+/// 集合名一律用 `db["name"]` 方括号形式（与 Compass 一致）：集合名里合法地可以带点，
+/// `db.a.b.find(` 在解析器眼里是「集合 a、方法 b」，只有方括号能无歧义表达。
+fn mongo_shell_candidates(
+    input: &str,
+    databases: &[String],
+    collections: &[String],
+) -> Vec<String> {
+    // `use fl`：补库名（后面还有别的词就说明库名写完了）。
+    if let Some(rest) = input.strip_prefix("use ")
+        && !rest.contains(char::is_whitespace)
+    {
+        return databases
             .iter()
-            .map(|keyword| (*keyword).to_string())
-            .collect()
+            .map(|name| format!("use {name}"))
+            .collect();
     }
-
-    /// 把 `db.<集合>.` 的输入改写成方括号写法，供候选前缀比对。
-    ///
-    /// 用户用点写法打出来的行必须与方括号候选比得上，否则一个候选都出不来。集合名的边界
-    /// 是它后面的 `.`：还没出现点（`db.eve`）就说明集合名还在输入中，保持引号未闭合。
-    fn canonical_input(input: &str) -> String {
-        let Some(rest) = input.strip_prefix("db.") else {
-            return input.to_string();
-        };
-        // 已经带 `(`：语句写完了，不再补。
-        if rest.contains('(') {
-            return input.to_string();
-        }
-        match rest.find('.') {
-            Some(dot) => format!("db[\"{}\"].{}", &rest[..dot], &rest[dot + 1..]),
-            None => format!("db[\"{rest}"),
-        }
+    if let Some(rest) = input.strip_prefix("db[") {
+        return mongo_shell_bracket_candidates(rest, collections);
     }
-
-    /// `db["…"]` 之后的候选：`"]` 还没出现就是还在写集合名，出现之后补方法名。
-    fn bracket_candidates(&self, rest: &str) -> Vec<String> {
-        match rest.split_once("\"]") {
-            // `db[` / `db["eve`：补集合名。
-            None => self
-                .session
-                .collections()
-                .into_iter()
-                .map(|name| format!("db[\"{name}\"]."))
-                .collect(),
-            // `db["events"].` / `db["events"].fi`：补方法名。
-            Some((name, after)) if !after.contains('(') => {
-                let name = name.trim_start_matches('"');
-                MONGO_SHELL_METHODS
+    if let Some(rest) = input.strip_prefix("db.") {
+        if let Some(dot) = rest.find('.') {
+            let collection = &rest[..dot];
+            let after = &rest[dot + 1..];
+            // 走到 `(` 之后就不给候选了：参数结构没法按名字猜。
+            if !collection.is_empty() && !after.contains('(') {
+                return MONGO_SHELL_METHODS
                     .iter()
-                    .map(|method| format!("db[\"{name}\"].{method}("))
-                    .collect()
+                    .map(|name| format!("db[\"{collection}\"].{name}("))
+                    .collect();
             }
-            Some(_) => Vec::new(),
         }
+        // `db.eve` / `db.`：补集合名。
+        return collections
+            .iter()
+            .map(|name| format!("db[\"{name}\"]."))
+            .collect();
     }
+    MONGO_SHELL_KEYWORDS
+        .iter()
+        .map(|keyword| (*keyword).to_string())
+        .collect()
+}
+
+/// 把 `db.<集合>.` 的输入改写成方括号写法，供候选前缀比对。
+///
+/// 用户用点写法打出来的行必须与方括号候选比得上，否则一个候选都出不来。集合名的边界
+/// 是它后面的 `.`：还没出现点（`db.eve`）就说明集合名还在输入中，保持引号未闭合。
+fn mongo_shell_canonical_input(input: &str) -> String {
+    let Some(rest) = input.strip_prefix("db.") else {
+        return input.to_string();
+    };
+    // 已经带 `(`：语句写完了，不再补。
+    if rest.contains('(') {
+        return input.to_string();
+    }
+    match rest.find('.') {
+        Some(dot) => format!("db[\"{}\"].{}", &rest[..dot], &rest[dot + 1..]),
+        None => format!("db[\"{rest}"),
+    }
+}
+
+/// `db["…"]` 之后的候选：`"]` 还没出现就是还在写集合名，出现之后补方法名。
+fn mongo_shell_bracket_candidates(rest: &str, collections: &[String]) -> Vec<String> {
+    match rest.split_once("\"]") {
+        // `db[` / `db["eve`：补集合名。
+        None => collections
+            .iter()
+            .map(|name| format!("db[\"{name}\"]."))
+            .collect(),
+        // `db["events"].` / `db["events"].fi`：补方法名。
+        Some((name, after)) if !after.contains('(') => {
+            let name = name.trim_start_matches('"');
+            MONGO_SHELL_METHODS
+                .iter()
+                .map(|method| format!("db[\"{name}\"].{method}("))
+                .collect()
+        }
+        Some(_) => Vec::new(),
+    }
+}
+
+/// MongoDB shell 补全候选：终端与命令工作台共用同一套形状判断与前缀过滤。
+///
+/// 返回的候选都是**整行**文本（带 `db.` / `use` 前缀），调用方按各自的替换区间落字：
+/// 终端替换整行，工作台替换光标所在行。
+pub fn mongo_shell_completions(
+    input: &str,
+    databases: &[String],
+    collections: &[String],
+) -> Vec<String> {
+    // 候选统一用方括号拼集合名，用户敲的却是 `db.events.`。比对前把输入也转成
+    // 方括号形式，否则前缀永远对不上（`db.events.` vs `db["events"].`）会一个候选都不出。
+    let typed = mongo_shell_canonical_input(input);
+    let (start, end) = mongo_shell_token_range(&typed);
+    let prefix = &typed[..start];
+    let token = &typed[start..end];
+    mongo_shell_candidates(&typed, databases, collections)
+        .into_iter()
+        .filter(|candidate| {
+            candidate.starts_with(prefix) && candidate[prefix.len()..].starts_with(token)
+        })
+        .collect()
 }
 
 impl mterm::TerminalCompletionAdapter for MongoCliCompletion {
@@ -803,21 +850,16 @@ impl mterm::TerminalCompletionAdapter for MongoCliCompletion {
     }
 
     fn complete(&self, ctx: &mterm::TerminalCommandContext) -> Vec<mterm::TerminalCompletionItem> {
-        // 候选统一用方括号拼集合名，用户敲的却是 `db.events.`。比对前把输入也转成
-        // 方括号形式，否则前缀永远对不上（`db.events.` vs `db["events"].`）会一个候选都不出。
-        let typed = Self::canonical_input(&ctx.input);
-        let (start, end) = Self::token_range(&typed);
-        let prefix = &typed[..start];
-        let token = &typed[start..end];
         // 候选是**整行**文本（带着 `db.` / 集合名前缀），因此替换区间是整行。
         //
         // 区间用字节偏移（组件层按字节发退格）。多发的退格落在空输入行上会被忽略，
         // 不会吃掉提示符，因此含中文的输入也安全。
-        self.candidates(&typed)
+        mongo_shell_completions(
+            &ctx.input,
+            &self.session.databases(),
+            &self.session.collections(),
+        )
             .into_iter()
-            .filter(|candidate| {
-                candidate.starts_with(prefix) && candidate[prefix.len()..].starts_with(token)
-            })
             .map(|candidate| mterm::TerminalCompletionItem {
                 label: candidate.clone(),
                 insert_text: candidate.clone(),

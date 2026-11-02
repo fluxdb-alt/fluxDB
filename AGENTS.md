@@ -52,6 +52,5 @@
 | UI 组件、交互、页面上下文或 GPUI 依赖 | [UI 规范](docs/ui-style.md) |
 | 语言包、locale 或界面文案迁移 | [界面国际化](docs/i18n.md) |
 | 国际化端到端验证 | [国际化 E2E 测试规范](docs/testing/i18n-e2e.md) |
-| MongoDB 连接、浏览、集合工作台或驱动调用 | [MongoDB 支持](docs/mongodb.md)；测试见 [MongoDB 测试](docs/testing/mongodb-e2e.md) |
 | 存储结构、凭据或 AI 管理实体 | [存储与 AI 运行时约束](docs/storage-and-ai-runtime.md) 存储章节 |
 | AI 执行器、事件、取消、并发或运行时依赖 | [运行时约束](docs/storage-and-ai-runtime.md#ai-运行时与执行器) |

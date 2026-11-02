@@ -80,9 +80,9 @@ impl Render for QueryOutputResizeDrag {
 }
 
 #[derive(Clone)]
-struct RedisWorkbenchPanelResizeDrag;
+struct WorkbenchPanelResizeDrag;
 
-impl Render for RedisWorkbenchPanelResizeDrag {
+impl Render for WorkbenchPanelResizeDrag {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         Empty
     }

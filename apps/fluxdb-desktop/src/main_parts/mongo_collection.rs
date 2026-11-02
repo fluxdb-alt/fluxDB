@@ -203,6 +203,7 @@ impl NavicatMain {
             expanded_fields,
             json_fold_toggles,
             page: cache.data.clone(),
+            document_order_base: 0,
             colors,
         };
         let results = mongo_results(state, cache, &documents, colors, cx);

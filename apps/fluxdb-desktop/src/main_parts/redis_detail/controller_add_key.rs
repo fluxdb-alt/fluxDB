@@ -1,6 +1,6 @@
 // 「新增 Key」控制器（对齐 RedisInsight AddKey）：只做状态编排、校验与提交调度。
 // 打开/关闭抽屉、类型切换重置依赖字段、增删类型子表单行、收集并组装 RedisAddKeyRequest、
-// 调度 CreateRedisKey；成功后关抽屉并刷新键列表、打开新键详情，失败仅提示错误且不丢表单状态。
+// 调度 CreateRedisKey；成功后关抽屉、刷新键列表并在当前标签页选中新键，失败仅提示错误且不丢表单状态。
 
 impl NavicatMain {
     /// 读取当前选中的建 Key 类型（下拉 value → `RedisAddKeyKind`，未知默认 String）。
@@ -421,15 +421,14 @@ impl NavicatMain {
                         Ok((object, key)) => {
                             // 创建成功：关闭建 Key 抽屉（下次打开时自动重建子表单）。
                             this.redis_add_key_drawer = None;
-                            // 刷新 DB 键列表，让新键出现在列表里。
-                            this.request_data_editor_refresh(tab_id, cx);
-                            // 对齐 RedisInsight：创建后打开新键详情。
-                            let key_path = ObjectPath {
-                                kind: ObjectKind::RedisKey,
-                                name: key.clone(),
-                                ..object
+                            // 对齐 RedisInsight：不为新键另开标签页。定位到该库的键列表标签页
+                            // （建 Key 也可能从单键详情标签页触发），刷新后选中新键并展示详情。
+                            let db_tab_id = match this.dispatch(AppCommand::OpenDataEditor(object), cx) {
+                                AppEvent::TabActivated(id) | AppEvent::TabOpened(id) => id,
+                                _ => tab_id,
                             };
-                            this.dispatch(AppCommand::OpenDataEditor(key_path), cx);
+                            this.set_redis_key_pending_selection(db_tab_id, key);
+                            this.request_data_editor_refresh(db_tab_id, cx);
                             this.show_message(
                                 tr("app.redis.add_key.toast.created").replace("%{key}", &new_key),
                                 AppMessageKind::Info,

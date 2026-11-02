@@ -138,25 +138,34 @@ fn mongo_find(
     // 线程上，逐条 `block_on` 既会继承小栈，也会退化成「每条文档开一个线程」。
     // 单次读取上限是 `limit + 1`（≤ 501 条），因此取消只在进入前判断即可。
     let mut cursor = mongo_block_on(60, "find", async move { find.await })?;
-    let (documents, fetched) = mongo_block_on(60, "cursor", async move {
+    let (documents, fetched, truncated_by_bytes) = mongo_block_on(60, "cursor", async move {
         use futures_util::TryStreamExt as _;
         let mut documents = Vec::new();
         let mut fetched: u64 = 0;
+        let mut bytes = 0usize;
+        let mut truncated_by_bytes = false;
         while let Some(document) = cursor.try_next().await? {
             fetched += 1;
             if fetched > limit {
                 // 多取到的那条只用于判定还有下一页，不返回。
                 break;
             }
-            documents.push(MongoDocument {
-                id: mongo_document_id(&document),
-                json: mongo_json_text(Bson::Document(document)),
-            });
+            let id = mongo_document_id(&document);
+            let json = mongo_json_text(Bson::Document(document));
+            // 条数上限挡不住大文档：命中字节预算就提前收手，并让 `has_more` 告知调用方。
+            if !documents.is_empty()
+                && bytes + json.len() > fluxdb_core::MONGO_MAX_RESULT_BYTES
+            {
+                truncated_by_bytes = true;
+                break;
+            }
+            bytes += json.len();
+            documents.push(MongoDocument { id, json });
         }
-        Ok((documents, fetched))
+        Ok((documents, fetched, truncated_by_bytes))
     })?;
 
-    let has_more = fetched > limit;
+    let has_more = fetched > limit || truncated_by_bytes;
     // 不足一页时总数可确定（skip + 本页条数），无需再查。
     let total = (!has_more).then_some(request.skip + documents.len() as u64);
     Ok(MongoDocumentsPage {
@@ -218,23 +227,38 @@ fn mongo_aggregate(
     let client = mongo_connect(config)?;
     let database = database.to_string();
     let collection = collection.to_string();
-    let cursor = mongo_block_on(60, "MongoDB 聚合", async move {
+    let mut cursor = mongo_block_on(60, "MongoDB 聚合", async move {
         client
             .database(&database)
             .collection::<Document>(&collection)
             .aggregate(stages)
             .await
     })?;
-    let documents = mongo_collect_cursor(cursor)?;
-    let has_more = documents.len() as u64 > limit;
-    let documents = documents
-        .into_iter()
-        .take(limit as usize)
-        .map(|document| MongoDocument {
-            id: mongo_document_id(&document),
-            json: mongo_json_text(Bson::Document(document)),
-        })
-        .collect::<Vec<_>>();
+    // 与 `find` 一样边读边卡条数与字节预算：聚合可能先产出海量文档，
+    // 先读空整个游标再截断等于把内存交给查询决定。
+    let (documents, has_more) = mongo_block_on(60, "MongoDB 聚合结果", async move {
+        use futures_util::TryStreamExt as _;
+        let mut documents = Vec::new();
+        let mut bytes = 0usize;
+        let mut truncated = false;
+        while let Some(document) = cursor.try_next().await? {
+            if documents.len() as u64 >= limit {
+                truncated = true;
+                break;
+            }
+            let id = mongo_document_id(&document);
+            let json = mongo_json_text(Bson::Document(document));
+            if !documents.is_empty()
+                && bytes + json.len() > fluxdb_core::MONGO_MAX_RESULT_BYTES
+            {
+                truncated = true;
+                break;
+            }
+            bytes += json.len();
+            documents.push(MongoDocument { id, json });
+        }
+        Ok((documents, truncated))
+    })?;
     Ok(MongoDocumentsPage {
         returned: documents.len() as u64,
         documents,
@@ -268,7 +292,7 @@ fn mongo_sample_documents(
     let pipeline = vec![doc! {
         "$sample": { "size": size as i64 }
     }];
-    let cursor = mongo_block_on(30, "MongoDB 采样", async move {
+    let mut cursor = mongo_block_on(30, "MongoDB 采样", async move {
         client
             .database(&database)
             .collection::<Document>(&collection)
@@ -281,10 +305,23 @@ fn mongo_sample_documents(
             ))
             .await
     })?;
-    Ok(mongo_collect_cursor(cursor)?
-        .into_iter()
-        .map(|document| mongo_json_text(Bson::Document(document)))
-        .collect())
+    // 抽样同样受字节预算约束：`$sample` 回来的文档一样可能是 16 MB 的大文档。
+    mongo_block_on(30, "MongoDB 采样结果", async move {
+        use futures_util::TryStreamExt as _;
+        let mut documents = Vec::new();
+        let mut bytes = 0usize;
+        while let Some(document) = cursor.try_next().await? {
+            let json = mongo_json_text(Bson::Document(document));
+            if !documents.is_empty()
+                && bytes + json.len() > fluxdb_core::MONGO_MAX_RESULT_BYTES
+            {
+                break;
+            }
+            bytes += json.len();
+            documents.push(json);
+        }
+        Ok(documents)
+    })
 }
 
 /// 排序校验：值只能是 1 / -1（`$meta` 等文本排序暂不支持，显式拒绝）。

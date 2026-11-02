@@ -1023,7 +1023,7 @@ impl AppController {
     }
 
     /// 「新增 Key」（对齐 RedisInsight AddKey）。目标是目标库（`RedisDb`）路径，
-    /// 建 Key 成功后回传 [`AppEvent::RedisKeyCreated`]，UI 据此关抽屉、刷新键列表并打开新键详情。
+    /// 建 Key 成功后回传 [`AppEvent::RedisKeyCreated`]，UI 据此关抽屉、刷新键列表并在当前标签页选中新键。
     fn apply_redis_create_key_command(
         &mut self,
         tab_id: TabId,

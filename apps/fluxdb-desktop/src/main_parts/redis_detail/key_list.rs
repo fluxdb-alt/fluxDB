@@ -319,6 +319,106 @@ impl NavicatMain {
         cx.notify();
     }
 
+    /// 新建 Key 成功后记录待选中的键名：等键列表刷新完成（`DataLoaded`）再按键名定位，
+    /// 避免在旧页面上选中错行，也不需要像原来那样为单个键另开标签页。
+    fn set_redis_key_pending_selection(&mut self, tab_id: TabId, key: String) {
+        self.redis_key_pending_selection.insert(tab_id, key);
+    }
+
+    /// 消费「新建 Key 后待选中」状态：刷新结果里能找到该键才选中并滚动到可视区；
+    /// 找不到（被搜索/类型过滤掉或本批 SCAN 未返回）就安静放弃，不把选中带到后续刷新里。
+    /// 表格状态尚未创建（新开库标签页首帧还没渲染）时保留待选中，等下一次加载/元信息合并重试。
+    fn apply_redis_key_pending_selection(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        let Some(key) = self.redis_key_pending_selection.get(&tab_id).cloned() else {
+            return;
+        };
+        let Some(page) = self
+            .controller
+            .state()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .and_then(|tab| match &tab.kind {
+                TabKind::DataEditor(editor) => editor.page.clone(),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        let display_page = self.data_page_for_display(tab_id, &page);
+        if redis_key_page_row_for_key(display_page.as_ref(), &key).is_none() {
+            // 键不在刷新结果里：放弃，避免后续无关刷新把选中带到一个旧目标上。
+            self.redis_key_pending_selection.remove(&tab_id);
+            return;
+        }
+        let applied = if self.redis_key_list_mode(tab_id).is_folder() {
+            self.select_redis_key_folder_leaf(tab_id, display_page.as_ref(), &key, cx);
+            true
+        } else {
+            self.select_redis_key_flat_row(tab_id, display_page.as_ref(), &key, cx)
+        };
+        if applied {
+            self.redis_key_pending_selection.remove(&tab_id);
+        }
+    }
+
+    /// 平铺模式：按可见行下标选中表格行（详情抽屉跟随选中行），并滚到可视区。
+    /// 返回是否完成选中；表格状态尚未创建时返回 `false`，由调用方保留待选中状态。
+    fn select_redis_key_flat_row(
+        &mut self,
+        tab_id: TabId,
+        page: &DataPage,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(row_ix) = redis_key_page_row_for_key(page, key) else {
+            return true;
+        };
+        let Some(table_state) = self.data_table_states.get(&tab_id).cloned() else {
+            return false;
+        };
+        table_state.update(cx, |table, cx| {
+            table.delegate_mut().select_row_for_click(row_ix, false);
+            table.refresh(cx);
+        });
+        self.redis_key_list_uniform_scroll_handle(tab_id)
+            .scroll_to_item(row_ix, ScrollStrategy::Center);
+        cx.notify();
+        true
+    }
+
+    /// Folder 模式：先展开全部祖先 folder 让叶子可见，再按叶子键选中并滚动到对应可见行。
+    fn select_redis_key_folder_leaf(
+        &mut self,
+        tab_id: TabId,
+        page: &DataPage,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if redis_key_page_row_for_key(page, key).is_none() {
+            return;
+        }
+        let delimiter = RedisKeyDelimiter::default();
+        let segments: Vec<&str> = delimiter.split(key).collect();
+        let expanded = self.redis_key_list_expanded.entry(tab_id).or_default();
+        let mut prefix = String::new();
+        for segment in &segments[..segments.len().saturating_sub(1)] {
+            prefix = delimiter.join_path(&prefix, segment);
+            expanded.insert(prefix.clone());
+        }
+        self.redis_key_folder_visible_cache.remove(&tab_id);
+        self.set_redis_key_list_selected_leaf(tab_id, key.to_string(), cx);
+        let visible_ix = self
+            .redis_key_folder_visible_rows(tab_id, page)
+            .iter()
+            .position(|row| row.kind == RedisKeyRowKind::Leaf && row.key == key);
+        if let Some(visible_ix) = visible_ix {
+            self.redis_key_list_uniform_scroll_handle(tab_id)
+                .scroll_to_item(visible_ix, ScrollStrategy::Center);
+        }
+        cx.notify();
+    }
+
     fn redis_key_list_folder_hovered(&self, tab_id: TabId) -> Option<usize> {
         self.redis_key_list_folder_hovered.get(&tab_id).copied()
     }
