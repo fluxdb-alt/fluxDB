@@ -189,8 +189,11 @@ pub(crate) fn trailing_ident_qualifier(before: &str) -> bool {
     }
     // 取 '.' 前的一段标识符；支持 `"schema".` / `` `schema`. `` / `[schema].`。
     // 标识符内不能夹着字符串/注释片段。
+    // 从 '.' 前一位向左取连续标识符；必须排除 '.' 本身，否则循环首个字符即非标识符，
+    // `start` 停留在 `dot` 并被下面的 `start >= dot` 判为无前缀（原先只有带引号的
+    // 标识符靠后续引号回退巧合绕开）。
     let mut start = dot;
-    for (index, ch) in before.char_indices().rev() {
+    for (index, ch) in trimmed[..dot].char_indices().rev() {
         if is_ident_char(ch) {
             start = index;
         } else {
@@ -416,6 +419,10 @@ mod filter_items_tests {
         }
         assert!(!trailing_ident_qualifier("SELECT * FROM ."));
         assert!(!trailing_ident_qualifier("SELECT 'x.'"));
+        assert!(
+            trailing_ident_qualifier("SELECT * FROM completion_lab."),
+            "plain ident qualifier"
+        );
     }
 }
 
