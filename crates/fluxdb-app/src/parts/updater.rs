@@ -17,6 +17,8 @@ const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_SIGNATURE_BYTES: u64 = 4 * 1024;
 const MAX_UPDATE_BYTES: u64 = 512 * 1024 * 1024;
 const DOWNLOAD_BUFFER_BYTES: usize = 256 * 1024;
+/// 每次下载使用独立的临时文件，避免被取消的旧任务清理文件时误删新任务的进度。
+static DOWNLOAD_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[derive(Clone, Debug, SerdeDeserialize, SerdeSerialize, PartialEq, Eq)]
 pub struct UpdateManifest {
@@ -400,7 +402,11 @@ pub fn download_update(
             format!("创建更新缓存目录失败：{error}"),
         )
     })?;
-    let part_path = target_dir.join(format!("update-{}.part", std::process::id()));
+    let part_path = target_dir.join(format!(
+        "update-{}-{}.part",
+        std::process::id(),
+        DOWNLOAD_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let final_path = target_dir.join(update_file_name(asset.kind));
     let response = network_agent(std::time::Duration::from_secs(30 * 60))
         .get(&asset.url)
