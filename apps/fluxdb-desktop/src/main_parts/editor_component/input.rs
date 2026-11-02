@@ -160,8 +160,7 @@ impl Editor {
         let start = self.buffer.line_start(point.row);
         let end = self.buffer.line_end_offset(point.row);
         self.selection = Selection::new(start, end);
-        cx.emit(EditorEvent::SelectionChanged(self.selection.clone()));
-        cx.notify()
+        self.emit_selection(cx);
     }
 
     // ------------------------------------------------------------ Snippet 会话
@@ -492,6 +491,9 @@ impl Editor {
 
     /// 广播选区变更事件并请求重绘（鼠标选区多处复用）。
     fn emit_selection(&mut self, cx: &mut Context<Self>) {
+        // 鼠标点击/拖选也移动光标：签名提示跟随光标，必须同步刷新，
+        // 否则移出调用括号后旧签名浮层会一直停在屏幕上。
+        self.request_signature(cx);
         cx.emit(EditorEvent::SelectionChanged(self.selection.clone()));
         cx.notify();
     }

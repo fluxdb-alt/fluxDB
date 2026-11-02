@@ -1866,6 +1866,8 @@ impl Editor {
     fn select_all(&mut self, cx: &mut Context<Self>) {
         let len = self.buffer.len();
         self.selection = Selection::new(0, len);
+        // 光标跳到文末：签名提示同样要跟着刷新。
+        self.request_signature(cx);
         cx.emit(EditorEvent::SelectionChanged(self.selection.clone()));
         cx.notify();
     }
