@@ -87,7 +87,9 @@ impl Render for Editor {
             .debug_selector(|| "query-editor".into())
             .relative()
             .size_full()
-            .overflow_hidden()
+            // 不裁剪编辑器根：补全浮层是它的绝对定位子节点，矮编辑器（如 MongoDB
+            // 工作台）里浮层要能越过编辑器边界盖到结果区上；正文滚动内容已由
+            // 内层滚动视口的 `overflow_hidden` 单独裁剪。
             .key_context(CONTEXT)
             .track_focus(&focus_handle)
             .tab_index(0)
@@ -203,7 +205,24 @@ impl Render for Editor {
         // 重入 panic）；事件闭包再各自捕获 Editor Entity 做 accept / hover。
         let popup_data = self.completion_popup_data(window);
         if let Some(data) = popup_data {
-            root = root.child(completion_popup(editor.clone(), data));
+            // 浮层按窗口坐标画在 `deferred` 层：矮编辑器里它要盖到结果区上，
+            // 若只作为编辑器子节点，后渲染的结果区会把它遮住/裁掉。
+            // `completion_placement` 给的是编辑器本地坐标，这里补上视口原点换算成窗口坐标。
+            let viewport_origin = scroll_handle.bounds().origin;
+            let popup_origin = gpui::point(
+                data.origin.x + viewport_origin.x,
+                data.origin.y + viewport_origin.y,
+            );
+            root = root.child(
+                gpui::deferred(
+                    gpui::anchored()
+                        .anchor(gpui::Anchor::TopLeft)
+                        .position(popup_origin)
+                        .snap_to_window_with_margin(px(8.))
+                        .child(completion_popup(editor.clone(), data)),
+                )
+                .with_priority(2),
+            );
         }
         if find_open {
             root = root.child(find_bar(editor, find_input, replace_input, theme));

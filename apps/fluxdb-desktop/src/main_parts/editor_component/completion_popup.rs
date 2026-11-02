@@ -33,7 +33,7 @@ pub(crate) fn completion_popup(
     data: CompletionPopupData,
 ) -> impl IntoElement {
     let CompletionPopupData {
-        origin,
+        origin: _,
         size,
         theme,
         font,
@@ -81,10 +81,9 @@ pub(crate) fn completion_popup(
             )
         }));
 
+    // 位置由外层 `deferred(anchored())` 按窗口坐标给；这里只定型宽高，
+    // 不再自己 `.absolute()`，否则会与锚点叠加。
     let panel = div()
-        .absolute()
-            .left(origin.x)
-            .top(origin.y)
             .w(size.width)
             .h(size.height)
             .p(px(4.))
@@ -419,6 +418,9 @@ fn completion_row(
         .id(ElementId::from(index))
         .debug_selector(move || format!("completion-item:{debug_label}"))
         .h(px(COMPLETION_ROW_HEIGHT))
+        // 固定行高、不参与 flex 收缩：否则候选多于可见行时整列会被压扁，
+        // 没有溢出内容就没有滚动范围（表现为“补全太多却滚不动”）。
+        .flex_none()
         .flex()
         .items_center()
         .gap_1()

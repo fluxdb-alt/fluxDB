@@ -15,6 +15,7 @@ mod i18n_e2e_tests {
 
     include!("i18n_tests/large_value_window.rs");
     include!("i18n_tests/redis_stream.rs");
+    include!("i18n_tests/redis_key_selection.rs");
     include!("i18n_tests/config_proposal.rs");
     include!("i18n_tests/sql_editor_edit.rs");
     include!("i18n_tests/table_page_query.rs");
@@ -29,6 +30,8 @@ mod i18n_e2e_tests {
     include!("i18n_tests/mongo_collection_menu.rs");
     include!("i18n_tests/mongo_query_panel.rs");
     include!("i18n_tests/mongo_aggregation_cards.rs");
+    include!("i18n_tests/mongo_workbench_cards.rs");
+    include!("i18n_tests/mongo_collection_selection.rs");
     include!("i18n_tests/mongo_indexes_page.rs");
     include!("i18n_tests/sqlserver_table_context.rs");
     include!("i18n_tests/user_admin_toolbar.rs");

@@ -17,6 +17,10 @@ const REDIS_WB_TOOLBAR_HEIGHT: f32 = 40.;
 // 右侧布局下编辑器区宽度的夹取边界：编辑器不至窄到没法写命令，结果区也始终留得下。
 const REDIS_WB_EDITOR_MIN_WIDTH: f32 = 320.;
 const REDIS_WB_RESULT_MIN_WIDTH: f32 = 320.;
+// 上下分栏的像素下限：占比下限在窗口较矮时仍可能把一侧压到几十像素，
+// 这里再兜一层绝对高度，保证编辑器能看清光标、结果区能看出一行记录。
+const WORKBENCH_EDITOR_MIN_HEIGHT: f32 = 100.;
+const WORKBENCH_RESULT_MIN_HEIGHT: f32 = 120.;
 // 单条执行记录卡片的结果区最大高度：超长 reply 在卡片内滚动，避免把整张卡片 / 外层列表撑高。
 const REDIS_WB_RECORD_BODY_MAX_HEIGHT: f32 = 320.;
 // 执行摘要的数值列按完整表头留宽；空间不足时由整张表横向滚动，而不是压缩成省略号。
@@ -62,13 +66,16 @@ fn query_output_clamp_height(result_height: f32, split_height: f32) -> f32 {
     }
 }
 
-/// 把编辑器区尺寸（像素）夹到「结果区 ∈ [split/6, 0.80·split]」对应的范围（Workbench）。
+/// 把上下分栏的编辑器高度（像素）夹到「结果区 ∈ [split/6, 0.80·split]」对应的范围。
 /// 结果最小 ⇒ editor 最大 = split − split/6 = 5·split/6；结果最大(0.80·split) ⇒ editor 最小 = 0.20·split。
+/// 占比下限之外再叠加像素下限，避免矮窗口把某一侧压到只剩几十像素。
 /// 可用空间过小时退化为对半，避免 `clamp` 因 min>max 触发 panic。
-/// 轴无关：`split` 传分栏可用高度即得高度约束，传可用宽度即得宽度约束。
-fn redis_workbench_clamp_editor_size(size: f32, split: f32) -> f32 {
-    let min_editor = split * (1. - REDIS_WB_RESULT_MAX_SPLIT_RATIO);
-    let max_editor = split * (1. - 1. / (1. + 1. / RESULT_MIN_EDITOR_RATIO));
+/// 只用于高度：宽度的像素下限不同，见 `redis_workbench_editor_width`。
+fn workbench_clamp_editor_size(size: f32, split: f32) -> f32 {
+    let min_editor = (split * (1. - REDIS_WB_RESULT_MAX_SPLIT_RATIO))
+        .max(WORKBENCH_EDITOR_MIN_HEIGHT);
+    let max_editor = (split * (1. - 1. / (1. + 1. / RESULT_MIN_EDITOR_RATIO)))
+        .min(split - WORKBENCH_RESULT_MIN_HEIGHT);
     if min_editor >= max_editor {
         split / 2.
     } else {
@@ -77,8 +84,8 @@ fn redis_workbench_clamp_editor_size(size: f32, split: f32) -> f32 {
 }
 
 /// 由全局分栏占比换算编辑器区高度（像素）。
-fn redis_workbench_editor_height(ratio: f32, split_height: f32) -> f32 {
-    redis_workbench_clamp_editor_size(split_height * ratio, split_height)
+fn workbench_editor_height(ratio: f32, split_height: f32) -> f32 {
+    workbench_clamp_editor_size(split_height * ratio, split_height)
 }
 
 /// 右侧布局下编辑器区宽度（像素）：取自设置，夹到
@@ -1360,7 +1367,7 @@ fn redis_workbench_content(
             let split_height = redis_workbench_split_height(window);
             let ratio =
                 f32::from(this.controller.state().settings.redis_workbench_editor_ratio) / 100.0;
-            redis_workbench_editor_height(ratio, split_height)
+            workbench_editor_height(ratio, split_height)
         }
         ResultsPlacement::Right => {
             let available = redis_workbench_split_width(this, window);
@@ -1376,7 +1383,13 @@ fn redis_workbench_content(
         window,
         cx,
     );
-    let split_handle = redis_workbench_split_handle(editor_size, placement, colors, cx);
+    let split_handle = workbench_split_handle(
+        WorkbenchSplitTarget::Redis,
+        editor_size,
+        placement,
+        colors,
+        cx,
+    );
     let results = redis_workbench_results(tab_id, workbench, this, colors, cx);
 
     // 编辑器区与结果区的排布方向由布局决定；结果区始终 flex_1 吃掉剩余空间。
@@ -2148,7 +2161,7 @@ fn redis_workbench_toolbar(
                     this.results_placement = this.results_placement.toggled();
                     // 布局一变，旧拖拽起点记录的尺寸属于另一种轴（高/宽），必须丢弃，
                     // 否则下一次拖动会把残留的高度当成宽度用。
-                    this.redis_workbench_panel_resize_start = None;
+                    this.workbench_panel_resize_start = None;
                     cx.notify();
                     cx.stop_propagation();
                 }),
@@ -2177,21 +2190,32 @@ fn redis_workbench_input_panel(
     // 返回具体 `Div` 而非 `impl IntoElement`：后者会捕获 `_cx` 的生命周期，
     // 调用方一旦把结果存进局部变量就会与后续的 `cx` 借用冲突。
     let panel = div()
-        .flex_none()
         .border_color(colors.border)
         .bg(colors.input_bg);
     let panel = match placement {
-        ResultsPlacement::Bottom => panel.h(px(size)).min_h(px(0.)).border_b_1(),
-        ResultsPlacement::Right => panel.w(px(size)).h_full().min_w(px(0.)).border_r_1(),
+        // 上下分栏允许收缩（但保留像素下限）：按视口估算的分栏高可能大于实际
+        // 可用高，固定不缩会把结果区压到下限以下。右侧布局由宽度约束，保持不缩。
+        ResultsPlacement::Bottom => panel
+            .h(px(size))
+            .min_h(px(WORKBENCH_EDITOR_MIN_HEIGHT))
+            .flex_initial()
+            .border_b_1(),
+        ResultsPlacement::Right => panel
+            .w(px(size))
+            .h_full()
+            .min_w(px(0.))
+            .flex_none()
+            .border_r_1(),
     };
     panel.child(editor)
 }
 
-/// Redis Workbench 上下分栏拖动手柄：居中一排 3 个圆点（对齐 RedisInsight 的 grip 观感）。
+/// Workbench 分栏拖动手柄：居中一排 3 个圆点（对齐 RedisInsight 的 grip 观感）。
 /// 拖动改变分栏大小并即时写回持久化设置，重开 Workbench 仍可恢复。
-/// 「下方」布局拖的是高度（写 `redis_workbench_editor_ratio`），
-/// 「右侧」布局拖的是宽度（写 `redis_workbench_editor_width`）。
-fn redis_workbench_split_handle(
+/// Redis「下方」布局拖高度（`redis_workbench_editor_ratio`），「右侧」拖宽度
+/// （`redis_workbench_editor_width`）；MongoDB Workbench 只支持上下分栏。
+fn workbench_split_handle(
+    target: WorkbenchSplitTarget,
     editor_size: f32,
     placement: ResultsPlacement,
     colors: UiColors,
@@ -2220,47 +2244,50 @@ fn redis_workbench_split_handle(
     };
 
     handle
-        .id("redis-workbench-split-handle")
+        .id(match target {
+            WorkbenchSplitTarget::Redis => "redis-workbench-split-handle",
+            WorkbenchSplitTarget::Mongo => "mongo-workbench-split-handle",
+        })
         .flex_none()
         .bg(colors.panel_bg)
         .hover(move |style| style.bg(colors.hover))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                // 起点记下布局与两个轴的坐标：布局可能在松手前被工具栏切走，
-                // 而 `on_mouse_up` 未必触发（见 `RedisWorkbenchPanelResizeStart` 的说明）。
-                this.redis_workbench_panel_resize_start =
-                    Some(RedisWorkbenchPanelResizeStart {
-                        placement,
-                        x: f32::from(event.position.x),
-                        y: f32::from(event.position.y),
-                        size: editor_size,
-                    });
+                // 起点记下目标、布局与两个轴的坐标：布局可能在工作台间切换、
+                // 松手也可能不触发（见 `WorkbenchPanelResizeStart` 的说明）。
+                this.workbench_panel_resize_start = Some(WorkbenchPanelResizeStart {
+                    target,
+                    placement,
+                    x: f32::from(event.position.x),
+                    y: f32::from(event.position.y),
+                    size: editor_size,
+                });
                 cx.stop_propagation();
             }),
         )
-        .on_drag(RedisWorkbenchPanelResizeDrag, |drag, _, _, cx| {
+        .on_drag(WorkbenchPanelResizeDrag, |drag, _, _, cx| {
             cx.stop_propagation();
             cx.new(|_| drag.clone())
         })
         .on_drag_move(cx.listener(
-            move |this, event: &DragMoveEvent<RedisWorkbenchPanelResizeDrag>, window, cx| {
-                let Some(start) = this.redis_workbench_panel_resize_start else {
+            move |this, event: &DragMoveEvent<WorkbenchPanelResizeDrag>, window, cx| {
+                let Some(start) = this.workbench_panel_resize_start else {
                     return;
                 };
-                // 一律按**起点记录的布局**换算，不读实时值：起点与轴必须配对。
+                // 一律按**起点记录的目标/布局**换算，不读实时值：目标与轴必须配对。
                 let mut settings = this.controller.state().settings.clone();
-                match start.placement {
-                    ResultsPlacement::Bottom => {
+                match (start.target, start.placement) {
+                    (WorkbenchSplitTarget::Redis, ResultsPlacement::Bottom) => {
                         // 增量 = 当前 Y − 按下 Y：手柄向下拖（Y 增大）→ 编辑器区变高。
                         let delta = f32::from(event.event.position.y) - start.y;
                         let split = redis_workbench_split_height(window);
-                        let new_size = redis_workbench_clamp_editor_size(start.size + delta, split);
+                        let new_size = workbench_clamp_editor_size(start.size + delta, split);
                         // 换算回整数占比写入内存设置，触发重渲染即时反馈；落盘推迟到松开鼠标。
                         settings.redis_workbench_editor_ratio =
                             (new_size / split * 100.0).round().clamp(0.0, 100.0) as u8;
                     }
-                    ResultsPlacement::Right => {
+                    (WorkbenchSplitTarget::Redis, ResultsPlacement::Right) => {
                         // 增量 = 当前 X − 按下 X：编辑器区在**左**，手柄向右拖 → 编辑器区变宽。
                         // 注意这与 SQL 结果面板相反（那块面板在右侧、向左生长，
                         // 所以那边是 `start.x - current.x`），别照抄。
@@ -2270,6 +2297,14 @@ fn redis_workbench_split_handle(
                             redis_workbench_editor_width(start.size + delta, available);
                         settings.redis_workbench_editor_width =
                             new_size.round().clamp(0.0, f32::from(u16::MAX)) as u16;
+                    }
+                    (WorkbenchSplitTarget::Mongo, _) => {
+                        // Mongo Workbench 只有上下分栏，恒定按 Y 轴换算。
+                        let delta = f32::from(event.event.position.y) - start.y;
+                        let split = mongo_workbench_split_height(window);
+                        let new_size = workbench_clamp_editor_size(start.size + delta, split);
+                        settings.mongo_workbench_editor_ratio =
+                            (new_size / split * 100.0).round().clamp(0.0, 100.0) as u8;
                     }
                 }
                 let _ = this.controller.dispatch(AppCommand::SaveSettings(settings));
@@ -2284,7 +2319,7 @@ fn redis_workbench_split_handle(
         .on_mouse_up(
             MouseButton::Left,
             cx.listener(move |this, _: &MouseUpEvent, _, cx| {
-                if this.redis_workbench_panel_resize_start.take().is_some() {
+                if this.workbench_panel_resize_start.take().is_some() {
                     let _ = this.storage.save_settings(&this.controller.state().settings);
                     cx.stop_propagation();
                 }
@@ -2293,7 +2328,7 @@ fn redis_workbench_split_handle(
         .on_mouse_up_out(
             MouseButton::Left,
             cx.listener(move |this, _: &MouseUpEvent, _, cx| {
-                if this.redis_workbench_panel_resize_start.take().is_some() {
+                if this.workbench_panel_resize_start.take().is_some() {
                     let _ = this.storage.save_settings(&this.controller.state().settings);
                     cx.stop_propagation();
                 }
@@ -2353,7 +2388,7 @@ fn redis_workbench_results(
     div()
         .flex_1()
         .min_w(px(0.))
-        .min_h(px(0.))
+        .min_h(px(WORKBENCH_RESULT_MIN_HEIGHT))
         .flex()
         .flex_col()
         .overflow_hidden()
@@ -6084,4 +6119,28 @@ fn data_editor_action_state(
             rgb(0xe8f2ff)
         })
     })
+}
+
+#[cfg(test)]
+mod workbench_split_tests {
+    use super::*;
+
+    #[test]
+    fn clamp_keeps_both_panes_above_pixel_floor() {
+        // 400px 分栏：占比例下限只有 80px，必须被 100px 像素下限抬高。
+        let split = 400.;
+        assert_eq!(
+            workbench_clamp_editor_size(0., split),
+            WORKBENCH_EDITOR_MIN_HEIGHT
+        );
+        let max = workbench_clamp_editor_size(10_000., split);
+        assert!(max >= WORKBENCH_EDITOR_MIN_HEIGHT);
+        assert!(split - max >= WORKBENCH_RESULT_MIN_HEIGHT - 0.001);
+    }
+
+    #[test]
+    fn clamp_falls_back_to_half_when_split_is_too_small() {
+        let split = 150.;
+        assert_eq!(workbench_clamp_editor_size(120., split), split / 2.);
+    }
 }

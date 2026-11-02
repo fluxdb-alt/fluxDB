@@ -755,6 +755,8 @@ impl NavicatMain {
                     self.ensure_redis_key_metadata(*tab_id, cx);
                 }
                 self.refresh_data_table_state(*tab_id, page, cx);
+                // 新建 Key 后等这次刷新落地，再在新页里按键名选中它并展示详情。
+                self.apply_redis_key_pending_selection(*tab_id, cx);
                 if self.pending_table_data_export_after_load == Some(*tab_id) {
                     self.pending_table_data_export_after_load = None;
                     self.open_table_data_export(*tab_id, cx);
@@ -772,6 +774,8 @@ impl NavicatMain {
                 // 就像「永远没加载出来」。随后再续补下一批可见行；`loaded` 已含本次合并的键，
                 // 没有新的缺元信息可见行时 `ensure_redis_key_metadata` 自然终止，不会重复循环。
                 self.refresh_active_data_table(*tab_id, cx);
+                // 新建 Key 的待选中可能在元信息补齐时才具备可用的表格状态，这里再消费一次。
+                self.apply_redis_key_pending_selection(*tab_id, cx);
                 self.ensure_redis_key_metadata(*tab_id, cx);
             }
             AppEvent::TabOpened(tab_id) => {
@@ -896,6 +900,7 @@ impl NavicatMain {
                 self.redis_workbench_inputs.remove(tab_id);
                 self._redis_workbench_input_subscriptions.remove(tab_id);
                 self.mongo_workbench_inputs.remove(tab_id);
+                self.mongo_workbench_completion.remove(tab_id);
                 self._mongo_workbench_input_subscriptions.remove(tab_id);
                 // 关掉 Redis CLI 终端：终止 PTY 子进程并释放对应终端会话实体。
                 if let Some(session) = self.terminal_sessions.remove(tab_id) {
@@ -904,7 +909,7 @@ impl NavicatMain {
                 // 关闭 Redis Pub/Sub 会话：随模型 drop 断开订阅连接，停止后续轮询派发。
                 self.close_pubsub_session(*tab_id);
                 // 上下分栏为全局状态，标签页关闭时一并复位拖动，避免残留中断态。
-                self.redis_workbench_panel_resize_start = None;
+                self.workbench_panel_resize_start = None;
                 if self
                     .pending_dangerous_redis_command
                     .as_ref()
@@ -1094,6 +1099,7 @@ impl NavicatMain {
                 self.redis_key_list_uniform_scroll.remove(tab_id);
                 self.redis_key_folder_visible_cache.remove(tab_id);
                 self.redis_key_list_loaded.remove(tab_id);
+                self.redis_key_pending_selection.remove(tab_id);
                 if self.redis_key_list_hovered_tab == Some(*tab_id) {
                     self.redis_key_list_hovered_tab = None;
                 }

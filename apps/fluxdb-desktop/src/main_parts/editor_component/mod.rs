@@ -3709,5 +3709,17 @@ mod multibyte_completion_tests {
 
         assert_eq!(range, CoreRange::new(0, 3));
     }
+
+    #[test]
+    fn completion_popup_shows_at_most_eight_rows() {
+        assert_eq!(completion_visible_row_count(0), 0);
+        assert_eq!(completion_visible_row_count(5), 5);
+        assert_eq!(completion_visible_row_count(20), 8);
+        // 最少按 3 行高度展示（候选不足 3 行时由浮层最小高度兜底）。
+        assert_eq!(
+            COMPLETION_POPUP_MIN_HEIGHT,
+            3. * COMPLETION_ROW_HEIGHT + 10.
+        );
+    }
 }
 

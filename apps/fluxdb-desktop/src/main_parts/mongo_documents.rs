@@ -186,7 +186,11 @@ struct MongoPageData {
 
 impl MongoPageData {
     fn build(page: Option<&fluxdb_core::MongoDocumentsPage>) -> Self {
-        let documents = page.map_or_else(Vec::new, |page| page.documents.clone());
+        Self::from_documents(page.map_or_else(Vec::new, |page| page.documents.clone()))
+    }
+
+    /// 从任意一批文档建快照；工作台的结果不走 `MongoDocumentsPage`，共用同一套解析与表格列。
+    fn from_documents(documents: Vec<fluxdb_core::MongoDocument>) -> Self {
         let values = documents
             .iter()
             .map(|document| serde_json::from_str::<JsonValue>(&document.json).ok())
@@ -323,6 +327,9 @@ struct MongoDocumentView {
     json_fold_toggles: Rc<BTreeSet<String>>,
     /// 本页文档快照（原文 + 解析结果），来自渲染缓存。
     page: Rc<MongoPageData>,
+    /// 排在当前列表之前的文档数：窗口级选择按文档序号 + 行号排阅读顺序，
+    /// 同一窗口里有多个列表（工作台的多条记录）时必须把序号接上，否则行序重复会让选区跳到别的卡片。
+    document_order_base: u64,
     colors: UiColors,
 }
 
@@ -556,9 +563,9 @@ fn mongo_document_card(
     let body = if collapsed {
         div()
     } else if context.display == MongoDisplayMode::Json {
-        mongo_json_block(view, index, document, value, &document_key, cx)
+        mongo_json_block(view, index, document, value, &document_key, "mongo-document", cx)
     } else {
-        mongo_field_list(view, index, document, value, &document_key, cx)
+        mongo_field_list(view, index, document, value, &document_key, "mongo-document", cx)
     };
 
     div()
@@ -653,9 +660,12 @@ fn mongo_json_block(
     document: &fluxdb_core::MongoDocument,
     value: Option<&JsonValue>,
     document_key: &str,
+    // 视图作用域：同一页可能有多个宿主（集合页、工作台多条记录）同时渲染第 0 篇文档，
+    // 元素 id 必须带上宿主前缀，否则不同卡片的折叠行会共用全局状态。
+    id_scope: &str,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let selector = format!("mongo-document-json:{index}");
+    let selector = format!("{id_scope}-json:{index}");
     let colors = view.colors;
     // 用户点过的节点（去掉文档身份前缀）。默认态是「根展开、嵌套全收起」，
     // 与默认相反的节点才会出现在这里，因此空集合直接等于完整默认态。
@@ -667,10 +677,12 @@ fn mongo_json_block(
         .map(str::to_string)
         .collect::<BTreeSet<_>>();
     // 先完整解析拿到所有可折叠节点，再按「深度 > 0 且未点开」算出需要折叠的路径。
-    // 解析结果来自渲染缓存，这里只重算 pretty 文本（折叠态每帧都可能不同）。
-    let folds = value
-        .map(|value| {
-            build_pretty_value(value, MONGO_JSON_INDENT, &BTreeSet::new())
+    // 展开态结果同时用来取折叠行的真实内容（复制用），避免再解析一遍。
+    let unfolded = value.map(|value| build_pretty_value(value, MONGO_JSON_INDENT, &BTreeSet::new()));
+    let folds = unfolded
+        .as_ref()
+        .map(|unfolded| {
+            unfolded
                 .nodes
                 .iter()
                 .filter(|node| {
@@ -684,6 +696,10 @@ fn mongo_json_block(
     let body = match value {
         Some(value) => {
             let pretty = build_pretty_value(value, MONGO_JSON_INDENT, &folds);
+            let expanded_copy = unfolded
+                .as_ref()
+                .map(|unfolded| mongo_expanded_copy(unfolded, &pretty))
+                .unwrap_or_default();
             let entity = cx.entity().downgrade();
             let tab_id = view.tab_id;
             let document_key = document_key.to_string();
@@ -691,6 +707,7 @@ fn mongo_json_block(
                 &JsonFoldView {
                     display: &pretty.text,
                     nodes: &pretty.nodes,
+                    expanded_copy: Some(&expanded_copy),
                     row_height: MONGO_JSON_ROW_HEIGHT,
                     line_num_width: Some(MONGO_JSON_LINE_NUM_WIDTH),
                     line_num_text_size: 9.,
@@ -699,8 +716,10 @@ fn mongo_json_block(
                     highlight: true,
                     indent_size: MONGO_JSON_INDENT,
                     error_line: None,
-                    selector_prefix: Some(format!("mongo-json-fold:{index}")),
-                    id_salt: format!("mongo-json-fold:{index}").into(),
+                    // 与其他卡片的行序错开：文档序号进高位，行号留低位。
+                    order_base: (view.document_order_base + index as u64) << 32,
+                    selector_prefix: Some(format!("{id_scope}-json-fold:{index}")),
+                    id_salt: format!("{id_scope}-json-fold:{index}").into(),
                 },
                 colors,
                 move |path, _window, cx| {
@@ -731,13 +750,43 @@ fn mongo_json_block(
         .child(body)
 }
 
+/// 折叠行的复制文本：按路径匹配展开态的同一节点，用它的完整行区间替换屏上的 `{ … }`。
+///
+/// 键是展示态行号（行号随折叠变化，所以每帧重算），值是展开后的多行文本（含 key 与缩进）。
+fn mongo_expanded_copy(
+    unfolded: &PrettyJson,
+    folded: &PrettyJson,
+) -> std::collections::HashMap<usize, String> {
+    let lines = unfolded.text.lines().collect::<Vec<_>>();
+    let mut copy = std::collections::HashMap::new();
+    for node in folded.nodes.iter().filter(|node| node.folded) {
+        let key = json_fold_path_key(&node.path);
+        let Some(unfolded_node) = unfolded
+            .nodes
+            .iter()
+            .find(|candidate| json_fold_path_key(&candidate.path) == key)
+        else {
+            continue;
+        };
+        let Some(block) = lines.get(unfolded_node.start_line..=unfolded_node.end_line) else {
+            continue;
+        };
+        copy.insert(node.start_line, block.join("\n"));
+    }
+    copy
+}
+
 /// 文档正文：顶层字段逐行渲染。
+///
+/// `id_scope` 区分同一窗口里可能同时存在的多个宿主（集合页、工作台、聚合预览），
+/// 字段文本元素 id 带上它，避免不同卡片共用选择状态。
 fn mongo_field_list(
     view: &MongoDocumentView,
     index: usize,
     document: &fluxdb_core::MongoDocument,
     value: Option<&JsonValue>,
     document_key: &str,
+    id_scope: &str,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let colors = view.colors;
@@ -751,36 +800,59 @@ fn mongo_field_list(
             .child(SharedString::from(document.json.clone()));
     };
     let selector = format!("mongo-document-fields:{index}");
-    // 配色每帧算一次：行数越多，逐行重复构造主题越浪费。
-    let theme = JsonEditorTheme::from_colors(colors);
     let mut list = div()
         .px_3()
         .py_2()
         .flex()
         .flex_col()
         .debug_selector(move || selector);
+    // 一张卡片的共享渲染上下文：配色只算一次，行序号按渲染顺序（先父行、后子行）递增，
+    // 它同时决定拖选/复制时的阅读顺序。
+    // 高位放文档序号、低位放行号：同一窗口的所有卡片行序必须全局唯一，
+    // 否则选区端点比较会误判方向，拖选时跳到别的文档。
+    let mut context = MongoFieldContext {
+        id_scope,
+        document_key,
+        theme: JsonEditorTheme::from_colors(colors),
+        order: (view.document_order_base + index as u64) << 32,
+    };
     for (key, value) in map {
-        list = list.child(mongo_field_row(
-            view,
-            document_key,
-            key,
-            value,
-            "",
-            theme,
-            cx,
-        ));
+        list = list.child(mongo_field_row(view, &mut context, key, value, "", cx));
     }
     list
 }
 
+/// 文档字段行的共享渲染上下文；`order` 随渲染递增，标记选择文档里的行序。
+struct MongoFieldContext<'a> {
+    id_scope: &'a str,
+    document_key: &'a str,
+    theme: JsonEditorTheme,
+    order: u64,
+}
+
+/// 字段文本元素 id：同一卡片内按字段路径唯一，跨帧稳定（选择句柄按它保留）。
+fn mongo_field_text_id(id_scope: &str, document_key: &str, path: &str) -> gpui::ElementId {
+    gpui::ElementId::Name(format!("{id_scope}:field-text:{document_key}:{path}").into())
+}
+
+/// 字段行只给文字上色：选择层要求一行是一个参与者，否则复制会在每段间插换行。
+fn mongo_field_highlight(color: gpui::Rgba) -> gpui::HighlightStyle {
+    gpui::HighlightStyle {
+        color: Some(color.into()),
+        ..Default::default()
+    }
+}
+
 /// 一个字段行：标量一行到底；对象/数组渲染成可点开的摘要 + 缩进子列表。
+///
+/// 文字部分整行合成一个可选中元素（双击选词、拖选、复制）；类型徽标不参与选择，
+/// 避免复制结果里混入 `String` / `Object` 这类装饰信息。
 fn mongo_field_row(
     view: &MongoDocumentView,
-    document_key: &str,
+    context: &mut MongoFieldContext<'_>,
     key: &str,
     value: &JsonValue,
     parent_path: &str,
-    theme: JsonEditorTheme,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let tab_id = view.tab_id;
@@ -791,35 +863,58 @@ fn mongo_field_row(
         format!("{parent_path}/{key}")
     };
     let kind = mongo_field_kind(value);
-    let label = div()
-        .flex_none()
-        .flex()
-        .items_center()
-        .child(
-            div()
-                .text_color(theme.key)
-                .child(SharedString::from(key.to_string())),
-        )
-        .child(div().text_color(theme.punctuation).child(":"));
+    let row_order = context.order;
+    context.order += 1;
+    let (id_scope, document_key, theme) =
+        (context.id_scope, context.document_key, context.theme);
 
     let row = div()
         .min_h(px(22.))
         .font_family(crate::PLATFORM_MONOSPACE_FONT)
         .text_size(px(11.));
 
+    // `key: 值` 一行一个元素，按字节区间给 key / 冒号 / 值分别上色。
+    // `copy_text` 用于嵌套行：屏上是 `{ … }`，复制时给完整内容。
+    let field_text =
+        |value_text: &str, value_color: gpui::Rgba, copy_text: Option<gpui::SharedString>| {
+        let mut text = String::with_capacity(key.len() + value_text.len() + 2);
+        text.push_str(key);
+        text.push(':');
+        let colon = key.len()..text.len();
+        text.push(' ');
+        let value_range = text.len()..text.len() + value_text.len();
+        text.push_str(value_text);
+        let highlights = vec![
+            (0..key.len(), mongo_field_highlight(theme.key)),
+            (colon, mongo_field_highlight(theme.punctuation)),
+            (value_range, mongo_field_highlight(value_color)),
+        ];
+        let text_selector = format!("{id_scope}:field-text:{document_key}:{path}");
+        let mut element =
+            SelectableStyledText::new(mongo_field_text_id(id_scope, document_key, &path), text)
+                .highlights(highlights)
+                .document_order(row_order);
+        if let Some(copy_text) = copy_text {
+            element = element.copy_text(copy_text);
+        }
+        div()
+            .min_w(px(0.))
+            .truncate()
+            // 调试选择器供无头用例定位可选中的字段文本。
+            .debug_selector(move || text_selector.clone())
+            .child(element)
+    };
+
     if !kind.is_nested() {
         return row
             .flex()
             .items_center()
             .overflow_hidden()
-            .child(label)
-            .child(
-                div()
-                    .min_w(px(0.))
-                    .truncate()
-                    .text_color(mongo_field_value_color(kind, theme, colors))
-                    .child(SharedString::from(mongo_field_value_label(value))),
-            )
+            .child(field_text(
+                &mongo_field_value_label(value),
+                mongo_field_value_color(kind, theme, colors),
+                None,
+            ))
             .child(
                 div()
                     .flex_none()
@@ -835,39 +930,51 @@ fn mongo_field_row(
     let is_open = view.expanded_fields.contains(&expanded_key);
     let toggle_key = expanded_key.clone();
     let selector = format!("mongo-field-toggle:{document_key}/{path}");
+    let summary = mongo_field_summary(kind, value);
+    // 嵌套行屏上是 `{ … }` 摘要；复制时给真实内容，保留 key 前缀。
+    let expanded = serde_json::to_string_pretty(value)
+        .map(|text| gpui::SharedString::from(format!("{key}: {text}")))
+        .ok();
     let header = div()
         .flex()
         .items_center()
         .gap_1()
-        .cursor_pointer()
-        .rounded(colors.radius)
-        .hover(move |style| style.bg(colors.hover))
-        .debug_selector(move || selector)
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, _, _, cx| {
-                this.toggle_mongo_field(tab_id, toggle_key.clone(), cx);
-                cx.stop_propagation();
-            }),
+        .child(
+            // 折叠命中区只保留箭头：整行可点会和双击选词争抢同一次按下。
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .rounded(colors.radius)
+                .hover(move |style| style.bg(colors.hover))
+                .debug_selector(move || selector)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                        // 双击留给文本选择，不连带折叠。
+                        if event.click_count > 1 {
+                            return;
+                        }
+                        this.toggle_mongo_field(tab_id, toggle_key.clone(), cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(app_icon(
+                    if is_open {
+                        AppIcon::ChevronDown
+                    } else {
+                        AppIcon::ChevronRight
+                    },
+                    10.,
+                    colors.muted,
+                )),
         )
-        .child(app_icon(
-            if is_open {
-                AppIcon::ChevronDown
-            } else {
-                AppIcon::ChevronRight
-            },
-            10.,
-            colors.muted,
-        ))
-        .child(label)
+        .child(field_text(&summary, colors.muted, expanded))
         .child(
             div()
-                .text_size(px(10.))
-                .text_color(colors.muted)
-                .child(mongo_field_summary(kind, value)),
-        )
-        .child(
-            div()
+                .flex_none()
                 .pl_3()
                 .text_size(px(9.))
                 .text_color(colors.muted)
@@ -898,15 +1005,8 @@ fn mongo_field_row(
             _ => Vec::new(),
         };
         for (child_key, child) in children {
-            children_column = children_column.child(mongo_field_row(
-                view,
-                document_key,
-                &child_key,
-                child,
-                &path,
-                theme,
-                cx,
-            ));
+            children_column =
+                children_column.child(mongo_field_row(view, context, &child_key, child, &path, cx));
         }
         nested = nested.child(children_column);
     }

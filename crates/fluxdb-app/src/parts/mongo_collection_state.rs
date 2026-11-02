@@ -133,6 +133,8 @@ pub struct MongoWorkbenchState {
     pub next_execution_id: u64,
     /// 折叠态记录 ID 集合（仅 UI 展示，会话内有效）。
     pub collapsed: std::collections::BTreeSet<u64>,
+    /// 当前语句开始执行的时刻，用于在记录里落真实耗时；没有执行时为 `None`。
+    pub running_started_at: Option<std::time::Instant>,
 }
 
 impl MongoWorkbenchState {
@@ -147,6 +149,7 @@ impl MongoWorkbenchState {
             saved_fingerprint: None,
             next_execution_id: 1,
             collapsed: std::collections::BTreeSet::new(),
+            running_started_at: None,
         }
     }
 
@@ -172,6 +175,12 @@ pub struct MongoWorkbenchExecution {
     /// 失败时为 `None`，错误原因见 `error`。
     pub output: Option<String>,
     pub error: Option<UserFacingError>,
+    /// 返回的文档数（仅 find / aggregate 这类文档结果有值）。
+    pub document_count: Option<u64>,
+    /// 结果是否因条数或字节预算被截断。
+    pub truncated: bool,
+    /// 结构化的文档结果；为空时界面按纯文本展示（`show`、`count`、错误等）。
+    pub documents: Vec<fluxdb_core::MongoDocument>,
     /// 执行耗时（毫秒）。
     pub elapsed_ms: u64,
     /// 执行时刻（Unix 秒）。

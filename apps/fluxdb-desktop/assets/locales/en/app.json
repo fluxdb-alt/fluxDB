@@ -5681,7 +5681,12 @@
       "hint": "Read-only: use / show / find / aggregate",
       "empty": "Type a statement and press Run; results are appended in execution order",
       "rerun": "Run again",
-      "running": "A statement is already running"
+      "running": "A statement is already running",
+      "document_count": "%{count} docs",
+      "elapsed": "%{ms} ms",
+      "truncated": "Truncated",
+      "preview_truncated": "Showing the first %{preview} of %{size}; copy to get the full result",
+      "no_output": "No output"
     },
     "loading": "Loading…",
     "empty": "No documents matched",

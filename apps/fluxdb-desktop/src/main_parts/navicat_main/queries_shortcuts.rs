@@ -724,6 +724,16 @@ impl NavicatMain {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // 展示区（MongoDB 文档字段 / JSON 行）的窗口级文本选择优先：
+        // 双击或拖选后按 cmd-c，复制的应是选中的文字而不是表格单元格。
+        // 与 gpui-base 根节点的复制一致：去掉选区首尾空白再写剪贴板。
+        let selected = gpui_kit::base::TextSelection::selected_text(window, cx)
+            .trim()
+            .to_string();
+        if !selected.is_empty() {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(selected));
+            return;
+        }
         if self.copy_data_selection_should_defer_to_focused_editor(window, cx) {
             return;
         }
