@@ -120,7 +120,8 @@ impl NavicatMain {
         self.update_ui.downloaded_path = None;
         self.update_ui.downloaded_bytes = 0;
         self.update_ui.total_bytes = update.asset.size;
-        self.update_cancel.store(false, Ordering::Relaxed);
+        // 每次下载使用独立取消令牌：旧任务（可能仍阻塞在网络读取里）不会被新任务重置。
+        self.update_cancel = Arc::new(AtomicBool::new(false));
         self.update_downloaded_bytes.store(0, Ordering::Relaxed);
         self.update_total_bytes
             .store(update.asset.size, Ordering::Relaxed);
@@ -157,13 +158,16 @@ impl NavicatMain {
                             this.update_ui.downloaded_bytes = this.update_ui.total_bytes;
                         }
                         Err(error) if error.kind == fluxdb_app::UpdateErrorKind::Cancelled => {
-                            this.update_ui.status = UpdateUiStatus::Available;
-                            this.update_ui.downloaded_bytes = 0;
-                            this.show_message(
-                                tr("app.settings.update.cancelled"),
-                                AppMessageKind::Info,
-                                cx,
-                            );
+                            // 用户点击取消时已立即关闭弹框并回到可下载状态，这里不重复提示。
+                            if this.update_ui.status == UpdateUiStatus::Downloading {
+                                this.update_ui.status = UpdateUiStatus::Available;
+                                this.update_ui.downloaded_bytes = 0;
+                                this.show_message(
+                                    tr("app.settings.update.cancelled"),
+                                    AppMessageKind::Info,
+                                    cx,
+                                );
+                            }
                         }
                         Err(error) => {
                             this.update_ui.status = UpdateUiStatus::Error;
@@ -199,10 +203,16 @@ impl NavicatMain {
     }
 
     fn cancel_update_download(&mut self, cx: &mut Context<Self>) {
-        if self.update_ui.status == UpdateUiStatus::Downloading {
-            self.update_cancel.store(true, Ordering::Relaxed);
-            cx.notify();
+        if self.update_ui.status != UpdateUiStatus::Downloading {
+            return;
         }
+        // 后台读取可能阻塞到下一次网络返回，取消不能等它：立即关闭弹框并回到可下载状态，
+        // 下载线程随后观察到取消标志时自行清理临时文件。
+        self.update_cancel.store(true, Ordering::Relaxed);
+        self.update_ui.status = UpdateUiStatus::Available;
+        self.update_ui.downloaded_bytes = 0;
+        self.update_ui.open = false;
+        cx.notify();
     }
 
     fn start_update_install(&mut self, cx: &mut Context<Self>) {

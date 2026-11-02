@@ -1689,6 +1689,28 @@ mod i18n_e2e_tests {
             cx.debug_bounds("update-dialog").is_none(),
             "later must close the update dialog"
         );
+
+        // 下载中点击「取消」必须立刻关闭弹框并回到可下载状态，不能等后台线程响应。
+        cx.update(|_, cx| {
+            view.update(cx, |this, _| {
+                this.update_ui.status = crate::UpdateUiStatus::Downloading;
+                this.update_ui.open = true;
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let cancel = cx
+            .debug_bounds("update-dialog-cancel")
+            .expect("cancel button");
+        cx.simulate_click(cancel.center(), Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("update-dialog").is_none(),
+            "cancel must close the update dialog"
+        );
+        assert_eq!(
+            cx.update(|_, cx| view.read(cx).update_ui.status),
+            crate::UpdateUiStatus::Available
+        );
     }
 
 }
