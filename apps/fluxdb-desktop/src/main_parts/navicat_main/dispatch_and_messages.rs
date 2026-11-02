@@ -1,5 +1,5 @@
 impl NavicatMain {
-    fn dispatch(&mut self, command: AppCommand, cx: &mut Context<Self>) -> AppEvent {
+    pub(crate) fn dispatch(&mut self, command: AppCommand, cx: &mut Context<Self>) -> AppEvent {
         self.capture_ai_chat_tab_source(&command);
         self.sync_settings_tab_dirty();
         if matches!(&command, AppCommand::ConfirmCloseDirtyTab(tab_id) if self.is_settings_tab(*tab_id)) {

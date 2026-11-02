@@ -99,6 +99,23 @@ impl<'a> IndexMetadataSource<'a> {
         }
     }
 
+    /// 补全查询使用的库名。
+    ///
+    /// MySQL 里 schema 就是 database：`archive.customers` 必须按 archive 库查，
+    /// 否则会错查连接默认库里的同名表。其他方言 schema 与 database 分离，保持原样。
+    fn completion_database<'b>(&'b self, key: &'b EngineTableKey) -> Option<&'b str> {
+        if self.config.kind == DatabaseKind::MySql {
+            // AST 的两段名优先：引擎会先用连接默认库填 `database`，这里必须让
+            // 显式写出的 `archive.` 覆盖它。
+            key.schema
+                .as_deref()
+                .or(key.database.as_deref())
+                .or(self.database.as_deref())
+        } else {
+            key.database.as_deref().or(self.database.as_deref())
+        }
+    }
+
     fn fetch_columns(&self, key: &EngineTableKey, schema: Option<&str>) -> Vec<ColumnMeta> {
         if self.cancelled() {
             return Vec::new();
@@ -108,7 +125,7 @@ impl<'a> IndexMetadataSource<'a> {
             .indexed_table_completion_columns_with_cancel(
                 self.config,
                 self.connection_id,
-                key.database.as_deref().or(self.database.as_deref()),
+                self.completion_database(key),
                 schema,
                 &key.table,
                 self.should_cancel,
@@ -282,7 +299,7 @@ impl MetadataSource for IndexMetadataSource<'_> {
                 .completion_foreign_keys_with_cancel(
                     self.config,
                     self.connection_id,
-                    key.database.as_deref().or(self.database.as_deref()),
+                    self.completion_database(key),
                     schema,
                     &key.table,
                     self.should_cancel,
