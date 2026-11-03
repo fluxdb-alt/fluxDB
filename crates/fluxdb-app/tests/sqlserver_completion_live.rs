@@ -1,8 +1,7 @@
 //! 真实 SQL Server 的 SQL 补全端到端验证。
 //!
 //! 仅在显式提供 `FLUXDB_MSSQL_COMPLETION=host:port:user:password:database` 时运行；
-//! 否则直接跳过。测试数据由 `docs/testing/sql-completion/sqlserver/数据准备.sql`
-//! 预置，本测试只读，不建表、不改数据。用例对应同目录《测试教程.md》。
+//! 否则直接跳过。测试数据需在目标库中预先准备好，本测试只读，不建表、不改数据。
 //!
 //! 走的是生产补全路径：`AppController::query_completions_for_text` → 补全引擎 →
 //! SQL Server connector 的 sys.objects / sys.columns 元数据查询，因此同时验证候选
