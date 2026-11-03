@@ -1,6 +1,11 @@
 {
   "name": "FluxDB",
   "window_title": "FluxDB — Database Client",
+  "quick_open_table": {
+    "empty": "No matching tables",
+    "no_scope": "Open a database first",
+    "not_loaded": "No tables are loaded for this database yet. Expand it in the sidebar first."
+  },
   "menu": {
     "open": "Open",
     "quit": "Quit"
@@ -3385,6 +3390,8 @@
     "search_data_detail": "Open the search panel for the current data page",
     "search_history": "Quick SQL history search",
     "search_history_detail": "Search and reuse previous queries",
+    "quick_open_table": "Quick open table",
+    "quick_open_table_detail": "Search tables in the current database and open one",
     "copy_data": "Copy data",
     "copy_data_detail": "Copy the selected table data"
   },

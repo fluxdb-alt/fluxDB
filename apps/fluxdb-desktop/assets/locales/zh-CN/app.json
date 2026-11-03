@@ -1,6 +1,11 @@
 {
   "name": "FluxDB",
   "window_title": "FluxDB — 数据库客户端",
+  "quick_open_table": {
+    "empty": "没有匹配的表",
+    "no_scope": "请先打开一个数据库",
+    "not_loaded": "当前库还没有加载表，请先在侧边栏展开"
+  },
   "menu": {
     "open": "打开",
     "quit": "退出"
@@ -3385,6 +3390,8 @@
     "search_data_detail": "打开当前数据页的搜索面板",
     "search_history": "SQL 历史快搜",
     "search_history_detail": "快速搜索并重用历史查询",
+    "quick_open_table": "快速打开表",
+    "quick_open_table_detail": "搜索当前库中的表并直接打开",
     "copy_data": "复制数据",
     "copy_data_detail": "复制当前选中的表格数据"
   },

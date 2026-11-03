@@ -1034,6 +1034,9 @@ fn navicat_main_new(
     let query_history_quick_search_input = cx.new(|cx| {
         InputState::new(window, cx).placeholder(tr("app.placeholder.search_executed_sql"))
     });
+    let quick_open_table_input = cx.new(|cx| {
+        InputState::new(window, cx).placeholder(tr("app.placeholder.search_table"))
+    });
     let redis_history_search_input = cx.new(|cx| {
         InputState::new(window, cx).placeholder(tr("app.placeholder.search_command_scope"))
     });
@@ -1527,6 +1530,20 @@ fn navicat_main_new(
             }
             InputEvent::PressEnter { .. } => {
                 this.confirm_query_history_quick_search(cx);
+            }
+            InputEvent::Focus | InputEvent::Blur => {}
+        },
+    );
+    let quick_open_table_subscription = cx.subscribe(
+        &quick_open_table_input,
+        |this: &mut NavicatMain, input, event: &InputEvent, cx| match event {
+            InputEvent::Change => {
+                this.quick_open_table_search = input.read(cx).value().to_string();
+                this.quick_open_table_selected = 0;
+                cx.notify();
+            }
+            InputEvent::PressEnter { .. } => {
+                this.confirm_quick_open_table(cx);
             }
             InputEvent::Focus | InputEvent::Blur => {}
         },
@@ -3001,6 +3018,12 @@ fn navicat_main_new(
         query_history_quick_search_input,
         _query_history_quick_search_subscription: query_history_quick_search_subscription,
         query_history_quick_search: String::new(),
+        quick_open_table_input,
+        _quick_open_table_subscription: quick_open_table_subscription,
+        quick_open_table_search: String::new(),
+        quick_open_table_open: false,
+        quick_open_table_selected: 0,
+        quick_open_table_entries: Vec::new(),
         redis_history_search_input,
         _redis_history_search_subscription: redis_history_search_subscription,
         redis_history_search: String::new(),
