@@ -255,6 +255,9 @@ pub struct QueryCompletionItem {
     /// 与被写入 CompletionIndex 的桶键一致，因此「候选身份」可直接当作索引查询键：
     /// 详情面板据此按 (库, schema, 表) 命中列的完整身份，避免同名跨 schema 取错对象。
     pub schema: Option<String>,
+    /// 插入时是否按方言补标识符引号。CTE / 派生表推导出的名字须按原样插入，
+    /// 否则 Oracle 中 `"item_total"` 与未加引号的 `ITEM_TOTAL` 不是同一标识符。
+    pub quote_identifier: bool,
 }
 
 impl Default for QueryCompletionItem {
@@ -269,6 +272,7 @@ impl Default for QueryCompletionItem {
             sort_text: None,
             insert_text_format: InsertTextFormat::PlainText,
             schema: None,
+            quote_identifier: true,
         }
     }
 }
