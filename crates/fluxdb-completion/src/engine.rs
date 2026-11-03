@@ -3,7 +3,7 @@
 use crate::dialect::CompletionDialect;
 use crate::locate::{lexical_slot, locate_slot};
 use crate::metadata::MetadataSource;
-use crate::model::{Candidate, CompletionOutput, CompletionRequest, WordContext};
+use crate::model::{Candidate, CandidateKind, CompletionOutput, CompletionRequest, WordContext};
 use crate::parse::{LineColIndex, parse_tolerant};
 use crate::strategy::{SlotContext, slot_candidates};
 use crate::symbols::{Symbols, collect};
@@ -80,6 +80,21 @@ pub fn complete(
     };
 
     let mut items = slot_candidates(&slot, &ctx);
+    // 光标后已经写了调用括号（`lab_dis|(amount)`）：只补函数名，别再插入 `()`，
+    // 否则采纳后变成 `lab_discount()(amount)`。
+    if statement
+        .get(word.replace_end..)
+        .is_some_and(|suffix| suffix.trim_start().starts_with('('))
+    {
+        for item in items
+            .iter_mut()
+            .filter(|item| item.kind == CandidateKind::Function)
+        {
+            if let Some(name) = item.insert_text.strip_suffix("()") {
+                item.insert_text = name.to_string();
+            }
+        }
+    }
     retain_matching(&mut items, &word);
     let filter = word.word_part.trim().to_ascii_lowercase();
     items.sort_by_key(|left| sort_key(left, &filter));
@@ -699,6 +714,24 @@ mod tests {
         assert_eq!(name.insert_text, "name");
         // 只替换词本身，保留 `u.` 限定符。
         assert_eq!(&sql[output.replace_start..output.replace_end], "na");
+    }
+
+    /// 光标后已有调用括号时，函数候选只补名字，不能插入重复的 `()`。
+    #[test]
+    fn function_insert_text_keeps_existing_call_parens() {
+        let cursor = "SELECT COUNT|(id) FROM users".find('|').unwrap();
+        let sql = "SELECT COUNT(id) FROM users".to_string();
+        let output = complete(
+            &CompletionRequest::new(&sql, cursor),
+            &dialect::POSTGRES,
+            &MockMeta::new(),
+        );
+        let count = output
+            .items
+            .iter()
+            .find(|item| item.label == "COUNT")
+            .expect("应补出 COUNT");
+        assert_eq!(count.insert_text, "COUNT");
     }
 
     #[test]

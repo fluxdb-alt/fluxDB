@@ -260,6 +260,8 @@ pub(crate) fn word_context(text: &str, cursor: usize, dialect: &dyn Dialect) -> 
     let qualified = text[..unquoted_word_start].ends_with('.');
     let open_quote = open_quote.filter(|_| !qualified && !quoted_word);
     let quoted = open_quote.is_some();
+    // 引号词要连同开引号一起替换；但不能把 `d.` 限定符也吃掉，否则采纳后丢失限定符。
+    let quoted_start = open_quote.map(|(quote_pos, _)| quote_pos);
     let word_start = match open_quote {
         Some((quote_pos, quote)) => quote_pos + quote.len_utf8(),
         None => unquoted_word_start,
@@ -327,11 +329,7 @@ pub(crate) fn word_context(text: &str, cursor: usize, dialect: &dyn Dialect) -> 
     WordContext {
         word_part,
         replace_start,
-        prefix_start: if open_quote.is_some() {
-            replace_start
-        } else {
-            word_start
-        },
+        prefix_start: quoted_start.unwrap_or(word_start),
         replace_end,
         quoted,
         qualifier,
@@ -444,6 +442,16 @@ mod tests {
         assert_eq!(c.word_part, "3d_us");
         assert!(c.quoted);
         assert_eq!(c.replace_start, "SELECT * from ".len());
+    }
+
+    /// 限定符后的未闭合引号列：缩进从开引号算，`d.` 必须留在替换区间外。
+    #[test]
+    fn unterminated_quoted_column_keeps_qualifier() {
+        let c = ctx("SELECT d.\"客户| FROM t d");
+        assert_eq!(c.qualifier.as_deref(), Some("d"));
+        assert_eq!(c.word_part, "客户");
+        assert!(c.quoted);
+        assert_eq!(c.prefix_start, "SELECT d.".len());
     }
 
     #[test]
