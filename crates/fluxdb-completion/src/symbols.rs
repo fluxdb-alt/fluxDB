@@ -9,7 +9,8 @@ use std::collections::{HashMap, HashSet};
 
 use sqlparser::ast::{
     Expr, JsonTableColumn, NamedWindowDefinition, NamedWindowExpr, ObjectName, ObjectNamePart,
-    Query, Select, SelectItem, SetExpr, Spanned, Statement, TableFactor, Visit, Visitor,
+    Query, Select, SelectItem, SetExpr, Spanned, Statement, TableAlias, TableFactor, Visit,
+    Visitor,
 };
 use sqlparser::tokenizer::Span;
 
@@ -358,6 +359,11 @@ impl Visitor for SymbolCollector<'_> {
                     });
                 }
             }
+            // PostgreSQL 表值函数（`LATERAL jsonb_array_elements_text(...) AS j(value)`）：
+            // 列清单由别名显式声明，按虚拟关系补全，不能拿函数名去查物理表元数据。
+            TableFactor::Function {
+                alias: Some(alias), ..
+            } if !alias.columns.is_empty() => register_alias_columns(self.scope(), alias),
             // MySQL `JSON_TABLE(...) AS jt`：列清单由 COLUMNS 子句显式声明，不走元数据。
             TableFactor::JsonTable {
                 columns,
@@ -380,6 +386,14 @@ impl Visitor for SymbolCollector<'_> {
                 let Some(table) = parts.last().cloned() else {
                     return ControlFlow::Continue(());
                 };
+                // 任意关系带列别名（`jsonb_array_elements_text(...) AS j(value)`）：
+                // 列清单由 SQL 显式声明，按虚拟关系补全，不能拿函数名去查物理表元数据。
+                if let Some(alias) = alias
+                    && !alias.columns.is_empty()
+                {
+                    register_alias_columns(self.scope(), alias);
+                    return ControlFlow::Continue(());
+                }
                 let schema = parts
                     .len()
                     .checked_sub(2)
@@ -421,6 +435,23 @@ impl Visitor for SymbolCollector<'_> {
         }
         ControlFlow::Continue(())
     }
+}
+
+/// 关系别名带列清单时登记成虚拟关系；列名由 SQL 显式给出，不走任何元数据。
+fn register_alias_columns(scope: &mut Scope, alias: &TableAlias) {
+    let name = alias.name.value.to_ascii_lowercase();
+    if scope.virtuals.iter().any(|binding| binding.name == name) {
+        return;
+    }
+    scope.virtuals.push(VirtualBinding {
+        name,
+        columns: alias
+            .columns
+            .iter()
+            .map(|column| column.name.value.clone())
+            .collect(),
+        is_cte_alias: false,
+    });
 }
 
 /// `JSON_TABLE` 的 COLUMNS 清单（含 NESTED 子列）→ 列名。
@@ -585,6 +616,28 @@ mod tests {
             .map(|binding| binding.name.as_str())
             .collect();
         assert_eq!(from_candidates, vec!["item_totals"]);
+    }
+
+    /// 表值函数带列别名（PostgreSQL LATERAL / JSONB）按虚拟关系补列，不查函数名元数据。
+    #[test]
+    fn table_function_column_aliases_resolve_columns() {
+        let text = "SELECT |j.value FROM audit_events e CROSS JOIN LATERAL \
+                    jsonb_array_elements_text(e.payload->'tags') AS j(value)";
+        let cursor = text.find('|').expect("光标");
+        let sql = text.replace('|', "");
+        let parsed = parse_tolerant(
+            &sql,
+            None,
+            cursor,
+            &sqlparser::dialect::PostgreSqlDialect {},
+        )
+        .expect("PG 语句应可解析");
+        let symbols = collect(&parsed.statements, &LineColIndex::new(&sql)).visible_at(cursor);
+        assert_eq!(
+            symbols.qualifier_virtual_columns("j"),
+            Some(vec!["value".to_string()])
+        );
+        assert!(symbols.resolve_qualifier("j").is_empty());
     }
 
     /// 相关子查询仍看得到外层关系（未限定列可用）。
