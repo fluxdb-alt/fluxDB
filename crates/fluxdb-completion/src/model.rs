@@ -26,6 +26,9 @@ pub struct Candidate {
     pub sort_text: Option<String>,
     /// 候选对象所属 schema，宿主用于详情面板与歧义消解。
     pub schema: Option<String>,
+    /// 插入时是否按方言补标识符引号。CTE / 派生表的列名来自语句内写法，
+    /// 补引号会改变大小写折叠语义（Oracle 的 `"item_total"` ≠ `ITEM_TOTAL`）。
+    pub quote_identifier: bool,
 }
 
 impl Candidate {
@@ -44,7 +47,14 @@ impl Candidate {
             filter_text: None,
             sort_text: None,
             schema: None,
+            quote_identifier: true,
         }
+    }
+
+    /// 语句内推导出的名字（CTE / 派生表列、投影别名）按原样插入，不补引号。
+    pub fn without_identifier_quotes(mut self) -> Self {
+        self.quote_identifier = false;
+        self
     }
 
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {

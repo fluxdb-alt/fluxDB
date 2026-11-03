@@ -44,47 +44,68 @@ fn oracle_load_column_infos(
     schema: &str,
     table: &str,
 ) -> fluxdb_core::Result<Vec<OracleColumnInfo>> {
-    let binds = [
-        OracleBindValue::Text(schema.to_string()),
-        OracleBindValue::Text(table.to_string()),
-    ];
-    let rows = oracle_query(
-        connection,
-        "SELECT C.COLUMN_NAME, C.DATA_TYPE, C.DATA_LENGTH, C.CHAR_LENGTH, C.CHAR_USED, \
-                C.DATA_PRECISION, C.DATA_SCALE, C.NULLABLE, C.DATA_DEFAULT, \
-                C.VIRTUAL_COLUMN, C.IDENTITY_COLUMN, CC.COMMENTS, \
-                CASE WHEN PK.COLUMN_NAME IS NULL THEN 0 ELSE 1 END AS IS_PK, \
-                PK.CONSTRAINT_NAME \
-         FROM ALL_TAB_COLS C \
-         LEFT JOIN ALL_COL_COMMENTS CC \
-           ON CC.OWNER = C.OWNER AND CC.TABLE_NAME = C.TABLE_NAME \
-          AND CC.COLUMN_NAME = C.COLUMN_NAME \
-         LEFT JOIN (SELECT CO.OWNER, CO.TABLE_NAME, CC2.COLUMN_NAME, CO.CONSTRAINT_NAME \
-                    FROM ALL_CONSTRAINTS CO \
-                    JOIN ALL_CONS_COLUMNS CC2 \
-                      ON CC2.OWNER = CO.OWNER AND CC2.CONSTRAINT_NAME = CO.CONSTRAINT_NAME \
-                    WHERE CO.CONSTRAINT_TYPE = 'P' AND CO.OWNER = :1 \
-                      AND CO.TABLE_NAME = :2) PK \
-           ON PK.OWNER = C.OWNER AND PK.TABLE_NAME = C.TABLE_NAME \
-          AND PK.COLUMN_NAME = C.COLUMN_NAME \
-         WHERE C.OWNER = :3 AND C.TABLE_NAME = :4 AND C.HIDDEN_COLUMN = 'NO' \
-         ORDER BY C.COLUMN_ID",
-        // `:1`/`:2` 在子查询里出现一次，`:3`/`:4` 是外层条件；驱动按出现次数校验绑定，
-        // 所以同一 schema/table 各绑定两次。
-        &[
-            binds[0].clone(),
-            binds[1].clone(),
-            binds[0].clone(),
-            binds[1].clone(),
-        ],
-    )?;
+    let query = |owner: &str, table: &str| {
+        let binds = [
+            OracleBindValue::Text(owner.to_string()),
+            OracleBindValue::Text(table.to_string()),
+        ];
+        oracle_query(
+            connection,
+            "SELECT C.COLUMN_NAME, C.DATA_TYPE, C.DATA_LENGTH, C.CHAR_LENGTH, C.CHAR_USED, \
+                    C.DATA_PRECISION, C.DATA_SCALE, C.NULLABLE, C.DATA_DEFAULT, \
+                    C.VIRTUAL_COLUMN, C.IDENTITY_COLUMN, CC.COMMENTS, \
+                    CASE WHEN PK.COLUMN_NAME IS NULL THEN 0 ELSE 1 END AS IS_PK, \
+                    PK.CONSTRAINT_NAME \
+             FROM ALL_TAB_COLS C \
+             LEFT JOIN ALL_COL_COMMENTS CC \
+               ON CC.OWNER = C.OWNER AND CC.TABLE_NAME = C.TABLE_NAME \
+              AND CC.COLUMN_NAME = C.COLUMN_NAME \
+             LEFT JOIN (SELECT CO.OWNER, CO.TABLE_NAME, CC2.COLUMN_NAME, CO.CONSTRAINT_NAME \
+                        FROM ALL_CONSTRAINTS CO \
+                        JOIN ALL_CONS_COLUMNS CC2 \
+                          ON CC2.OWNER = CO.OWNER AND CC2.CONSTRAINT_NAME = CO.CONSTRAINT_NAME \
+                        WHERE CO.CONSTRAINT_TYPE = 'P' AND CO.OWNER = :1 \
+                          AND CO.TABLE_NAME = :2) PK \
+               ON PK.OWNER = C.OWNER AND PK.TABLE_NAME = C.TABLE_NAME \
+              AND PK.COLUMN_NAME = C.COLUMN_NAME \
+             WHERE C.OWNER = :3 AND C.TABLE_NAME = :4 AND C.HIDDEN_COLUMN = 'NO' \
+             ORDER BY C.COLUMN_ID",
+            // `:1`/`:2` 在子查询里出现一次，`:3`/`:4` 是外层条件；驱动按出现次数校验绑定，
+            // 所以同一 schema/table 各绑定两次。
+            &[
+                binds[0].clone(),
+                binds[1].clone(),
+                binds[0].clone(),
+                binds[1].clone(),
+            ],
+        )
+    };
+    // 补全里的未引用表名来自 SQL 解析，Oracle 会折叠为大写后再查目录；
+    // 带引号的混合大小写名（如 "Order Details"）仍按原样精确匹配。
+    let actual_owner = schema.to_string();
+    let mut actual_table = table.to_string();
+    let mut rows = query(&actual_owner, &actual_table)?;
+    if rows.is_empty() {
+        let upper = table.to_uppercase();
+        if upper != table {
+            actual_table = upper;
+            rows = query(&actual_owner, &actual_table)?;
+        }
+    }
+    // 同义词不在 ALL_TAB_COLS 里；按目标表再查一次，补全使用同义词时仍能给出真实列。
+    if rows.is_empty()
+        && let Some((owner, table)) = oracle_synonym_target(connection, &actual_owner, &actual_table)
+    {
+        actual_table = table;
+        rows = query(&owner, &actual_table)?;
+    }
     if rows.is_empty() {
         return Err(Error::new(
             ErrorKind::Query,
             format!("未读取到 {schema}.{table} 的列信息（对象不存在或无权限）"),
         ));
     }
-    let identities = oracle_load_identity_columns(connection, schema, table);
+    let identities = oracle_load_identity_columns(connection, &actual_owner, &actual_table);
     let mut columns = Vec::with_capacity(rows.len());
     for row in &rows {
         let Some(name) = oracle_meta_text(row, 0) else {
@@ -126,6 +147,38 @@ fn oracle_load_column_infos(
         });
     }
     Ok(columns)
+}
+
+/// 解析私有/公共同义词指向的真实表；未命中返回 `None`。
+fn oracle_synonym_target(
+    connection: &OracleConnection,
+    owner: &str,
+    synonym: &str,
+) -> Option<(String, String)> {
+    let mut candidates = vec![synonym.to_string()];
+    let upper = synonym.to_uppercase();
+    if upper != synonym {
+        candidates.push(upper);
+    }
+    for name in candidates {
+        let rows = oracle_query(
+            connection,
+            "SELECT TABLE_OWNER, TABLE_NAME FROM ALL_SYNONYMS \
+             WHERE OWNER = :1 AND SYNONYM_NAME = :2",
+            &[
+                OracleBindValue::Text(owner.to_string()),
+                OracleBindValue::Text(name),
+            ],
+        )
+        .ok()?;
+        if let Some(row) = rows.first()
+            && let (Some(owner), Some(table)) =
+                (oracle_meta_text(row, 0), oracle_meta_text(row, 1))
+        {
+            return Some((owner, table));
+        }
+    }
+    None
 }
 
 /// 身份列声明（`GENERATED ALWAYS|BY DEFAULT AS IDENTITY`）。视图不存在时返回空表，
@@ -412,11 +465,23 @@ fn oracle_load_completion_columns_for_tables(
         if chunk.is_empty() {
             continue;
         }
+        // 未引用表名由 SQL 解析得到时可能是小写；Oracle 目录里存的是折叠后的大写名。
+        // 同时按原名和折叠名查，返回时再映射回调用方请求的写法，避免索引键对不上。
+        let mut lookup = Vec::new();
+        for table in chunk {
+            lookup.push(table.clone());
+            let upper = table.to_uppercase();
+            if upper != *table {
+                lookup.push(upper);
+            }
+        }
+        lookup.sort();
+        lookup.dedup();
         let mut binds = vec![
             OracleBindValue::Text(schema.to_string()),
             OracleBindValue::Text(schema.to_string()),
         ];
-        let placeholders = chunk
+        let placeholders = lookup
             .iter()
             .map(|table| oracle_placeholder(&mut binds, OracleBindValue::Text(table.clone())))
             .collect::<Vec<_>>()
@@ -450,10 +515,20 @@ fn oracle_load_completion_columns_for_tables(
             else {
                 continue;
             };
+            let requested = chunk
+                .iter()
+                .find(|candidate| **candidate == table)
+                .or_else(|| {
+                    chunk
+                        .iter()
+                        .find(|candidate| candidate.eq_ignore_ascii_case(&table))
+                })
+                .cloned()
+                .unwrap_or_else(|| table.clone());
             out.push(CompletionColumn {
                 database: database.map(str::to_string),
                 schema: Some(schema.to_string()),
-                table,
+                table: requested,
                 name,
                 type_name: Some(oracle_column_type_name(
                     &oracle_meta_text(row, 2).unwrap_or_default(),

@@ -492,6 +492,7 @@ fn completion_item_from_engine(
         filter_text,
         sort_text,
         schema,
+        quote_identifier,
     } = candidate;
     let mut insert_text_format = InsertTextFormat::PlainText;
     let kind = match kind {
@@ -527,6 +528,7 @@ fn completion_item_from_engine(
         sort_text,
         insert_text_format,
         schema,
+        quote_identifier,
     }
 }
 

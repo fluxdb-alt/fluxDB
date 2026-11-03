@@ -36,7 +36,8 @@ fn quote_completion_insert_text(
                 | QueryCompletionKind::Procedure
                 | QueryCompletionKind::Trigger
         );
-    if !is_identifier {
+    // CTE / 派生表列与投影别名来自语句本身：保持原样，补引号会改变大小写折叠语义。
+    if !is_identifier || !item.quote_identifier {
         return;
     }
     // 复合标识符逐段处理；函数调用保留括号。函数/存储过程/触发器仅在“必须引号”
@@ -2396,5 +2397,32 @@ fn query_history_kind(sql: &str) -> QueryHistoryKind {
             "create" | "alter" | "drop" | "truncate" | "rename" | "grant" | "revoke" | "use",
         ) => QueryHistoryKind::SchemaChange,
         _ => QueryHistoryKind::Query,
+    }
+}
+
+#[cfg(test)]
+mod identifier_quote_tests {
+    use super::*;
+
+    #[test]
+    fn virtual_column_keeps_unquoted_insert_text() {
+        let mut item = QueryCompletionItem {
+            label: "it.item_total".into(),
+            insert_text: "it.item_total".into(),
+            kind: QueryCompletionKind::Column,
+            quote_identifier: false,
+            ..Default::default()
+        };
+        quote_completion_insert_text(&mut item, DatabaseKind::Oracle, &|_| true);
+        assert_eq!(item.insert_text, "it.item_total");
+
+        let mut physical = QueryCompletionItem {
+            label: "c.CUSTOMER_NAME".into(),
+            insert_text: "c.CUSTOMER_NAME".into(),
+            kind: QueryCompletionKind::Column,
+            ..Default::default()
+        };
+        quote_completion_insert_text(&mut physical, DatabaseKind::Oracle, &|_| true);
+        assert_eq!(physical.insert_text, "\"c\".\"CUSTOMER_NAME\"");
     }
 }

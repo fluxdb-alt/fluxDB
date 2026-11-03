@@ -225,6 +225,7 @@ fn expression_candidates(
         candidates.extend(ctx.symbols.output_aliases.iter().map(|alias| {
             Candidate::new(alias.clone(), alias.clone(), CandidateKind::Column)
                 .with_sort_text(format!("{SCORE_ALIAS}:{alias}"))
+                .without_identifier_quotes()
         }));
     }
 
@@ -478,7 +479,8 @@ fn unqualified_column_candidates(ctx: &SlotContext<'_>) -> Vec<Candidate> {
             };
             candidates.push(
                 Candidate::new(label.clone(), label.clone(), CandidateKind::Column)
-                    .with_sort_text(format!("{SCORE_COLUMN}:{label}")),
+                    .with_sort_text(format!("{SCORE_COLUMN}:{label}"))
+                    .without_identifier_quotes(),
             );
         }
     }
@@ -811,6 +813,7 @@ fn virtual_column_candidates(columns: &[String]) -> Vec<Candidate> {
         .map(|column| {
             Candidate::new(column.clone(), column.clone(), CandidateKind::Column)
                 .with_sort_text(format!("{SCORE_COLUMN}:{column}"))
+                .without_identifier_quotes()
         })
         .collect()
 }

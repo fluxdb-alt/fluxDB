@@ -325,9 +325,28 @@ fn oracle_execute_statement(
 fn oracle_statements_for_execution(request: &QueryRequest) -> Vec<String> {
     query_statements_for_execution(request, DatabaseKind::Oracle)
         .into_iter()
-        .map(|statement| statement.trim().trim_end_matches('/').trim().to_string())
+        .map(|statement| {
+            // OCI 不接受语句开头的注释行（ORA-00900）；SQL*Plus 和编辑器都允许，
+            // 所以在发送前剥掉前导注释，注释内容不参与执行语义。
+            strip_leading_sql_comments(statement.trim().trim_end_matches('/').trim())
+                .to_string()
+        })
         .filter(|statement| !statement.is_empty())
         .collect()
+}
+
+/// 去掉语句最前面的空白、`--` 行注释与 `/* ... */` 块注释。
+fn strip_leading_sql_comments(mut sql: &str) -> &str {
+    loop {
+        sql = sql.trim_start();
+        if let Some(rest) = sql.strip_prefix("--") {
+            sql = rest.split_once('\n').map_or("", |(_, rest)| rest);
+        } else if let Some(rest) = sql.strip_prefix("/*") {
+            sql = rest.split_once("*/").map_or("", |(_, rest)| rest);
+        } else {
+            return sql;
+        }
+    }
 }
 
 fn oracle_execute_parameterized(
@@ -336,7 +355,9 @@ fn oracle_execute_parameterized(
     parameters: &[fluxdb_core::SqlParameter],
 ) -> fluxdb_core::Result<QueryExecutionResult> {
     let statement = request.text.trim().to_string();
-    if statement.is_empty() {
+    // 与批量入口一致：OCI 不接受前导注释，发送前剥掉，摘要里仍保留原文。
+    let executable = strip_leading_sql_comments(&statement).to_string();
+    if executable.is_empty() {
         return Err(Error::new(ErrorKind::Query, "查询不能为空"));
     }
     let binds = parameters
@@ -355,7 +376,7 @@ fn oracle_execute_parameterized(
     let owner = fluxdb_core::result_content_owner(request.session_id, request.connection_id);
     let outcome = oracle_execute_statement(
         &connection,
-        &statement,
+        &executable,
         &binds,
         pagination,
         request.options.read_only,
@@ -405,5 +426,24 @@ fn oracle_execute_parameterized(
                 rollback_snapshots: Vec::new(),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_leading_sql_comments;
+
+    #[test]
+    fn strips_leading_comments_before_oracle_execution() {
+        assert_eq!(
+            strip_leading_sql_comments("-- 中文注释\nSELECT 1 FROM dual;"),
+            "SELECT 1 FROM dual;"
+        );
+        assert_eq!(
+            strip_leading_sql_comments("/* block */ -- line\nSELECT 1 FROM dual"),
+            "SELECT 1 FROM dual"
+        );
+        assert_eq!(strip_leading_sql_comments("  SELECT 1"), "SELECT 1");
+        assert_eq!(strip_leading_sql_comments("-- only comment"), "");
     }
 }
