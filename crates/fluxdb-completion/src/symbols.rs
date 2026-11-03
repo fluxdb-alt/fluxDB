@@ -8,9 +8,9 @@ use core::ops::ControlFlow;
 use std::collections::{HashMap, HashSet};
 
 use sqlparser::ast::{
-    Expr, JsonTableColumn, NamedWindowDefinition, NamedWindowExpr, ObjectName, ObjectNamePart,
-    Query, Select, SelectItem, SetExpr, Spanned, Statement, TableAlias, TableFactor, Visit,
-    Visitor,
+    Expr, ExprWithAlias, JsonTableColumn, NamedWindowDefinition, NamedWindowExpr, ObjectName,
+    ObjectNamePart, PivotValueSource, Query, Select, SelectItem, SetExpr, Spanned, Statement,
+    TableAlias, TableFactor, Value, Visit, Visitor,
 };
 use sqlparser::tokenizer::Span;
 
@@ -370,16 +370,39 @@ impl Visitor for SymbolCollector<'_> {
                 alias: Some(alias),
                 ..
             } => {
-                let name = alias.name.value.to_ascii_lowercase();
                 let columns = json_table_columns(columns);
-                let scope = self.scope();
-                if !scope.virtuals.iter().any(|binding| binding.name == name) {
-                    scope.virtuals.push(VirtualBinding {
-                        name,
-                        columns,
-                        is_cte_alias: false,
-                    });
-                }
+                register_virtual_columns(self.scope(), &alias.name.value, columns, false);
+            }
+            // SQL Server `OPENJSON(...) WITH (...)`：列清单由 WITH 子句显式声明；
+            // 未写 WITH 时固定返回 key/value/type 三列，均不走物理表元数据。
+            TableFactor::OpenJsonTable {
+                columns,
+                alias: Some(alias),
+                ..
+            } => {
+                let columns = if columns.is_empty() {
+                    vec!["key".to_string(), "value".to_string(), "type".to_string()]
+                } else {
+                    columns
+                        .iter()
+                        .map(|column| column.name.value.clone())
+                        .collect()
+                };
+                register_virtual_columns(self.scope(), &alias.name.value, columns, false);
+            }
+            // SQL Server / Oracle `PIVOT`：输出列 = 未被聚合或 FOR 消耗的输入列，
+            // 再加上 IN 列表生成的新列。派生输入可静态推导完整列集。
+            TableFactor::Pivot {
+                table,
+                aggregate_functions,
+                value_column,
+                value_source,
+                alias: Some(alias),
+                ..
+            } => {
+                let columns =
+                    pivot_output_columns(table, aggregate_functions, value_column, value_source);
+                register_virtual_columns(self.scope(), &alias.name.value, columns, false);
             }
             TableFactor::Table { name, alias, .. } => {
                 let parts = object_name_parts(name);
@@ -452,6 +475,121 @@ fn register_alias_columns(scope: &mut Scope, alias: &TableAlias) {
             .collect(),
         is_cte_alias: false,
     });
+}
+
+/// 登记一个静态可推导列清单的虚拟关系；同名只保留先出现的绑定。
+fn register_virtual_columns(
+    scope: &mut Scope,
+    name: &str,
+    columns: Vec<String>,
+    is_cte_alias: bool,
+) {
+    let name = name.to_ascii_lowercase();
+    if scope.virtuals.iter().any(|binding| binding.name == name) {
+        return;
+    }
+    scope.virtuals.push(VirtualBinding {
+        name,
+        columns,
+        is_cte_alias,
+    });
+}
+
+/// `PIVOT` 的输出列：输入列去掉 FOR 列与聚合函数引用的列，再接 IN 列表生成的新列。
+///
+/// 输入是派生表时投影列可静态推导；物理表缺少元数据，只能补生成列，不能退化成
+/// 暴露原始表字段（PIVOT 后 status/total_amount 已不属于输出关系）。
+fn pivot_output_columns(
+    table: &TableFactor,
+    aggregate_functions: &[ExprWithAlias],
+    value_column: &[Expr],
+    value_source: &PivotValueSource,
+) -> Vec<String> {
+    let source_columns = match table {
+        TableFactor::Derived { subquery, .. } => projection_columns(subquery),
+        TableFactor::Table {
+            alias: Some(alias), ..
+        } if !alias.columns.is_empty() => alias
+            .columns
+            .iter()
+            .map(|column| column.name.value.clone())
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    let mut consumed = HashSet::new();
+    for expr in value_column {
+        collect_identifier_names(expr, &mut consumed);
+    }
+    for aggregate in aggregate_functions {
+        collect_identifier_names(&aggregate.expr, &mut consumed);
+    }
+
+    let mut columns: Vec<String> = source_columns
+        .into_iter()
+        .filter(|column| !consumed.contains(&column.to_ascii_lowercase()))
+        .collect();
+    if let PivotValueSource::List(values) = value_source {
+        columns.extend(values.iter().filter_map(pivot_value_name));
+    }
+    columns
+}
+
+/// IN 列表里的值 → PIVOT 生成的列名：优先显式别名，否则标识符或字面量本身的文本。
+fn pivot_value_name(value: &ExprWithAlias) -> Option<String> {
+    value
+        .alias
+        .as_ref()
+        .map(|alias| alias.value.clone())
+        .or_else(|| pivot_expr_name(&value.expr))
+}
+
+fn pivot_expr_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Identifier(ident) => Some(ident.value.clone()),
+        Expr::CompoundIdentifier(parts) => parts.last().map(|ident| ident.value.clone()),
+        Expr::Nested(inner) => pivot_expr_name(inner),
+        Expr::Value(value) => match &value.value {
+            Value::Number(text, _) => Some(text.clone()),
+            Value::SingleQuotedString(text)
+            | Value::DoubleQuotedString(text)
+            | Value::TripleSingleQuotedString(text)
+            | Value::TripleDoubleQuotedString(text)
+            | Value::EscapedStringLiteral(text)
+            | Value::UnicodeStringLiteral(text) => Some(text.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// 收集表达式里出现的标识符名（小写），用于判断哪些输入列被 PIVOT 消耗。
+fn collect_identifier_names(expr: &Expr, names: &mut HashSet<String>) {
+    #[derive(Default)]
+    struct Collector(HashSet<String>);
+
+    impl Visitor for Collector {
+        type Break = ();
+
+        fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+            match expr {
+                Expr::Identifier(ident) => {
+                    self.0.insert(ident.value.to_ascii_lowercase());
+                }
+                Expr::CompoundIdentifier(parts) => {
+                    if let Some(last) = parts.last() {
+                        self.0.insert(last.value.to_ascii_lowercase());
+                    }
+                }
+                _ => {}
+            }
+            ControlFlow::Continue(())
+        }
+    }
+
+    let mut collector = Collector::default();
+    let _ = expr.visit(&mut collector);
+    names.extend(collector.0);
 }
 
 /// `JSON_TABLE` 的 COLUMNS 清单（含 NESTED 子列）→ 列名。
@@ -638,6 +776,65 @@ mod tests {
             Some(vec!["value".to_string()])
         );
         assert!(symbols.resolve_qualifier("j").is_empty());
+    }
+
+    /// SQL Server OPENJSON 的 WITH 清单是别名唯一可见的列来源。
+    #[test]
+    fn openjson_with_columns_resolve_through_alias() {
+        let text = "SELECT |jt.tag FROM audit_events e CROSS APPLY \
+                    OPENJSON(e.payload,'$.tags') WITH (tag NVARCHAR(30) '$') jt";
+        let cursor = text.find('|').expect("光标");
+        let sql = text.replace('|', "");
+        let parsed = parse_tolerant(&sql, None, cursor, &sqlparser::dialect::MsSqlDialect {})
+            .expect("SQL Server 语句应可解析");
+        let symbols = collect(&parsed.statements, &LineColIndex::new(&sql)).visible_at(cursor);
+        assert_eq!(
+            symbols.qualifier_virtual_columns("jt"),
+            Some(vec!["tag".to_string()])
+        );
+        assert!(symbols.resolve_qualifier("jt").is_empty());
+    }
+
+    /// 未写 WITH 时 OPENJSON 固定返回 key/value/type。
+    #[test]
+    fn openjson_without_with_exposes_default_columns() {
+        let text = "SELECT |j.value FROM OPENJSON('{\"a\":1}') j";
+        let cursor = text.find('|').expect("光标");
+        let sql = text.replace('|', "");
+        let parsed = parse_tolerant(&sql, None, cursor, &sqlparser::dialect::MsSqlDialect {})
+            .expect("SQL Server 语句应可解析");
+        let symbols = collect(&parsed.statements, &LineColIndex::new(&sql)).visible_at(cursor);
+        assert_eq!(
+            symbols.qualifier_virtual_columns("j"),
+            Some(vec![
+                "key".to_string(),
+                "value".to_string(),
+                "type".to_string()
+            ])
+        );
+    }
+
+    /// PIVOT 输出只保留未消耗的分组列，并补上 IN 列表生成的列。
+    #[test]
+    fn pivot_alias_exposes_grouping_and_generated_columns() {
+        let text = "SELECT |p.tenant_id FROM \
+                    (SELECT tenant_id,status,total_amount FROM orders) source \
+                    PIVOT(SUM(total_amount) FOR status IN ([new],[paid],[cancelled])) p";
+        let cursor = text.find('|').expect("光标");
+        let sql = text.replace('|', "");
+        let parsed = parse_tolerant(&sql, None, cursor, &sqlparser::dialect::MsSqlDialect {})
+            .expect("SQL Server 语句应可解析");
+        let symbols = collect(&parsed.statements, &LineColIndex::new(&sql)).visible_at(cursor);
+        assert_eq!(
+            symbols.qualifier_virtual_columns("p"),
+            Some(vec![
+                "tenant_id".to_string(),
+                "new".to_string(),
+                "paid".to_string(),
+                "cancelled".to_string()
+            ])
+        );
+        assert!(symbols.resolve_qualifier("p").is_empty());
     }
 
     /// 相关子查询仍看得到外层关系（未限定列可用）。
