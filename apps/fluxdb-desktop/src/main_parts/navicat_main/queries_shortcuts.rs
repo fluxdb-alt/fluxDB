@@ -357,6 +357,7 @@ impl NavicatMain {
             return;
         }
         self.query_history_open = false;
+        self.quick_open_table_open = false;
         self.query_history_quick_open = true;
         self.query_history_quick_search.clear();
         self.query_history_quick_selected = 0;
@@ -835,6 +836,12 @@ impl NavicatMain {
         }
         if self.query_history_quick_open {
             self.query_history_quick_open = false;
+            cx.notify();
+            return;
+        }
+
+        if self.quick_open_table_open {
+            self.quick_open_table_open = false;
             cx.notify();
             return;
         }

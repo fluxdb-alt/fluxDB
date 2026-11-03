@@ -510,6 +510,14 @@ struct NavicatMain {
     query_history_quick_open: bool,
     query_history_quick_selected: usize,
     query_history_quick_kind_filter: QueryHistoryKindFilter,
+    /// 快速打开表弹层：输入框、当前搜索串与候选列表。
+    quick_open_table_input: Entity<InputState>,
+    _quick_open_table_subscription: Subscription,
+    quick_open_table_search: String,
+    quick_open_table_open: bool,
+    quick_open_table_selected: usize,
+    /// 只来自侧边栏已加载对象树，不额外查询数据库 catalog。
+    quick_open_table_entries: Vec<ObjectPath>,
     query_history_connection_select:
         Entity<SelectState<SearchableVec<QueryHistoryConnectionFilterItem>>>,
     _query_history_connection_select_subscription: Subscription,

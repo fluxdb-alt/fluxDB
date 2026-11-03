@@ -20,6 +20,7 @@ impl NavicatMain {
             || self.group_context_menu.take().is_some()
             || std::mem::take(&mut self.query_history_open)
             || std::mem::take(&mut self.query_history_quick_open)
+            || std::mem::take(&mut self.quick_open_table_open)
         {
             cx.notify();
         }
@@ -31,6 +32,7 @@ impl NavicatMain {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.quick_open_table_open = false;
         if self.tab_switcher == Some(kind) {
             self.tab_switcher = None;
         } else {

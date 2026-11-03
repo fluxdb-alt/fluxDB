@@ -221,6 +221,10 @@ impl Render for NavicatMain {
             .on_action(cx.listener(Self::query_history_quick_search_previous))
             .on_action(cx.listener(Self::query_history_quick_search_next))
             .on_action(cx.listener(Self::query_history_quick_search_confirm))
+            .on_action(cx.listener(Self::open_quick_open_table_action))
+            .on_action(cx.listener(Self::quick_open_table_previous))
+            .on_action(cx.listener(Self::quick_open_table_next))
+            .on_action(cx.listener(Self::quick_open_table_confirm))
             .on_action(cx.listener(Self::copy_data_selection))
             .on_action(cx.listener(Self::copy_footer_sql_selection))
             .on_action(cx.listener(Self::delete_connection_shortcut))
@@ -261,6 +265,10 @@ impl Render for NavicatMain {
                     }
                     if this.query_history_quick_open {
                         this.query_history_quick_open = false;
+                        changed = true;
+                    }
+                    if this.quick_open_table_open {
+                        this.quick_open_table_open = false;
                         changed = true;
                     }
                     if this.tab_switcher.take().is_some() {
@@ -943,6 +951,9 @@ impl Render for NavicatMain {
             })
             .when(self.query_history_quick_open, |this| {
                 this.child(query_history_quick_search_modal(&state, self, colors, cx))
+            })
+            .when(self.quick_open_table_open, |this| {
+                this.child(quick_open_table_modal(self, colors, cx))
             })
             // gpui-component 的 Dialog 层不再由应用自绘：`gpui_component::init` 会把
             // `WindowState` 注册为 `Root` 插件，sheet / dialog / notification 层由 `Root`

@@ -71,6 +71,10 @@ fn shortcut_text(definition: &ShortcutDefinition) -> (SharedString, SharedString
             tr("app.shortcuts.search_history"),
             tr("app.shortcuts.search_history_detail"),
         ),
+        "app.quick_open_table" => (
+            tr("app.shortcuts.quick_open_table"),
+            tr("app.shortcuts.quick_open_table_detail"),
+        ),
         "query.copy_data" => (
             tr("app.shortcuts.copy_data"),
             tr("app.shortcuts.copy_data_detail"),

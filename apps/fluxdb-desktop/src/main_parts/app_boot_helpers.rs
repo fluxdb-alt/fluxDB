@@ -233,6 +233,26 @@ fn navicat_main_from_root(root: &Root) -> Option<Entity<NavicatMain>> {
     root.view().clone().downcast::<NavicatMain>().ok()
 }
 
+/// 应用级「快速打开表」入口：不依赖当前焦点在 `NavicatMain` 上。
+///
+/// 刚启动或点击侧边栏后窗口可能没有焦点，此时视图内的 `on_action` 收不到快捷键；
+/// 与退出快捷键一样走应用级监听，再定位主窗口视图执行。
+fn open_quick_open_table_from_root(cx: &mut App) {
+    let Some(window) = cx
+        .active_window()
+        .or_else(|| cx.windows().into_iter().next())
+        .and_then(|handle| handle.downcast::<Root>())
+    else {
+        return;
+    };
+    let _ = window.update(cx, |root, window, cx| {
+        let Some(main) = navicat_main_from_root(root) else {
+            return;
+        };
+        main.update(cx, |main, cx| main.open_quick_open_table(window, cx));
+    });
+}
+
 /// Windows/Linux：系统关窗（如 Alt+F4）时先做未保存检查。
 ///
 /// 有未保存内容则阻止本次关闭并弹确认框，由确认按钮执行真正退出。
@@ -269,6 +289,12 @@ fn register_shortcuts(cx: &mut App, settings: &Settings) {
         // 快捷键在窗口事件处理期间触发，此刻该窗口正被借用；直接更新同一窗口会
         // 返回 "window not found"。延后到本轮更新结束再检查并弹确认框。
         cx.defer(request_app_quit);
+    });
+    // 快速打开表必须在窗口无焦点时也能触发（例如刚启动或点击侧边栏后），
+    // 因此同样走应用级监听；停掉传播避免视图内的同名处理再执行一次。
+    cx.on_action(|_: &QuickOpenTable, cx| {
+        cx.stop_propagation();
+        cx.defer(open_quick_open_table_from_root);
     });
     cx.bind_keys([KeyBinding::new(
         if cfg!(target_os = "macos") {
@@ -310,6 +336,9 @@ fn register_shortcuts(cx: &mut App, settings: &Settings) {
             QueryHistoryQuickSearchConfirm,
             Some("QueryHistoryQuickSearch"),
         ),
+        KeyBinding::new("up", QuickOpenTablePrevious, Some("QuickOpenTable")),
+        KeyBinding::new("down", QuickOpenTableNext, Some("QuickOpenTable")),
+        KeyBinding::new("enter", QuickOpenTableConfirm, Some("QuickOpenTable")),
         KeyBinding::new("escape", CancelDialog, None),
         KeyBinding::new(
             "delete",

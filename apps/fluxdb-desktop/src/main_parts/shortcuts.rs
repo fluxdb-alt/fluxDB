@@ -20,6 +20,7 @@ pub(crate) enum ShortcutAction {
     ExecuteOrApply,
     OpenDataSearch,
     OpenQueryHistoryQuickSearch,
+    QuickOpenTable,
     CopyDataSelection,
 }
 
@@ -102,6 +103,16 @@ pub(crate) const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         macos: "shift-cmd-h",
         other: "ctrl-shift-h",
         action: ShortcutAction::OpenQueryHistoryQuickSearch,
+        context: None,
+    },
+    ShortcutDefinition {
+        id: "app.quick_open_table",
+        title: "Quick open table",
+        detail: "Search tables in the current database and open one",
+        icon: AppIcon::Table,
+        macos: "cmd-p",
+        other: "ctrl-p",
+        action: ShortcutAction::QuickOpenTable,
         context: None,
     },
     ShortcutDefinition {
@@ -197,6 +208,9 @@ pub(crate) fn bind_shortcut(
         }
         ShortcutAction::OpenQueryHistoryQuickSearch => {
             cx.bind_keys([KeyBinding::new(spec, OpenQueryHistoryQuickSearch, context)])
+        }
+        ShortcutAction::QuickOpenTable => {
+            cx.bind_keys([KeyBinding::new(spec, QuickOpenTable, context)])
         }
         ShortcutAction::CopyDataSelection => {
             cx.bind_keys([KeyBinding::new(spec, CopyDataSelection, context)])

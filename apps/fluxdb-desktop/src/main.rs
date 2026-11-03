@@ -222,6 +222,8 @@ include!("main_parts/i18n_tests.rs");
 #[cfg(test)]
 include!("main_parts/tabs_workspace_tests.rs");
 #[cfg(test)]
+include!("main_parts/quick_open_table_tests.rs");
+#[cfg(test)]
 include!("main_parts/sidebar_refresh_tests.rs");
 #[cfg(test)]
 include!("main_parts/mongo_sidebar_tests.rs");
