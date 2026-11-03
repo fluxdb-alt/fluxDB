@@ -3431,8 +3431,7 @@
       "pending": "Not available yet",
       "enabled": "Enabled",
       "developing": "In development",
-      "supported": "Supported",
-      "needs_work": "Needs work"
+      "supported": "Supported"
     },
     "message": {
       "saved": "Settings saved",
@@ -3628,9 +3627,18 @@
       "tidb_detail": "Supports connection tests, object browsing, data viewing, SQL execution, and table structure",
       "sqlite_source": "Built-in SQLx SQLite connector",
       "sqlite_detail": "Supports local file connections, object browsing, data viewing, SQL execution, and table structure",
-      "mock_source": "Configuration entry is ready",
-      "mongo_detail": "Currently uses a mock connector; real object browsing and data operations are not complete",
-      "redis_detail": "Currently uses a mock connector; real key browsing and data operations are not complete"
+      "postgres_source": "Built-in tokio-postgres connector",
+      "postgres_detail": "Supports connection tests, object browsing, data viewing, SQL execution, table structure, and user management",
+      "dameng_source": "Built-in DM8 connector",
+      "dameng_detail": "Supports connection tests, object browsing, data viewing, SQL execution, table structure, and user management",
+      "sqlserver_source": "Built-in TDS (tiberius) connector",
+      "sqlserver_detail": "Supports connection tests, object browsing, data viewing, T-SQL execution, table structure, and user management",
+      "oracle_source": "Built-in Oracle connector",
+      "oracle_detail": "Supports connection tests, object browsing, data viewing, SQL execution, table structure, and user management",
+      "mongo_source": "Built-in MongoDB connector",
+      "mongo_detail": "Supports connection string import, collection and document browsing, document editing, query building, aggregation, and import/export",
+      "redis_source": "Built-in Redis connector",
+      "redis_detail": "Supports key browsing, key editing, TTL, command execution, and Pub/Sub"
     },
     "about": {
       "group": {

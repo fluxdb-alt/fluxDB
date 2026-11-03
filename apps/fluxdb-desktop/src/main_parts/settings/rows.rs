@@ -76,18 +76,11 @@ fn settings_database_support_row(entry: DatabaseSupportEntry, colors: UiColors) 
                         ),
                 ),
         )
-        .child(settings_database_support_status(entry.status, colors))
+        .child(settings_database_support_status(colors))
 }
 
-fn settings_database_support_status(
-    status: DatabaseSupportStatus,
-    colors: UiColors,
-) -> impl IntoElement {
-    let label = match status {
-        DatabaseSupportStatus::BuiltIn => tr("app.settings.status.supported"),
-        DatabaseSupportStatus::Mock => tr("app.settings.status.needs_work"),
-    };
-
+fn settings_database_support_status(colors: UiColors) -> impl IntoElement {
+    let label = tr("app.settings.status.supported");
     settings_status_chip(label.clone(), label, colors)
 }
 

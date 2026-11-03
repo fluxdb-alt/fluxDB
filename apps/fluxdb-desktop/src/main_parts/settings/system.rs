@@ -596,47 +596,56 @@ fn settings_section_description(section: SettingsPanelSection) -> SharedString {
 #[derive(Clone)]
 struct DatabaseSupportEntry {
     kind: DatabaseKind,
-    status: DatabaseSupportStatus,
     source: SharedString,
     detail: SharedString,
 }
 
-#[derive(Clone, Copy)]
-enum DatabaseSupportStatus {
-    BuiltIn,
-    Mock,
-}
-
-fn database_support_entries() -> [DatabaseSupportEntry; 5] {
+/// 内置连接器清单，顺序与 `DatabaseKind` 保持一致；新增数据库类型时必须同步补齐。
+fn database_support_entries() -> [DatabaseSupportEntry; 9] {
     [
         DatabaseSupportEntry {
             kind: DatabaseKind::MySql,
-            status: DatabaseSupportStatus::BuiltIn,
             source: tr("app.settings.database_support.mysql_source"),
             detail: tr("app.settings.database_support.mysql_detail"),
         },
         DatabaseSupportEntry {
             kind: DatabaseKind::TiDb,
-            status: DatabaseSupportStatus::BuiltIn,
             source: tr("app.settings.database_support.tidb_source"),
             detail: tr("app.settings.database_support.tidb_detail"),
         },
         DatabaseSupportEntry {
             kind: DatabaseKind::Sqlite,
-            status: DatabaseSupportStatus::BuiltIn,
             source: tr("app.settings.database_support.sqlite_source"),
             detail: tr("app.settings.database_support.sqlite_detail"),
         },
         DatabaseSupportEntry {
+            kind: DatabaseKind::Postgres,
+            source: tr("app.settings.database_support.postgres_source"),
+            detail: tr("app.settings.database_support.postgres_detail"),
+        },
+        DatabaseSupportEntry {
+            kind: DatabaseKind::Dameng,
+            source: tr("app.settings.database_support.dameng_source"),
+            detail: tr("app.settings.database_support.dameng_detail"),
+        },
+        DatabaseSupportEntry {
+            kind: DatabaseKind::SqlServer,
+            source: tr("app.settings.database_support.sqlserver_source"),
+            detail: tr("app.settings.database_support.sqlserver_detail"),
+        },
+        DatabaseSupportEntry {
+            kind: DatabaseKind::Oracle,
+            source: tr("app.settings.database_support.oracle_source"),
+            detail: tr("app.settings.database_support.oracle_detail"),
+        },
+        DatabaseSupportEntry {
             kind: DatabaseKind::MongoDb,
-            status: DatabaseSupportStatus::Mock,
-            source: tr("app.settings.database_support.mock_source"),
+            source: tr("app.settings.database_support.mongo_source"),
             detail: tr("app.settings.database_support.mongo_detail"),
         },
         DatabaseSupportEntry {
             kind: DatabaseKind::Redis,
-            status: DatabaseSupportStatus::Mock,
-            source: tr("app.settings.database_support.mock_source"),
+            source: tr("app.settings.database_support.redis_source"),
             detail: tr("app.settings.database_support.redis_detail"),
         },
     ]

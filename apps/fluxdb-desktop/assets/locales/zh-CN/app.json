@@ -3431,8 +3431,7 @@
       "pending": "待接入",
       "enabled": "已启用",
       "developing": "开发中",
-      "supported": "已支持",
-      "needs_work": "待补齐"
+      "supported": "已支持"
     },
     "message": {
       "saved": "设置已保存",
@@ -3628,9 +3627,18 @@
       "tidb_detail": "支持连接测试、对象浏览、数据查看、SQL 执行和表结构能力",
       "sqlite_source": "内置 SQLx SQLite 连接器",
       "sqlite_detail": "支持本地文件连接、对象浏览、数据查看、SQL 执行和表结构能力",
-      "mock_source": "配置入口已就绪",
-      "mongo_detail": "当前仍使用模拟连接器，真实对象浏览和数据操作能力待补齐",
-      "redis_detail": "当前仍使用模拟连接器，真实键浏览和数据操作能力待补齐"
+      "postgres_source": "内置 tokio-postgres 连接器",
+      "postgres_detail": "支持连接测试、对象浏览、数据查看、SQL 执行、表结构和用户管理",
+      "dameng_source": "内置达梦 DM8 连接器",
+      "dameng_detail": "支持连接测试、对象浏览、数据查看、SQL 执行、表结构和用户管理",
+      "sqlserver_source": "内置 TDS（tiberius）连接器",
+      "sqlserver_detail": "支持连接测试、对象浏览、数据查看、T-SQL 执行、表结构和用户管理",
+      "oracle_source": "内置 Oracle 连接器",
+      "oracle_detail": "支持连接测试、对象浏览、数据查看、SQL 执行、表结构和用户管理",
+      "mongo_source": "内置 MongoDB 连接器",
+      "mongo_detail": "支持连接串导入、集合与文档浏览、文档编辑、查询构建、聚合和导入导出",
+      "redis_source": "内置 Redis 连接器",
+      "redis_detail": "支持键浏览、键值编辑、TTL、命令执行和发布订阅"
     },
     "about": {
       "group": {
