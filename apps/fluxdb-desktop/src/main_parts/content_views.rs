@@ -2368,7 +2368,30 @@ fn redis_workbench_results(
         }
     } else {
         // 已有执行记录时始终展示记录列表；新执行完成后把新记录追加到列表末尾。
-        redis_workbench_records(tab_id, workbench, this, colors, cx).into_any_element()
+        let records = redis_workbench_records(tab_id, workbench, this, colors, cx).into_any_element();
+        match workbench.error.as_ref() {
+            // 已有记录时错误态原本会被记录列表顶掉（如只读连接拦截写入），
+            // 用户在结果区看不到任何反馈；这里把错误提示置顶，记录继续保留。
+            Some(error) => div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h(px(0.))
+                .child(
+                    div().flex_none().p_3().child(page_error_alert(
+                        gpui::ElementId::Name(format!("redis-workbench-error-{}", tab_id.0).into()),
+                        &error.title,
+                        &error.message,
+                        error.detail.as_deref(),
+                        None,
+                        cx,
+                        colors,
+                    )),
+                )
+                .child(records)
+                .into_any_element(),
+            None => records,
+        }
     };
 
     // 横向：右侧布局下结果区会变窄，`.min_w(px(0.))` 才能让它真正收缩
