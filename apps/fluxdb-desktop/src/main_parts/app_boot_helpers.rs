@@ -202,6 +202,60 @@ fn app_assets_base_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
 }
 
+/// 统一的应用退出入口。
+///
+/// 把退出请求转给主窗口做未保存检查，由主窗口决定直接退出还是弹确认框；
+/// 拿不到主窗口（例如窗口已销毁）时无法确认，直接退出。
+fn request_app_quit(cx: &mut App) {
+    // macOS 关闭窗口只是隐藏到托盘，此时 active_window 可能为空，回退到窗口栈里的首个窗口。
+    let Some(window) = cx
+        .active_window()
+        .or_else(|| cx.windows().into_iter().next())
+        .and_then(|handle| handle.downcast::<Root>())
+    else {
+        cx.quit();
+        return;
+    };
+    let handled = window.update(cx, |root, _window, cx| {
+        let Some(main) = navicat_main_from_root(root) else {
+            return false;
+        };
+        main.update(cx, |main, cx| main.request_quit(cx));
+        true
+    });
+    if !matches!(handled, Ok(true)) {
+        cx.quit();
+    }
+}
+
+/// 窗口根视图是 `Root`（承载弹框/通知等插件），业务视图 `NavicatMain` 挂在它的 `view()` 上。
+fn navicat_main_from_root(root: &Root) -> Option<Entity<NavicatMain>> {
+    root.view().clone().downcast::<NavicatMain>().ok()
+}
+
+/// Windows/Linux：系统关窗（如 Alt+F4）时先做未保存检查。
+///
+/// 有未保存内容则阻止本次关闭并弹确认框，由确认按钮执行真正退出。
+#[cfg(not(target_os = "macos"))]
+fn install_close_quit_confirm(window: &Window, cx: &mut App) {
+    window.on_window_should_close(cx, |window, cx| {
+        let Some(root) = window.root::<Root>().flatten() else {
+            return true;
+        };
+        let Some(main) = navicat_main_from_root(&root.read(cx)) else {
+            return true;
+        };
+        if !main.read(cx).has_unsaved_work() {
+            return true;
+        }
+        main.update(cx, |main, cx| {
+            main.pending_exit_confirm = true;
+            cx.notify();
+        });
+        false
+    });
+}
+
 fn register_shortcuts(cx: &mut App, settings: &Settings) {
     // 新的通用编辑器与 SQL 连接层：注册通用编辑器快捷键 + SQL 执行快捷键。
     editor_component::register_editor_shortcuts(cx);
@@ -212,8 +266,9 @@ fn register_shortcuts(cx: &mut App, settings: &Settings) {
 
     // 应用级退出快捷键绑定在无上下文层级，确保编辑器或表格聚焦时也能退出。
     cx.on_action(|_: &Quit, cx| {
-        tracing::info!(target: "fluxdb_desktop", "收到退出快捷键，退出应用");
-        cx.quit();
+        // 快捷键在窗口事件处理期间触发，此刻该窗口正被借用；直接更新同一窗口会
+        // 返回 "window not found"。延后到本轮更新结束再检查并弹确认框。
+        cx.defer(request_app_quit);
     });
     cx.bind_keys([KeyBinding::new(
         if cfg!(target_os = "macos") {

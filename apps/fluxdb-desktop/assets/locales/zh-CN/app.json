@@ -3695,17 +3695,10 @@
     },
     "system": {
       "group": {
-        "startup": "启动与窗口",
         "diagnostics": "隐私与诊断",
         "local_data": "本地数据",
         "advanced": "高级"
       },
-      "restore_window": "恢复窗口大小和位置",
-      "restore_window_detail": "启动时恢复上次关闭应用时的窗口状态",
-      "start_minimized": "启动时最小化",
-      "start_minimized_detail": "应用启动后保持最小化状态",
-      "confirm_unsaved": "关闭未保存内容时确认",
-      "confirm_unsaved_detail": "关闭包含未保存编辑内容的标签页前显示确认",
       "view_data_dir": "查看数据目录",
       "view_data_dir_detail": "打开应用配置、历史记录和缓存所在的本地目录",
       "clear_query_history": "清理查询历史",

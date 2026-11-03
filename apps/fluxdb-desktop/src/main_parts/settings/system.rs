@@ -452,30 +452,6 @@ fn settings_system_panel(
         .flex_col()
         .gap_3()
         .child(
-            settings_panel_group(tr("app.settings.system.group.startup"), colors)
-                .child(settings_preference_row(
-                    tr("app.settings.system.restore_window"),
-                    tr("app.settings.system.restore_window_detail"),
-                    AppIcon::PanelBottom,
-                    tr("app.settings.status.pending"),
-                    colors,
-                ))
-                .child(settings_preference_row(
-                    tr("app.settings.system.start_minimized"),
-                    tr("app.settings.system.start_minimized_detail"),
-                    AppIcon::Minus,
-                    tr("app.settings.status.pending"),
-                    colors,
-                ))
-                .child(settings_preference_row(
-                    tr("app.settings.system.confirm_unsaved"),
-                    tr("app.settings.system.confirm_unsaved_detail"),
-                    AppIcon::CircleSlash,
-                    tr("app.settings.status.pending"),
-                    colors,
-                )),
-        )
-        .child(
             settings_panel_group(tr("app.settings.system.group.diagnostics"), colors)
                 .child(settings_performance_diagnostics_row(
                     settings.performance_diagnostics,

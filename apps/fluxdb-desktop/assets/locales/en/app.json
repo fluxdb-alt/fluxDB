@@ -3695,17 +3695,10 @@
     },
     "system": {
       "group": {
-        "startup": "Startup & window",
         "diagnostics": "Privacy & diagnostics",
         "local_data": "Local data",
         "advanced": "Advanced"
       },
-      "restore_window": "Restore window size and position",
-      "restore_window_detail": "Restore the previous window state at startup",
-      "start_minimized": "Start minimized",
-      "start_minimized_detail": "Keep the application minimized after startup",
-      "confirm_unsaved": "Confirm before closing unsaved content",
-      "confirm_unsaved_detail": "Ask before closing tabs with unsaved edits",
       "view_data_dir": "View data directory",
       "view_data_dir_detail": "Open the local folder containing configuration, history, and cache",
       "clear_query_history": "Clear query history",
