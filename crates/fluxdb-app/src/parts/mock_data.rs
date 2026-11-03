@@ -67,6 +67,7 @@ fn create_database_for_connection(
     config: &ConnectionConfig,
     request: &CreateDatabaseRequest,
 ) -> fluxdb_core::Result<()> {
+    ensure_read_only_allows(config, fluxdb_core::WriteIntent::Mutation)?;
     connector_for(config)?.create_database(request)
 }
 
@@ -76,6 +77,7 @@ fn create_schema_for_connection(
     database: &str,
     schema: &str,
 ) -> fluxdb_core::Result<()> {
+    ensure_read_only_allows(config, fluxdb_core::WriteIntent::Mutation)?;
     connector_for(config)?.create_schema(connection_id, database, schema)
 }
 
@@ -96,6 +98,7 @@ fn delete_database_for_connection(
     connection_id: ConnectionId,
     database: &str,
 ) -> fluxdb_core::Result<()> {
+    ensure_read_only_allows(config, fluxdb_core::WriteIntent::Mutation)?;
     connector_for(config)?.delete_database(connection_id, database)
 }
 
@@ -103,6 +106,7 @@ fn execute_query_for_connection(
     config: &ConnectionConfig,
     request: &QueryRequest,
 ) -> fluxdb_core::Result<QueryExecutionResult> {
+    ensure_read_only_allows(config, fluxdb_core::WriteIntent::Sql(&request.text))?;
     connector_for(config)?.execute(request)
 }
 
@@ -112,6 +116,7 @@ fn execute_query_for_connection_with_progress(
     on_summary: &mut dyn FnMut(QueryExecutionSummary),
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<QueryExecutionResult> {
+    ensure_read_only_allows(config, fluxdb_core::WriteIntent::Sql(&request.text))?;
     connector_for(config)?.execute_with_progress(request, on_summary, should_cancel)
 }
 
@@ -122,6 +127,10 @@ fn execute_command_workbench_commands_for_connection(
     config: &ConnectionConfig,
     request: &CommandWorkbenchRequest,
 ) -> fluxdb_core::Result<Vec<CommandWorkbenchExecution>> {
+    ensure_read_only_allows(
+        config,
+        fluxdb_core::WriteIntent::RedisCommand(&request.text),
+    )?;
     match config.kind {
         DatabaseKind::Redis => RedisConnector::with_config(config.clone())
             .execute_command_workbench_commands(request),
@@ -410,6 +419,7 @@ fn apply_data_changes_for_connection(
     config: &ConnectionConfig,
     changes: &DataChangeSet,
 ) -> fluxdb_core::Result<AppliedChangeOutcome> {
+    ensure_read_only_allows(config, fluxdb_core::WriteIntent::Mutation)?;
     connector_for(config)?.apply_changes(changes)
 }
 

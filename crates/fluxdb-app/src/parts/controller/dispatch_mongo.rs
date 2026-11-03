@@ -1,3 +1,8 @@
+/// Mongo 写操作统一走连接只读检查（文档/集合/索引/导入）。
+fn ensure_mongo_write_allowed(config: &ConnectionConfig) -> fluxdb_core::Result<()> {
+    ensure_read_only_allows(config, fluxdb_core::WriteIntent::Mutation)
+}
+
 impl AppController {
     /// MongoDB 集合工作台 / 连接信息 / 集合增删 / 命令执行。
     fn dispatch_mongo_command(&mut self, command: AppCommand) -> AppEvent {
@@ -392,6 +397,9 @@ impl AppController {
         let Some(config) = self.connection_config(object.connection_id).cloned() else {
             return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
         };
+        if let Err(error) = ensure_mongo_write_allowed(&config) {
+            return self.fail(error);
+        }
         let database = object.database.clone().unwrap_or_default();
         match connector_for(&config).and_then(|connector| {
             connector.mongo_replace_document(
@@ -429,6 +437,9 @@ impl AppController {
         let Some(config) = self.connection_config(object.connection_id).cloned() else {
             return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
         };
+        if let Err(error) = ensure_mongo_write_allowed(&config) {
+            return self.fail(error);
+        }
         let database = object.database.clone().unwrap_or_default();
         match connector_for(&config).and_then(|connector| {
             connector.mongo_delete_document(
@@ -465,6 +476,9 @@ impl AppController {
         let Some(config) = self.connection_config(object.connection_id).cloned() else {
             return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
         };
+        if let Err(error) = ensure_mongo_write_allowed(&config) {
+            return self.fail(error);
+        }
         let database = object.database.clone().unwrap_or_default();
         match connector_for(&config).and_then(|connector| {
             connector.mongo_insert_document(
@@ -599,6 +613,9 @@ impl AppController {
             return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
         };
         let config = connection.config.clone();
+        if let Err(error) = ensure_mongo_write_allowed(&config) {
+            return self.fail(error);
+        }
         if let Err(error) = connector_for(&config).and_then(|connector| {
             connector.mongo_create_collection(connection_id, &database, &collection)
         }) {
@@ -630,6 +647,9 @@ impl AppController {
         let Some(config) = self.connection_config(connection_id).cloned() else {
             return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
         };
+        if let Err(error) = ensure_mongo_write_allowed(&config) {
+            return self.fail(error);
+        }
         if let Err(error) = connector_for(&config).and_then(|connector| {
             connector.mongo_drop_collection(connection_id, &database, &collection)
         }) {
@@ -674,6 +694,9 @@ impl AppController {
         let Some(config) = self.connection_config(connection_id).cloned() else {
             return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
         };
+        if let Err(error) = ensure_mongo_write_allowed(&config) {
+            return self.fail(error);
+        }
         if let Err(error) = connector_for(&config).and_then(|connector| {
             connector.mongo_drop_index(connection_id, &database, &collection, &index)
         }) {
@@ -698,6 +721,9 @@ impl AppController {
         let Some(config) = self.connection_config(connection_id).cloned() else {
             return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
         };
+        if let Err(error) = ensure_mongo_write_allowed(&config) {
+            return self.fail(error);
+        }
         if let Err(error) = connector_for(&config).and_then(|connector| {
             connector.mongo_rename_collection(connection_id, &database, &collection, &new_name)
         }) {
@@ -745,6 +771,11 @@ impl AppController {
         let Some(config) = self.connection_config(connection_id).cloned() else {
             return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
         };
+        if let Err(error) =
+            ensure_read_only_allows(&config, fluxdb_core::WriteIntent::MongoCommand(&command))
+        {
+            return self.fail(error);
+        }
         match connector_for(&config)
             .and_then(|connector| connector.mongo_run_command(connection_id, &database, &command))
         {

@@ -1002,6 +1002,9 @@ impl AppController {
         let Some(config) = self.connection_config(object.connection_id).cloned() else {
             return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
         };
+        if let Err(error) = ensure_read_only_allows(&config, fluxdb_core::WriteIntent::Mutation) {
+            return self.fail(error);
+        }
         let connector = RedisConnector::with_config(config);
         match apply(&connector, &object) {
             Ok(()) => match self.load_data_page(&object, Pagination::new(0, 1), &[], &[], None) {
@@ -1053,6 +1056,9 @@ impl AppController {
         let Some(config) = self.connection_config(object.connection_id).cloned() else {
             return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
         };
+        if let Err(error) = ensure_read_only_allows(&config, fluxdb_core::WriteIntent::Mutation) {
+            return self.fail(error);
+        }
         let key = request.key.clone();
         match RedisConnector::with_config(config).add_key(&object, &request) {
             Ok(()) => AppEvent::RedisKeyCreated {

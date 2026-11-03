@@ -2070,6 +2070,9 @@
     "test": "Test",
     "save_and_connect": "Save and connect",
     "redis_only": "This setting is only available for Redis connections",
+    "read_only": {
+      "hint": "When enabled, writes, schema changes, imports and table edits through this connection are rejected; queries, exports and copies are unaffected."
+    },
     "tab": {
       "connection": "Connection",
       "tls": "TLS/SSL",
@@ -2091,7 +2094,8 @@
       "auth_db_optional": "Optional, usually admin",
       "auth_mechanism": "Authentication",
       "params": "Parameters",
-      "file_path": "File path"
+      "file_path": "File path",
+      "read_only": "Read-only connection"
     },
     "method": {
       "form": "Form",
@@ -2324,7 +2328,8 @@
     "unpin": "Unpin",
     "copy_table_name": "Copy table name",
     "table_name_copied": "Table name copied",
-    "new_mysql_connection": "New MySQL connection"
+    "new_mysql_connection": "New MySQL connection",
+    "read_only": "Read-only"
   },
   "pagination": {
     "first": "First page",

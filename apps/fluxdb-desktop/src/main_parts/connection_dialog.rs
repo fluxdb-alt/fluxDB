@@ -968,16 +968,42 @@ fn new_connection_tab_content(
             | DatabaseKind::Postgres => ssh_form(kind, form, inputs, colors, window, cx),
             _ => redis_only_settings_hint(colors),
         },
-        NewConnectionTab::Advanced => match kind {
-            DatabaseKind::MySql | DatabaseKind::TiDb => {
-                mysql_advanced_form(form, inputs, colors, window, cx)
-            }
-            DatabaseKind::Postgres => postgres_advanced_form(form, inputs, colors, window, cx),
-            DatabaseKind::Redis => advanced_form(form, inputs, colors, window, cx),
-            DatabaseKind::SqlServer => sqlserver_advanced_form(inputs, colors, window, cx),
-            DatabaseKind::Oracle => oracle_advanced_form(inputs, colors, window, cx),
-            _ => redis_only_settings_hint(colors),
-        },
+        NewConnectionTab::Advanced => {
+            let specific = match kind {
+                DatabaseKind::MySql | DatabaseKind::TiDb => {
+                    mysql_advanced_form(form, inputs, colors, window, cx)
+                }
+                DatabaseKind::Postgres => postgres_advanced_form(form, inputs, colors, window, cx),
+                DatabaseKind::Redis => advanced_form(form, inputs, colors, window, cx),
+                DatabaseKind::SqlServer => sqlserver_advanced_form(inputs, colors, window, cx),
+                DatabaseKind::Oracle => oracle_advanced_form(inputs, colors, window, cx),
+                _ => redis_only_settings_hint(colors),
+            };
+            // 只读开关对所有连接类型通用，放在各库专属高级项之前。
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(
+                    h_form()
+                        .label_width(px(112.))
+                        .child(toggle_row_light(
+                            tr("app.connection.field.read_only"),
+                            ConnectionToggleField::ReadOnly,
+                            form.read_only,
+                            colors,
+                            cx,
+                        )),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors.muted)
+                        .child(tr("app.connection.read_only.hint")),
+                )
+                .child(specific)
+        }
     }
 }
 
@@ -2037,6 +2063,7 @@ fn connection_toggle_id(field: ConnectionToggleField) -> &'static str {
             "new-connection-toggle-pg-show-system-schemas"
         }
         ConnectionToggleField::MongoSrv => "new-connection-toggle-mongo-srv",
+        ConnectionToggleField::ReadOnly => "new-connection-toggle-read-only",
     }
 }
 

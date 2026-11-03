@@ -194,6 +194,7 @@ impl AppController {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(DatabaseTaskProgress),
     ) -> fluxdb_core::Result<RestoreOutcome> {
+        ensure_read_only_allows(&request.config, fluxdb_core::WriteIntent::Mutation)?;
         fluxdb_connectors::database_backup(request.config.kind)?
             .restore(request, plan, cancel, progress)
     }
@@ -231,6 +232,7 @@ impl AppController {
             .connection_config(object.connection_id)
             .cloned()
             .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        ensure_read_only_allows(&config, fluxdb_core::WriteIntent::Mutation)?;
         let format = fluxdb_core::TableImportFormat::from_path(source).ok_or_else(|| {
             Error::new(
                 ErrorKind::Unsupported,
@@ -307,6 +309,7 @@ impl AppController {
         progress: &mut dyn FnMut(MongoImportProgress),
     ) -> fluxdb_core::Result<MongoImportReport> {
         let config = self.mongo_connection_config(object)?;
+        ensure_read_only_allows(&config, fluxdb_core::WriteIntent::Mutation)?;
         connector_for(&config)?.mongo_import_documents(
             &fluxdb_core::MongoImportRequest {
                 object: object.clone(),
