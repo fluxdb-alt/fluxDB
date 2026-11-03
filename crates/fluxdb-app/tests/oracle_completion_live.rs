@@ -1,8 +1,7 @@
 //! 真实 Oracle 的 SQL 补全端到端验证。
 //!
 //! 仅在显式提供 `FLUXDB_ORACLE_SMOKE=host:port:user:password[:service]` 时运行；
-//! 默认忽略。测试数据由 `docs/testing/sql-completion/oracle/数据准备.sql` 预置，
-//! 本测试只读，不建表、不改数据。用例对应同目录《测试教程.md》。
+//! 默认忽略。测试数据需在目标库中预先准备好，本测试只读，不建表、不改数据。
 
 use fluxdb_app::{AppCommand, AppController};
 use fluxdb_core::{

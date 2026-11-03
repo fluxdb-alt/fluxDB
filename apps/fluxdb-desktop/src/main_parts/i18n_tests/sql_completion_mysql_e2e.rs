@@ -1,5 +1,4 @@
-// MySQL SQL 补全端到端验证：沿用 docs/testing/sql-completion/mysql/测试教程.md
-// 的 21 个用例，只验证「Ctrl+Space 后候选能不能出来」。
+// MySQL SQL 补全端到端验证：共 21 个用例，只验证「Ctrl+Space 后候选能不能出来」。
 //
 // 驱动的是真实生产视图（NavicatMain + 真实 Editor + SqlAdapter + 真实 MySQL 连接），
 // 但用无头 TestAppContext 注入按键，因此不覆盖系统级快捷键拦截、IME 与像素渲染。
