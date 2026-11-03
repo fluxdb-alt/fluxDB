@@ -1,4 +1,14 @@
 impl NavicatMain {
+    /// 连接是否开启了只读模式。
+    ///
+    /// 用于拦截不经过 `fluxdb-app` 写入入口的操作（Redis CLI、Pub/Sub 发布）。
+    fn connection_is_read_only(&self, connection_id: ConnectionId) -> bool {
+        self.controller.state().connections.iter().any(|connection| {
+            connection.config.id == connection_id
+                && fluxdb_app::connection_is_read_only(&connection.config)
+        })
+    }
+
     fn handle_connection_menu_action(
         &mut self,
         action: ConnectionMenuAction,
@@ -191,6 +201,16 @@ impl NavicatMain {
                 }
             }
             DatabaseMenuAction::RedisCli => {
+                // Redis CLI 启动外部 `redis-cli` 进程，无法在客户端逐条拦截命令；
+                // 只读连接直接拒绝打开，避免绕过只读护栏。
+                if self.connection_is_read_only(menu.connection_id) {
+                    self.show_message(
+                        tr("app.backend_error.redis_cli_read_only"),
+                        AppMessageKind::Error,
+                        cx,
+                    );
+                    return;
+                }
                 // 数据库名即逻辑库编号（"0"~"15"），无法解析时回退到 0，由 controller 兜底去重。
                 let database = menu.database.parse::<u32>().unwrap_or(0);
                 self.dispatch(
