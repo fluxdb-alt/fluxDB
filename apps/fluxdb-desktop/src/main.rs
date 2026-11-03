@@ -216,6 +216,8 @@ include!("main_parts/app_boot.rs");
 include!("main_parts/app_boot_helpers.rs");
 
 #[cfg(test)]
+include!("main_parts/quit_confirm_tests.rs");
+#[cfg(test)]
 include!("main_parts/i18n_tests.rs");
 #[cfg(test)]
 include!("main_parts/tabs_workspace_tests.rs");

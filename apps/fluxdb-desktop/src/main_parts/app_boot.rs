@@ -116,6 +116,8 @@ fn main() {
                     // Windows/Linux 默认正常关闭。当前只有 macOS 的隐藏/恢复行为经过验证。
                     #[cfg(target_os = "macos")]
                     install_close_to_tray(window, cx);
+                    #[cfg(not(target_os = "macos"))]
+                    install_close_quit_confirm(window, cx);
                     let view =
                         cx.new(|cx| navicat_main_new(window, cx, controller, storage, theme_mode));
                     // Tab 拦截已迁移到通用 Editor 的键绑定体系，不再需要全局拦截。

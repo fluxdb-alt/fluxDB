@@ -91,7 +91,7 @@ fn handle_tray_menu_events(cx: &mut App) {
     while let Ok(event) = MenuEvent::receiver().try_recv() {
         match event.id().as_ref() {
             TRAY_OPEN_ID => activate_main_window(cx),
-            TRAY_QUIT_ID => cx.quit(),
+            TRAY_QUIT_ID => cx.defer(request_app_quit),
             _ => {}
         }
     }

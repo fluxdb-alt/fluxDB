@@ -130,6 +130,31 @@ impl NavicatMain {
         cx.notify();
     }
 
+    /// 退出应用前检查会丢失的工作。
+    ///
+    /// 存在未保存修改（含表数据编辑、SQL/Redis/Mongo 草稿）或运行中的查询时弹确认框，
+    /// 避免 Cmd+Q、托盘退出、关窗等路径静默丢弃内容；否则直接退出。
+    fn request_quit(&mut self, cx: &mut Context<Self>) {
+        if self.has_unsaved_work() {
+            self.pending_exit_confirm = true;
+            cx.notify();
+            return;
+        }
+        cx.quit();
+    }
+
+    /// 是否存在未保存修改或运行中的查询。
+    fn has_unsaved_work(&self) -> bool {
+        self.controller.state().tabs.iter().any(|tab| {
+            tab.dirty
+                || match &tab.kind {
+                    TabKind::QueryEditor(editor) => editor.running,
+                    TabKind::RedisWorkbench(workbench) => workbench.running,
+                    _ => false,
+                }
+        })
+    }
+
     fn close_workspace_warning(&self, scope: FirstLevelScope) -> PendingCloseWorkspace {
         let state = self.controller.state();
         let display_name = match &scope {

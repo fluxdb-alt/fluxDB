@@ -320,7 +320,7 @@ fn window_control_buttons(
                 }),
         )
         .child(
-            // 关闭：先弹确认框（Windows 用户要求二次确认），确认后才退出。
+            // 关闭：仅在有未保存内容时弹确认框，确认后才退出。
             div()
                 .id("win-btn-close")
                 .size(px(34.))
@@ -336,9 +336,8 @@ fn window_control_buttons(
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
-                        this.pending_exit_confirm = true;
+                        this.request_quit(cx);
                         cx.stop_propagation();
-                        cx.notify();
                     }),
                 ),
         )
