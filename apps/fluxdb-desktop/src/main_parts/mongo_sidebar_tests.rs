@@ -1607,11 +1607,18 @@ mod mongo_sidebar_tests {
             (screen.contains("switched to db admin") && screen.contains("admin> ")).then_some(())
         });
 
-        // 8. 只读边界：写命令必须被拒，且错误文本真的上屏。
-        type_in_terminal(cx, "db.demo.insertOne({ name: \"fluxdb\" })");
-        wait_until(cx, "写命令被拒", |cx| {
+        // 8. 写命令真的落库：插入后返回 insertedId，再按标记删掉，保持环境干净。
+        //    只读连接的拦截在连接器单测覆盖（不依赖真实库）。
+        type_in_terminal(cx, "db.demo.insertOne({ name: \"fluxdb-e2e-write\" })");
+        wait_until(cx, "写命令返回 insertedId", |cx| {
             shell_screen_compact(cx, &view)
-                .contains("read-only")
+                .contains("insertedId")
+                .then_some(())
+        });
+        type_in_terminal(cx, "db.demo.deleteMany({ name: \"fluxdb-e2e-write\" })");
+        wait_until(cx, "清理写入的探针文档", |cx| {
+            shell_screen_compact(cx, &view)
+                .contains("deletedCount:1")
                 .then_some(())
         });
 

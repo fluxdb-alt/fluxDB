@@ -2,7 +2,7 @@
 //
 // 形态对齐 Redis Workbench：输入一条语句 → 追加一条执行记录，结果区可重跑 / 删除。
 // 与 CLI（`MongoCliState`）的分工：CLI 是真实终端 REPL，工作台是「可回看的执行台」。
-// 语句语法与只读边界完全交给连接器的 `mongo_shell`，这里只做状态与记录管理。
+// 语句语法、写方法与只读拦截完全交给连接器的 `mongo_shell`，这里只做状态与记录管理。
 
 /// 结果区保留的最大记录数；超出后丢最旧的，避免一次会话无限堆积。
 const MONGO_WORKBENCH_MAX_RECORDS: usize = 100;

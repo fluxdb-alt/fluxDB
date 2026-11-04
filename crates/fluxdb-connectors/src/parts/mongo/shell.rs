@@ -1,4 +1,4 @@
-// MongoDB shell 语句解析与执行（命令行终端用，只读）。
+// MongoDB shell 语句解析与执行（命令行终端用，mongosh 子集）。
 //
 // 目标是让终端里的写法和 Compass / mongosh 一致：
 //   use fluxdb_demo
@@ -6,13 +6,14 @@
 //   db.events.find({ event_type: "page_view" }).sort({ duration_ms: -1 }).limit(20)
 //   db.events.findOne(...) / countDocuments(...) / distinct("field", ...) / aggregate([...])
 //   db.events.getIndexes() / db.events.stats() / db.getCollectionNames()
+//   db.events.insertOne({...}) / updateMany(...) / deleteOne(...) / createIndex(...)
 //
 // 边界：
 //   - 不做 JS 求值。参数是「放宽了引号与尾逗号的 JSON」，构造器（`ObjectId("…")`、
 //     `ISODate("…")`、`NumberLong(…)`）在解析阶段就地换成 Extended JSON，再交给 BSON。
 //     `let` / 变量 / 多语句一律不支持，报错说清楚而不是给出半截结果。
-//   - 只读。写与管理命令（insert / update / delete / drop / createIndex …）明确拒绝，
-//     而不是悄悄执行。
+//   - 写方法只覆盖显式白名单；其余写 / 管理命令明确拒绝，而不是悄悄执行。
+//     只读连接在执行前拦截所有写方法。
 //   - 输出排版对齐 Compass：键蓝色、字符串绿色、数字橙色，类型保留
 //     `ObjectId('…')` / `ISODate('…')` 这样的标注。
 
@@ -42,31 +43,20 @@ impl MongoShellOutput {
     }
 }
 
-/// shell 里还会遇到的写 / 管理方法：单独识别是为了给出「本终端不支持写」而不是「拼错了」。
+/// 尚未支持的写 / 管理方法：单独识别是为了给出「本终端不支持该方法」而不是「拼错了」。
+/// 已实现的写方法在 `mongo_shell_method` 里先行匹配，不落进这里。
 const MONGO_SHELL_WRITE_METHODS: &[&str] = &[
-    "insert",
-    "insertOne",
-    "insertMany",
     "update",
-    "updateOne",
-    "updateMany",
-    "replaceOne",
-    "delete",
-    "deleteOne",
-    "deleteMany",
-    "remove",
     "save",
     "bulkWrite",
-    "drop",
     "renameCollection",
-    "createCollection",
-    "createIndex",
     "createIndexes",
-    "dropIndex",
-    "dropIndexes",
     "dropDatabase",
     "createUser",
     "runCommand",
+    "findOneAndUpdate",
+    "findOneAndReplace",
+    "findOneAndDelete",
 ];
 
 /// 解析后的一条语句。
@@ -86,6 +76,8 @@ enum MongoShellStatement {
         /// 链式调用（`.sort(...)` 等）；只有 `find` 支持。
         chain: Vec<MongoShellChainCall>,
     },
+    /// `db.createCollection(<name>, [options])`。
+    CreateCollection { name: String, options: String },
 }
 
 #[derive(Debug)]
@@ -104,6 +96,41 @@ enum MongoShellMethod {
     Aggregate,
     Indexes,
     Stats,
+    InsertOne,
+    InsertMany,
+    Insert,
+    UpdateOne,
+    UpdateMany,
+    ReplaceOne,
+    DeleteOne,
+    DeleteMany,
+    Remove,
+    CreateIndex,
+    DropIndex,
+    DropIndexes,
+    DropCollection,
+}
+
+impl MongoShellMethod {
+    /// 写方法：只读连接在执行前统一拒绝，也是「哪些方法会改数据」的唯一清单。
+    fn is_write(&self) -> bool {
+        matches!(
+            self,
+            Self::InsertOne
+                | Self::InsertMany
+                | Self::Insert
+                | Self::UpdateOne
+                | Self::UpdateMany
+                | Self::ReplaceOne
+                | Self::DeleteOne
+                | Self::DeleteMany
+                | Self::Remove
+                | Self::CreateIndex
+                | Self::DropIndex
+                | Self::DropIndexes
+                | Self::DropCollection
+        )
+    }
 }
 
 /// 执行一条 shell 语句。
@@ -142,6 +169,11 @@ fn mongo_shell(
         } => {
             let database = mongo_shell_require_database(database)?;
             mongo_shell_run(config, &database, &collection, method, &args, &chain)?
+        }
+        MongoShellStatement::CreateCollection { name, options } => {
+            mongo_shell_ensure_writable(config)?;
+            let database = mongo_shell_require_database(database)?;
+            mongo_shell_create_collection(config, &database, &name, &options)?
         }
     };
     Ok(fluxdb_core::MongoShellResult {
@@ -250,13 +282,15 @@ fn mongo_shell_parse_db_call(text: &str) -> fluxdb_core::Result<MongoShellStatem
         let rest = rest
             .strip_prefix('.')
             .ok_or_else(|| mongo_shell_error("Usage: db.<collection>.<method>(...)"))?;
-        match rest.find('.') {
+        // 方法名只到 `(` 为止：参数里的点（`{size: 1024.5}`、`"a.b"`）不能当成集合分隔符。
+        let head = rest.split('(').next().unwrap_or(rest);
+        match head.find('.') {
             Some(dot) => (
                 unquote(rest[..dot].trim()).to_string(),
                 &rest[dot + 1..],
                 None,
             ),
-            // `db.someMethod()`：没有集合名，只可能是 db 级方法。
+            // `db.someMethod(...)`：方法名里没有点，只可能是 db 级方法。
             None => (String::new(), rest, Some(rest)),
         }
     };
@@ -268,8 +302,23 @@ fn mongo_shell_parse_db_call(text: &str) -> fluxdb_core::Result<MongoShellStatem
             }
             return Ok(MongoShellStatement::CollectionNames);
         }
+        if name.eq_ignore_ascii_case("createCollection") {
+            if args.is_empty() || args.len() > 2 || !chain.is_empty() {
+                return Err(mongo_shell_error(
+                    "Usage: db.createCollection(\"name\", [options])",
+                ));
+            }
+            let collection = unquote(args[0].trim());
+            if collection.is_empty() {
+                return Err(mongo_shell_error("Collection name cannot be empty"));
+            }
+            return Ok(MongoShellStatement::CreateCollection {
+                name: collection.to_string(),
+                options: args.get(1).cloned().unwrap_or_default(),
+            });
+        }
         return Err(mongo_shell_error(format!(
-            "Unknown db method: {name}; only db.getCollectionNames() is supported"
+            "Unknown db method: {name}; supported: db.getCollectionNames() / db.createCollection()"
         )));
     }
     let (name, args, chain) = mongo_shell_split_call(tail)?;
@@ -381,14 +430,27 @@ fn mongo_shell_method(name: &str) -> fluxdb_core::Result<MongoShellMethod> {
         "aggregate" => MongoShellMethod::Aggregate,
         "getindexes" => MongoShellMethod::Indexes,
         "stats" => MongoShellMethod::Stats,
+        "insertone" => MongoShellMethod::InsertOne,
+        "insertmany" => MongoShellMethod::InsertMany,
+        "insert" => MongoShellMethod::Insert,
+        "updateone" => MongoShellMethod::UpdateOne,
+        "updatemany" => MongoShellMethod::UpdateMany,
+        "replaceone" => MongoShellMethod::ReplaceOne,
+        "deleteone" => MongoShellMethod::DeleteOne,
+        "deletemany" => MongoShellMethod::DeleteMany,
+        "remove" => MongoShellMethod::Remove,
+        "createindex" => MongoShellMethod::CreateIndex,
+        "dropindex" => MongoShellMethod::DropIndex,
+        "dropindexes" => MongoShellMethod::DropIndexes,
+        "drop" => MongoShellMethod::DropCollection,
         other => {
             let is_write = MONGO_SHELL_WRITE_METHODS
                 .iter()
                 .any(|candidate| candidate.to_ascii_lowercase() == other);
             return Err(mongo_shell_error(if is_write {
                 format!(
-                    "The command line only supports read-only queries; {name} is not supported. \
-                     Use the collection workbench or import to write data"
+                    "{name} is not supported in the command line; \
+                     use insertOne / updateOne / deleteOne or the collection workbench"
                 )
             } else {
                 // 单行：多行清单在终端里是一整块红字，按 Tab 看候选更接近 mongosh。
@@ -503,6 +565,9 @@ fn mongo_shell_run(
     args: &[String],
     chain: &[MongoShellChainCall],
 ) -> fluxdb_core::Result<MongoShellOutput> {
+    if method.is_write() {
+        mongo_shell_ensure_writable(config)?;
+    }
     match method {
         MongoShellMethod::Find => mongo_shell_find(config, database, collection, args, chain),
         _ if !chain.is_empty() => Err(mongo_shell_error(
@@ -515,7 +580,56 @@ fn mongo_shell_run(
         MongoShellMethod::Aggregate => mongo_shell_aggregate(config, database, collection, args),
         MongoShellMethod::Indexes => mongo_shell_indexes(config, database, collection),
         MongoShellMethod::Stats => mongo_shell_stats(config, database, collection),
+        MongoShellMethod::InsertOne => {
+            mongo_shell_insert(config, database, collection, args, MongoShellInsertMode::One)
+        }
+        MongoShellMethod::InsertMany => {
+            mongo_shell_insert(config, database, collection, args, MongoShellInsertMode::Many)
+        }
+        MongoShellMethod::Insert => {
+            mongo_shell_insert(config, database, collection, args, MongoShellInsertMode::Any)
+        }
+        MongoShellMethod::UpdateOne => mongo_shell_update(
+            config,
+            database,
+            collection,
+            args,
+            MongoShellUpdateMode::One,
+        ),
+        MongoShellMethod::UpdateMany => mongo_shell_update(
+            config,
+            database,
+            collection,
+            args,
+            MongoShellUpdateMode::Many,
+        ),
+        MongoShellMethod::ReplaceOne => mongo_shell_replace(config, database, collection, args),
+        MongoShellMethod::DeleteOne => {
+            mongo_shell_delete(config, database, collection, args, false)
+        }
+        MongoShellMethod::DeleteMany => {
+            mongo_shell_delete(config, database, collection, args, true)
+        }
+        MongoShellMethod::Remove => mongo_shell_remove(config, database, collection, args),
+        MongoShellMethod::CreateIndex => {
+            mongo_shell_create_index(config, database, collection, args)
+        }
+        MongoShellMethod::DropIndex => mongo_shell_drop_index(config, database, collection, args),
+        MongoShellMethod::DropIndexes => {
+            mongo_shell_drop_indexes(config, database, collection)
+        }
+        MongoShellMethod::DropCollection => {
+            mongo_shell_drop_collection(config, database, collection)
+        }
     }
+}
+
+/// 只读连接的统一拒绝点：CLI 与命令工作台都走这里，避免各写方法各拦一遍。
+fn mongo_shell_ensure_writable(config: &ConnectionConfig) -> fluxdb_core::Result<()> {
+    if config.is_read_only() {
+        return Err(Error::new(ErrorKind::Permission, "连接已设为只读，未执行"));
+    }
+    Ok(())
 }
 
 fn mongo_shell_find(
@@ -781,6 +895,455 @@ fn mongo_shell_stats(
     Ok(MongoShellOutput::text(mongo_shell_pretty(&Bson::Document(stats), 0)))
 }
 
+// —— 写操作 ——
+//
+// 写方法统一走驱动 API（而不是 run_command），这样返回结构与 mongosh 对齐：
+// 插入给 insertedId(s)，更新给 matched / modified / upserted，删除给 deletedCount。
+// 只读连接在 `mongo_shell_run` 入口统一拒绝。
+
+/// `insertOne` / `insertMany` / `insert` 的入参形态。
+#[derive(Clone, Copy, PartialEq)]
+enum MongoShellInsertMode {
+    One,
+    Many,
+    /// `insert`：文档或文档数组都接受，与 mongosh 一致。
+    Any,
+}
+
+/// `updateOne` / `updateMany` 的语义差异只有「改几条」。
+#[derive(Clone, Copy, PartialEq)]
+enum MongoShellUpdateMode {
+    One,
+    Many,
+}
+
+fn mongo_shell_insert(
+    config: &ConnectionConfig,
+    database: &str,
+    collection: &str,
+    args: &[String],
+    mode: MongoShellInsertMode,
+) -> fluxdb_core::Result<MongoShellOutput> {
+    let [text] = args else {
+        return Err(mongo_shell_error(match mode {
+            MongoShellInsertMode::One => "Usage: insertOne(document)",
+            MongoShellInsertMode::Many => "Usage: insertMany([documents])",
+            MongoShellInsertMode::Any => "Usage: insert(document | [documents])",
+        }));
+    };
+    let value = mongo_shell_parse_text("Document", text)?;
+    let (documents, many) = match (mode, value) {
+        (MongoShellInsertMode::One, Bson::Document(document)) => (vec![document], false),
+        (MongoShellInsertMode::One, _) => {
+            return Err(mongo_shell_error("insertOne expects an object"))
+        }
+        (MongoShellInsertMode::Many, Bson::Array(items)) => (mongo_shell_documents(items)?, true),
+        (MongoShellInsertMode::Many, _) => {
+            return Err(mongo_shell_error("insertMany expects an array of objects"))
+        }
+        (MongoShellInsertMode::Any, Bson::Document(document)) => (vec![document], false),
+        (MongoShellInsertMode::Any, Bson::Array(items)) => (mongo_shell_documents(items)?, true),
+        (MongoShellInsertMode::Any, _) => {
+            return Err(mongo_shell_error("insert expects an object or an array of objects"))
+        }
+    };
+    if documents.is_empty() {
+        return Err(mongo_shell_error("insertMany requires at least one document"));
+    }
+    let client = mongo_connect(config)?;
+    let database = database.to_string();
+    let collection = collection.to_string();
+    let reply = if many {
+        let result = mongo_block_on(60, "insertMany", async move {
+            client
+                .database(&database)
+                .collection::<Document>(&collection)
+                .insert_many(documents)
+                .await
+        })?;
+        // mongosh 用 `insertedIds: {"0": ObjectId, …}`；驱动给的是 HashMap，按序排好再输出。
+        let mut inserted_ids = Document::new();
+        let mut pairs: Vec<(usize, Bson)> = result.inserted_ids.into_iter().collect();
+        pairs.sort_by_key(|(index, _)| *index);
+        for (index, id) in pairs {
+            inserted_ids.insert(index.to_string(), id);
+        }
+        doc! {"acknowledged": true, "insertedIds": inserted_ids}
+    } else {
+        let document = documents.into_iter().next().unwrap_or_default();
+        let result = mongo_block_on(60, "insertOne", async move {
+            client
+                .database(&database)
+                .collection::<Document>(&collection)
+                .insert_one(document)
+                .await
+        })?;
+        doc! {"acknowledged": true, "insertedId": result.inserted_id}
+    };
+    Ok(MongoShellOutput::text(mongo_shell_pretty(
+        &Bson::Document(reply),
+        0,
+    )))
+}
+
+fn mongo_shell_update(
+    config: &ConnectionConfig,
+    database: &str,
+    collection: &str,
+    args: &[String],
+    mode: MongoShellUpdateMode,
+) -> fluxdb_core::Result<MongoShellOutput> {
+    let (filter_text, update_text, options_text) = match args {
+        [filter, update] => (filter.as_str(), update.as_str(), None),
+        [filter, update, options] => (filter.as_str(), update.as_str(), Some(options.as_str())),
+        _ => {
+            return Err(mongo_shell_error(match mode {
+                MongoShellUpdateMode::One => "Usage: updateOne(filter, update, [options])",
+                MongoShellUpdateMode::Many => "Usage: updateMany(filter, update, [options])",
+            }));
+        }
+    };
+    let filter = mongo_shell_document("Filter", filter_text)?;
+    let update = mongo_shell_update_modifications(update_text)?;
+    let upsert = mongo_shell_upsert(options_text)?;
+    let client = mongo_connect(config)?;
+    let database = database.to_string();
+    let collection = collection.to_string();
+    let result = mongo_block_on(60, "update", async move {
+        let collection = client.database(&database).collection::<Document>(&collection);
+        match (mode, update) {
+            (MongoShellUpdateMode::One, MongoShellUpdate::Document(document)) => {
+                collection.update_one(filter, document).upsert(upsert).await
+            }
+            (MongoShellUpdateMode::One, MongoShellUpdate::Pipeline(pipeline)) => {
+                collection.update_one(filter, pipeline).upsert(upsert).await
+            }
+            (MongoShellUpdateMode::Many, MongoShellUpdate::Document(document)) => {
+                collection.update_many(filter, document).upsert(upsert).await
+            }
+            (MongoShellUpdateMode::Many, MongoShellUpdate::Pipeline(pipeline)) => {
+                collection.update_many(filter, pipeline).upsert(upsert).await
+            }
+        }
+    })?;
+    Ok(MongoShellOutput::text(mongo_shell_pretty(
+        &Bson::Document(mongo_shell_update_reply(&result)),
+        0,
+    )))
+}
+
+fn mongo_shell_replace(
+    config: &ConnectionConfig,
+    database: &str,
+    collection: &str,
+    args: &[String],
+) -> fluxdb_core::Result<MongoShellOutput> {
+    let (filter_text, replacement_text, options_text) = match args {
+        [filter, replacement] => (filter.as_str(), replacement.as_str(), None),
+        [filter, replacement, options] => {
+            (filter.as_str(), replacement.as_str(), Some(options.as_str()))
+        }
+        _ => return Err(mongo_shell_error("Usage: replaceOne(filter, replacement, [options])")),
+    };
+    let filter = mongo_shell_document("Filter", filter_text)?;
+    let replacement = mongo_shell_document("Replacement", replacement_text)?;
+    if replacement.keys().any(|key| key.starts_with('$')) {
+        return Err(mongo_shell_error(
+            "replaceOne replacement cannot contain update operators; use updateOne instead",
+        ));
+    }
+    let upsert = mongo_shell_upsert(options_text)?;
+    let client = mongo_connect(config)?;
+    let database = database.to_string();
+    let collection = collection.to_string();
+    let result = mongo_block_on(60, "replaceOne", async move {
+        client
+            .database(&database)
+            .collection::<Document>(&collection)
+            .replace_one(filter, replacement)
+            .upsert(upsert)
+            .await
+    })?;
+    Ok(MongoShellOutput::text(mongo_shell_pretty(
+        &Bson::Document(mongo_shell_update_reply(&result)),
+        0,
+    )))
+}
+
+/// 更新 / 替换共用的返回结构，字段顺序与 mongosh 一致。
+fn mongo_shell_update_reply(result: &mongodb::results::UpdateResult) -> Document {
+    doc! {
+        "acknowledged": true,
+        "modifiedCount": result.modified_count as i64,
+        "upsertedId": result.upserted_id.clone().unwrap_or(Bson::Null),
+        "upsertedCount": if result.upserted_id.is_some() { 1i64 } else { 0i64 },
+        "matchedCount": result.matched_count as i64,
+    }
+}
+
+/// `update` 参数：更新文档，或聚合管道（数组）。
+///
+/// 驱动的 `UpdateModifications` 没有公开导出，这里保留自己的形态，
+/// 在调用 `update_one` / `update_many` 时分别传文档或 `Vec<Document>`。
+enum MongoShellUpdate {
+    Document(Document),
+    Pipeline(Vec<Document>),
+}
+
+fn mongo_shell_update_modifications(text: &str) -> fluxdb_core::Result<MongoShellUpdate> {
+    match mongo_shell_parse_text("Update", text)? {
+        Bson::Document(document) => Ok(MongoShellUpdate::Document(document)),
+        Bson::Array(items) => Ok(MongoShellUpdate::Pipeline(mongo_shell_documents(items)?)),
+        _ => Err(mongo_shell_error("Update must be an object or a pipeline array")),
+    }
+}
+
+/// 写方法第三个参数只支持 `upsert`；其余选项直接报错，避免「写了但没生效」。
+fn mongo_shell_upsert(options_text: Option<&str>) -> fluxdb_core::Result<bool> {
+    let Some(text) = options_text else {
+        return Ok(false);
+    };
+    let options = mongo_shell_document("Options", text)?;
+    for key in options.keys() {
+        if key != "upsert" {
+            return Err(mongo_shell_error(format!(
+                "Option {key} is not supported; only upsert is supported"
+            )));
+        }
+    }
+    match options.get("upsert") {
+        None => Ok(false),
+        Some(Bson::Boolean(value)) => Ok(*value),
+        Some(_) => Err(mongo_shell_error("upsert must be true or false")),
+    }
+}
+
+fn mongo_shell_delete(
+    config: &ConnectionConfig,
+    database: &str,
+    collection: &str,
+    args: &[String],
+    many: bool,
+) -> fluxdb_core::Result<MongoShellOutput> {
+    let [filter_text] = args else {
+        return Err(mongo_shell_error(if many {
+            "Usage: deleteMany(filter)"
+        } else {
+            "Usage: deleteOne(filter)"
+        }));
+    };
+    let filter = mongo_shell_document("Filter", filter_text)?;
+    let client = mongo_connect(config)?;
+    let database = database.to_string();
+    let collection = collection.to_string();
+    let result = mongo_block_on(60, "delete", async move {
+        let collection = client.database(&database).collection::<Document>(&collection);
+        if many {
+            collection.delete_many(filter).await
+        } else {
+            collection.delete_one(filter).await
+        }
+    })?;
+    let reply = doc! {"acknowledged": true, "deletedCount": result.deleted_count as i64};
+    Ok(MongoShellOutput::text(mongo_shell_pretty(
+        &Bson::Document(reply),
+        0,
+    )))
+}
+
+/// 兼容 mongosh 的旧写法 `remove(filter, justOne)`。
+fn mongo_shell_remove(
+    config: &ConnectionConfig,
+    database: &str,
+    collection: &str,
+    args: &[String],
+) -> fluxdb_core::Result<MongoShellOutput> {
+    let (filter_text, just_one) = match args {
+        [filter] => (filter.as_str(), false),
+        [filter, flag] => (filter.as_str(), mongo_shell_boolean(flag, "justOne")?),
+        _ => return Err(mongo_shell_error("Usage: remove(filter, [justOne])")),
+    };
+    // remove 的 justOne=true 等价于 deleteOne；这里复用同一条删除实现。
+    let args = [filter_text.to_string()];
+    mongo_shell_delete(config, database, collection, &args, !just_one)
+}
+
+fn mongo_shell_boolean(text: &str, label: &str) -> fluxdb_core::Result<bool> {
+    match text.trim() {
+        "true" | "1" => Ok(true),
+        "false" | "0" => Ok(false),
+        other => Err(mongo_shell_error(format!(
+            "{label} must be true or false, got {other}"
+        ))),
+    }
+}
+
+fn mongo_shell_create_index(
+    config: &ConnectionConfig,
+    database: &str,
+    collection: &str,
+    args: &[String],
+) -> fluxdb_core::Result<MongoShellOutput> {
+    let (keys_text, options_text) = match args {
+        [keys] => (keys.as_str(), None),
+        [keys, options] => (keys.as_str(), Some(options.as_str())),
+        _ => return Err(mongo_shell_error("Usage: createIndex(keys, [options])")),
+    };
+    let keys = mongo_shell_document("Key specification", keys_text)?;
+    if keys.is_empty() {
+        return Err(mongo_shell_error("Index key specification cannot be empty"));
+    }
+    // 原样透传选项文档：服务端认识的选项（unique / expireAfterSeconds / partialFilterExpression …）
+    // 直接生效，不认识的由服务端报错，避免本地反序列化把未知选项悄悄丢掉。
+    let mut index = doc! {"key": keys.clone()};
+    let mut name = mongo_shell_index_name(&keys)?;
+    if let Some(text) = options_text {
+        let options = mongo_shell_document("Options", text)?;
+        if options.contains_key("key") {
+            return Err(mongo_shell_error(
+                "Options cannot redefine key; pass the key document as the first argument",
+            ));
+        }
+        match options.get("name") {
+            None => {}
+            Some(Bson::String(custom)) => name = custom.clone(),
+            Some(_) => return Err(mongo_shell_error("Index name must be a string")),
+        }
+        for (key, value) in options {
+            index.insert(key, value);
+        }
+    }
+    // `createIndexes` 命令要求每条索引带 name；驱动会自动补，命令直发必须自己给。
+    index.insert("name", name.clone());
+    let command = doc! {
+        "createIndexes": collection,
+        "indexes": [index],
+    };
+    mongo_shell_command(config, database, command, "createIndex")?;
+    // mongosh 只回索引名，例如 `a_1`。
+    Ok(MongoShellOutput::text(name))
+}
+
+fn mongo_shell_drop_index(
+    config: &ConnectionConfig,
+    database: &str,
+    collection: &str,
+    args: &[String],
+) -> fluxdb_core::Result<MongoShellOutput> {
+    let [spec] = args else {
+        return Err(mongo_shell_error("Usage: dropIndex(name | keyDocument)"));
+    };
+    let name = if spec.trim_start().starts_with('{') {
+        // mongosh 允许传 key 文档：索引名按 `字段_方向` 拼接（`a_1_b_-1`）。
+        mongo_shell_index_name(&mongo_shell_document("Key specification", spec)?)?
+    } else {
+        unquote(spec.trim()).to_string()
+    };
+    if name.is_empty() {
+        return Err(mongo_shell_error("Index name cannot be empty"));
+    }
+    let command = doc! {"dropIndexes": collection, "index": name};
+    mongo_shell_command(config, database, command, "dropIndex")
+}
+
+fn mongo_shell_drop_indexes(
+    config: &ConnectionConfig,
+    database: &str,
+    collection: &str,
+) -> fluxdb_core::Result<MongoShellOutput> {
+    let command = doc! {"dropIndexes": collection, "index": "*"};
+    mongo_shell_command(config, database, command, "dropIndexes")
+}
+
+fn mongo_shell_drop_collection(
+    config: &ConnectionConfig,
+    database: &str,
+    collection: &str,
+) -> fluxdb_core::Result<MongoShellOutput> {
+    let client = mongo_connect(config)?;
+    let database = database.to_string();
+    let collection = collection.to_string();
+    mongo_block_on(60, "drop", async move {
+        client
+            .database(&database)
+            .collection::<Document>(&collection)
+            .drop()
+            .await
+    })?;
+    // mongosh 的 `drop()` 打印布尔值；驱动只回成功/失败，这里按成功固定为 true。
+    Ok(MongoShellOutput::text("true".to_string()))
+}
+
+fn mongo_shell_create_collection(
+    config: &ConnectionConfig,
+    database: &str,
+    collection: &str,
+    options_text: &str,
+) -> fluxdb_core::Result<MongoShellOutput> {
+    let options = mongo_shell_document("Options", options_text)?;
+    // 服务端命令名是 `create`；`createCollection` 只是 mongosh 的方法名。
+    let mut command = doc! {"create": collection};
+    for (name, value) in options {
+        if name == "create" {
+            return Err(mongo_shell_error("Options cannot redefine create"));
+        }
+        command.insert(name, value);
+    }
+    mongo_shell_command(config, database, command, "createCollection")
+}
+
+/// 执行一条原始命令并排版服务端返回；索引与建集合这类操作没有驱动级结果结构。
+fn mongo_shell_command(
+    config: &ConnectionConfig,
+    database: &str,
+    command: Document,
+    label: &str,
+) -> fluxdb_core::Result<MongoShellOutput> {
+    let client = mongo_connect(config)?;
+    let database = database.to_string();
+    let reply = mongo_block_on(60, label, async move {
+        client.database(&database).run_command(command).await
+    })?;
+    Ok(MongoShellOutput::text(mongo_shell_pretty(
+        &Bson::Document(reply),
+        0,
+    )))
+}
+
+/// 由 key 文档推导索引名：`{a: 1, b: -1}` → `a_1_b_-1`。
+fn mongo_shell_index_name(keys: &Document) -> fluxdb_core::Result<String> {
+    if keys.is_empty() {
+        return Err(mongo_shell_error("Index key specification cannot be empty"));
+    }
+    let mut parts = Vec::with_capacity(keys.len());
+    for (field, direction) in keys {
+        let direction = match direction {
+            Bson::Int32(value) => value.to_string(),
+            Bson::Int64(value) => value.to_string(),
+            Bson::Double(value) => value.to_string(),
+            Bson::String(value) => value.clone(),
+            other => {
+                return Err(mongo_shell_error(format!(
+                    "Index direction for {field} must be a number or a string, got {other:?}"
+                )));
+            }
+        };
+        parts.push(format!("{field}_{direction}"));
+    }
+    Ok(parts.join("_"))
+}
+
+/// 把数组元素逐个收成文档；插入 / 管道共用。
+fn mongo_shell_documents(items: Vec<Bson>) -> fluxdb_core::Result<Vec<Document>> {
+    items
+        .into_iter()
+        .map(|item| match item {
+            Bson::Document(document) => Ok(document),
+            _ => Err(mongo_shell_error("Each document must be an object")),
+        })
+        .collect()
+}
+
 // —— 参数解析 ——
 
 /// shell 参数文本 → BSON 文档。空文本等价于 `{}`。
@@ -822,7 +1385,7 @@ fn mongo_shell_pipeline(text: &str) -> fluxdb_core::Result<Vec<Document>> {
                         key.eq_ignore_ascii_case("$out") || key.eq_ignore_ascii_case("$merge")
                     }) {
                         return Err(mongo_shell_error(format!(
-                            "The command line only supports read-only queries; {stage_name} is not supported"
+                            "{stage_name} is not supported in the command line; it writes results to a collection"
                         )));
                     }
                     Ok(stage)
@@ -1087,10 +1650,10 @@ mod mongo_shell_tests {
 
     #[test]
     fn pipeline_rejects_write_stages() {
-        // 只读终端不允许把结果写回集合；CLI 与命令工作台共用这条入口。
+        // 终端不允许把聚合结果写回集合；CLI 与命令工作台共用这条入口。
         let out = mongo_shell_pipeline(r#"[{ "$match": {} }, { "$out": "archive" }]"#)
             .expect_err("$out 必须被拒绝");
-        assert!(out.message.contains("read-only"), "{}", out.message);
+        assert!(out.message.contains("$out"), "{}", out.message);
         assert!(
             mongo_shell_pipeline(r#"[{ "$merge": { "into": "archive" } }]"#).is_err(),
             "$merge 必须被拒绝"
@@ -1123,8 +1686,10 @@ mod mongo_shell_tests {
 
     #[test]
     fn rejects_write_and_unknown_methods_with_distinct_messages() {
-        let write = mongo_shell_method("deleteMany").expect_err("写方法必须拒绝");
-        assert!(write.message.contains("read-only"), "{}", write.message);
+        // 已实现的写方法放行；未实现的写方法给出「不支持」而不是「拼错了」。
+        assert!(mongo_shell_method("deleteMany").is_ok());
+        let write = mongo_shell_method("bulkWrite").expect_err("未实现的写方法必须拒绝");
+        assert!(write.message.contains("not supported"), "{}", write.message);
 
         let unknown = mongo_shell_method("findAll").expect_err("未知方法必须拒绝");
         assert!(unknown.message.contains("Unknown method"), "{}", unknown.message);
@@ -1229,6 +1794,89 @@ mod mongo_shell_tests {
         assert_eq!(mongo_shell_bytes(512.0), "512B");
         assert_eq!(mongo_shell_bytes(1024.0), "1.000KB");
         assert_eq!(mongo_shell_bytes(1024.0 * 1024.0 * 20.5), "20.500MB");
+    }
+
+    #[test]
+    fn write_methods_parse_into_their_variants() {
+        // 写方法名大小写不敏感，且必须落到各自的执行分支而不是「未知方法」。
+        for (statement, expected) in [
+            (r#"db.events.insertOne({a: 1})"#, "InsertOne"),
+            (r#"db.events.insertMany([{a: 1}])"#, "InsertMany"),
+            (r#"db.events.insert({a: 1})"#, "Insert"),
+            (r#"db.events.updateOne({a: 1}, {$set: {b: 2}})"#, "UpdateOne"),
+            (r#"db.events.updateMany({}, {$set: {b: 2}})"#, "UpdateMany"),
+            (r#"db.events.replaceOne({a: 1}, {a: 2})"#, "ReplaceOne"),
+            (r#"db.events.deleteOne({a: 1})"#, "DeleteOne"),
+            (r#"db.events.deleteMany({})"#, "DeleteMany"),
+            (r#"db.events.remove({a: 1}, true)"#, "Remove"),
+            (r#"db.events.createIndex({a: 1}, {unique: true})"#, "CreateIndex"),
+            (r#"db.events.dropIndex("a_1")"#, "DropIndex"),
+            (r#"db.events.dropIndexes()"#, "DropIndexes"),
+            (r#"db.events.drop()"#, "DropCollection"),
+        ] {
+            let parsed = mongo_shell_parse(statement).expect(statement);
+            let MongoShellStatement::Collection { method, .. } = parsed else {
+                panic!("{statement} 应解析为集合方法");
+            };
+            assert_eq!(format!("{method:?}"), expected, "{statement}");
+        }
+        assert!(matches!(
+            mongo_shell_parse(r#"db.createCollection("events", {capped: true})"#),
+            Ok(MongoShellStatement::CreateCollection { .. })
+        ));
+        // 参数里的点不能被当成集合分隔符（`{size: 1024.5}`）。
+        assert!(matches!(
+            mongo_shell_parse(r#"db.createCollection("events", {size: 1024.5})"#),
+            Ok(MongoShellStatement::CreateCollection { .. })
+        ));
+    }
+
+    #[test]
+    fn read_only_connection_rejects_writes_before_connecting() {
+        // 端口 1 不可达：只要错误是 Permission，就说明写方法在连库前已被拦截。
+        let mut config = unreachable_config();
+        config
+            .options
+            .insert("read_only".to_string(), "true".to_string());
+        for statement in [
+            r#"db.events.insertOne({a: 1})"#,
+            r#"db.events.updateMany({}, {$set: {a: 2}})"#,
+            r#"db.events.deleteOne({a: 1})"#,
+            r#"db.events.createIndex({a: 1})"#,
+            r#"db.events.drop()"#,
+            r#"db.createCollection("events")"#,
+        ] {
+            let error = mongo_shell(&config, "demo", statement).expect_err(statement);
+            assert_eq!(error.kind, ErrorKind::Permission, "{statement}");
+            assert_eq!(error.message, "连接已设为只读，未执行");
+        }
+    }
+
+    #[test]
+    fn write_arguments_are_validated_without_connecting() {
+        let config = unreachable_config();
+        let error = |statement: &str| {
+            mongo_shell(&config, "demo", statement)
+                .expect_err(statement)
+                .message
+        };
+        assert!(error("db.events.insertOne([{a: 1}])").contains("expects an object"));
+        assert!(error("db.events.insertMany({a: 1})").contains("expects an array"));
+        assert!(error("db.events.updateOne({a: 1})").contains("Usage: updateOne"));
+        assert!(error(r#"db.events.updateOne({}, {$set: {a: 2}}, {multi: true})"#)
+            .contains("only upsert is supported"));
+        assert!(error("db.events.createIndex({})").contains("cannot be empty"));
+        assert!(error("db.events.dropIndex()").contains("Usage: dropIndex"));
+        assert!(error("db.createCollection()").contains("Usage: db.createCollection"));
+        // 未实现的写方法给出明确提示，而不是「未知方法」。
+        assert!(error(r#"db.events.runCommand({ping: 1})"#).contains("not supported"));
+    }
+
+    #[test]
+    fn index_name_is_derived_from_keys() {
+        let keys = mongo_shell_document("Key specification", r#"{a: 1, b: -1, c: "text"}"#)
+            .expect("key 文档");
+        assert_eq!(mongo_shell_index_name(&keys).expect("索引名"), "a_1_b_-1_c_text");
     }
 
     /// 指向不可达地址的连接：本组用例不连库，只验证解析与排版。

@@ -579,17 +579,10 @@ impl SecurityAuditHook for UnavailableAuditHook {
 }
 
 /// 连接是否被标记为只读：SQLite 走 endpoint 标记，其它类型走显式 `options["read_only"]`。
+///
+/// 判定本身在 `ConnectionConfig::is_read_only`（连接器也要用），这里只保留业务层的入口。
 pub fn connection_is_read_only(config: &fluxdb_core::ConnectionConfig) -> bool {
-    matches!(
-        config.endpoint,
-        fluxdb_core::Endpoint::SqliteFile {
-            read_only: true,
-            ..
-        }
-    ) || config
-        .options
-        .get("read_only")
-        .is_some_and(|value| value == "true")
+    config.is_read_only()
 }
 
 /// 由**本轮固定目标连接**推导内核权限（设计 §25、§29）。
