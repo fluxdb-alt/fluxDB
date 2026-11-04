@@ -1496,6 +1496,8 @@
         "file_search_content": "搜索已授权附件正文",
         "file_read": "读取已授权附件正文",
         "context_read": "读取已授权引用",
+        "docs_search": "检索内置 FluxDB 产品文档",
+        "docs_read": "按小节读取内置产品文档正文",
         "plan_update": "更新公开执行计划",
         "mongo_read_documents": "有界读取已授权 MongoDB 集合页的文档快照，不重新查询数据库"
       }

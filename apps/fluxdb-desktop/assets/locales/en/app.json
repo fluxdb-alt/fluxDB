@@ -1496,6 +1496,8 @@
         "file_search_content": "Search authorized attachment content",
         "file_read": "Read authorized attachment content",
         "context_read": "Read an authorized reference",
+        "docs_search": "Search bundled FluxDB product documentation",
+        "docs_read": "Read a bounded section of bundled product documentation",
         "plan_update": "Update the public execution plan",
         "mongo_read_documents": "Read bounded documents from the authorized MongoDB collection page snapshot without re-querying the database"
       }
