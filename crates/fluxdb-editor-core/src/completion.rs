@@ -473,12 +473,16 @@ impl CompletionController {
                 return None;
             }
         }
-        if let (Some(previous_cursor), Some(cursor)) = (self.last_result_cursor, new_cursor) {
-            let suffix_bytes = new_query.len().saturating_sub(self.last_query.len());
-            if cursor < previous_cursor || cursor - previous_cursor != suffix_bytes {
-                return None;
+        let suffix_bytes = new_query.len().saturating_sub(self.last_query.len());
+        let insertion_cursor = match (self.last_result_cursor, new_cursor) {
+            (Some(previous_cursor), Some(cursor)) => {
+                if cursor < previous_cursor || cursor - previous_cursor != suffix_bytes {
+                    return None;
+                }
+                Some(previous_cursor)
             }
-        }
+            _ => None,
+        };
         if new_query.len() <= self.last_query.len() {
             // 不是后缀（变短了），需要刷新。
             return None;
@@ -488,8 +492,9 @@ impl CompletionController {
         }
         let candidates = self.cache.get(&self.last_query)?.clone();
         let suffix = &new_query[self.last_query.len()..];
-        // 位置相关的 replace_range 由“采纳”时刻依据实时光标重建；复用的缓存项可能对应
-        // 旧光标位置，若原样带回会引入过期偏移。故复用路径统一清空，交由宿主重建。
+        // 复用只发生在光标处追加后缀的场景；把缓存里的替换区间按这次插入平移，
+        // 否则整行候选（Mongo shell 的 `db["…"]`）会退化成按词前缀插入，留下 `db.db[...]`。
+        // 没有旧光标时无法确定插入点，仍清空区间交给宿主重建。
         let filtered: Vec<CompletionItem> = candidates
             .iter()
             .filter(|item| {
@@ -502,7 +507,19 @@ impl CompletionController {
             })
             .cloned()
             .map(|mut item| {
-                item.replace_range = None;
+                item.replace_range = match (item.replace_range, insertion_cursor) {
+                    (Some(range), Some(cursor)) => {
+                        let shift = |offset: Offset| {
+                            if offset >= cursor {
+                                offset + suffix_bytes
+                            } else {
+                                offset
+                            }
+                        };
+                        Some(Range::new(shift(range.start), shift(range.end)))
+                    }
+                    _ => None,
+                };
                 item
             })
             .collect();
@@ -619,5 +636,38 @@ mod signature_tests {
         assert_eq!(signature_at_end("SELECT (a + "), None);
         // 空文档（光标 0）。
         assert_eq!(signature_at_end(""), None);
+    }
+}
+
+#[cfg(test)]
+mod reuse_tests {
+    use super::*;
+
+    fn line_item(start: usize, end: usize) -> CompletionItem {
+        let mut item = CompletionItem::new("db[\"customers\"].", CompletionKind::Command);
+        item.replace_range = Some(Range::new(start, end));
+        item
+    }
+
+    #[test]
+    fn reused_ranges_follow_typing_at_cursor() {
+        let mut ctrl = CompletionController::new();
+        // 光标在 `db.` 行尾，整行替换区间 0..3；再键入 `c` 形成 `db.c`。
+        ctrl.store_result_at("", vec![line_item(0, 3)], Some(1), Some(3));
+        let reused = ctrl
+            .try_reuse_local_at("c", 2, 1, Some(4))
+            .expect("suffix reuse");
+        assert_eq!(reused[0].replace_range, Some(Range::new(0, 4)));
+    }
+
+    #[test]
+    fn reused_ranges_shift_residue_after_cursor() {
+        let mut ctrl = CompletionController::new();
+        // 光标在行中：区间覆盖光标右侧残留，插入一个字符后整体后移。
+        ctrl.store_result_at("c", vec![line_item(0, 7)], Some(1), Some(4));
+        let reused = ctrl
+            .try_reuse_local_at("cu", 2, 1, Some(5))
+            .expect("suffix reuse");
+        assert_eq!(reused[0].replace_range, Some(Range::new(0, 8)));
     }
 }
