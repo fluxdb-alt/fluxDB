@@ -649,7 +649,7 @@ impl NavicatMain {
                 }
             }
             // MySQL / TiDB 走结构化档案校验（含 SSH/代理/超时）。
-            DatabaseKind::MySql | DatabaseKind::TiDb => {
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
                 let profile = form.build_mysql_profile();
                 if let Some(message) = profile.validate() {
                     return Err(message);
@@ -773,6 +773,7 @@ impl NavicatMain {
         let endpoint = match kind {
             DatabaseKind::MySql
             | DatabaseKind::TiDb
+            | DatabaseKind::MariaDb
             | DatabaseKind::Redis
             | DatabaseKind::Postgres
             | DatabaseKind::Dameng
@@ -818,7 +819,7 @@ impl NavicatMain {
         };
 
         // MySQL/TiDB 专用：把表单里的 TLS/SSH/Proxy/Advanced 字段组装成结构化档案。
-        let mysql_profile = if matches!(kind, DatabaseKind::MySql | DatabaseKind::TiDb) {
+        let mysql_profile = if matches!(kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb) {
             Some(form.build_mysql_profile())
         } else {
             None

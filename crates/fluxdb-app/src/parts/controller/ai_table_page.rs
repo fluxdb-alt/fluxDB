@@ -45,6 +45,7 @@ impl AppController {
                             DatabaseKind::Sqlite
                                 | DatabaseKind::MySql
                                 | DatabaseKind::TiDb
+                                | DatabaseKind::MariaDb
                                 | DatabaseKind::Postgres
                                 | DatabaseKind::Dameng
                         )

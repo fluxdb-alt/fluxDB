@@ -15,12 +15,18 @@ pub fn format_for_execution(
 ) -> Option<BackupFormat> {
     // 校验「执行器与库类型」是否匹配，避免 MySQL 用 sqlite 执行器等错配组合。
     let matches = match (kind, execution) {
-        (DatabaseKind::MySql | DatabaseKind::TiDb, BackupExecution::MySqlDump) => true,
+        (
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb,
+            BackupExecution::MySqlDump,
+        ) => true,
         (DatabaseKind::Postgres, BackupExecution::PgDump) => true,
         (DatabaseKind::Postgres, BackupExecution::SqlDump) => false, // PG 逻辑归一为原生 pg_dump
         (DatabaseKind::Sqlite, BackupExecution::SqliteBinary) => true,
         (DatabaseKind::Sqlite, BackupExecution::SqlDump) => false, // 当前只支持完整二进制快照
-        (DatabaseKind::MySql | DatabaseKind::TiDb, BackupExecution::SqlDump) => true,
+        (
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb,
+            BackupExecution::SqlDump,
+        ) => true,
         (DatabaseKind::SqlServer, BackupExecution::SqlDump) => true,
         (DatabaseKind::Oracle, BackupExecution::SqlDump) => true,
         _ => false,

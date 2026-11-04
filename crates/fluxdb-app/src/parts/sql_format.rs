@@ -11,7 +11,7 @@ pub fn format_sql_text_for_dialect(sql: &str, dialect: DatabaseKind) -> String {
     );
     format_sql_statements(
         &formatted,
-        matches!(dialect, DatabaseKind::MySql | DatabaseKind::TiDb),
+        matches!(dialect, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb),
     )
 }
 
@@ -52,7 +52,7 @@ fn protect_digit_prefixed_identifiers(sql: &str, dialect: DatabaseKind) -> Prote
     // SQL Server 的方括号标识符内部允许空格；`sqlformat` 会把它改写成 `[ ID ]`，
     // 使 `[ID]` 与列名 `ID` 不再相等。先整体占位，格式化后再原样还原。
     let protect_brackets = dialect == DatabaseKind::SqlServer;
-    if !matches!(dialect, DatabaseKind::MySql | DatabaseKind::TiDb) && !protect_brackets {
+    if !matches!(dialect, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb) && !protect_brackets {
         return ProtectedSqlIdentifiers {
             sql: sql.to_string(),
             identifiers: Vec::new(),
@@ -203,7 +203,7 @@ pub fn compress_sql_text(sql: &str) -> String {
 fn sql_text_for_execution(sql: &str, default_limit: u64, db_kind: DatabaseKind) -> String {
     let pipeline = if matches!(
         db_kind,
-        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Sqlite
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb | DatabaseKind::Sqlite
     ) {
         normalize_double_quoted_sql_strings(sql)
     } else {
@@ -985,6 +985,7 @@ fn format_sql_with_options(sql: &str, dialect: DatabaseKind) -> String {
             dialect: match dialect {
                 DatabaseKind::MySql
                 | DatabaseKind::TiDb
+                | DatabaseKind::MariaDb
                 | DatabaseKind::Sqlite
                 | DatabaseKind::MongoDb
                 | DatabaseKind::Redis

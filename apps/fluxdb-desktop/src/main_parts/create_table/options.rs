@@ -6,7 +6,7 @@ fn create_table_options(
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    if !matches!(create.database_kind, DatabaseKind::MySql | DatabaseKind::TiDb) {
+    if !matches!(create.database_kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb) {
         return create_table_empty_state(tr("app.create_table.table_options.unsupported"), colors);
     }
 
@@ -178,7 +178,7 @@ fn create_table_partitions(
         return create_table_empty_state(tr("app.create_table.partition.dameng_read_only"), colors)
             .debug_selector(|| "create-table-dameng-partitions-read-only".to_string());
     }
-    if !matches!(create.database_kind, DatabaseKind::MySql | DatabaseKind::TiDb) {
+    if !matches!(create.database_kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb) {
         create_table_empty_state(tr("app.create_table.partition.unsupported"), colors)
     } else {
         let method_select = this.create_table_select(

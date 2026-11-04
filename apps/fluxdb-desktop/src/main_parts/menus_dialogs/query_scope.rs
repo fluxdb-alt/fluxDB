@@ -230,7 +230,7 @@ fn automatic_query_database(config: &ConnectionConfig) -> Option<String> {
         DatabaseKind::Redis => {
             connection_default_database(config).or_else(|| Some("0".to_string()))
         }
-        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MongoDb => None,
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb | DatabaseKind::MongoDb => None,
         DatabaseKind::Postgres => Some("postgres".to_string()),
         DatabaseKind::Dameng => {
             connection_default_database(config).or_else(|| Some("DAMENG".to_string()))

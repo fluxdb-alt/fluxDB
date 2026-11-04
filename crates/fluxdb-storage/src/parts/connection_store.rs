@@ -77,6 +77,7 @@ pub(crate) fn kind_to_str(kind: DatabaseKind) -> &'static str {
     match kind {
         DatabaseKind::MySql => "mysql",
         DatabaseKind::TiDb => "tidb",
+        DatabaseKind::MariaDb => "mariadb",
         DatabaseKind::Sqlite => "sqlite",
         DatabaseKind::MongoDb => "mongo",
         DatabaseKind::Redis => "redis",
@@ -92,6 +93,7 @@ pub(crate) fn kind_from_str(value: &str) -> Option<DatabaseKind> {
     match value {
         "mysql" => Some(DatabaseKind::MySql),
         "tidb" => Some(DatabaseKind::TiDb),
+        "mariadb" => Some(DatabaseKind::MariaDb),
         "sqlite" => Some(DatabaseKind::Sqlite),
         "mongo" => Some(DatabaseKind::MongoDb),
         "redis" => Some(DatabaseKind::Redis),
@@ -100,6 +102,22 @@ pub(crate) fn kind_from_str(value: &str) -> Option<DatabaseKind> {
         "sqlserver" => Some(DatabaseKind::SqlServer),
         "oracle" => Some(DatabaseKind::Oracle),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod kind_storage_tests {
+    use super::{kind_from_str, kind_to_str};
+    use fluxdb_core::DatabaseKind;
+
+    #[test]
+    fn mariadb_kind_round_trips_through_storage() {
+        assert_eq!(kind_to_str(DatabaseKind::MariaDb), "mariadb");
+        assert_eq!(
+            kind_from_str("mariadb"),
+            Some(DatabaseKind::MariaDb),
+            "旧版本落盘的 mariadb 连接必须能还原"
+        );
     }
 }
 

@@ -17,7 +17,11 @@ impl MySqlConnector {
 
 impl Connector for MySqlConnector {
     fn kind(&self) -> DatabaseKind {
-        DatabaseKind::MySql
+        // MySQL / TiDB / MariaDB 共用同一实现；无配置上下文（如测试）时按 MySQL。
+        self.config
+            .as_ref()
+            .map(|config| config.kind)
+            .unwrap_or(DatabaseKind::MySql)
     }
 
     fn test_connection(&self, config: &ConnectionConfig) -> fluxdb_core::Result<()> {

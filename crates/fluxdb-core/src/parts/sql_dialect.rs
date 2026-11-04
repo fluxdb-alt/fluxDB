@@ -230,7 +230,7 @@ fn render_limit_offset(limit: u64, offset: u64) -> String {
 
 /// 按 `DatabaseKind` 解析出对应方言对象（`&dyn SqlDialect`）。
 ///
-/// MySQL 与 TiDB 共用反引号方言；MongoDB/Redis 无「表数据预览」SQL，回退 MySQL 保持可渲染。
+/// MySQL / MariaDB / TiDB 共用反引号方言；MongoDB/Redis 无「表数据预览」SQL，回退 MySQL 保持可渲染。
 pub fn sql_dialect(kind: DatabaseKind) -> &'static dyn SqlDialect {
     match kind {
         DatabaseKind::Postgres => &PostgresDialect,
@@ -238,9 +238,11 @@ pub fn sql_dialect(kind: DatabaseKind) -> &'static dyn SqlDialect {
         DatabaseKind::SqlServer => &SqlServerDialect,
         DatabaseKind::Oracle => &OracleDialect,
         DatabaseKind::Sqlite => &SqliteDialect,
-        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MongoDb | DatabaseKind::Redis => {
-            &MySqlDialect
-        }
+        DatabaseKind::MySql
+        | DatabaseKind::TiDb
+        | DatabaseKind::MariaDb
+        | DatabaseKind::MongoDb
+        | DatabaseKind::Redis => &MySqlDialect,
     }
 }
 

@@ -19,6 +19,7 @@ impl AiConnectionsListTool {
                         | fluxdb_core::DatabaseKind::Postgres
                         | fluxdb_core::DatabaseKind::MySql
                         | fluxdb_core::DatabaseKind::TiDb
+                        | fluxdb_core::DatabaseKind::MariaDb
                         | fluxdb_core::DatabaseKind::Dameng
                         | fluxdb_core::DatabaseKind::SqlServer
                 );

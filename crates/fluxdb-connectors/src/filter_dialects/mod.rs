@@ -23,7 +23,9 @@ pub mod sqlserver;
 /// 按数据库类型选择筛选方言。MongoDB/Redis 没有 SQL WHERE 语义，明确返回 `None`。
 pub fn filter_dialect(kind: DatabaseKind) -> Option<&'static dyn FilterDialect> {
     match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => Some(&mysql::MYSQL_SYNTAX),
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
+            Some(&mysql::MYSQL_SYNTAX)
+        }
         DatabaseKind::Postgres => Some(&postgres::POSTGRES_SYNTAX),
         DatabaseKind::Sqlite => Some(&sqlite::SQLITE_SYNTAX),
         DatabaseKind::SqlServer => Some(&sqlserver::SQLSERVER_SYNTAX),
@@ -104,7 +106,9 @@ pub fn compile_filter_tree(
 
 fn filter_syntax(kind: DatabaseKind) -> Option<FilterSyntax> {
     match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => Some(FilterSyntax::MySql),
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
+            Some(FilterSyntax::MySql)
+        }
         DatabaseKind::Postgres => Some(FilterSyntax::Postgres),
         DatabaseKind::Sqlite => Some(FilterSyntax::Sqlite),
         DatabaseKind::SqlServer => Some(FilterSyntax::SqlServer),

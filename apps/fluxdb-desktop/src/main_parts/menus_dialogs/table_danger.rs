@@ -6,7 +6,7 @@ struct DangerTableCapabilities {
 
 fn danger_table_capabilities(database_kind: DatabaseKind) -> DangerTableCapabilities {
     DangerTableCapabilities {
-        foreign_key_check: matches!(database_kind, DatabaseKind::MySql | DatabaseKind::TiDb),
+        foreign_key_check: matches!(database_kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb),
         restart_identity: database_kind == DatabaseKind::Postgres,
     }
 }

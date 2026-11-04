@@ -1572,6 +1572,7 @@ fn database_kind_name(kind: DatabaseKind) -> &'static str {
     match kind {
         DatabaseKind::MySql => "MySQL",
         DatabaseKind::TiDb => "TiDB",
+        DatabaseKind::MariaDb => "MariaDB",
         DatabaseKind::Sqlite => "SQLite",
         DatabaseKind::MongoDb => "MongoDB",
         DatabaseKind::Redis => "Redis",

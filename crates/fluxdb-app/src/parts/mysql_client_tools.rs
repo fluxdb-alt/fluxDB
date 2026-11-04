@@ -4,7 +4,7 @@ use super::{
     MySqlClientVersion, PgClientDownloadProgress, PgClientSource, install_native_client_files,
     internal_error, mysql_client_version, native_client_version_output,
 };
-use fluxdb_core::Settings;
+use fluxdb_core::{DatabaseKind, Settings};
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
@@ -30,7 +30,17 @@ impl MySqlClientTool {
         }
     }
     fn find_in(self, dir: &Path) -> Option<PathBuf> {
-        self.names()
+        self.find_in_order(dir, false)
+    }
+
+    /// `mariadb_first` 用于 MariaDB 连接：同一目录同时装了 MySQL 与 MariaDB
+    /// 客户端时优先选原生工具，避免用 MySQL 9 的 dump 处理 MariaDB 服务端。
+    fn find_in_order(self, dir: &Path, mariadb_first: bool) -> Option<PathBuf> {
+        let mut names = self.names();
+        if mariadb_first {
+            names.reverse();
+        }
+        names
             .iter()
             .map(|name| {
                 dir.join(if cfg!(windows) {
@@ -177,6 +187,14 @@ fn candidate_dirs(settings: &Settings) -> Vec<(PathBuf, PgClientSource)> {
 }
 
 fn candidates(settings: &Settings, tool: MySqlClientTool) -> Vec<(PathBuf, PgClientSource)> {
+    candidates_for(DatabaseKind::MySql, settings, tool)
+}
+
+fn candidates_for(
+    kind: DatabaseKind,
+    settings: &Settings,
+    tool: MySqlClientTool,
+) -> Vec<(PathBuf, PgClientSource)> {
     // 旧单文件配置仍最高优先；显式错误不悄悄换成另一套客户端。
     if tool == MySqlClientTool::Dump && !settings.mysqldump_path.trim().is_empty() {
         return vec![(
@@ -184,9 +202,13 @@ fn candidates(settings: &Settings, tool: MySqlClientTool) -> Vec<(PathBuf, PgCli
             PgClientSource::Configured,
         )];
     }
+    let mariadb_first = kind == DatabaseKind::MariaDb;
     candidate_dirs(settings)
         .into_iter()
-        .filter_map(|(dir, source)| tool.find_in(&dir).map(|path| (path, source)))
+        .filter_map(|(dir, source)| {
+            tool.find_in_order(&dir, mariadb_first)
+                .map(|path| (path, source))
+        })
         .collect()
 }
 
@@ -214,7 +236,16 @@ pub fn resolve_mysql_client_tool(
     settings: &Settings,
     tool: MySqlClientTool,
 ) -> Option<MySqlClientLocation> {
-    candidates(settings, tool)
+    resolve_mysql_client_tool_for(DatabaseKind::MySql, settings, tool)
+}
+
+/// 按连接类型解析客户端；MariaDB 优先 `mariadb-dump` / `mariadb`。
+pub fn resolve_mysql_client_tool_for(
+    kind: DatabaseKind,
+    settings: &Settings,
+    tool: MySqlClientTool,
+) -> Option<MySqlClientLocation> {
+    candidates_for(kind, settings, tool)
         .into_iter()
         .find_map(|(program, source)| {
             let version = mysql_client_version(&native_client_version_output(&program)?)?;

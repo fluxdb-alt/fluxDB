@@ -52,8 +52,10 @@ fn inspect_restore(
             }
             warnings.push("此备份仅含数据，将导入到目标已有结构；列兼容性以预检查为准。".into());
         }
+        // MySQL 协议家族内部（MySQL / TiDB / MariaDB）的 SQL 转储可互相恢复；
+        // 真正的语法/版本差异由恢复前脚本校验和用户确认承担。
         if meta.kind.is_some_and(|source| {
-            source != kind && !(source == DatabaseKind::MySql && kind == DatabaseKind::TiDb)
+            source != kind && !(source.is_mysql_family() && kind.is_mysql_family())
         }) {
             return Err(task_error("源数据库与目标类型不兼容"));
         }
@@ -104,7 +106,7 @@ fn inspect_restore(
             DatabaseKind::Postgres => warnings.push(
                 "PostgreSQL 以单事务执行（psql --single-transaction），失败整体回滚。".into(),
             ),
-            DatabaseKind::MySql | DatabaseKind::TiDb => {
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
                 if mysql_single_transaction_ok(request, &plan_tables) {
                     warnings.push(
                         "MySQL/TiDB 在单事务中导入数据（无建表/重建 DDL），失败整体回滚。".into(),

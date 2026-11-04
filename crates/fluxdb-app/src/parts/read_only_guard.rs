@@ -169,6 +169,9 @@ fn read_only_policy_for(kind: DatabaseKind) -> &'static dyn ReadOnlyPolicy {
     static TIDB: SqlReadOnlyPolicy = SqlReadOnlyPolicy {
         kind: DatabaseKind::TiDb,
     };
+    static MARIADB: SqlReadOnlyPolicy = SqlReadOnlyPolicy {
+        kind: DatabaseKind::MariaDb,
+    };
     static POSTGRES: SqlReadOnlyPolicy = SqlReadOnlyPolicy {
         kind: DatabaseKind::Postgres,
     };
@@ -188,6 +191,7 @@ fn read_only_policy_for(kind: DatabaseKind) -> &'static dyn ReadOnlyPolicy {
         DatabaseKind::Sqlite => &SQLITE,
         DatabaseKind::MySql => &MYSQL,
         DatabaseKind::TiDb => &TIDB,
+        DatabaseKind::MariaDb => &MARIADB,
         DatabaseKind::Postgres => &POSTGRES,
         DatabaseKind::SqlServer => &SQLSERVER,
         DatabaseKind::Oracle => &ORACLE,

@@ -179,7 +179,7 @@ fn parse_sql_identifier(input: &str, kind: DatabaseKind) -> Option<(String, &str
         }
     }
     let quote = match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => '`',
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => '`',
         _ => '"',
     };
     if let Some(rest) = input.strip_prefix(quote) {
