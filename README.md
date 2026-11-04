@@ -17,6 +17,18 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 
 ## 最近更新
 
+### v0.1.15
+
+- **新增 MariaDB 数据源**：复用 MySQL 协议链路，支持对象浏览、SQL 查询与补全、表结构管理与设计、数据编辑、导入导出、备份恢复、用户与权限，并接入 MariaDB 专用只读与 AI SQL 策略。
+- **连接级只读模式**：高级设置新增“只读连接”；SQL、Redis、MongoDB 的写入入口统一拦截，Redis CLI 通过本机代理限制写命令，SQLite 以驱动只读方式打开文件；侧边栏标记只读连接。
+- **AI 内置文档检索**：新增 `docs.search` / `docs.read`，只读随应用编译的操作手册；AI 先检索小节，再按需分页读取正文，避免凭记忆编造菜单路径。
+- **操作手册与快速打开**：新增完整中文操作手册，覆盖连接、SQL、数据编辑、结构管理、导入导出、备份、权限、Redis、MongoDB 与设置；新增 `⌘P` / `Ctrl+P` 模糊搜索已加载表与视图并直接打开。
+- **MongoDB 写入能力**：命令行终端与命令工作台支持 insert / update / delete / 索引 / 集合等写方法，聚合仍拒绝 `$out` / `$merge` 写回；修复补全复用后出现 `db.db` 前缀。
+- **SQL 补全与交互修复**：补齐 MySQL、PostgreSQL、Oracle、SQL Server 多类补全；修复主键编辑后的脏格标记、Redis Workbench 失败结果展示、函数签名浮层残留、取消更新下载后弹框未关闭等问题。
+- **设置与退出**：设置页补齐 10 种内置连接器支持列表；退出时存在未保存修改或运行中查询会先确认。
+
+[完整更新说明](./release-notes/v0.1.15/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.14
 
 - **新增 MongoDB 数据源**：连接串导入与 SRV 拓扑发现、库 / 集合 / 视图浏览、集合工作台（文档 / 聚合 / 索引 / 信息）、筛选投影排序、条件构建器、查询补全、文档新增 / 编辑 / 复制 / 删除、JSON / JSONL / CSV 导入导出、集合重命名与删除、索引查看与删除、库级命令工作台与命令行终端，以及 AI 页面上下文与受控执行。
@@ -28,15 +40,6 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 - **稳定性修复**：修复 PostgreSQL 与无主键表含大字段行无法更新 / 删除、SQL Server 超预算丢行、中文等非 ASCII 值导入 MongoDB 时的崩溃、筛选 / 排序弹层未对齐触发控件，以及浅色主题下 ghost 按钮悬停文字与底色同色。
 
 [完整更新说明](./release-notes/v0.1.14/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
-
-### v0.1.13
-
-- **新增 Oracle 数据源**：Service Name / SID 连接、Schema / 对象浏览、SQL 查询、表结构管理与设计、数据编辑、筛选与排序、SQL 补全、用户与权限管理、本机逻辑导出，以及 AI 页面上下文与受控执行。
-- **Oracle 首版边界**：不提供服务器端 Data Pump 备份，导出是本机逻辑导出（DDL + 逐页数据），既不是服务器端原生备份，也不保证跨页一致快照；非当前账号的授权明细不可读，界面不把它画成可撤销授权；详见[数据库支持](#数据库支持)。
-- **用户与权限五页签**：常规 / 角色 / 系统权限 / 对象权限 / SQL 预览，每个页签顶部是类型锁死的授权编辑器；Oracle「新建 schema」改为打开新建账号表单，达梦复用同一面板。
-- **稳定性修复**：修复 Oracle 导入的 `ORA-01861`、复制表读不到源表 DDL、Explain 发出必然失败语句，以及账号变更失败时不显示已执行条数。
-
-[完整更新说明](./release-notes/v0.1.13/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
 
 ## 为什么选择 FluxDB
 
