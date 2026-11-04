@@ -4388,7 +4388,6 @@
     "connection_not_authorized_turn": "连接不在本轮授权集合内，未执行",
     "connection_changed_not_executed": "连接配置已变化或连接已删除，未执行",
     "connection_read_only_not_executed": "连接已设为只读，未执行",
-    "redis_cli_read_only": "连接已设为只读，无法打开 Redis CLI",
     "unknown_write_unverifiable": "无法核实未知写入状态",
     "unknown_write_blocked": "该连接有尚未核实的未知写入，禁止继续修改",
     "approval_policy_changed": "审批期间策略变化或调用已取消，未执行",

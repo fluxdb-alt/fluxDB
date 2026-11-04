@@ -4388,7 +4388,6 @@
     "connection_not_authorized_turn": "The connection is not in this turn's authorized set; not executed",
     "connection_changed_not_executed": "The connection configuration changed or the connection was deleted; not executed",
     "connection_read_only_not_executed": "The connection is read-only; not executed",
-    "redis_cli_read_only": "The connection is read-only; Redis CLI is unavailable",
     "unknown_write_unverifiable": "Unable to verify the unknown write status",
     "unknown_write_blocked": "This connection has an unverified unknown write; further modifications are blocked",
     "approval_policy_changed": "The policy changed or the call was cancelled during approval; not executed",

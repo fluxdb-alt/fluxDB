@@ -88,15 +88,23 @@ impl ReadOnlyPolicy for RedisReadOnlyPolicy {
         for line in commands {
             seen = true;
             let argv: Vec<String> = line.split_whitespace().map(str::to_string).collect();
-            let extra_read_only = argv
-                .first()
-                .is_some_and(|command| REDIS_EXTRA_READ_ONLY.contains(&command.to_ascii_lowercase().as_str()));
-            if !extra_read_only && !classify_redis_command(&argv).is_read_only() {
+            if !redis_argv_allowed(&argv) {
                 return false;
             }
         }
         seen
     }
+}
+
+/// 单条 Redis 命令是否属于只读。
+///
+/// 供 CLI 只读代理复用：代理拿到的是已解析的 argv，与 Workbench 的文本路径共用同一套判定。
+pub(crate) fn redis_argv_allowed(argv: &[String]) -> bool {
+    argv.first().is_some_and(|command| {
+        let command = command.to_ascii_lowercase();
+        REDIS_EXTRA_READ_ONLY.contains(&command.as_str())
+            || classify_redis_command(argv).is_read_only()
+    })
 }
 
 /// MongoDB 只读策略：`runCommand` 只放行明确只读的命令；`aggregate` 额外拒绝写管道。
