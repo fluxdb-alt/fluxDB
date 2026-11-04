@@ -19,6 +19,18 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 
 ## Latest changes
 
+### v0.1.15
+
+- **MariaDB support**: reuses the MySQL protocol path for object browsing, SQL queries and completion, table design, data editing, import/export, backup and restore, and users/privileges, with MariaDB-specific read-only and AI SQL policies.
+- **Connection-level read-only mode**: the advanced connection settings add a read-only switch. Write paths across SQL, Redis and MongoDB are blocked, the Redis CLI goes through a local proxy that rejects writes, SQLite files open read-only at the driver level, and the sidebar marks read-only connections.
+- **Built-in AI documentation tools**: `docs.search` and `docs.read` search and page through the product manual bundled into the app, so the AI can quote real sections instead of inventing menu paths.
+- **User guide and quick open**: a complete Chinese user guide now covers connections, SQL, data editing, schema management, import/export, backup, permissions, Redis, MongoDB and settings; `⌘P` / `Ctrl+P` fuzzy-searches loaded tables and views and opens them directly.
+- **MongoDB writes**: the command-line terminal and command workbench support insert / update / delete / index / collection write methods, while aggregation still rejects `$out` / `$merge`; completion reuse no longer produces a duplicated `db.db` prefix.
+- **SQL completion and interaction fixes**: filled completion gaps for MySQL, PostgreSQL, Oracle and SQL Server, and fixed dirty-cell marking after primary-key edits, missing Redis Workbench failures, stale function-signature popovers and the update dialog not closing after download cancellation.
+- **Settings and quit**: the settings database list now covers all ten built-in connectors, and quitting with unsaved changes or running queries asks for confirmation first.
+
+[Full release notes](./release-notes/v0.1.15/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.14
 
 - **MongoDB support**: connection-string import with SRV discovery, database/collection/view browsing, a collection workspace (documents, aggregation, indexes, info), filters projection and sort, a visual condition builder, SQL-style query completion, document create/edit/duplicate/delete, JSON / JSONL / CSV import and export, collection rename and drop, index view and drop, a database-level command workbench and command-line terminal, and AI page context with controlled execution.
@@ -30,15 +42,6 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 - **Stability fixes**: fixed rows with large values failing to update or delete in PostgreSQL and in tables without primary keys, SQL Server dropping rows over budget, crashes when importing non-ASCII values into MongoDB, filter/sort popovers not anchored to the control that opened them, and ghost-button hover text matching the background in the light theme.
 
 [Full release notes](./release-notes/v0.1.14/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
-
-### v0.1.13
-
-- **Oracle support**: Service Name / SID connections, schema/object browsing, SQL queries with dialect-aware completion, table design, data editing, filtering and sorting, user and permission management, local logical export, and AI page context with controlled execution.
-- **Oracle first-release limits**: no server-side Data Pump backup; export is local logical export (DDL plus paged data), which is neither a native server backup nor a cross-page consistent snapshot. Grant details of other accounts are unreadable and are not drawn as revocable grants. See [Database support](#database-support).
-- **Five-tab user administration**: General / Roles / System privileges / Object privileges / SQL preview, each opening with a type-locked grant editor. Oracle "New schema" now opens the create-account form, and Dameng reuses the same panel.
-- **Stability fixes**: fixed Oracle import `ORA-01861`, table copy not reading the source DDL, Explain sending statements that always fail, and account changes not reporting how many statements already ran.
-
-[Full release notes](./release-notes/v0.1.13/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
 
 ## Why FluxDB
 
