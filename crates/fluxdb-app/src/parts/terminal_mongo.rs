@@ -24,6 +24,7 @@ const MONGO_SHELL_KEYWORDS: &[&str] = &[
     "show collections",
     "db.",
     "db.getCollectionNames()",
+    "db.createCollection(",
 ];
 
 /// 集合方法补全候选（`db.<集合>.` 之后）。
@@ -37,6 +38,17 @@ const MONGO_SHELL_METHODS: &[&str] = &[
     "aggregate",
     "getIndexes",
     "stats",
+    "insertOne",
+    "insertMany",
+    "updateOne",
+    "updateMany",
+    "replaceOne",
+    "deleteOne",
+    "deleteMany",
+    "createIndex",
+    "dropIndex",
+    "dropIndexes",
+    "drop",
 ];
 
 /// REPL 与 adapter 共享的会话状态。
@@ -880,7 +892,7 @@ impl mterm::TerminalCompletionAdapter for MongoCliCompletion {
         }
     }
 
-    /// 写操作已在连接器解析层拒绝（只读终端），这里不需要二次确认。
+    /// 与 mongosh 一致：写语句直接执行，不做二次确认；只读连接由连接器统一拒绝。
     fn is_dangerous(&self, _input: &str) -> bool {
         false
     }
@@ -1152,8 +1164,8 @@ mod mongo_repl_input_tests {
     #[test]
     fn syntax_errors_are_echoed_line_by_line_in_red() {
         let (mut repl, _tx, _rx) = repl();
-        let rendered = String::from_utf8_lossy(&repl.execute("db.events.insertOne({})")).to_string();
-        assert!(rendered.contains("read-only"), "{rendered}");
+        let rendered = String::from_utf8_lossy(&repl.execute("db.events.nope()")).to_string();
+        assert!(rendered.contains("Unknown method"), "{rendered}");
         // 错误行带 ANSI 红色，且以 CRLF 结束——否则下一行会接着上一行的列。
         assert!(rendered.contains("\x1b[31m"), "{rendered}");
         assert!(rendered.contains("\r\n"), "{rendered}");

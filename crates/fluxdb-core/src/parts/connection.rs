@@ -71,6 +71,17 @@ pub struct ConnectionConfig {
 }
 
 impl ConnectionConfig {
+    /// 连接是否被标记为只读：SQLite 走 endpoint 标记，其它类型走显式 `options["read_only"]`。
+    ///
+    /// 连接器与业务层共用这一判定，避免各层对只读的定义漂移。
+    pub fn is_read_only(&self) -> bool {
+        matches!(self.endpoint, Endpoint::SqliteFile { read_only: true, .. })
+            || self
+                .options
+                .get("read_only")
+                .is_some_and(|value| value == "true")
+    }
+
     /// 若携带 Redis 档案，则把档案归一化进扁平的 `endpoint` / `options`，
     /// 产出一份可直接拨号的配置；无档案时原样返回（兼容历史连接）。
     ///
