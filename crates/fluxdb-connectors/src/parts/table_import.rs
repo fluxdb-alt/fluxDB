@@ -19,6 +19,7 @@ pub fn table_data_import(kind: DatabaseKind) -> fluxdb_core::Result<Box<dyn Tabl
     match kind {
         DatabaseKind::MySql => Ok(Box::new(MySqlTableImport)),
         DatabaseKind::TiDb => Ok(Box::new(TiDbTableImport)),
+        DatabaseKind::MariaDb => Ok(Box::new(MariaDbTableImport)),
         DatabaseKind::Postgres => Ok(Box::new(PostgresTableImport)),
         DatabaseKind::Sqlite => Ok(Box::new(SqliteTableImport)),
         DatabaseKind::Dameng => Ok(Box::new(DamengTableImport)),
@@ -33,6 +34,7 @@ pub fn table_data_import(kind: DatabaseKind) -> fluxdb_core::Result<Box<dyn Tabl
 
 struct MySqlTableImport;
 struct TiDbTableImport;
+struct MariaDbTableImport;
 struct PostgresTableImport;
 struct SqliteTableImport;
 struct DamengTableImport;
@@ -80,6 +82,28 @@ impl TableDataImport for TiDbTableImport {
         request: &TableImportPreviewRequest,
     ) -> fluxdb_core::Result<TableImportPreview> {
         preview_relational(DatabaseKind::TiDb, request)
+    }
+}
+
+impl TableDataImport for MariaDbTableImport {
+    fn kind(&self) -> DatabaseKind {
+        DatabaseKind::MariaDb
+    }
+
+    fn import(
+        &self,
+        request: &TableImportRequest,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(TableImportProgress),
+    ) -> fluxdb_core::Result<TableImportReport> {
+        import_relational(DatabaseKind::MariaDb, request, cancel, progress)
+    }
+
+    fn preview(
+        &self,
+        request: &TableImportPreviewRequest,
+    ) -> fluxdb_core::Result<TableImportPreview> {
+        preview_relational(DatabaseKind::MariaDb, request)
     }
 }
 
@@ -960,7 +984,7 @@ fn import_qualified_table(
     request: &TableImportRequest,
 ) -> fluxdb_core::Result<String> {
     match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
             let database = request
                 .object
                 .database
@@ -1056,7 +1080,7 @@ fn import_qualified_table(
 
 fn import_quote_identifier(kind: DatabaseKind, identifier: &str) -> String {
     match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
             fluxdb_core::MySqlDialect.quote_identifier(identifier)
         }
         DatabaseKind::Postgres => fluxdb_core::PostgresDialect.quote_identifier(identifier),

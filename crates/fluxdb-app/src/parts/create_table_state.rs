@@ -6,7 +6,7 @@ impl CreateTableState {
     ) -> Self {
         let provider = create_table_provider(database_kind);
         let (engine, charset) = match database_kind {
-            DatabaseKind::MySql | DatabaseKind::TiDb => ("InnoDB", "utf8mb4"),
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => ("InnoDB", "utf8mb4"),
             _ => ("", ""),
         };
         Self {
@@ -533,7 +533,11 @@ impl CreateTableState {
     }
 
     pub fn toggle_check_not_enforced(&mut self, check_id: u64) {
-        if self.database_kind != DatabaseKind::MySql && self.database_kind != DatabaseKind::TiDb {
+        // MariaDB 不支持 `NOT ENFORCED`，与 MySQL 8 / TiDB 的开关能力不同。
+        if !matches!(
+            self.database_kind,
+            DatabaseKind::MySql | DatabaseKind::TiDb
+        ) {
             return;
         }
         if let Some(check) = self.checks.iter_mut().find(|check| check.id == check_id) {

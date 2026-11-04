@@ -170,7 +170,7 @@ pub fn quote_identifier(name: &str, kind: DatabaseKind, reserved: impl Fn(&str) 
         return name.to_string();
     }
     match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
             fluxdb_core::MySqlDialect.quote_identifier(name)
         }
         DatabaseKind::SqlServer => fluxdb_core::SqlServerDialect.quote_identifier(name),

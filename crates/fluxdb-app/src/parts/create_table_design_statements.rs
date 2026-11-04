@@ -623,7 +623,7 @@ fn create_table_temporal_precision_validation_error(
 fn create_table_bit_length_validation_error(create: &CreateTableState) -> Option<&'static str> {
     if !matches!(
         create.database_kind,
-        DatabaseKind::MySql | DatabaseKind::TiDb
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb
     ) {
         return None;
     }
@@ -706,8 +706,10 @@ fn create_table_check_validation_error(create: &CreateTableState) -> Option<&'st
             return Some("检查表达式不能为空");
         }
         if check.not_enforced
-            && create.database_kind != DatabaseKind::MySql
-            && create.database_kind != DatabaseKind::TiDb
+            && !matches!(
+                create.database_kind,
+                DatabaseKind::MySql | DatabaseKind::TiDb
+            )
         {
             return Some("当前连接类型不支持不强制实施检查");
         }
@@ -937,7 +939,7 @@ fn create_table_partition_validation_error(create: &CreateTableState) -> Option<
     if !create.partition_enabled {
         return None;
     }
-    if !matches!(create.database_kind, DatabaseKind::MySql | DatabaseKind::TiDb) {
+    if !matches!(create.database_kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb) {
         return Some("当前连接类型不支持分区");
     }
     let sql = create.partition_sql.trim();

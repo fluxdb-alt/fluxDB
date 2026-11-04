@@ -35,7 +35,7 @@ fn user_admin_panel_for(kind: DatabaseKind) -> Option<&'static dyn UserAdminPane
         // 达梦复用 Oracle 账号面板：账号 = schema，授权模型同源。
         DatabaseKind::Oracle | DatabaseKind::Dameng => Some(&OracleUserAdminPanel),
         // MySQL / TiDB 走 provider 驱动的默认面板。
-        DatabaseKind::MySql | DatabaseKind::TiDb => Some(&MysqlUserAdminPanel),
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => Some(&MysqlUserAdminPanel),
         _ => None,
     }
 }

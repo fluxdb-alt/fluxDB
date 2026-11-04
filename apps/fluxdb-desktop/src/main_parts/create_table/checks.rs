@@ -15,8 +15,11 @@ fn create_table_checks(
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let check_count = create.checks.len();
-    let not_enforced_supported =
-        create.database_kind == DatabaseKind::MySql || create.database_kind == DatabaseKind::TiDb;
+    // MariaDB 的 CHECK 恒为强制，不接受 `NOT ENFORCED`（会直接报语法错误）。
+    let not_enforced_supported = matches!(
+        create.database_kind,
+        DatabaseKind::MySql | DatabaseKind::TiDb
+    );
     let mut rows = div().flex().flex_col();
     for (position, check) in create.checks.iter().enumerate() {
         let row = CreateTableCheckRow {

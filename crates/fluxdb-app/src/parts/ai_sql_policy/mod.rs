@@ -25,7 +25,7 @@ mod sqlite;
 mod sqlserver;
 
 pub use dameng::DAMENG;
-pub use mysql::MYSQL;
+pub use mysql::{MARIADB, MYSQL};
 pub use oracle::ORACLE;
 pub use postgres::POSTGRES;
 pub use sqlite::SQLITE;
@@ -131,6 +131,7 @@ pub trait SqlPolicy: Send + Sync {
 pub fn policy_for(kind: DatabaseKind) -> Option<&'static dyn SqlPolicy> {
     match kind {
         DatabaseKind::MySql | DatabaseKind::TiDb => Some(&MYSQL),
+        DatabaseKind::MariaDb => Some(&MARIADB),
         DatabaseKind::Postgres => Some(&POSTGRES),
         DatabaseKind::Sqlite => Some(&SQLITE),
         DatabaseKind::SqlServer => Some(&SQLSERVER),

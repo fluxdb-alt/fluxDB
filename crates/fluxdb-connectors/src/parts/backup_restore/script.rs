@@ -292,7 +292,7 @@ fn validate_statement(sql: &str, kind: DatabaseKind) -> fluxdb_core::Result<()> 
                 // 内建函数（uuid/随机/日期/字符串/数值聚合等）；Postgres 保持最小集。
                 let mut allowed_functions: Vec<&str> =
                     vec!["nextval", "now", "current_timestamp"];
-                if kind == DatabaseKind::MySql || kind == DatabaseKind::TiDb {
+                if kind.is_mysql_family() {
                     allowed_functions.extend([
                         "pg_catalog.setval",
                         "pg_catalog.set_config",

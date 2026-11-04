@@ -2999,7 +2999,7 @@
   "user_admin": {
     "title": "用户与权限",
     "connection": "连接",
-    "supported_note": "当前支持 MySQL/TiDB 兼容连接。SQLite、MongoDB、Redis 会按各自权限模型继续扩展。",
+    "supported_note": "当前支持 MySQL / MariaDB / TiDB 兼容连接。SQLite、MongoDB、Redis 会按各自权限模型继续扩展。",
     "loading": "加载中",
     "saving": "保存中",
     "delete": "删除",
@@ -3143,7 +3143,7 @@
     "stage": {
       "file": "文件"
     },
-    "native_option_hint": "「锁定所有表」「单一事务」「包含存储过程/函数」仅对 MySQL/TiDB 原生 mysqldump 生效；「包含表结构/数据」仅对逻辑备份生效。\n若报 Couldn't execute 'SELECT LIBRARY_NAME …'（mysqldump 9.x 客户端 + 老版本服务端），取消「包含存储过程/函数」或在设置中换用与服务端匹配的 mysqldump。",
+    "native_option_hint": "「锁定所有表」「单一事务」「包含存储过程/函数」仅对 MySQL / MariaDB / TiDB 原生 mysqldump 生效；「包含表结构/数据」仅对逻辑备份生效。\n若报 Couldn't execute 'SELECT LIBRARY_NAME …'（mysqldump 9.x 客户端 + 老版本服务端），取消「包含存储过程/函数」或在设置中换用与服务端匹配的 mysqldump。",
     "mode": {
       "auto": "自动选择"
     },
@@ -3177,7 +3177,7 @@
     "sqlite_snapshot_note": "（完整数据库快照，包含全部对象）",
     "oracle_logical_note": "（Oracle 本机逻辑导出：DDL + 逐页数据，不是服务器端原生备份，也不是一致快照）",
     "pg_client_missing": "未找到 pg_dump：PostgreSQL 备份依赖客户端工具，请先下载或指定客户端目录。",
-    "mysql_client_missing": "未找到 mysqldump / mariadb-dump：MySQL/TiDB 原生备份依赖客户端工具。",
+    "mysql_client_missing": "未找到 mysqldump / mariadb-dump：MySQL / MariaDB / TiDB 原生备份依赖客户端工具。",
     "go_settings": "前往设置",
     "advanced": "高级选项",
     "lock_tables": "锁定所有表",
@@ -3637,6 +3637,8 @@
       "mysql_detail": "支持连接测试、对象浏览、数据查看、SQL 执行、表结构和用户管理",
       "tidb_source": "复用 MySQL 协议连接器",
       "tidb_detail": "支持连接测试、对象浏览、数据查看、SQL 执行和表结构能力",
+      "mariadb_source": "复用 MySQL 协议连接器",
+      "mariadb_detail": "支持连接测试、对象浏览、数据查看、SQL 执行、表结构与用户管理；兼容 mariadb-dump / mariadb 客户端",
       "sqlite_source": "内置 SQLx SQLite 连接器",
       "sqlite_detail": "支持本地文件连接、对象浏览、数据查看、SQL 执行和表结构能力",
       "postgres_source": "内置 tokio-postgres 连接器",

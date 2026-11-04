@@ -2,6 +2,9 @@
 pub enum DatabaseKind {
     MySql,
     TiDb,
+    /// MariaDB：与 MySQL 共用 wire protocol、反引号方言与 SQLx 连接器，
+    /// 但在客户端工具、系统库与服务端能力上独立识别。
+    MariaDb,
     Sqlite,
     MongoDb,
     Redis,
@@ -12,6 +15,17 @@ pub enum DatabaseKind {
 }
 
 impl DatabaseKind {
+    /// 是否属于 MySQL 协议家族（MySQL / TiDB / MariaDB）。
+    ///
+    /// 这三者共享 wire protocol、反引号标识符与 `LIMIT/OFFSET` 分页；
+    /// 连接器、方言、补全与备份链路应统一用它判断，避免新增分支时漏掉 MariaDB。
+    pub fn is_mysql_family(self) -> bool {
+        matches!(
+            self,
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb
+        )
+    }
+
     /// 是否支持「按块追加写入」大字段（上传替换的流式路径）。
     ///
     /// 只有实现了逐块追加的连接器才返回 true。Oracle/达梦暂时为 false：
@@ -24,6 +38,7 @@ impl DatabaseKind {
             self,
             DatabaseKind::MySql
                 | DatabaseKind::TiDb
+                | DatabaseKind::MariaDb
                 | DatabaseKind::Sqlite
                 | DatabaseKind::Postgres
                 | DatabaseKind::SqlServer
@@ -48,8 +63,8 @@ pub struct ConnectionConfig {
     /// 仅为 Redis 连接填充；历史连接缺省为 `None`，兼容既有落盘数据。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redis_profile: Option<RedisConnectionProfile>,
-    /// MySQL/TiDB 专用结构化连接档案（TLS / SSH / 代理 / 超时）。
-    /// 仅为 MySQL/TiDB 连接填充；历史连接缺省为 `None`，兼容既有落盘数据。
+    /// MySQL / MariaDB / TiDB 专用结构化连接档案（TLS / SSH / 代理 / 超时）。
+    /// 仅为 MySQL 家族连接填充；历史连接缺省为 `None`，兼容既有落盘数据。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mysql_profile: Option<MysqlConnectionProfile>,
     /// PostgreSQL 专用结构化连接档案（TLS / SSH / 代理 / 作用域 / 超时）。

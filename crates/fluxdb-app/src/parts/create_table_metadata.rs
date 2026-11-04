@@ -65,7 +65,7 @@ fn create_table_triggers_from_info(triggers: Vec<TriggerInfo>) -> Vec<CreateTabl
 }
 
 fn create_table_apply_design_ddl(create: &mut CreateTableState, ddl: &str) {
-    if matches!(create.database_kind, DatabaseKind::MySql | DatabaseKind::TiDb) {
+    if matches!(create.database_kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb) {
         create_table_apply_mysql_table_options(create, ddl);
         create_table_apply_mysql_partition(create, ddl);
     }
@@ -283,7 +283,7 @@ fn create_table_design_type_parts(
     let raw_type = raw_type.as_str();
     match database_kind {
         DatabaseKind::Postgres => create_table_postgres_design_type_parts(raw_type),
-        DatabaseKind::MySql | DatabaseKind::TiDb => create_table_mysql_design_type_parts(raw_type),
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => create_table_mysql_design_type_parts(raw_type),
         DatabaseKind::Sqlite => create_table_sqlite_design_type_parts(raw_type),
         _ => create_table_split_column_type(raw_type),
     }
@@ -464,7 +464,7 @@ impl CreateTableColumn {
             .unwrap_or_else(|| provider.default_column_type());
         let (mut data_type, mut length, mut scale) =
             create_table_design_type_parts(database_kind, provider, raw_type);
-        let enum_values = if matches!(database_kind, DatabaseKind::MySql | DatabaseKind::TiDb) {
+        let enum_values = if matches!(database_kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb) {
             create_table_mysql_type_values(raw_type)
         } else {
             None

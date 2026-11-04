@@ -146,7 +146,7 @@ fn dialect_for(kind: DatabaseKind) -> &'static dyn SqlParserDialect {
     match kind {
         DatabaseKind::Oracle => &ORACLE,
         DatabaseKind::Postgres => &POSTGRES,
-        DatabaseKind::MySql | DatabaseKind::TiDb => &MYSQL,
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => &MYSQL,
         DatabaseKind::Sqlite => &SQLITE,
         DatabaseKind::SqlServer => &MSSQL,
         // 达梦的分号、引号、反斜杠语义都按 SQL 标准，Generic 比 PostgreSQL 更贴：

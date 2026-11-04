@@ -89,7 +89,7 @@ fn create_database_modal(
 ) -> impl IntoElement {
     let needs_charset = matches!(
         form.database_kind,
-        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Postgres
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb | DatabaseKind::Postgres
     );
     let is_postgres = form.database_kind == DatabaseKind::Postgres;
     let is_sqlserver = form.database_kind == DatabaseKind::SqlServer;

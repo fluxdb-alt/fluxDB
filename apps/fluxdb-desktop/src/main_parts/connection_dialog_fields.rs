@@ -326,7 +326,7 @@ fn folder_button_light(colors: UiColors, cx: &mut Context<NavicatMain>) -> Div {
 
 fn database_default_port(kind: DatabaseKind) -> &'static str {
     match kind {
-        DatabaseKind::MySql => "3306",
+        DatabaseKind::MySql | DatabaseKind::MariaDb => "3306",
         DatabaseKind::TiDb => "4000",
         DatabaseKind::MongoDb => "27017",
         DatabaseKind::Redis => "6379",
@@ -362,7 +362,7 @@ fn first_connection_field(kind: DatabaseKind) -> ConnectionField {
 
 fn connection_fields(kind: DatabaseKind) -> &'static [ConnectionField] {
     match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => &[
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => &[
             ConnectionField::Name,
             ConnectionField::Host,
             ConnectionField::Port,

@@ -2,6 +2,7 @@ pub fn database_backup(kind: DatabaseKind) -> fluxdb_core::Result<Box<dyn Databa
     match kind {
         DatabaseKind::MySql => Ok(Box::new(MySqlBackup)),
         DatabaseKind::TiDb => Ok(Box::new(TiDbBackup { mysql: MySqlBackup })),
+        DatabaseKind::MariaDb => Ok(Box::new(MariaDbBackup { mysql: MySqlBackup })),
         DatabaseKind::Postgres => Ok(Box::new(PostgresBackup)),
         DatabaseKind::Sqlite => Ok(Box::new(SqliteBackup)),
         DatabaseKind::Dameng => Ok(Box::new(DamengBackup)),
@@ -12,6 +13,9 @@ pub fn database_backup(kind: DatabaseKind) -> fluxdb_core::Result<Box<dyn Databa
 }
 struct MySqlBackup;
 struct TiDbBackup {
+    mysql: MySqlBackup,
+}
+struct MariaDbBackup {
     mysql: MySqlBackup,
 }
 struct PostgresBackup;
@@ -194,6 +198,29 @@ impl DatabaseBackup for TiDbBackup {
         let mut request = request.clone();
         request.include_routines = false;
         self.mysql.backup(&request, cancel, progress)
+    }
+    restore_methods!();
+}
+impl DatabaseBackup for MariaDbBackup {
+    fn kind(&self) -> DatabaseKind {
+        DatabaseKind::MariaDb
+    }
+    fn execution(
+        &self,
+        method: BackupMethod,
+        native: bool,
+    ) -> fluxdb_core::Result<BackupExecution> {
+        self.mysql.execution(method, native)
+    }
+    fn backup(
+        &self,
+        request: &BackupRequest,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(DatabaseTaskProgress),
+    ) -> fluxdb_core::Result<BackupManifest> {
+        // MariaDB 与 MySQL 共用 mysqldump/mariadb-dump 参数链路；
+        // 工具自身版本探测决定 MariaDB 专属参数，不在类型层重复。
+        self.mysql.backup(request, cancel, progress)
     }
     restore_methods!();
 }

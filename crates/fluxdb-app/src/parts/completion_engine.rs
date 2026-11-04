@@ -13,7 +13,9 @@ use fluxdb_completion::{
 /// 连接类型 → 补全方言（TiDB 与 MySQL 语法一致；Mongo/Redis 走通用词表）。
 fn app_completion_dialect(kind: DatabaseKind) -> &'static dyn CompletionDialect {
     match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => &fluxdb_completion::MYSQL,
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
+            &fluxdb_completion::MYSQL
+        }
         DatabaseKind::Sqlite => &fluxdb_completion::SQLITE,
         DatabaseKind::Postgres => &fluxdb_completion::POSTGRES,
         DatabaseKind::Dameng => &fluxdb_completion::DAMENG,
@@ -104,7 +106,7 @@ impl<'a> IndexMetadataSource<'a> {
     /// MySQL 里 schema 就是 database：`archive.customers` 必须按 archive 库查，
     /// 否则会错查连接默认库里的同名表。其他方言 schema 与 database 分离，保持原样。
     fn completion_database<'b>(&'b self, key: &'b EngineTableKey) -> Option<&'b str> {
-        if self.config.kind == DatabaseKind::MySql {
+        if self.config.kind.is_mysql_family() {
             // AST 的两段名优先：引擎会先用连接默认库填 `database`，这里必须让
             // 显式写出的 `archive.` 覆盖它。
             key.schema

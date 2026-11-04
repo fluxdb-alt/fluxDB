@@ -121,7 +121,7 @@ impl NavicatMain {
             .is_some_and(|connection| {
                 matches!(
                     connection.config.kind,
-                    DatabaseKind::MySql | DatabaseKind::TiDb
+                    DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb
                 )
             })
             && !fluxdb_app::mysql_client_tool_present(

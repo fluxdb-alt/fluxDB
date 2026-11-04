@@ -745,6 +745,13 @@ impl NewConnectionForm {
                 form.username = "root".to_string();
                 form.url_params = "charset=utf8mb4&parseTime=true".to_string();
             }
+            DatabaseKind::MariaDb => {
+                form.name = format!("MariaDB Local {index}");
+                form.host = "127.0.0.1".to_string();
+                form.port = "3306".to_string();
+                form.username = "root".to_string();
+                form.url_params = "charset=utf8mb4&parseTime=true".to_string();
+            }
             DatabaseKind::TiDb => {
                 form.name = format!("TiDB Local {index}");
                 form.host = "127.0.0.1".to_string();
@@ -874,7 +881,7 @@ impl NewConnectionForm {
         }
 
         // MySQL / TiDB 档案回填：同样优先结构化档案，缺省时用历史扁平参数迁移。
-        if matches!(config.kind, DatabaseKind::MySql | DatabaseKind::TiDb) {
+        if matches!(config.kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb) {
             let profile = config.mysql_profile.clone().or_else(|| {
                 Some(fluxdb_core::MysqlConnectionProfile::from_options(
                     &config.options,
