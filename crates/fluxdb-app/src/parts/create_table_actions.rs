@@ -257,7 +257,9 @@ static UNSUPPORTED_TABLE_ACTION_SQL_PROVIDER: UnsupportedTableActionSqlProvider 
 
 fn table_action_sql_provider(database_kind: DatabaseKind) -> &'static dyn TableActionSqlProvider {
     match database_kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => &MYSQL_TABLE_ACTION_SQL_PROVIDER,
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
+            &MYSQL_TABLE_ACTION_SQL_PROVIDER
+        }
         DatabaseKind::Sqlite => &SQLITE_TABLE_ACTION_SQL_PROVIDER,
         DatabaseKind::SqlServer => &SQLSERVER_TABLE_ACTION_SQL_PROVIDER,
         DatabaseKind::Postgres => &POSTGRES_TABLE_ACTION_SQL_PROVIDER,

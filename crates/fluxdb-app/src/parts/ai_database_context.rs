@@ -37,6 +37,7 @@ impl AppController {
         let database_kind = match config.kind {
             DatabaseKind::MySql => "mysql",
             DatabaseKind::TiDb => "tidb",
+            DatabaseKind::MariaDb => "mariadb",
             DatabaseKind::Postgres => "postgres",
             DatabaseKind::Sqlite => "sqlite",
             DatabaseKind::Redis => "redis",

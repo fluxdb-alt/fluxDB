@@ -84,10 +84,10 @@ impl AppController {
         let settings = &self.state.settings;
         let mysql = if matches!(
             request.config.kind,
-            DatabaseKind::MySql | DatabaseKind::TiDb
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb
         ) && method != BackupMethod::Logical
         {
-            resolve_mysql_client_tool(settings, MySqlClientTool::Dump)
+            resolve_mysql_client_tool_for(request.config.kind, settings, MySqlClientTool::Dump)
         } else {
             None
         };
@@ -156,12 +156,16 @@ impl AppController {
         cancel: &AtomicBool,
     ) -> fluxdb_core::Result<(RestoreRequest, RestorePlan)> {
         request.tool = match request.config.kind {
-            DatabaseKind::MySql | DatabaseKind::TiDb => {
-                resolve_mysql_client_tool(&self.state.settings, MySqlClientTool::Console)
-                    .map(|t| t.program)
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::Unsupported, mysql_client_install_hint())
-                    })?
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
+                resolve_mysql_client_tool_for(
+                    request.config.kind,
+                    &self.state.settings,
+                    MySqlClientTool::Console,
+                )
+                .map(|t| t.program)
+                .ok_or_else(|| {
+                    Error::new(ErrorKind::Unsupported, mysql_client_install_hint())
+                })?
             }
             DatabaseKind::Postgres => PathBuf::from(
                 resolve_pg_client_tool(&self.state.settings, PgClientTool::Psql, None)

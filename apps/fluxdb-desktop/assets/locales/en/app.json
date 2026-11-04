@@ -2999,7 +2999,7 @@
   "user_admin": {
     "title": "Users & permissions",
     "connection": "Connection",
-    "supported_note": "MySQL/TiDB-compatible connections are supported. SQLite, MongoDB, and Redis will extend their respective permission models later.",
+    "supported_note": "MySQL / MariaDB / TiDB-compatible connections are supported. SQLite, MongoDB, and Redis will extend their respective permission models later.",
     "loading": "Loading...",
     "saving": "Saving...",
     "delete": "Delete",
@@ -3143,7 +3143,7 @@
     "stage": {
       "file": "File"
     },
-    "native_option_hint": "“Lock all tables”, “Single transaction”, and “Include stored procedures/functions” apply only to native MySQL/TiDB mysqldump; “Include table structure/data” applies only to logical backup.\nIf you see Couldn't execute 'SELECT LIBRARY_NAME …' (mysqldump 9.x client with an older server), disable “Include stored procedures/functions” or switch to a mysqldump version matching the server in Settings.",
+    "native_option_hint": "“Lock all tables”, “Single transaction”, and “Include stored procedures/functions” apply only to native MySQL / MariaDB / TiDB mysqldump; “Include table structure/data” applies only to logical backup.\nIf you see Couldn't execute 'SELECT LIBRARY_NAME …' (mysqldump 9.x client with an older server), disable “Include stored procedures/functions” or switch to a mysqldump version matching the server in Settings.",
     "mode": {
       "auto": "Auto"
     },
@@ -3177,7 +3177,7 @@
     "sqlite_snapshot_note": " (full database snapshot, all objects included)",
     "oracle_logical_note": "(Oracle local logical export: DDL + paged data, not a server-side native backup and not a consistent snapshot)",
     "pg_client_missing": "pg_dump not found: PostgreSQL backups require the client tools. Download them or set the client directory.",
-    "mysql_client_missing": "mysqldump / mariadb-dump not found: MySQL/TiDB native backups require the client tools.",
+    "mysql_client_missing": "mysqldump / mariadb-dump not found: MySQL / MariaDB / TiDB native backups require the client tools.",
     "go_settings": "Open settings",
     "advanced": "Advanced options",
     "lock_tables": "Lock all tables",
@@ -3637,6 +3637,8 @@
       "mysql_detail": "Supports connection tests, object browsing, data viewing, SQL execution, table structure, and user management",
       "tidb_source": "Reuses the MySQL protocol connector",
       "tidb_detail": "Supports connection tests, object browsing, data viewing, SQL execution, and table structure",
+      "mariadb_source": "Reuses the MySQL protocol connector",
+      "mariadb_detail": "Supports connection tests, object browsing, data viewing, SQL execution, table structure, and user management; works with mariadb-dump / mariadb clients",
       "sqlite_source": "Built-in SQLx SQLite connector",
       "sqlite_detail": "Supports local file connections, object browsing, data viewing, SQL execution, and table structure",
       "postgres_source": "Built-in tokio-postgres connector",

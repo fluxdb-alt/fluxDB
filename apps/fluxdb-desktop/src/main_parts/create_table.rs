@@ -3739,7 +3739,7 @@ fn create_table_column_options(
     let id = column.id;
     let data_type = column.data_type.to_lowercase();
     let capabilities = create_table_provider(database_kind).type_capabilities(&data_type);
-    let is_enum = matches!(database_kind, DatabaseKind::MySql | DatabaseKind::TiDb)
+    let is_enum = matches!(database_kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb)
         && matches!(create_table_type_base(&column.data_type).as_str(), "enum" | "set");
     let enum_max_height = f32::from(window.viewport_size().height) * 0.3;
     let enum_panel_height =

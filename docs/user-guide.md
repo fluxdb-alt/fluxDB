@@ -2,7 +2,7 @@
 
 > 适用范围：FluxDB Desktop 当前版本（macOS）
 >
-> 支持的数据源：MySQL、TiDB、PostgreSQL、SQL Server、SQLite、达梦 DM8、Redis、MongoDB
+> 支持的数据源：MySQL、MariaDB、TiDB、PostgreSQL、SQL Server、SQLite、达梦 DM8、Redis、MongoDB
 > 项目仍处于早期开发阶段。执行写入、删除、清空、恢复或权限变更前，请先备份重要数据，并确认当前连接和数据库无误。
 
 ## 目录
@@ -79,7 +79,7 @@
 
 | 类型 | 主要连接信息 | 常用默认端口 |
 | --- | --- | ---: |
-| MySQL / TiDB | 主机、端口、用户名、密码、数据库、URL 参数 | 3306 |
+| MySQL / TiDB / MariaDB | 主机、端口、用户名、密码、数据库、URL 参数 | 3306 |
 | PostgreSQL | 主机、端口、用户名、密码、数据库、URL 参数 | 5432 |
 | SQL Server | 主机、端口、用户名、密码、数据库、Schema、实例名 | 1433 |
 | Oracle | 主机、端口、用户名、密码、Service Name 或 SID、登录身份 | 1521 |
@@ -94,7 +94,7 @@ MongoDB 连接建议直接粘贴连接串导入，详见 [MongoDB 支持](mongod
 1. 在“名称”中填写便于识别的连接名，例如“本地 MySQL”或“生产只读库”。
 2. 选择连接颜色。颜色用于在连接树和查询上下文中快速区分环境。
 3. 按数据库类型填写主机、端口、账号等信息：
-   - MySQL、TiDB、PostgreSQL：数据库可按实际需要填写；连接后也可以在树中切换数据库。
+   - MySQL、MariaDB、TiDB、PostgreSQL：数据库可按实际需要填写；连接后也可以在树中切换数据库。
    - SQL Server：使用 SQL Server 认证，填写主机、端口、用户名、密码和登录默认数据库；Schema 留空时连接后读取默认 Schema，读不到时使用 `dbo`。
    - Oracle：填写主机、端口、用户名和密码，并选择用 Service Name 还是 SID 定位实例；绝大多数 12c 及以上实例应填 Service Name（例如 `FREEPDB1`），只有旧实例或明确要求时才用 SID。
    - SQLite：点击文件选择按钮，选择现有数据库文件。
@@ -106,7 +106,7 @@ MongoDB 连接建议直接粘贴连接串导入，详见 [MongoDB 支持](mongod
 
 ### 2.4 配置 TLS/SSL
 
-MySQL、TiDB、PostgreSQL 和 Redis 可在“TLS/SSL”页签中配置加密连接：
+MySQL、MariaDB、TiDB、PostgreSQL 和 Redis 可在“TLS/SSL”页签中配置加密连接：
 
 1. 开启“启用 TLS”。
 2. 按服务端要求选择 SSL 模式。
@@ -126,7 +126,7 @@ MySQL、TiDB、PostgreSQL 和 Redis 可在“TLS/SSL”页签中配置加密连�
 
 ### 2.6 高级设置
 
-- MySQL / TiDB：可配置连接和查询超时、字符集、TCP 保活等选项。
+- MySQL / MariaDB / TiDB：可配置连接和查询超时、字符集、TCP 保活等选项。
 - PostgreSQL：可配置建连超时、查询超时、应用名、默认 Schema、TCP 保活，以及是否显示其他数据库和系统 Schema。
 - SQL Server：可配置建连超时、查询超时和应用名；命名实例必须同时填写实际端口。查询标签会复用同一 SQL Server 会话，因此跨次执行可保持事务、临时表和会话级 `SET` 状态；超时或点击“停止”会关闭该连接以终止服务端执行，结果状态需要重新核对。
 - Redis：可配置连接复用、超时、TCP 保活及拓扑相关选项。
@@ -496,7 +496,7 @@ PostgreSQL 触发器需要引用已存在的函数；不能直接使用 MySQL �
 3. 设置“备份目录”。
 4. 按数据库类型检查原生客户端：
    - SQLite：`sqlite3`
-   - MySQL / TiDB：MySQL 客户端工具
+   - MySQL / MariaDB / TiDB：MySQL / MariaDB 客户端工具（`mysqldump` / `mariadb-dump`）
    - PostgreSQL：PostgreSQL 客户端工具
 5. 可使用设置页中的检测或下载安装入口确认工具状态。
 
@@ -530,7 +530,11 @@ PostgreSQL 触发器需要引用已存在的函数；不能直接使用 MySQL �
 
 ## 9. 用户与权限管理
 
-MySQL、TiDB、PostgreSQL、SQL Server、Oracle 和达梦 DM8 连接支持“用户与权限”入口。
+MySQL、MariaDB、TiDB、PostgreSQL、SQL Server、Oracle 和达梦 DM8 连接支持“用户与权限”入口。
+
+> MariaDB 与 MySQL 的账号 DDL 不同：新建用户默认使用 `mysql_native_password`，
+> 认证插件按 `IDENTIFIED VIA ... USING PASSWORD(...)` 生成；角色是无 host 的账号，
+> 授权、撤销与默认角色只写角色名。面板会按连接类型自动切换，无需手工改写 SQL。
 
 1. 右键连接，选择“用户与权限”。
 2. 点击刷新，加载用户或角色列表。

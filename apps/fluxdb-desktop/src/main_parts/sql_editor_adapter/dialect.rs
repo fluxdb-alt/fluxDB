@@ -121,7 +121,7 @@ impl SqlDialect {
     /// （实际不会被 SQL 编辑器使用）。
     pub fn from_database_kind(kind: DatabaseKind) -> Self {
         match kind {
-            DatabaseKind::MySql | DatabaseKind::TiDb => SqlDialect::Mysql,
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => SqlDialect::Mysql,
             DatabaseKind::Sqlite => SqlDialect::Sqlite,
             DatabaseKind::Postgres => SqlDialect::Postgres,
             DatabaseKind::Dameng => SqlDialect::Dameng,
@@ -188,7 +188,7 @@ fn completion_keyword_defs(
 /// 达梦常用函数与伪列；MongoDB/Redis 没有 SQL 条件，返回空表。
 pub fn data_filter_keywords(kind: DatabaseKind) -> Vec<KeywordDef> {
     match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => MYSQL_KEYWORDS.to_vec(),
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => MYSQL_KEYWORDS.to_vec(),
         DatabaseKind::Postgres => POSTGRES_KEYWORDS.to_vec(),
         DatabaseKind::Sqlite => SQLITE_KEYWORDS.to_vec(),
         DatabaseKind::SqlServer => SQLSERVER_KEYWORDS.to_vec(),
@@ -218,6 +218,7 @@ pub fn data_filter_dialect_name(kind: DatabaseKind) -> &'static str {
     match kind {
         DatabaseKind::MySql => "MySQL",
         DatabaseKind::TiDb => "TiDB",
+        DatabaseKind::MariaDb => "MariaDB",
         DatabaseKind::Sqlite => "SQLite",
         DatabaseKind::Postgres => "PostgreSQL",
         DatabaseKind::Dameng => "Dameng",

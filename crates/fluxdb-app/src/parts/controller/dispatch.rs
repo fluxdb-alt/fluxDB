@@ -2294,7 +2294,7 @@ impl AppController {
             .map_err(|message| Error::new(ErrorKind::Query, message))?;
         let mut statements = vec![(base_sql, true)];
         let trigger_statements = match create.database_kind {
-            DatabaseKind::MySql | DatabaseKind::TiDb => {
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
                 create_table_mysql_trigger_statements(&create)
             }
             DatabaseKind::Sqlite => create_table_sqlite_trigger_statements(&create),

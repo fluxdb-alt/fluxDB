@@ -579,6 +579,14 @@ fn new_connection_modal(
                                             cx,
                                         ))
                                         .child(kind_tile(
+                                            "MariaDB",
+                                            DatabaseKind::MariaDb,
+                                            kind,
+                                            editing,
+                                            colors,
+                                            cx,
+                                        ))
+                                        .child(kind_tile(
                                             "TiDB",
                                             DatabaseKind::TiDb,
                                             kind,
@@ -867,6 +875,7 @@ fn database_kind_element_suffix(kind: DatabaseKind) -> &'static str {
     match kind {
         DatabaseKind::MySql => "mysql",
         DatabaseKind::TiDb => "tidb",
+        DatabaseKind::MariaDb => "mariadb",
         DatabaseKind::Sqlite => "sqlite",
         DatabaseKind::MongoDb => "mongodb",
         DatabaseKind::Redis => "redis",
@@ -885,6 +894,7 @@ fn database_kind_icon_path(kind: DatabaseKind) -> &'static str {
     match kind {
         DatabaseKind::MySql => "db/mysql.svg",
         DatabaseKind::TiDb => "db/tidb.svg",
+        DatabaseKind::MariaDb => "db/mariadb.svg",
         DatabaseKind::Sqlite => "db/sqlite.svg",
         DatabaseKind::MongoDb => "db/mongodb.svg",
         DatabaseKind::Redis => "db/redis.svg",
@@ -954,6 +964,7 @@ fn new_connection_tab_content(
         NewConnectionTab::Tls => match kind {
             DatabaseKind::MySql
             | DatabaseKind::TiDb
+            | DatabaseKind::MariaDb
             | DatabaseKind::Redis
             | DatabaseKind::Postgres => tls_form(kind, form, inputs, colors, window, cx),
             DatabaseKind::SqlServer => sqlserver_encryption_form(inputs, colors, window, cx),
@@ -964,13 +975,14 @@ fn new_connection_tab_content(
         NewConnectionTab::Ssh => match kind {
             DatabaseKind::MySql
             | DatabaseKind::TiDb
+            | DatabaseKind::MariaDb
             | DatabaseKind::Redis
             | DatabaseKind::Postgres => ssh_form(kind, form, inputs, colors, window, cx),
             _ => redis_only_settings_hint(colors),
         },
         NewConnectionTab::Advanced => {
             let specific = match kind {
-                DatabaseKind::MySql | DatabaseKind::TiDb => {
+                DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
                     mysql_advanced_form(form, inputs, colors, window, cx)
                 }
                 DatabaseKind::Postgres => postgres_advanced_form(form, inputs, colors, window, cx),
@@ -1068,7 +1080,7 @@ fn tls_parameters_block(
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let is_mysql = matches!(kind, DatabaseKind::MySql | DatabaseKind::TiDb);
+    let is_mysql = matches!(kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb);
     let is_postgres = kind == DatabaseKind::Postgres;
     div()
         .flex()
@@ -1421,7 +1433,7 @@ fn ssh_form(
     // 认证方式："password" 显示/可用密码，私钥方式显示/可用私钥与口令。
     let password_mode = form.ssh_auth != "private_key";
     let enabled = form.ssh_enabled;
-    let is_mysql = matches!(kind, DatabaseKind::MySql | DatabaseKind::TiDb);
+    let is_mysql = matches!(kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb);
     div()
         .flex()
         .flex_col()
@@ -2089,7 +2101,7 @@ fn connection_form(
         .child(color_row_light(&form_state.color, colors, cx));
 
     let form = match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => base
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => base
             .child(host_port_row_light(
                 tr("app.connection.field.host"),
                 inputs,

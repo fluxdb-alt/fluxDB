@@ -270,6 +270,7 @@ impl NavicatMain {
     fn open_user_admin_for_connection(
         &mut self,
         connection_id: ConnectionId,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let event = self.dispatch(AppCommand::OpenUserAdmin(connection_id), cx);
@@ -277,6 +278,26 @@ impl NavicatMain {
             AppEvent::TabOpened(tab_id) | AppEvent::TabActivated(tab_id) => Some(tab_id),
             _ => None,
         };
+        // 认证插件候选跟着服务端走：MariaDB 不识别 MySQL 8 的插件名。
+        let auth_plugins = self
+            .controller
+            .state()
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == connection_id)
+            .and_then(|connection| database_user_admin_provider(connection.config.kind))
+            .map(|provider| {
+                provider
+                    .auth_plugins()
+                    .iter()
+                    .map(|plugin| (*plugin).to_string())
+                    .collect::<Vec<_>>()
+            });
+        if let Some(auth_plugins) = auth_plugins {
+            self.user_admin_auth_plugin_select.update(cx, |select, cx| {
+                select.set_items(SearchableVec::new(auth_plugins), window, cx);
+            });
+        }
         if let Some(tab_id) = tab_id {
             // PG：走角色工作台加载（PgRole 权威列表 + 成员关系），不进 MySQL 用户加载路径。
             let is_postgres = self

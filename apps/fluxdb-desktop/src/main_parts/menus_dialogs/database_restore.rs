@@ -224,6 +224,7 @@ impl NavicatMain {
             initial.kind,
             DatabaseKind::MySql
                 | DatabaseKind::TiDb
+                | DatabaseKind::MariaDb
                 | DatabaseKind::Postgres
                 | DatabaseKind::Sqlite
                 | DatabaseKind::Dameng

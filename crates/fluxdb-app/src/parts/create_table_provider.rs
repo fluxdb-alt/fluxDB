@@ -50,7 +50,7 @@ pub fn create_table_special_type_options(kind: DatabaseKind) -> Vec<String> {
 
 fn create_table_type_is_special(kind: DatabaseKind, data_type: &str) -> bool {
     match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => matches!(
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => matches!(
             data_type,
             "enum"
                 | "set"
@@ -95,7 +95,9 @@ fn create_table_type_is_special(kind: DatabaseKind, data_type: &str) -> bool {
 
 pub fn create_table_provider(kind: DatabaseKind) -> &'static dyn CreateTableProvider {
     match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => &MYSQL_CREATE_TABLE_PROVIDER,
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
+            &MYSQL_CREATE_TABLE_PROVIDER
+        }
         DatabaseKind::Sqlite => &SQLITE_CREATE_TABLE_PROVIDER,
         DatabaseKind::Postgres => &POSTGRES_CREATE_TABLE_PROVIDER,
         DatabaseKind::Dameng => &DAMENG_CREATE_TABLE_PROVIDER,

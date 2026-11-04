@@ -259,6 +259,7 @@ fn ai_database_kind_label(kind: fluxdb_core::DatabaseKind) -> &'static str {
     match kind {
         fluxdb_core::DatabaseKind::MySql => "MySQL",
         fluxdb_core::DatabaseKind::TiDb => "TiDB",
+        fluxdb_core::DatabaseKind::MariaDb => "MariaDB",
         fluxdb_core::DatabaseKind::Sqlite => "SQLite",
         fluxdb_core::DatabaseKind::MongoDb => "MongoDB",
         fluxdb_core::DatabaseKind::Redis => "Redis",

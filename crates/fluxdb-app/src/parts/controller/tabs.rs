@@ -193,7 +193,7 @@ impl AppController {
         };
         // 用户与权限：MySQL/TiDB 走既有 provider；PostgreSQL 走 PG 角色管理（角色经连接器读取）。
         let scope = match connection.config.kind {
-            DatabaseKind::MySql | DatabaseKind::TiDb => match database_user_admin_provider(connection.config.kind) {
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => match database_user_admin_provider(connection.config.kind) {
                 Some(provider) => provider.default_scope(),
                 None => {
                     return self.fail(Error::new(ErrorKind::Internal, "MySQL 用户与权限 provider 缺失"));
@@ -227,8 +227,16 @@ impl AppController {
                     .map(|profile| profile.basic.database.clone())
                     .filter(|database| !database.trim().is_empty())
             });
+        // 新建账号表单的默认认证插件必须跟着服务端：MariaDB 没有
+        // caching_sha2_password，预填它会导致创建账号直接语法/插件错误。
+        // 在可变借用 `self` 之前取出，避免与 `connection` 的不可变借用冲突。
+        let default_auth_plugin = database_user_admin_provider(connection.config.kind)
+            .map(|provider| provider.default_auth_plugin().to_string());
         let tab_id = self.next_tab_id();
         let mut admin = UserAdminState::new(connection_id, database, scope);
+        if let Some(default_auth_plugin) = default_auth_plugin {
+            admin.auth_plugin = default_auth_plugin;
+        }
         if scope == PrivilegeScope::SqlServer {
             admin.sqlserver = Some(SqlServerSecurityState {
                 database: if admin.privilege_database == "*" { String::new() } else { admin.privilege_database.clone() },

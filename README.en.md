@@ -2,7 +2,7 @@
 
 **A native, cross-platform database client and SQL editor designed for high performance and low overhead: query, edit data, manage schemas and debug Redis in one window.**
 
-FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MySQL, PostgreSQL, SQL Server, SQLite, TiDB, Dameng DM8, MongoDB and Redis into one desktop workflow, with a permission-aware AI Agent.
+FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MySQL, MariaDB, PostgreSQL, SQL Server, SQLite, TiDB, Dameng DM8, MongoDB and Redis into one desktop workflow, with a permission-aware AI Agent.
 
 **English | [简体中文](./README.md)**
 
@@ -103,14 +103,13 @@ Capabilities vary by database. See the [user guide](./docs/user-guide.md) for de
 | --- | --- | --- | --- | --- |
 | MySQL | SQL queries, object browsing, table management, data editing, import/export, native client tool entry | `mysqldump` logical backup; SQL restore | TLS/SSL, SSH tunnel, proxy, timeouts, charset | - |
 | TiDB | Reuses the MySQL protocol path with TiDB SQL dialect, completion and schema management | Reuses MySQL logical backup | Same connection features as MySQL | - |
+| MariaDB | Reuses the MySQL protocol path for object browsing, SQL queries, table structure management, data editing, import/export, and users/privileges; detects MariaDB server versions | Reuses `mysqldump` / `mariadb-dump` logical backup and SQL restore | Same connection features as MySQL; default port 3306 | - |
 | PostgreSQL | SQL queries, schema/object browsing, table management, data editing, users and roles, psql tool entry | `pg_dump` plain SQL; `psql` restore | TLS, SSH, proxy, schema scope, timeouts | - |
 | SQL Server | T-SQL queries, database/schema/object browsing, table design and data editing, table import/export, logins, database users, role membership and explicit permissions, object-level logical backup/restore, AI page context and controlled execution | Object-level logical SQL backup and restore | SQL Server authentication, TLS, explicit ports; named instances require the actual port | Windows integrated authentication, Azure AD, contained database users, column-level permission editing, user-defined server roles, SQL Browser/named-instance auto-discovery, and database-level physical `BACKUP DATABASE`. Object-level logical backup and restore is not a substitute for database-level disaster recovery. |
 | SQLite | Local file connections, SQL queries, object browsing, table management, data editing | Consistent `VACUUM INTO` snapshot; restore to a new file with integrity and foreign-key checks | Local file path | - |
 | Dameng DM8 | Schema/object browsing, SQL queries, table design and management, data editing, table import | Logical backup and SQL restore; restore currently targets a single schema | Instance and schema connection settings | - |
 | MongoDB | Connection-string import (`mongodb://` / `mongodb+srv://`), database/collection/view browsing, collection workspace (document filter/projection/sort, condition builder, aggregation, indexes, collection info), document create/edit/duplicate/delete, JSON / JSONL / CSV import and export, collection rename and drop, command-line terminal, SQL-style query completion, AI page context and controlled execution | No database-level backup/restore; export is document-level logical export (JSON / JSONL / CSV) | `mongodb+srv://` discovery, SCRAM-SHA-1 / SCRAM-SHA-256 / MONGODB-X509, TLS options via connection-string import; at most 500 documents per query | No `mongodump` / `mongorestore` backup and restore, no performance-metrics panel, no SSH tunnel, no bulk delete (and no undo), no cross-database collection moves, no view rename/drop, no time-series or capped collection creation, no in-table row editing, no transactions or change streams; CSV import supports scalar fields only and must be UTF-8; new documents always get an ObjectId `_id`. |
 | Redis | Keyspace browsing, value editing, TTL, Workbench, CLI, Pub/Sub | No database-level backup/restore | TLS, SSH, Sentinel, Cluster, URI/Cloud; Cluster uses DB 0 only | - |
-
-MariaDB is not currently supported. It is a roadmap candidate, not a current capability.
 
 ## AI Agent
 
@@ -142,7 +141,7 @@ Open the [latest release](https://github.com/fluxdb-alt/fluxDB/releases/latest) 
 
 Release packages include `.sha256` checksums. Windows ARM64, Linux ARM64, AppImage, Flatpak and Snap are not currently available.
 
-MySQL and PostgreSQL backup/restore depend on the local `mysqldump`/`mysql` and `pg_dump`/`psql` clients. Basic queries and editing do not require them.
+MySQL, MariaDB and PostgreSQL backup/restore depend on the local `mysqldump`/`mariadb-dump`, `mysql`/`mariadb` and `pg_dump`/`psql` clients. Basic queries and editing do not require them.
 
 After installation, choose “Add connection”, select a database type, enter the connection details and test the connection. See the [user guide](./docs/user-guide.md); it currently uses Chinese screenshots and macOS shortcuts.
 
@@ -211,7 +210,6 @@ Current priorities are real-world coverage for existing databases, stability and
 
 - **SQL Server follow-up**: Windows integrated authentication and Azure AD, contained database users, column-level permissions, user-defined server roles, named-instance auto-discovery, and database-level physical backup/restore.
 - **MongoDB follow-up**: database-level backup/restore, performance metrics, bulk delete and bulk writes, in-table row editing, transactions and change streams.
-- **MariaDB**: independent dialect, system tables and backup parameter support.
 - **More databases**: evaluate ClickHouse, DuckDB, Elasticsearch/OpenSearch and others based on community demand.
 
 The roadmap does not imply current support.

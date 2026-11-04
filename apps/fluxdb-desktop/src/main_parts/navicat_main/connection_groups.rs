@@ -18,7 +18,7 @@ impl NavicatMain {
                 self.pending_new_query_connection = Some(connection_id);
             }
             ConnectionMenuAction::UserAdmin => {
-                self.open_user_admin_for_connection(connection_id, cx);
+                self.open_user_admin_for_connection(connection_id, window, cx);
             }
             ConnectionMenuAction::ExecuteSqlFile => {
                 self.show_sql_file_execution_modal(Some(connection_id), None, window, cx);
@@ -253,7 +253,7 @@ impl NavicatMain {
                     .is_some_and(|connection| connection.config.kind == DatabaseKind::Oracle);
                 if is_oracle {
                     // 打开面板会把该页签置为活动页，随后直接进入新建账号表单。
-                    self.open_user_admin_for_connection(menu.connection_id, cx);
+                    self.open_user_admin_for_connection(menu.connection_id, window, cx);
                     if let Some(tab_id) = self.active_user_admin_tab_id() {
                         self.dispatch(AppCommand::BeginOracleCreateUser(tab_id), cx);
                     }
@@ -851,6 +851,7 @@ impl NavicatMain {
             connection.config.kind,
             DatabaseKind::MySql
                 | DatabaseKind::TiDb
+                | DatabaseKind::MariaDb
                 | DatabaseKind::Sqlite
                 | DatabaseKind::Postgres
                 | DatabaseKind::SqlServer
@@ -1143,7 +1144,7 @@ impl NavicatMain {
         // MySQL/TiDB 需要 charset+collation；PG 需要 ENCODING+locale（复用 charset/collation 字段）。
         let requires_charset = matches!(
             connection_config.kind,
-            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::Postgres
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb | DatabaseKind::Postgres
         );
         let charset = if is_mongo {
             first_collection

@@ -68,6 +68,9 @@ pub struct UserRoleMember {
 pub struct DatabaseUserAdminProvider {
     dialect: UserAdminDialect,
     default_scope: PrivilegeScope,
+    /// MariaDB 复用 MySQL 方言，但账号 DDL 与服务端插件集不同：
+    /// `IDENTIFIED WITH ... BY` / `SET DEFAULT ROLE ... TO` 在 MariaDB 上会报语法错误。
+    mariadb: bool,
 }
 
 impl DatabaseUserAdminProvider {
@@ -77,6 +80,37 @@ impl DatabaseUserAdminProvider {
 
     pub fn default_scope(self) -> PrivilegeScope {
         self.default_scope
+    }
+
+    /// 新建账号时预填的认证插件。MySQL 8 默认 `caching_sha2_password`；
+    /// MariaDB 没有该插件，默认用兼容性最好的 `mysql_native_password`。
+    pub fn default_auth_plugin(self) -> &'static str {
+        if self.mariadb {
+            "mysql_native_password"
+        } else {
+            "caching_sha2_password"
+        }
+    }
+
+    /// 认证插件候选项。MariaDB 不支持 MySQL 8 的
+    /// `caching_sha2_password` / `sha256_password` / `auth_socket`。
+    pub fn auth_plugins(self) -> &'static [&'static str] {
+        if self.mariadb {
+            &[
+                "mysql_native_password",
+                "ed25519",
+                "unix_socket",
+                "pam",
+            ]
+        } else {
+            &[
+                "caching_sha2_password",
+                "mysql_native_password",
+                "sha256_password",
+                "auth_socket",
+                "mysql_clear_password",
+            ]
+        }
     }
 
     pub fn list_users_sql(self) -> &'static str {
@@ -117,30 +151,46 @@ impl DatabaseUserAdminProvider {
 
     pub fn show_grants_sql(self, user: &DatabaseUserIdentity) -> String {
         match self.dialect {
-            UserAdminDialect::MySql => format!("SHOW GRANTS FOR {};", mysql_user_account(user)),
+            UserAdminDialect::MySql => format!("SHOW GRANTS FOR {};", self.mysql_account(user)),
         }
     }
 
     pub fn create_user_sql(self, input: &CreatePrincipalInput) -> String {
         match self.dialect {
             UserAdminDialect::MySql => {
-                let auth_plugin = input
+                let plugin = input
                     .auth_plugin
                     .as_deref()
                     .map(str::trim)
-                    .filter(|plugin| !plugin.is_empty())
-                    .map(|plugin| format!(" WITH {}", quote_mysql_identifier(plugin)))
-                    .unwrap_or_default();
-                format!(
-                    "CREATE USER {} IDENTIFIED{} BY {};",
-                    mysql_user_account(&DatabaseUserIdentity {
-                        user: input.user.clone(),
-                        host: input.host.clone(),
-                        plugin: None,
-                    }),
-                    auth_plugin,
-                    quote_mysql_string(&input.password)
-                )
+                    .filter(|plugin| !plugin.is_empty());
+                let account = self.mysql_account(&DatabaseUserIdentity {
+                    user: input.user.clone(),
+                    host: input.host.clone(),
+                    plugin: None,
+                });
+                let password = quote_mysql_string(&input.password);
+                // MariaDB 用 `IDENTIFIED VIA <plugin> USING PASSWORD(...)`；
+                // MySQL 的 `IDENTIFIED WITH <plugin> BY ...` 在 MariaDB 上是语法错误。
+                let identified = if self.mariadb {
+                    match plugin {
+                        Some(plugin) => format!(
+                            "VIA {} USING PASSWORD({})",
+                            quote_mysql_identifier(plugin),
+                            password
+                        ),
+                        None => format!("BY {password}"),
+                    }
+                } else {
+                    match plugin {
+                        Some(plugin) => format!(
+                            "WITH {} BY {}",
+                            quote_mysql_identifier(plugin),
+                            password
+                        ),
+                        None => format!("BY {password}"),
+                    }
+                };
+                format!("CREATE USER {account} IDENTIFIED {identified};")
             }
         }
     }
@@ -149,7 +199,7 @@ impl DatabaseUserAdminProvider {
         match self.dialect {
             UserAdminDialect::MySql => format!(
                 "ALTER USER {} IDENTIFIED BY {};",
-                mysql_user_account(user),
+                self.mysql_account(user),
                 quote_mysql_string(password)
             ),
         }
@@ -163,15 +213,22 @@ impl DatabaseUserAdminProvider {
     ) -> String {
         match self.dialect {
             UserAdminDialect::MySql => {
+                let account = self.mysql_account(user);
+                let plugin = quote_mysql_identifier(plugin.trim());
+                if self.mariadb {
+                    // MariaDB：`IDENTIFIED VIA plugin [USING PASSWORD('...')]`。
+                    return match password {
+                        Some(password) => format!(
+                            "ALTER USER {account} IDENTIFIED VIA {plugin} USING PASSWORD({});",
+                            quote_mysql_string(password)
+                        ),
+                        None => format!("ALTER USER {account} IDENTIFIED VIA {plugin};"),
+                    };
+                }
                 let password_sql = password
                     .map(|password| format!(" BY {}", quote_mysql_string(password)))
                     .unwrap_or_default();
-                format!(
-                    "ALTER USER {} IDENTIFIED WITH {}{};",
-                    mysql_user_account(user),
-                    quote_mysql_identifier(plugin.trim()),
-                    password_sql
-                )
+                format!("ALTER USER {account} IDENTIFIED WITH {plugin}{password_sql};")
             }
         }
     }
@@ -195,7 +252,7 @@ impl DatabaseUserAdminProvider {
         };
         Some(match self.dialect {
             UserAdminDialect::MySql => {
-                format!("ALTER USER {} {};", mysql_user_account(user), suffix)
+                format!("ALTER USER {} {};", self.mysql_account(user), suffix)
             }
         })
     }
@@ -220,7 +277,7 @@ impl DatabaseUserAdminProvider {
         }
         (!clauses.is_empty()).then(|| match self.dialect {
             UserAdminDialect::MySql => {
-                format!("ALTER USER {} WITH {};", mysql_user_account(user), clauses.join(" "))
+                format!("ALTER USER {} WITH {};", self.mysql_account(user), clauses.join(" "))
             }
         })
     }
@@ -256,7 +313,7 @@ impl DatabaseUserAdminProvider {
         };
         Some(match self.dialect {
             UserAdminDialect::MySql => {
-                format!("ALTER USER {} REQUIRE {};", mysql_user_account(user), requirement)
+                format!("ALTER USER {} REQUIRE {};", self.mysql_account(user), requirement)
             }
         })
     }
@@ -265,7 +322,7 @@ impl DatabaseUserAdminProvider {
         match self.dialect {
             UserAdminDialect::MySql => format!(
                 "ALTER USER {} ACCOUNT {};",
-                mysql_user_account(user),
+                self.mysql_account(user),
                 if enabled { "UNLOCK" } else { "LOCK" }
             ),
         }
@@ -273,7 +330,7 @@ impl DatabaseUserAdminProvider {
 
     pub fn drop_user_sql(self, user: &DatabaseUserIdentity) -> String {
         match self.dialect {
-            UserAdminDialect::MySql => format!("DROP USER {};", mysql_user_account(user)),
+            UserAdminDialect::MySql => format!("DROP USER {};", self.mysql_account(user)),
         }
     }
 
@@ -290,7 +347,7 @@ impl DatabaseUserAdminProvider {
                     "GRANT {} ON {} TO {}{};",
                     privileges,
                     mysql_privilege_target_sql(&input.database, &input.table),
-                    mysql_user_account(&input.user),
+                    self.mysql_account(&input.user),
                     grant_option
                 )
             }
@@ -305,7 +362,7 @@ impl DatabaseUserAdminProvider {
                     "REVOKE {} ON {} FROM {};",
                     privileges,
                     mysql_privilege_target_sql(&input.database, &input.table),
-                    mysql_user_account(&input.user)
+                    self.mysql_account(&input.user)
                 )
             }
         }
@@ -316,8 +373,8 @@ impl DatabaseUserAdminProvider {
             UserAdminDialect::MySql => {
                 format!(
                     "GRANT {} TO {};",
-                    mysql_user_account(role),
-                    mysql_user_account(user)
+                    self.mysql_account(role),
+                    self.mysql_account(user)
                 )
             }
         }
@@ -328,8 +385,8 @@ impl DatabaseUserAdminProvider {
             UserAdminDialect::MySql => {
                 format!(
                     "REVOKE {} FROM {};",
-                    mysql_user_account(role),
-                    mysql_user_account(user)
+                    self.mysql_account(role),
+                    self.mysql_account(user)
                 )
             }
         }
@@ -347,12 +404,30 @@ impl DatabaseUserAdminProvider {
                 } else {
                     roles
                         .iter()
-                        .map(mysql_user_account)
+                        .map(|role| self.mysql_account(role))
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
-                format!("SET DEFAULT ROLE {} TO {};", roles_sql, mysql_user_account(user))
+                // MariaDB 用 `FOR`，MySQL 用 `TO`；写错关键字服务端直接报语法错误。
+                let keyword = if self.mariadb { "FOR" } else { "TO" };
+                format!(
+                    "SET DEFAULT ROLE {} {keyword} {};",
+                    roles_sql,
+                    self.mysql_account(user)
+                )
             }
+        }
+    }
+
+    /// MySQL 家族账号写法。
+    ///
+    /// MariaDB 的角色是 host 为空的账号：`SHOW GRANTS` / `GRANT` / `REVOKE` /
+    /// `SET DEFAULT ROLE` 里只能写角色名，补上 `@''` 或 `@'%'` 会报 1141/1064。
+    fn mysql_account(self, user: &DatabaseUserIdentity) -> String {
+        if self.mariadb && user.host.is_empty() {
+            quote_mysql_string(&user.user)
+        } else {
+            mysql_user_account(user)
         }
     }
 
@@ -410,10 +485,13 @@ pub const MYSQL_COMMON_PRIVILEGES: [&str; 17] = [
 
 pub fn database_user_admin_provider(kind: DatabaseKind) -> Option<DatabaseUserAdminProvider> {
     match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => Some(DatabaseUserAdminProvider {
-            dialect: UserAdminDialect::MySql,
-            default_scope: PrivilegeScope::MySql,
-        }),
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
+            Some(DatabaseUserAdminProvider {
+                dialect: UserAdminDialect::MySql,
+                default_scope: PrivilegeScope::MySql,
+                mariadb: kind == DatabaseKind::MariaDb,
+            })
+        }
         DatabaseKind::Sqlite
         | DatabaseKind::MongoDb
         | DatabaseKind::Redis
@@ -707,9 +785,15 @@ pub fn parse_mysql_account(value: &str) -> Option<DatabaseUserIdentity> {
     }
     let rest = &value[quote.len_utf8()..];
     let (user, rest) = parse_mysql_quoted_part(rest, quote)?;
-    let rest = rest.strip_prefix('@')?;
-    let rest = rest.strip_prefix(quote)?;
-    let (host, rest) = parse_mysql_quoted_part(rest, quote)?;
+    // MariaDB 的角色账号没有 host，`SHOW GRANTS` 里只打印 `` `role` ``；
+    // 这里把缺失的 `@host` 视为空 host，与 `mysql.user` 里的角色行保持一致。
+    let (host, rest) = match rest.strip_prefix('@') {
+        Some(rest) => {
+            let rest = rest.strip_prefix(quote)?;
+            parse_mysql_quoted_part(rest, quote)?
+        }
+        None => (String::new(), rest),
+    };
     if !rest.trim().is_empty() {
         return None;
     }
@@ -774,7 +858,10 @@ fn default_roles_for_user_from_grants(
         let Some(rest) = strip_ascii_prefix(trimmed, "SET DEFAULT ROLE ") else {
             continue;
         };
-        let Some((roles_part, target_part)) = split_once_ascii(rest, " TO ") else {
+        // MySQL 输出 `SET DEFAULT ROLE ... TO ...`，MariaDB 输出 `... FOR ...`。
+        let Some((roles_part, target_part)) =
+            split_once_ascii(rest, " TO ").or_else(|| split_once_ascii(rest, " FOR "))
+        else {
             continue;
         };
         if !parse_mysql_account(target_part)
@@ -845,4 +932,120 @@ fn push_unique_role(roles: &mut Vec<DatabaseUserIdentity>, role: DatabaseUserIde
 
 fn same_database_account(left: &DatabaseUserIdentity, right: &DatabaseUserIdentity) -> bool {
     left.user == right.user && left.host == right.host
+}
+
+#[cfg(test)]
+mod mariadb_user_admin_tests {
+    use super::{
+        CreatePrincipalInput, DatabaseKind, DatabaseUserAdminProvider, DatabaseUserIdentity,
+        UserAdminDialect, database_user_admin_provider,
+    };
+
+    fn provider_for(kind: DatabaseKind) -> DatabaseUserAdminProvider {
+        database_user_admin_provider(kind).expect("provider")
+    }
+
+    fn account(user: &str) -> DatabaseUserIdentity {
+        DatabaseUserIdentity {
+            user: user.to_string(),
+            host: "%".to_string(),
+            plugin: None,
+        }
+    }
+
+    #[test]
+    fn mariadb_reuses_mysql_user_admin_sql() {
+        let provider: DatabaseUserAdminProvider = provider_for(DatabaseKind::MariaDb);
+        assert_eq!(provider.dialect(), UserAdminDialect::MySql);
+        assert!(provider.list_users_sql().contains("mysql.user"));
+        assert_eq!(provider.default_auth_plugin(), "mysql_native_password");
+        assert!(!provider.auth_plugins().contains(&"caching_sha2_password"));
+    }
+
+    #[test]
+    fn mariadb_create_user_uses_via_syntax() {
+        let sql = provider_for(DatabaseKind::MariaDb).create_user_sql(&CreatePrincipalInput {
+            user: "app".into(),
+            host: "%".into(),
+            password: "p@ss".into(),
+            auth_plugin: Some("mysql_native_password".into()),
+        });
+        assert_eq!(
+            sql,
+            "CREATE USER 'app'@'%' IDENTIFIED VIA `mysql_native_password` USING PASSWORD('p@ss');"
+        );
+        let sql = provider_for(DatabaseKind::MySql).create_user_sql(&CreatePrincipalInput {
+            user: "app".into(),
+            host: "%".into(),
+            password: "p@ss".into(),
+            auth_plugin: Some("caching_sha2_password".into()),
+        });
+        assert!(sql.contains("IDENTIFIED WITH `caching_sha2_password` BY 'p@ss'"));
+    }
+
+    #[test]
+    fn mariadb_alter_auth_plugin_and_default_roles_use_mariadb_keywords() {
+        let provider = provider_for(DatabaseKind::MariaDb);
+        assert_eq!(
+            provider.alter_auth_plugin_sql(
+                &account("app"),
+                "mysql_native_password",
+                Some("p@ss")
+            ),
+            "ALTER USER 'app'@'%' IDENTIFIED VIA `mysql_native_password` USING PASSWORD('p@ss');"
+        );
+        assert_eq!(
+            provider.alter_auth_plugin_sql(&account("app"), "unix_socket", None),
+            "ALTER USER 'app'@'%' IDENTIFIED VIA `unix_socket`;"
+        );
+        // MariaDB 的角色没有 host：角色一侧只能写角色名。
+        let role = DatabaseUserIdentity {
+            user: "role_a".into(),
+            host: String::new(),
+            plugin: None,
+        };
+        assert_eq!(
+            provider.set_default_roles_sql(&account("app"), std::slice::from_ref(&role)),
+            "SET DEFAULT ROLE 'role_a' FOR 'app'@'%';"
+        );
+        assert_eq!(
+            provider.grant_role_sql(&role, &account("app")),
+            "GRANT 'role_a' TO 'app'@'%';"
+        );
+        assert_eq!(
+            provider.revoke_role_sql(&role, &account("app")),
+            "REVOKE 'role_a' FROM 'app'@'%';"
+        );
+        assert_eq!(
+            provider.show_grants_sql(&role),
+            "SHOW GRANTS FOR 'role_a';"
+        );
+        assert_eq!(
+            provider_for(DatabaseKind::MySql).grant_role_sql(&account("role_a"), &account("app")),
+            "GRANT 'role_a'@'%' TO 'app'@'%';"
+        );
+        assert_eq!(
+            provider_for(DatabaseKind::MySql).set_default_roles_sql(&account("app"), &[]),
+            "SET DEFAULT ROLE NONE TO 'app'@'%';"
+        );
+    }
+
+    #[test]
+    fn mariadb_show_grants_default_role_line_is_parsed() {
+        let grants = vec![
+            "GRANT `role_a` TO `app`@`%`".to_string(),
+            "SET DEFAULT ROLE `role_a` FOR `app`@`%`".to_string(),
+        ];
+        // MariaDB 的 `SHOW GRANTS` 对无显式 host 的角色只打印角色名，候选也要用空 host。
+        let role = DatabaseUserIdentity {
+            user: "role_a".into(),
+            host: String::new(),
+            plugin: None,
+        };
+        let memberships =
+            super::role_memberships_from_grants(&[role], &grants, &account("app"));
+        assert_eq!(memberships.len(), 1);
+        assert!(memberships[0].granted);
+        assert!(memberships[0].default_role);
+    }
 }

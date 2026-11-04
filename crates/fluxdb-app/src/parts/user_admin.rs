@@ -35,6 +35,15 @@ impl AppController {
             .ok_or_else(|| Error::new(ErrorKind::Unsupported, "暂不支持该连接的用户与权限管理"))
     }
 
+    /// 当前标签页连接对应的默认认证插件（MariaDB 与 MySQL 8 不同）。
+    fn user_admin_default_auth_plugin(&self, tab_id: TabId) -> &'static str {
+        self.user_admin_state(tab_id)
+            .and_then(|admin| self.connection_kind(admin.connection_id))
+            .and_then(database_user_admin_provider)
+            .map(|provider| provider.default_auth_plugin())
+            .unwrap_or("caching_sha2_password")
+    }
+
     fn load_user_admin_users(&self, tab_id: TabId) -> fluxdb_core::Result<Vec<DatabaseUserIdentity>> {
         let admin = self
             .user_admin_state(tab_id)
@@ -229,6 +238,7 @@ impl AppController {
     fn reset_user_admin_selection_after_users_load(
         admin: &mut UserAdminState,
         users: &[DatabaseUserIdentity],
+        default_plugin: &str,
     ) {
         let pending_selection = admin.pending_selected_user.take();
         if pending_selection
@@ -251,7 +261,7 @@ impl AppController {
             admin.auth_plugin = selected
                 .plugin
                 .clone()
-                .unwrap_or_else(|| "caching_sha2_password".to_string());
+                .unwrap_or_else(|| default_plugin.to_string());
         }
         admin.password_expiry_policy = "DEFAULT".to_string();
         admin.create_password.clear();

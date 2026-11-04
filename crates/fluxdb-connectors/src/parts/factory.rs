@@ -27,7 +27,7 @@ pub fn connector_for(config: &ConnectionConfig) -> fluxdb_core::Result<Box<dyn C
     }
 
     let connector: Box<dyn Connector> = match config.kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb => {
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
             Box::new(MySqlConnector::with_config(config.clone()))
         }
         DatabaseKind::Sqlite => Box::new(SqliteConnector::with_config(config.clone())),

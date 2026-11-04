@@ -577,7 +577,7 @@ struct DatabaseSupportEntry {
 }
 
 /// 内置连接器清单，顺序与 `DatabaseKind` 保持一致；新增数据库类型时必须同步补齐。
-fn database_support_entries() -> [DatabaseSupportEntry; 9] {
+fn database_support_entries() -> [DatabaseSupportEntry; 10] {
     [
         DatabaseSupportEntry {
             kind: DatabaseKind::MySql,
@@ -588,6 +588,11 @@ fn database_support_entries() -> [DatabaseSupportEntry; 9] {
             kind: DatabaseKind::TiDb,
             source: tr("app.settings.database_support.tidb_source"),
             detail: tr("app.settings.database_support.tidb_detail"),
+        },
+        DatabaseSupportEntry {
+            kind: DatabaseKind::MariaDb,
+            source: tr("app.settings.database_support.mariadb_source"),
+            detail: tr("app.settings.database_support.mariadb_detail"),
         },
         DatabaseSupportEntry {
             kind: DatabaseKind::Sqlite,

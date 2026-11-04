@@ -17,10 +17,15 @@ impl AppController {
             }
             AppCommand::FinishUserAdminUsersLoad { tab_id, result } => match result {
                 Ok(users) => {
+                    let default_plugin = self.user_admin_default_auth_plugin(tab_id);
                     if let Some(admin) = self.user_admin_state_mut(tab_id) {
                         admin.loading_users = false;
                         admin.users = users.clone();
-                        Self::reset_user_admin_selection_after_users_load(admin, &users);
+                        Self::reset_user_admin_selection_after_users_load(
+                            admin,
+                            &users,
+                            default_plugin,
+                        );
                         admin.users_error = None;
                         AppEvent::UserAdminUsersLoaded(tab_id, users)
                     } else {
@@ -145,6 +150,7 @@ impl AppController {
                 }
             },
             AppCommand::SelectUserAdminUser { tab_id, user } => {
+                let default_plugin = self.user_admin_default_auth_plugin(tab_id);
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
                     admin.selected_user = Some(user);
                     admin.creating_user = false;
@@ -164,7 +170,7 @@ impl AppController {
                         admin.auth_plugin = selected
                             .plugin
                             .clone()
-                            .unwrap_or_else(|| "caching_sha2_password".to_string());
+                            .unwrap_or_else(|| default_plugin.to_string());
                     }
                     admin.password_expiry_policy = "DEFAULT".to_string();
                     admin.create_password.clear();
@@ -176,6 +182,7 @@ impl AppController {
                 }
             }
             AppCommand::BeginUserAdminCreateUser(tab_id) => {
+                let default_plugin = self.user_admin_default_auth_plugin(tab_id);
                 if let Some(admin) = self.user_admin_state_mut(tab_id) {
                     admin.creating_user = true;
                     admin.search.clear();
@@ -192,7 +199,7 @@ impl AppController {
                     // 用户名留空：与 PG / SQL Server / Oracle 的新建表单一致，不预填占位名。
                     admin.create_user.clear();
                     admin.create_host = "%".to_string();
-                    admin.auth_plugin = "caching_sha2_password".to_string();
+                    admin.auth_plugin = default_plugin.to_string();
                     admin.password_expiry_policy = "DEFAULT".to_string();
                     admin.create_password.clear();
                     admin.new_password.clear();

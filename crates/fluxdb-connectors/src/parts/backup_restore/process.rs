@@ -145,7 +145,9 @@ fn sanitized_client_diagnostics(bytes: &[u8]) -> String {
 fn resolved(config: &ConnectionConfig) -> ConnectionConfig {
     match config.kind {
         DatabaseKind::Postgres => config.postgres_resolved(),
-        DatabaseKind::MySql | DatabaseKind::TiDb => config.mysql_resolved(),
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
+            config.mysql_resolved()
+        }
         _ => config.clone(),
     }
 }
