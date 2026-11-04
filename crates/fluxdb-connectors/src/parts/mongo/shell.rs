@@ -805,6 +805,9 @@ fn mongo_shell_parse_text(label: &str, text: &str) -> fluxdb_core::Result<Bson> 
 }
 
 /// 聚合管道：必须是数组。
+///
+/// `$out` / `$merge` 会把聚合结果写回集合，和终端的只读边界冲突，解析阶段就拒绝；
+/// 放在这里是因为 CLI 与命令工作台共用同一入口。
 fn mongo_shell_pipeline(text: &str) -> fluxdb_core::Result<Vec<Document>> {
     let text = text.trim();
     if text.is_empty() {
@@ -814,7 +817,16 @@ fn mongo_shell_pipeline(text: &str) -> fluxdb_core::Result<Vec<Document>> {
         Bson::Array(items) => items
             .into_iter()
             .map(|item| match item {
-                Bson::Document(stage) => Ok(stage),
+                Bson::Document(stage) => {
+                    if let Some(stage_name) = stage.keys().find(|key| {
+                        key.eq_ignore_ascii_case("$out") || key.eq_ignore_ascii_case("$merge")
+                    }) {
+                        return Err(mongo_shell_error(format!(
+                            "The command line only supports read-only queries; {stage_name} is not supported"
+                        )));
+                    }
+                    Ok(stage)
+                }
                 _ => Err(mongo_shell_error("Each pipeline stage must be an object")),
             })
             .collect(),
@@ -1071,6 +1083,19 @@ mod mongo_shell_tests {
         assert_eq!(request.filter, r#"{ event_type: "page_view" }"#);
         assert_eq!(request.sort, "{ duration_ms: -1 }");
         assert_eq!(request.limit, 20);
+    }
+
+    #[test]
+    fn pipeline_rejects_write_stages() {
+        // 只读终端不允许把结果写回集合；CLI 与命令工作台共用这条入口。
+        let out = mongo_shell_pipeline(r#"[{ "$match": {} }, { "$out": "archive" }]"#)
+            .expect_err("$out 必须被拒绝");
+        assert!(out.message.contains("read-only"), "{}", out.message);
+        assert!(
+            mongo_shell_pipeline(r#"[{ "$merge": { "into": "archive" } }]"#).is_err(),
+            "$merge 必须被拒绝"
+        );
+        assert!(mongo_shell_pipeline(r#"[{ "$match": {} }]"#).is_ok());
     }
 
     #[test]
