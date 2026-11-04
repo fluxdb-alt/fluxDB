@@ -29,10 +29,6 @@ impl MySqlClientTool {
             Self::Console => ["mysql", "mariadb"],
         }
     }
-    fn find_in(self, dir: &Path) -> Option<PathBuf> {
-        self.find_in_order(dir, false)
-    }
-
     /// `mariadb_first` 用于 MariaDB 连接：同一目录同时装了 MySQL 与 MariaDB
     /// 客户端时优先选原生工具，避免用 MySQL 9 的 dump 处理 MariaDB 服务端。
     fn find_in_order(self, dir: &Path, mariadb_first: bool) -> Option<PathBuf> {
