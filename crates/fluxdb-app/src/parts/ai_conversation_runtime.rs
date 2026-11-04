@@ -151,6 +151,8 @@ impl AiRuntimeHandle {
                     tools = tools.with_hooks(ai_builtin_hooks(storage, job)?);
                     add_ai_file_tools(&mut tools, storage, job)?;
                     add_ai_reference_tools(&mut tools, storage, job)?;
+                    // 内置产品文档只读、无需授权：始终进入目录，避免模型凭记忆编操作路径。
+                    add_ai_docs_tools(&mut tools)?;
                     // 通用产物工具始终装配；来源兼容性由实际产物能力校验。
                     add_ai_artifact_tools(
                         &mut tools,

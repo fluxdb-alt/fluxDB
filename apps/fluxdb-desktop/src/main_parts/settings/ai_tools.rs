@@ -35,6 +35,8 @@ fn ai_tool_text(id: &str, group: &str, desc: &str) -> (SharedString, SharedStrin
         "file.search_content" => tr("app.ai.tools.desc.file_search_content"),
         "file.read" => tr("app.ai.tools.desc.file_read"),
         "context.read" => tr("app.ai.tools.desc.context_read"),
+        "docs.search" => tr("app.ai.tools.desc.docs_search"),
+        "docs.read" => tr("app.ai.tools.desc.docs_read"),
         "plan.update" => tr("app.ai.tools.desc.plan_update"),
 
         "toolbox.inspect" => tr("app.ai.tools.desc.toolbox_inspect"),

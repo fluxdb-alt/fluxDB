@@ -54,6 +54,18 @@ pub const AI_AGENT_TOOL_CATALOG: &[(&str, &str, &str, bool)] = &[
         false,
     ),
     (
+        "docs.search",
+        "common",
+        "Search bundled FluxDB product documentation",
+        false,
+    ),
+    (
+        "docs.read",
+        "common",
+        "Read a bounded section of bundled FluxDB product documentation",
+        false,
+    ),
+    (
         "plan.update",
         "common",
         "Update the public execution plan",
@@ -240,6 +252,8 @@ mod ai_tool_management_tests {
             "file.search",
             "file.search_content",
             "context.read",
+            "docs.search",
+            "docs.read",
             "plan.update",
         ] {
             assert!(ids.contains(&id), "{id}");

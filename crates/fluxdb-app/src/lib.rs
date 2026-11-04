@@ -162,6 +162,8 @@ include!("parts/ai_table_page.rs");
 include!("parts/sql_files.rs");
 include!("parts/ai_references.rs");
 include!("parts/ai_file_tools.rs");
+include!("parts/manual_docs.rs");
+include!("parts/ai_docs_tools.rs");
 include!("parts/ai_file_content.rs");
 include!("parts/ai_reference_details.rs");
 include!("parts/ai_database_context.rs");

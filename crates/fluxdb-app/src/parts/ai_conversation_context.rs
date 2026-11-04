@@ -69,6 +69,10 @@ fn ai_conversation_turn_messages(
         ));
         system_messages.push(fluxdb_core::ModelMessage::new(
             fluxdb_core::ModelRole::System,
+            "文档规则：遇到 FluxDB 功能、界面、配置、快捷键、支持范围或操作步骤问题，先调用 docs.search 检索内置文档；query 用简短关键词（如“MariaDB 连接”），不要整句提问。命中后用 docs.read 读取对应 section_id 的正文；返回 truncated 时按 next_offset 继续读，再依据正文回答。回答中引用章节名（如“8.1 首次配置”）。文档未覆盖时明确说明，不要编造菜单路径或操作步骤。docs.* 只读内置产品文档，不读取用户文件或数据库。",
+        ));
+        system_messages.push(fluxdb_core::ModelMessage::new(
+            fluxdb_core::ModelRole::System,
             "配置工具规则：用户要查看或修改设置、模型、Agent、工具启停、MCP 或会话时，先用 toolbox.inspect 读取当前非敏感状态和 revision，再用 toolbox.search 找操作、toolbox.load 加载选中的 1-5 个操作，下一轮调用其完整工具；不要猜对象 ID 或 revision。\
              配置提案在用户确认前不会落库；API Key、密码和 Token 永远由用户在本地弹框输入，不得作为工具参数、提案内容或回复正文。\
              新增模型时优先预填 Provider、Endpoint、模型 ID、上下文和价格；不确定的值明确标注，不伪造。",
