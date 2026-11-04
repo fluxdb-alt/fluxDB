@@ -17,12 +17,13 @@ pub use fluxdb_connectors::{
 };
 use fluxdb_core::{
     AppliedChangeOutcome, BinaryCellSummary, COMPLETION_INDEX_VERSION, CellUpdate, CellUpdateValue,
-    CellValue, Column, ColumnRef, CommandExecutionSource, CommandExecutionSummary,
-    CommandExecutionTarget, CommandResultsMode, CommandRunMode, CommandWorkbenchExecution,
-    CommandWorkbenchRequest, CompletionColumn, CompletionIndexMeta, CompletionIndexSnapshot,
-    CompletionRoutine, CompletionRoutineKind, CompletionTable, CompletionTrigger, ConnectionConfig,
-    ConnectionDraft, ConnectionGroup, ConnectionGroupId, ConnectionId, ConnectionOverview,
-    Connector, CreateDatabaseRequest, DataChangeSet, DataExportPreview, DataPage, DatabaseKind,
+    CellValue, Column, ColumnRef, CommandExecutionItem, CommandExecutionSource,
+    CommandExecutionStatus, CommandExecutionSummary, CommandExecutionTarget, CommandReply,
+    CommandResultsMode, CommandRunMode, CommandWorkbenchExecution, CommandWorkbenchRequest,
+    CompletionColumn, CompletionIndexMeta, CompletionIndexSnapshot, CompletionRoutine,
+    CompletionRoutineKind, CompletionTable, CompletionTrigger, ConnectionConfig, ConnectionDraft,
+    ConnectionGroup, ConnectionGroupId, ConnectionId, ConnectionOverview, Connector,
+    CreateDatabaseRequest, DataChangeSet, DataExportPreview, DataPage, DatabaseKind,
     DatabasePrivilegeGrant, DatabaseUserIdentity, Endpoint, ErColumn, ErForeignKeyEdge,
     ErGraphData, ErLoadStatus, ErRelationship, ErTableNode, ErTableRef, Error, ErrorKind,
     ExecutionPolicy, ExecutionPolicySettings, FilterExpression, FilterSpec, ForeignKeyInfo,
@@ -75,6 +76,7 @@ include!("parts/controller.rs");
 include!("parts/data_editor.rs");
 include!("parts/cell_content_store.rs");
 include!("parts/cell_content_view.rs");
+include!("parts/read_only_guard.rs");
 include!("parts/mock_data.rs");
 include!("parts/sql_format.rs");
 include!("parts/table_info.rs");

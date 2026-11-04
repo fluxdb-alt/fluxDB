@@ -1038,6 +1038,18 @@ fn connection_tree(
                 .text_color(colors.text)
                 .child(connection.config.name.clone()),
         )
+        .when(fluxdb_app::connection_is_read_only(&connection.config), |this| {
+            this.child(
+                div()
+                    .px(px(5.))
+                    .rounded(colors.radius)
+                    .border_1()
+                    .border_color(colors.border)
+                    .text_size(px(10.))
+                    .text_color(colors.muted)
+                    .child(tr("app.sidebar.read_only")),
+            )
+        })
         .when(connection.connected, |this| {
             this.child(div().size(px(7.)).rounded_full().bg(rgb(0x16a34a)))
         })

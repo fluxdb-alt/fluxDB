@@ -1415,7 +1415,44 @@ impl AppController {
                     let (connection_id, database) = match &mut tab.kind {
                         TabKind::RedisWorkbench(workbench) => {
                             workbench.running = false;
-                            workbench.error = Some(user_error.clone());
+                            // 整次执行失败（如只读连接拦截）也落成一条执行记录，
+                            // 与成功记录同构展示；错误页在已有记录时会被记录列表顶掉。
+                            workbench.error = None;
+                            let execution_id = workbench.next_execution_id;
+                            workbench.next_execution_id += 1;
+                            workbench.executions.push(CommandWorkbenchExecution {
+                                id: execution_id,
+                                target: CommandExecutionTarget::Redis {
+                                    connection_id: workbench.connection_id,
+                                    database: workbench.database,
+                                },
+                                text: text.clone(),
+                                commands: vec![CommandExecutionItem {
+                                    command: text.trim().to_string(),
+                                    argv_preview: text
+                                        .split_whitespace()
+                                        .map(str::to_string)
+                                        .collect(),
+                                    status: CommandExecutionStatus::Failed,
+                                    reply: CommandReply::Error(user_error.message.clone()),
+                                    elapsed_ms: 0,
+                                    size_limit_exceeded: false,
+                                }],
+                                summary: CommandExecutionSummary {
+                                    total: 1,
+                                    success: 0,
+                                    failed: 1,
+                                    skipped: 0,
+                                },
+                                run_mode: CommandRunMode::Text,
+                                results_mode: CommandResultsMode::Default,
+                                started_at_unix_secs: SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .map(|duration| duration.as_secs())
+                                    .unwrap_or(0),
+                                elapsed_ms: 0,
+                            });
+                            tab.dirty = workbench.has_unsaved_text();
                             (workbench.connection_id, workbench.database)
                         }
                         _ => {

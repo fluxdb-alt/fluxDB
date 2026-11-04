@@ -575,10 +575,8 @@ fn data_change_dirty_cells(
     };
     let mut dirty_cells = BTreeSet::new();
     for update in &changes.updates {
-        let Some(row_index) = page.rows.iter().enumerate().find_map(|(row_index, _)| {
-            (data_page_row_identity(page, row_index).as_ref() == Some(&update.identity))
-                .then_some(row_index)
-        }) else {
+        let Some(row_index) = data_page_row_for_identity(page, &update.identity, &update.cells)
+        else {
             continue;
         };
         for cell in &update.cells {
@@ -603,12 +601,54 @@ fn data_change_deleted_rows(page: &DataPage, changes: Option<&DataChangeSet>) ->
         .deletes
         .iter()
         .filter_map(|identity| {
-            page.rows.iter().enumerate().find_map(|(row_index, _)| {
-                (data_page_row_identity(page, row_index).as_ref() == Some(identity))
-                    .then_some(row_index)
-            })
+            // 删除行可能同时被编辑过（含主键列），带上该行改动里的新值才能定位。
+            let changed_cells = changes
+                .updates
+                .iter()
+                .find(|update| &update.identity == identity)
+                .map(|update| update.cells.as_slice())
+                .unwrap_or_default();
+            data_page_row_for_identity(page, identity, changed_cells)
         })
         .collect()
+}
+
+/// 找到改动集里某个原始行身份对应的页面行。
+///
+/// 身份值来自改动前的原始行，而页面行会被就地编辑（主键列也允许改），
+/// 直接用身份比较会失配：改动格不高亮、删除行不置灰。
+/// 身份列按「本次改动过 → 比对新值，否则 → 比对原值」判定。
+fn data_page_row_for_identity(
+    page: &DataPage,
+    identity: &RowIdentity,
+    changed_cells: &[CellUpdate],
+) -> Option<usize> {
+    page.rows.iter().enumerate().find_map(|(row_index, _)| {
+        data_page_row_matches_identity(page, row_index, identity, changed_cells).then_some(row_index)
+    })
+}
+
+fn data_page_row_matches_identity(
+    page: &DataPage,
+    row_index: usize,
+    identity: &RowIdentity,
+    changed_cells: &[CellUpdate],
+) -> bool {
+    let Some(row) = page.rows.get(row_index) else {
+        return false;
+    };
+    identity.values.iter().all(|(name, original)| {
+        let Some(column_index) = page.columns.iter().position(|column| &column.name == name) else {
+            return false;
+        };
+        let Some(current) = row.values.get(column_index) else {
+            return false;
+        };
+        match changed_cells.iter().find(|cell| &cell.column == name) {
+            Some(cell) => cell.value.placeholder() == current,
+            None => current == original,
+        }
+    })
 }
 
 fn data_cell_selection_should_fill_background(dirty_cell: bool, deleted_row: bool) -> bool {
@@ -634,25 +674,6 @@ fn data_cell_edit_should_commit_before_cell_change(
     target: DataCellEditState,
 ) -> bool {
     current.is_some_and(|editing| editing != target)
-}
-
-fn data_page_row_identity(page: &DataPage, row_index: usize) -> Option<RowIdentity> {
-    let row = page.rows.get(row_index)?;
-    let mut values = BTreeMap::new();
-    for (index, column) in page.columns.iter().enumerate() {
-        if column.primary_key
-            && let Some(value) = row.values.get(index)
-        {
-            values.insert(column.name.clone(), value.clone());
-        }
-    }
-    if values.is_empty()
-        && let Some(column) = page.columns.first()
-        && let Some(value) = row.values.first()
-    {
-        values.insert(column.name.clone(), value.clone());
-    }
-    (!values.is_empty()).then_some(RowIdentity { values })
 }
 
 fn data_type_color(type_name: &str) -> Option<gpui::Rgba> {
@@ -895,5 +916,101 @@ mod data_cell_clip_tests {
             DATA_CELL_DISPLAY_LIMIT
         );
         assert!(clipped.ends_with('…'));
+    }
+}
+
+#[cfg(test)]
+mod dirty_cell_tests {
+    use super::*;
+    use fluxdb_core::RowUpdate;
+
+    fn column(name: &str, primary_key: bool) -> GdbColumn {
+        GdbColumn {
+            name: name.to_string(),
+            type_name: Some("int".to_string()),
+            nullable: false,
+            primary_key,
+            comment: None,
+        }
+    }
+
+    /// 复合主键表：tenant_id + customer_id 都是主键。
+    fn page(customer_id: CellValue) -> DataPage {
+        DataPage {
+            columns: vec![column("tenant_id", true), column("customer_id", true), column("name", false)],
+            rows: vec![Row {
+                values: vec![CellValue::I64(1), customer_id, CellValue::Text("Old Alice".to_string())],
+            }],
+            offset: 0,
+            limit: 100,
+            has_more: false,
+            incomplete: None,
+        }
+    }
+
+    fn update(identity: &[(&str, CellValue)], cells: &[(&str, CellValue)]) -> DataChangeSet {
+        DataChangeSet {
+            object: ObjectPath {
+                connection_id: ConnectionId(0),
+                database: Some("db".to_string()),
+                schema: None,
+                name: "customers".to_string(),
+                kind: ObjectKind::Table,
+            },
+            inserts: Vec::new(),
+            updates: vec![RowUpdate {
+                identity: RowIdentity {
+                    values: identity
+                        .iter()
+                        .map(|(name, value)| (name.to_string(), value.clone()))
+                        .collect(),
+                },
+                cells: cells
+                    .iter()
+                    .map(|(name, value)| CellUpdate::new(*name, value.clone()))
+                    .collect(),
+            }],
+            deletes: Vec::new(),
+            insert_intents: None,
+        }
+    }
+
+    #[test]
+    fn marks_dirty_cell_after_primary_key_edit() {
+        // 页面行已是改后值，改动集身份仍是改前值：仍要高亮被改的主键格。
+        let changes = update(
+            &[("tenant_id", CellValue::I64(1)), ("customer_id", CellValue::I64(101))],
+            &[("customer_id", CellValue::I64(1012))],
+        );
+        let page = page(CellValue::I64(1012));
+
+        let dirty = data_change_dirty_cells(&page, Some(&changes));
+
+        assert_eq!(dirty, BTreeSet::from([(0, 1)]));
+    }
+
+    #[test]
+    fn marks_deleted_row_after_primary_key_edit() {
+        let mut changes = update(
+            &[("tenant_id", CellValue::I64(1)), ("customer_id", CellValue::I64(101))],
+            &[("customer_id", CellValue::I64(1012))],
+        );
+        changes.deletes.push(RowIdentity {
+            values: changes.updates[0].identity.values.clone(),
+        });
+        let page = page(CellValue::I64(1012));
+
+        assert_eq!(data_change_deleted_rows(&page, Some(&changes)), BTreeSet::from([0]));
+    }
+
+    #[test]
+    fn does_not_mark_unrelated_row() {
+        let changes = update(
+            &[("tenant_id", CellValue::I64(1)), ("customer_id", CellValue::I64(101))],
+            &[("customer_id", CellValue::I64(1012))],
+        );
+        let page = page(CellValue::I64(999));
+
+        assert!(data_change_dirty_cells(&page, Some(&changes)).is_empty());
     }
 }

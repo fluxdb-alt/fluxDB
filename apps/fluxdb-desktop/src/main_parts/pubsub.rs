@@ -225,6 +225,19 @@ impl NavicatMain {
         if channel.trim().is_empty() {
             return;
         }
+        // 发布消息是写入操作；只读连接下不进入命令队列。
+        let is_read_only = self
+            .pubsub_sessions
+            .get(&tab_id)
+            .is_some_and(|model| fluxdb_app::connection_is_read_only(&model.config));
+        if is_read_only {
+            self.show_message(
+                tr("app.backend_error.connection_read_only_not_executed"),
+                AppMessageKind::Error,
+                cx,
+            );
+            return;
+        }
         self.pubsub_publish(tab_id, channel.trim(), &message);
         if let Some(model) = self.pubsub_sessions.get_mut(&tab_id) {
             model.publish_message.clear();

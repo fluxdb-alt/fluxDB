@@ -469,6 +469,7 @@ impl NavicatMain {
             ConnectionToggleField::PgShowOtherDatabases => form.pg_show_other_databases = value,
             ConnectionToggleField::PgShowSystemSchemas => form.pg_show_system_schemas = value,
             ConnectionToggleField::MongoSrv => form.mongo_srv = value,
+            ConnectionToggleField::ReadOnly => form.read_only = value,
         }
         cx.notify();
     }
@@ -743,6 +744,9 @@ impl NavicatMain {
             options.insert("password".to_string(), form.password.clone());
         }
         options.insert(CONNECTION_COLOR_OPTION.to_string(), form.color.clone());
+        if form.read_only {
+            options.insert("read_only".to_string(), "true".to_string());
+        }
         if !form.url_params.trim().is_empty() {
             options.insert("url_params".to_string(), form.url_params.trim().to_string());
             // Redis 没有连接串，用同一个「参数」输入框承载 tls / tls_insecure /
@@ -790,9 +794,10 @@ impl NavicatMain {
                     .unwrap_or_else(|_| database_default_port_u16(kind)),
                 database: non_empty_option(form.oracle_target_name()),
             },
+            // SQLite 的只读直接落到驱动打开标志，服务端层面真正拒绝写入。
             DatabaseKind::Sqlite => Endpoint::SqliteFile {
                 path: form.sqlite_path.trim().into(),
-                read_only: false,
+                read_only: form.read_only,
             },
             DatabaseKind::MongoDb => Endpoint::Tcp {
                 host: form.host.trim().to_string(),

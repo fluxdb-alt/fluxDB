@@ -438,6 +438,8 @@ enum ConnectionToggleField {
     PgShowSystemSchemas,
     /// MongoDB 是否走 `mongodb+srv://`（SRV 拓扑发现，单 DNS 名）
     MongoSrv,
+    /// 连接级只读：开启后禁止通过该连接写入
+    ReadOnly,
 }
 
 #[derive(Clone, Debug)]
@@ -453,6 +455,8 @@ struct NewConnectionForm {
     url_params: String,
     sqlite_path: String,
     mongo_srv: bool,
+    /// 连接级只读（落盘为 `options["read_only"]`）
+    read_only: bool,
     mongo_auth_db: String,
     mongo_auth_mechanism: String,
     // —— Redis 专用编辑值 ——
@@ -667,6 +671,7 @@ impl NewConnectionForm {
             url_params: String::new(),
             sqlite_path: String::new(),
             mongo_srv: false,
+            read_only: false,
             mongo_auth_db: String::new(),
             // 空串表示交给驱动协商认证机制。
             mongo_auth_mechanism: String::new(),
@@ -814,6 +819,17 @@ impl NewConnectionForm {
             .options
             .get("srv")
             .is_some_and(|value| value == "true");
+        form.read_only = config
+            .options
+            .get("read_only")
+            .is_some_and(|value| value == "true")
+            || matches!(
+                config.endpoint,
+                Endpoint::SqliteFile {
+                    read_only: true,
+                    ..
+                }
+            );
         form.mongo_auth_db = config.options.get("auth_db").cloned().unwrap_or_default();
         form.mongo_auth_mechanism = config
             .options
