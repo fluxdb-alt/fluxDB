@@ -171,6 +171,14 @@ FLUXDB_PROFILE=dev cargo test --locked -p <crate> --doc
 
 只有影响共享契约、跨模块依赖、关键基础设施或无法可靠圈定范围等情况才扩大回归。局部模块测试通过后不固定追加全 crate；全 crate 通过也不固定追加 workspace。用户旅程/跨层链路需要时再选 E2E，不要求把纯逻辑用例从 UI 重测一遍。已通过结果仅在相关代码/依赖/feature 及环境未受后续改动影响时复用。
 
+### SSH 隧道端到端
+
+`scripts/ssh-tunnel-e2e.sh [mongo|mssql|oracle|dm|all]` 用 Podman 在同一 pod 内启动数据库与 sshd，只发布 sshd 端口，因此数据库在宿主机不可达，只能经跳板机转发：
+- `crates/fluxdb-connectors/tests/ssh_tunnel_live.rs` 覆盖档案 → 隧道 → 驱动 → 命令回执，并断言去掉隧道后直连失败、错误 SSH 密码不回退直连。
+- `i18n_e2e_tests::mongo_connection_form_connects_through_ssh_tunnel` 在生产视图里点击选择类型、切 SSH 页签、填表并保存，验证 UI 表单与凭据保存链路。
+- 脚本自行生成临时密钥和 `known_hosts`（不限定 `-t`，libssh2 可能协商 ECDSA），只清理本次创建的 pod；容器参数缺失时用例直接跳过。
+- SQL Server / Oracle / 达梦官方镜像只有 x86_64；arm64 宿主且无 Rosetta 时无法起真库。在 x86_64 Linux 上用 `scripts/ssh-tunnel-e2e.sh mssql|oracle|dm|all` 验证：数据库与 sshd 同 pod、数据库不发布宿主端口，只有经跳板机才能连通；`tests/sqlserver_tunnel_live.rs` 及 Oracle/达梦既有 smoke 用例通过 `FLUXDB_*_SSH` 环境变量启用隧道；达梦用例里直接使用裸驱动的事务/字符集检查在隧道模式下会显式跳过（裸驱动只认原始 host），其余读写都走生产连接器。达梦官方不提供可 pull 镜像，需用 `FLUXDB_E2E_DM_TAR` 指定官方 tar（如 `https://download.dameng.com/eco/dm8/dm8_20241022_x86_rh6_64_single.tar`，镜像名 `dm8_single:dm8_20241022_rev244896_x86_rh6_64`）。宿主机只需 SSH 入站端口，容器互访不出宿主。Oracle 官方仓库在国内可能很慢，可先在本机拉 amd64 镜像，再 `podman save | zstd | ssh 'zstd -d | podman load'` 传入，并用 `FLUXDB_E2E_ORACLE_IMAGE` 指向本地镜像名。
+
 Clippy 的 `--all-targets` 会检查测试等目标，但不执行用例；不默认加 `--all-features` 打开未经确认的平台/可选能力。优先处理本次新增或触及的警告，不为历史警告顺手大改，只在最小范围抑制有依据的 lint 并说明原因；不整组开启 `pedantic`/`restriction`，不批量加 `allow`。在未建立一致工具链和零警告基线前，不擅自将全仓警告升级为错误。
 
 报告记录执行平台、命令、实际通过/失败/忽略/过滤数量。表驱动的多行输入不等于多个 `#[test]`；`--list`、`--no-run`、零用例与 `#[ignore]` 都不是通过证据。

@@ -3,6 +3,7 @@
 target/
 .superspec/
 .claude/
+bench-results/
 docs/design
 apps/gdb-desktop/target/
 docs/design-assets

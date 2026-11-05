@@ -1,9 +1,44 @@
 use dm_pure::{ClientConfig, DmClient, DmError, ExecuteResult, Param, Value};
 
+/// 达梦连接句柄：驱动 client + 可能存在的 SSH 隧道。
+///
+/// 隧道必须与 client 同生命周期存活；Deref 让既有 helper（接收 `&mut DmClient`）
+/// 无需改动即可继续使用。
+struct DmSession {
+    client: DmClient,
+    _tunnel: Option<SshTunnel>,
+}
+
+impl std::ops::Deref for DmSession {
+    type Target = DmClient;
+    fn deref(&self) -> &Self::Target {
+        &self.client
+    }
+}
+
+impl std::ops::DerefMut for DmSession {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.client
+    }
+}
+
 /// 建立一条 DM8 普通连接。驱动是同步实现，调用方按需在短生命周期线程中执行。
-fn dm_connect(config: &ConnectionConfig) -> fluxdb_core::Result<DmClient> {
+fn dm_connect(config: &ConnectionConfig) -> fluxdb_core::Result<DmSession> {
     let profile = dm_profile(config)?;
-    let (host, port) = profile.dial_endpoint();
+    let (mut host, mut port) = profile.dial_endpoint();
+    // SSH 隧道：先建本地转发，再把拨号目标改成 127.0.0.1:local_port。
+    let tunnel = if profile.ssh.enabled {
+        let opened = open_tunnel_for_profile(
+            &profile.ssh,
+            (&host, port),
+            profile.advanced.connect_timeout_secs,
+        )?;
+        host = "127.0.0.1".into();
+        port = opened.local_port;
+        Some(opened)
+    } else {
+        None
+    };
     let connect_timeout = Duration::from_secs(u64::from(
         profile.advanced.connect_timeout_secs.max(1),
     ));
@@ -32,7 +67,10 @@ fn dm_connect(config: &ConnectionConfig) -> fluxdb_core::Result<DmClient> {
         .map_err(|error| dm_error("建立达梦连接失败", error))?;
     // DM8 的 SET SCHEMA / ALTER SESSION 在当前驱动连接上会触发服务端资源错误；
     // 所有业务 SQL 已显式使用 schema 限定，因此不在建连阶段切换会话 schema。
-    Ok(client)
+    Ok(DmSession {
+        client,
+        _tunnel: tunnel,
+    })
 }
 
 fn dm_profile(config: &ConnectionConfig) -> fluxdb_core::Result<&fluxdb_core::DamengConnectionProfile> {

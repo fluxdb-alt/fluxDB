@@ -4,7 +4,27 @@ use tiberius::{AuthMethod, Client, Config as TdsConfig, EncryptionLevel};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt as _};
 
-type SqlServerClient = Client<Compat<TokioTcpStream>>;
+/// SQL Server 连接句柄：驱动 client + 可能存在的 SSH 隧道。
+///
+/// 隧道必须与 client 同生命周期存活（Drop 即关闭转发端口），Deref 让既有调用点
+/// 继续按 `Client<Compat<TokioTcpStream>>` 使用。
+struct SqlServerClient {
+    client: Client<Compat<TokioTcpStream>>,
+    _tunnel: Option<SshTunnel>,
+}
+
+impl std::ops::Deref for SqlServerClient {
+    type Target = Client<Compat<TokioTcpStream>>;
+    fn deref(&self) -> &Self::Target {
+        &self.client
+    }
+}
+
+impl std::ops::DerefMut for SqlServerClient {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.client
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct SqlServerSessionKey {
@@ -211,9 +231,10 @@ fn sqlserver_tiberius_config(
 
 /// 建立一条 SQL Server 会话。connect timeout 覆盖 TCP + TLS + TDS login 全过程；
 /// Azure 路由重定向最多跟随两次，超限直接报错，避免无限重连。
-async fn sqlserver_connect_async(
+async fn sqlserver_connect_raw(
     profile: &SqlServerConnectionProfile,
-) -> fluxdb_core::Result<SqlServerClient> {
+    tunneled: bool,
+) -> fluxdb_core::Result<Client<Compat<TokioTcpStream>>> {
     let mut config = sqlserver_tiberius_config(profile)?;
     let timeout = Duration::from_secs(u64::from(profile.advanced.connect_timeout_secs.max(1)));
     for redirects in 0..=2 {
@@ -235,6 +256,14 @@ async fn sqlserver_connect_async(
                 message,
                 ..
             })) if message.contains("alternative address") && redirects < 2 => {
+                // 隧道只能到跳板机可达的那一个目标；服务端给出的替代地址本地不可达，
+                // 继续直连会绕过隧道，明确拒绝而非静默改走公网。
+                if tunneled {
+                    return Err(Error::new(
+                        ErrorKind::Connection,
+                        "SQL Server 路由重定向不支持 SSH 隧道，请改用直连或固定端口",
+                    ));
+                }
                 let (host, port) = parse_sqlserver_routing_error(&message)?;
                 config.host(host);
                 config.port(port);
@@ -301,19 +330,39 @@ where
 /// macOS GCD 小栈上的业务调用链叠加 rustls 握手会溢出；连接 future 必须由共享
 /// runtime 调度，调用方只轮询轻量 JoinHandle。连接超时与证书校验仍在原握手中执行。
 fn sqlserver_connect_profile(
-    profile: SqlServerConnectionProfile,
+    mut profile: SqlServerConnectionProfile,
 ) -> fluxdb_core::Result<SqlServerClient> {
+    // SSH 隧道：先建本地转发，再把拨号目标改成 127.0.0.1:local_port。
+    // 隧道由返回句柄持有，client 关闭/丢弃时才断开。
+    let tunnel = if profile.ssh.enabled {
+        let target = (profile.basic.host.clone(), profile.basic.port);
+        let tunnel = open_tunnel_for_profile(
+            &profile.ssh,
+            (&target.0, target.1),
+            profile.advanced.connect_timeout_secs,
+        )?;
+        profile.basic.host = "127.0.0.1".into();
+        profile.basic.port = tunnel.local_port;
+        Some(tunnel)
+    } else {
+        None
+    };
+    let tunneled = tunnel.is_some();
     let connection = sqlserver_runtime().spawn(async move {
-        sqlserver_connect_async(&profile).await
+        sqlserver_connect_raw(&profile, tunneled).await
     });
-    sqlserver_block_on(connection).map_err(|error| {
+    let client = sqlserver_block_on(connection).map_err(|error| {
         tracing::error!(
             target: "fluxdb_connectors",
             error = %error,
             "SQL Server connection task failed"
         );
         Error::new(ErrorKind::Connection, "SQL Server 连接任务异常结束")
-    })?
+    })??;
+    Ok(SqlServerClient {
+        client,
+        _tunnel: tunnel,
+    })
 }
 
 fn sqlserver_connect(config: &ConnectionConfig) -> fluxdb_core::Result<SqlServerClient> {
@@ -322,7 +371,8 @@ fn sqlserver_connect(config: &ConnectionConfig) -> fluxdb_core::Result<SqlServer
 }
 
 async fn sqlserver_close(client: SqlServerClient) {
-    let _ = client.close().await;
+    // `Client::close` 消费 client；隧道由 wrapper 持有的引用在函数结束时释放。
+    let _ = client.client.close().await;
 }
 
 fn sqlserver_io_error(prefix: &str, error: std::io::Error) -> Error {

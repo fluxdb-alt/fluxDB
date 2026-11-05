@@ -40,6 +40,7 @@ fn dameng_profile_password_is_encrypted_and_restored() {
                 password: SecretRef::inline(password),
             },
             advanced: DamengAdvancedOptions::default(),
+            ssh: Default::default(),
         }),
         sqlserver_profile: None,
         mongo_profile: None,

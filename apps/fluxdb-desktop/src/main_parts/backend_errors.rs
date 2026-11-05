@@ -607,6 +607,13 @@ fn localize_backend_error_text(text: &str) -> String {
         "SSH 端口不合法" => "app.backend_error.app_msg_ssh_port_invalid",
         "请填写 SSH 用户名" => "app.backend_error.app_msg_ssh_username_required",
         "请填写 SSH 私钥文件路径" => "app.backend_error.app_msg_ssh_key_path_required",
+        "SSH 隧道仅支持单个 MongoDB 主机（不支持 SRV/多主机）" => {
+            "app.backend_error.app_msg_ssh_single_mongo_host"
+        }
+        "SQL Server 路由重定向不支持 SSH 隧道，请改用直连或固定端口" => {
+            "app.backend_error.app_msg_ssh_sqlserver_routing"
+        }
+        "SSH 隧道未启用" => "app.backend_error.app_msg_ssh_tunnel_disabled",
         "高级超时值不能超过 86400 秒" => "app.backend_error.app_msg_advanced_timeout_too_large",
         "强制 TLS 模式需先启用 TLS" => "app.backend_error.app_msg_tls_require_enabled_first",
         "代理传输暂未支持，请先关闭代理或仅使用 SSH 隧道" => "app.backend_error.app_msg_proxy_transport_unsupported",

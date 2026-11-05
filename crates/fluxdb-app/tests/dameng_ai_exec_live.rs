@@ -46,6 +46,7 @@ fn smoke_config() -> Option<ConnectionConfig> {
                 encoding: String::new(),
                 application_name: "FluxDB AI test".into(),
             },
+            ssh: Default::default(),
         }),
         sqlserver_profile: None,
         mongo_profile: None,

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 // First-pass source split: included files remain in crate-root scope while domain modules are refined.
 include!("parts/error.rs");
 include!("parts/secrets.rs");
+include!("parts/ssh_profile.rs");
 include!("parts/connection.rs");
 include!("parts/redis_profile.rs");
 include!("parts/mysql_profile.rs");

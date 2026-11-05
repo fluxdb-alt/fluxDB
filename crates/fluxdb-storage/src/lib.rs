@@ -1293,64 +1293,88 @@ fn postgres_profile_secret_slots_mut(
 fn dameng_profile_secret_slots(
     profile: &fluxdb_core::DamengConnectionProfile,
 ) -> Vec<(&'static str, &SecretRef)> {
-    vec![(
+    let mut slots = vec![(
         connection_secrets::DATABASE_PASSWORD,
         &profile.basic.password,
-    )]
+    )];
+    if profile.ssh.enabled {
+        slots.push((connection_secrets::SSH_PASSWORD, &profile.ssh.password));
+        slots.push((connection_secrets::SSH_PASSPHRASE, &profile.ssh.passphrase));
+    }
+    slots
 }
 
 fn dameng_profile_secret_slots_mut(
     profile: &mut fluxdb_core::DamengConnectionProfile,
 ) -> Vec<(&'static str, &mut SecretRef)> {
-    vec![(
-        connection_secrets::DATABASE_PASSWORD,
-        &mut profile.basic.password,
-    )]
+    let fluxdb_core::DamengConnectionProfile { basic, ssh, .. } = profile;
+    let mut slots = vec![(connection_secrets::DATABASE_PASSWORD, &mut basic.password)];
+    if ssh.enabled {
+        slots.push((connection_secrets::SSH_PASSWORD, &mut ssh.password));
+        slots.push((connection_secrets::SSH_PASSPHRASE, &mut ssh.passphrase));
+    }
+    slots
 }
 
 fn sqlserver_profile_secret_slots(
     profile: &SqlServerConnectionProfile,
 ) -> Vec<(&'static str, &SecretRef)> {
-    vec![(
+    let mut slots = vec![(
         connection_secrets::DATABASE_PASSWORD,
         &profile.basic.password,
-    )]
+    )];
+    if profile.ssh.enabled {
+        slots.push((connection_secrets::SSH_PASSWORD, &profile.ssh.password));
+        slots.push((connection_secrets::SSH_PASSPHRASE, &profile.ssh.passphrase));
+    }
+    slots
 }
 
 fn sqlserver_profile_secret_slots_mut(
     profile: &mut SqlServerConnectionProfile,
 ) -> Vec<(&'static str, &mut SecretRef)> {
-    vec![(
-        connection_secrets::DATABASE_PASSWORD,
-        &mut profile.basic.password,
-    )]
+    let SqlServerConnectionProfile { basic, ssh, .. } = profile;
+    let mut slots = vec![(connection_secrets::DATABASE_PASSWORD, &mut basic.password)];
+    if ssh.enabled {
+        slots.push((connection_secrets::SSH_PASSWORD, &mut ssh.password));
+        slots.push((connection_secrets::SSH_PASSPHRASE, &mut ssh.passphrase));
+    }
+    slots
 }
 
-/// MongoDB 档案里唯一的密码槽位；TLS 证书走文件路径引用，不进加密凭据表。
+/// MongoDB 档案的密码槽位；TLS 证书走文件路径引用，不进加密凭据表。
 fn mongo_profile_secret_slots(
     profile: &fluxdb_core::MongoConnectionProfile,
 ) -> Vec<(&'static str, &SecretRef)> {
-    vec![(
+    let mut slots = vec![(
         connection_secrets::DATABASE_PASSWORD,
         &profile.basic.password,
-    )]
+    )];
+    if profile.ssh.enabled {
+        slots.push((connection_secrets::SSH_PASSWORD, &profile.ssh.password));
+        slots.push((connection_secrets::SSH_PASSPHRASE, &profile.ssh.passphrase));
+    }
+    slots
 }
 
 fn mongo_profile_secret_slots_mut(
     profile: &mut fluxdb_core::MongoConnectionProfile,
 ) -> Vec<(&'static str, &mut SecretRef)> {
-    vec![(
-        connection_secrets::DATABASE_PASSWORD,
-        &mut profile.basic.password,
-    )]
+    let fluxdb_core::MongoConnectionProfile { basic, ssh, .. } = profile;
+    let mut slots = vec![(connection_secrets::DATABASE_PASSWORD, &mut basic.password)];
+    if ssh.enabled {
+        slots.push((connection_secrets::SSH_PASSWORD, &mut ssh.password));
+        slots.push((connection_secrets::SSH_PASSPHRASE, &mut ssh.passphrase));
+    }
+    slots
 }
 
-/// Oracle 有两个受控槽位：登录密码与 Wallet 口令。
-/// Wallet 口令与登录密码分开存，避免改密码时误删 Wallet 凭据。
+/// Oracle 受控槽位：登录密码、Wallet 口令与 SSH 密码/口令。
+/// 各槽位分开存，避免改其中一项时误删其它凭据。
 fn oracle_profile_secret_slots(
     profile: &OracleConnectionProfile,
 ) -> Vec<(&'static str, &SecretRef)> {
-    vec![
+    let mut slots = vec![
         (
             connection_secrets::DATABASE_PASSWORD,
             &profile.basic.password,
@@ -1359,20 +1383,33 @@ fn oracle_profile_secret_slots(
             connection_secrets::ORACLE_WALLET_PASSWORD,
             &profile.advanced.wallet_password,
         ),
-    ]
+    ];
+    if profile.ssh.enabled {
+        slots.push((connection_secrets::SSH_PASSWORD, &profile.ssh.password));
+        slots.push((connection_secrets::SSH_PASSPHRASE, &profile.ssh.passphrase));
+    }
+    slots
 }
 
 fn oracle_profile_secret_slots_mut(
     profile: &mut OracleConnectionProfile,
 ) -> Vec<(&'static str, &mut SecretRef)> {
-    vec![
-        (
-            connection_secrets::DATABASE_PASSWORD,
-            &mut profile.basic.password,
-        ),
+    let OracleConnectionProfile {
+        basic,
+        advanced,
+        ssh,
+        ..
+    } = profile;
+    let mut slots = vec![
+        (connection_secrets::DATABASE_PASSWORD, &mut basic.password),
         (
             connection_secrets::ORACLE_WALLET_PASSWORD,
-            &mut profile.advanced.wallet_password,
+            &mut advanced.wallet_password,
         ),
-    ]
+    ];
+    if ssh.enabled {
+        slots.push((connection_secrets::SSH_PASSWORD, &mut ssh.password));
+        slots.push((connection_secrets::SSH_PASSPHRASE, &mut ssh.passphrase));
+    }
+    slots
 }

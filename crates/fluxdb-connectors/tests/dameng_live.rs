@@ -8,7 +8,8 @@ use fluxdb_connectors::connector_for;
 use fluxdb_core::{
     CellUpdate, CellValue, ConnectionConfig, ConnectionId, DamengAdvancedOptions,
     DamengBasicOptions, DamengConnectionProfile, DataChangeSet, DatabaseKind, Endpoint, ObjectKind,
-    ObjectPath, Row, RowIdentity, RowUpdate, SecretRef,
+    ObjectPath, QueryExecutionOptions, QueryMode, QueryRequest, Row, RowIdentity, RowUpdate,
+    SecretRef, SshAuth, SshTunnelProfile,
 };
 use std::collections::BTreeMap;
 
@@ -46,11 +47,30 @@ fn smoke_config() -> Option<ConnectionConfig> {
                 encoding: String::new(),
                 application_name: "FluxDB test".into(),
             },
+            ssh: ssh_profile(),
         }),
         sqlserver_profile: None,
         mongo_profile: None,
         oracle_profile: None,
     })
+}
+
+/// `FLUXDB_DM_SSH=host:port:user:password`；未设置时返回禁用档案。
+fn ssh_profile() -> SshTunnelProfile {
+    let Ok(raw) = std::env::var("FLUXDB_DM_SSH") else {
+        return SshTunnelProfile::default();
+    };
+    let parts = raw.splitn(4, ':').collect::<Vec<_>>();
+    assert_eq!(parts.len(), 4, "FLUXDB_DM_SSH=host:port:user:password");
+    SshTunnelProfile {
+        enabled: true,
+        host: parts[0].into(),
+        port: parts[1].parse().expect("SSH port"),
+        username: parts[2].into(),
+        auth: SshAuth::Password,
+        password: SecretRef::inline(parts[3]),
+        ..SshTunnelProfile::default()
+    }
 }
 
 fn qualified(schema: &str, table: &str) -> String {
@@ -71,15 +91,14 @@ fn dameng_live_connection_objects_query_and_transaction() {
     let parent = qualified(&schema, "FLUXDB_TEST_PARENT");
     let child = qualified(&schema, "FLUXDB_TEST_CHILD");
 
-    dm_execute_raw(&config, &format!("DROP TABLE IF EXISTS {child}"), &[]);
-    dm_execute_raw(&config, &format!("DROP TABLE IF EXISTS {parent}"), &[]);
+    dm_execute_raw(&config, &format!("DROP TABLE IF EXISTS {child}"));
+    dm_execute_raw(&config, &format!("DROP TABLE IF EXISTS {parent}"));
     dm_execute_raw(
         &config,
         &format!(
             "CREATE TABLE {parent} (ID INT PRIMARY KEY, NAME VARCHAR(80) NOT NULL, \
              AMOUNT DECIMAL(18,4), CREATED_AT TIMESTAMP)"
         ),
-        &[],
     );
     dm_execute_raw(
         &config,
@@ -88,44 +107,26 @@ fn dameng_live_connection_objects_query_and_transaction() {
              NOTE VARCHAR(200), CONSTRAINT FK_FLUXDB_TEST_CHILD_PARENT \
              FOREIGN KEY (PARENT_ID) REFERENCES {parent}(ID))"
         ),
-        &[],
     );
     dm_execute_raw(
         &config,
         &format!("COMMENT ON TABLE {parent} IS 'FluxDB DM8 integration test'"),
-        &[],
     );
     dm_execute_raw(
         &config,
         &format!("COMMENT ON COLUMN {parent}.NAME IS 'display name'"),
-        &[],
     );
     dm_execute_raw(
         &config,
-        &format!("INSERT INTO {parent} (ID, NAME, AMOUNT) VALUES (?, ?, ?)"),
-        &[
-            dm_pure::Param::Int(1),
-            dm_pure::Param::Str("alpha".into()),
-            dm_pure::Param::Str("12.34".into()),
-        ],
+        &format!("INSERT INTO {parent} (ID, NAME, AMOUNT) VALUES (1, 'alpha', 12.34)"),
     );
     dm_execute_raw(
         &config,
-        &format!("INSERT INTO {parent} (ID, NAME, AMOUNT) VALUES (?, ?, ?)"),
-        &[
-            dm_pure::Param::Int(2),
-            dm_pure::Param::Str("中文".into()),
-            dm_pure::Param::Str("56.78".into()),
-        ],
+        &format!("INSERT INTO {parent} (ID, NAME, AMOUNT) VALUES (2, '中文', 56.78)"),
     );
     dm_execute_raw(
         &config,
-        &format!("INSERT INTO {child} (ID, PARENT_ID, NOTE) VALUES (?, ?, ?)"),
-        &[
-            dm_pure::Param::Int(10),
-            dm_pure::Param::Int(1),
-            dm_pure::Param::Str("child".into()),
-        ],
+        &format!("INSERT INTO {child} (ID, PARENT_ID, NOTE) VALUES (10, 1, 'child')"),
     );
 
     let result = std::panic::catch_unwind(|| {
@@ -270,36 +271,41 @@ fn dameng_live_connection_objects_query_and_transaction() {
         );
 
         let profile = config.dameng_profile.as_ref().expect("DM profile");
-        let mut client = dm_pure::DmClient::new(
-            &profile.basic.host,
-            profile.basic.port,
-            &profile.basic.username,
-            profile.password().expect("DM password"),
-        );
-        client.connect().expect("raw DM connection");
-        client.begin().expect("begin transaction");
-        client
-            .execute(
-                &format!("INSERT INTO {parent} (ID, NAME) VALUES (?, ?)"),
-                &[dm_pure::Param::Int(9), dm_pure::Param::Str("tx".into())],
-            )
-            .expect("insert in transaction");
-        client.rollback().expect("rollback transaction");
-        let count = client
-            .execute(
-                &format!("SELECT COUNT(*) FROM {parent} WHERE ID = ?"),
-                &[dm_pure::Param::Int(9)],
-            )
-            .expect("verify rollback");
-        let dm_pure::ExecuteResult::Query { rows, .. } = count else {
-            panic!("COUNT query must return rows");
-        };
-        assert_eq!(rows[0][0].as_i64(), Some(0));
-        client.close();
+        // 裸驱动只认原始 host，无法走 SSH 隧道；隧道模式下事务语义由直连 smoke 覆盖。
+        if profile.ssh.enabled {
+            eprintln!("skip raw-driver transaction check: dm_pure bypasses SSH tunnel");
+        } else {
+            let mut client = dm_pure::DmClient::new(
+                &profile.basic.host,
+                profile.basic.port,
+                &profile.basic.username,
+                profile.password().expect("DM password"),
+            );
+            client.connect().expect("raw DM connection");
+            client.begin().expect("begin transaction");
+            client
+                .execute(
+                    &format!("INSERT INTO {parent} (ID, NAME) VALUES (?, ?)"),
+                    &[dm_pure::Param::Int(9), dm_pure::Param::Str("tx".into())],
+                )
+                .expect("insert in transaction");
+            client.rollback().expect("rollback transaction");
+            let count = client
+                .execute(
+                    &format!("SELECT COUNT(*) FROM {parent} WHERE ID = ?"),
+                    &[dm_pure::Param::Int(9)],
+                )
+                .expect("verify rollback");
+            let dm_pure::ExecuteResult::Query { rows, .. } = count else {
+                panic!("COUNT query must return rows");
+            };
+            assert_eq!(rows[0][0].as_i64(), Some(0));
+            client.close();
+        }
     });
 
-    dm_execute_raw(&config, &format!("DROP TABLE IF EXISTS {child}"), &[]);
-    dm_execute_raw(&config, &format!("DROP TABLE IF EXISTS {parent}"), &[]);
+    dm_execute_raw(&config, &format!("DROP TABLE IF EXISTS {child}"));
+    dm_execute_raw(&config, &format!("DROP TABLE IF EXISTS {parent}"));
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
@@ -310,6 +316,11 @@ fn dameng_live_connection_objects_query_and_transaction() {
 fn dameng_live_reports_utf8_encoding_for_unicode_text() {
     let config = smoke_config().expect("FLUXDB_DM_SMOKE must be host:port:user:password");
     let profile = config.dameng_profile.as_ref().expect("DM profile");
+    // 裸驱动只认原始 host，无法走 SSH 隧道；字符集行为由直连 smoke 覆盖。
+    if profile.ssh.enabled {
+        eprintln!("skip raw-driver encoding check: dm_pure bypasses SSH tunnel");
+        return;
+    }
     let text = "中文往返ABC";
     for encoding in [None, Some("utf-8".to_string()), Some("gb18030".to_string())] {
         let mut client = dm_pure::DmClient::with_config(dm_pure::ClientConfig {
@@ -341,15 +352,25 @@ fn dameng_live_reports_utf8_encoding_for_unicode_text() {
     }
 }
 
-fn dm_execute_raw(config: &ConnectionConfig, sql: &str, params: &[dm_pure::Param]) {
-    let profile = config.dameng_profile.as_ref().expect("DM profile");
-    let mut client = dm_pure::DmClient::new(
-        &profile.basic.host,
-        profile.basic.port,
-        &profile.basic.username,
-        profile.password().unwrap_or(""),
+/// 通过生产连接器执行准备/清理 SQL。
+///
+/// 不用裸 `dm_pure` 客户端：裸驱动只认原始 host，会绕过 SSH 隧道。
+fn dm_execute_raw(config: &ConnectionConfig, sql: &str) {
+    let connector = connector_for(config).expect("DM connector");
+    let result = connector
+        .execute(&QueryRequest {
+            connection_id: config.id,
+            database: None,
+            schema: None,
+            session_id: None,
+            text: sql.to_string(),
+            mode: QueryMode::All,
+            options: QueryExecutionOptions::default(),
+        })
+        .expect("DM test SQL");
+    assert!(
+        result.summaries.iter().all(|summary| summary.success),
+        "DM SQL failed: {sql} / {:?}",
+        result.summaries
     );
-    client.connect().expect("DM test connection");
-    client.execute(sql, params).expect("DM test SQL");
-    client.close();
 }

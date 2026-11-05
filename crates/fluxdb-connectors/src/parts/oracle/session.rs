@@ -64,8 +64,30 @@ fn oracle_profile(config: &ConnectionConfig) -> fluxdb_core::Result<OracleConnec
 ///
 /// 会话 schema 取连接档案里的默认值；SQL 执行入口改用
 /// [`oracle_connect_with_schema`] 让请求级 schema 生效。
-fn oracle_connect(config: &ConnectionConfig) -> fluxdb_core::Result<OracleConnection> {
+fn oracle_connect(config: &ConnectionConfig) -> fluxdb_core::Result<OracleSession> {
     oracle_connect_with_schema(config, None)
+}
+
+/// Oracle 连接句柄：驱动连接 + 可能存在的 SSH 隧道。
+///
+/// 隧道必须与连接同生命周期存活；Deref 让既有 helper（接收 `&OracleConnection`）
+/// 无需改动即可继续使用。
+struct OracleSession {
+    connection: OracleConnection,
+    _tunnel: Option<SshTunnel>,
+}
+
+impl std::ops::Deref for OracleSession {
+    type Target = OracleConnection;
+    fn deref(&self) -> &Self::Target {
+        &self.connection
+    }
+}
+
+impl std::ops::DerefMut for OracleSession {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.connection
+    }
 }
 
 /// 建立连接并按需切换会话 schema，`request_schema` 优先于连接档案的默认值。
@@ -75,8 +97,22 @@ fn oracle_connect(config: &ConnectionConfig) -> fluxdb_core::Result<OracleConnec
 fn oracle_connect_with_schema(
     config: &ConnectionConfig,
     request_schema: Option<&str>,
-) -> fluxdb_core::Result<OracleConnection> {
-    let profile = oracle_profile(config)?;
+) -> fluxdb_core::Result<OracleSession> {
+    let mut profile = oracle_profile(config)?;
+    // SSH 隧道：连接串改写为本地转发端口；隧道随返回句柄存活。
+    let tunnel = if profile.ssh.enabled {
+        let target = (profile.basic.host.clone(), profile.basic.port);
+        let tunnel = open_tunnel_for_profile(
+            &profile.ssh,
+            (&target.0, target.1),
+            profile.advanced.connect_timeout_secs,
+        )?;
+        profile.basic.host = "127.0.0.1".into();
+        profile.basic.port = tunnel.local_port;
+        Some(tunnel)
+    } else {
+        None
+    };
     let mut options = OracleConfig::default()
         .set_connect_string(&profile.connect_string())
         .map_err(|error| oracle_error("Oracle 连接串无效", error))?
@@ -131,7 +167,10 @@ fn oracle_connect_with_schema(
             )
         })?;
     }
-    Ok(connection)
+    Ok(OracleSession {
+        connection,
+        _tunnel: tunnel,
+    })
 }
 
 /// 把会话日期时间格式钉成 fluxDB 自己读写用的 ISO 形态。

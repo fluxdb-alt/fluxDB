@@ -150,6 +150,7 @@ fn oracle_one_shot_config(parts: &[String]) -> fluxdb_core::ConnectionConfig {
                 password: fluxdb_core::SecretRef::inline(parts[4].clone()),
             },
             advanced: fluxdb_core::OracleAdvancedOptions::default(),
+            ssh: Default::default(),
         }),
         mongo_profile: None,
     }
@@ -183,6 +184,7 @@ fn dameng_one_shot_config(parts: &[String]) -> fluxdb_core::ConnectionConfig {
                 password: fluxdb_core::SecretRef::inline(parts[3].clone()),
             },
             advanced: fluxdb_core::DamengAdvancedOptions::default(),
+            ssh: Default::default(),
         }),
         sqlserver_profile: None,
         oracle_profile: None,

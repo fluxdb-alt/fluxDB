@@ -58,9 +58,11 @@ fn mongo_run<T: Send>(label: &str, future: impl Future<Output = T> + Send) -> fl
 
 /// 已建好的客户端：同一连接的多次操作复用同一个连接池。
 struct CachedMongoClient {
-    /// 建这个 client 时用的 URI 指纹。配置换了 URI 就自然重建，不依赖调用方记得失效。
+    /// 建这个 client 时用的配置指纹。配置变了就自然重建，不依赖调用方记得失效。
     fingerprint: u64,
     client: MongoClient,
+    /// 隧道需与客户端连接池同生命周期存活；未启用 SSH 时为空。
+    _tunnel: Option<SshTunnel>,
 }
 
 /// 全进程的客户端缓存（每个连接最多一份）。
@@ -101,6 +103,23 @@ fn mongo_uri_fingerprint(uri: &str) -> u64 {
     hasher.finish()
 }
 
+/// 档案指纹：URI + SSH 参数。密码类只参与哈希，不落日志。
+fn mongo_profile_fingerprint(profile: &fluxdb_core::MongoConnectionProfile) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    profile.to_uri().hash(&mut hasher);
+    let ssh = &profile.ssh;
+    ssh.enabled.hash(&mut hasher);
+    ssh.host.hash(&mut hasher);
+    ssh.port.hash(&mut hasher);
+    ssh.username.hash(&mut hasher);
+    ssh.auth.as_str().hash(&mut hasher);
+    ssh.password.value().hash(&mut hasher);
+    ssh.private_key.key.hash(&mut hasher);
+    ssh.passphrase.value().hash(&mut hasher);
+    hasher.finish()
+}
+
 /// 取缓存的客户端；没有或 URI 已变时返回 `None`。
 fn mongo_cached_client(connection_id: ConnectionId, fingerprint: u64) -> Option<MongoClient> {
     let clients = mongo_clients().lock().ok()?;
@@ -114,26 +133,47 @@ fn mongo_cached_client(connection_id: ConnectionId, fingerprint: u64) -> Option<
 ///
 /// 同一连接（同一 URI）复用已建好的 client；只有首次或配置变了才真正建池。
 fn mongo_connect(config: &ConnectionConfig) -> fluxdb_core::Result<MongoClient> {
-    let uri = match config.mongo_profile.as_ref() {
-        Some(profile) => {
-            if let Some(message) = profile.validate() {
-                return Err(Error::new(ErrorKind::Connection, message));
-            }
-            profile.to_uri()
+    let profile = config.mongo_profile.as_ref();
+    if let Some(profile) = profile
+        && let Some(message) = profile.validate()
+    {
+        return Err(Error::new(ErrorKind::Connection, message));
+    }
+    let (base_uri, fingerprint) = match profile {
+        Some(profile) => (profile.to_uri(), mongo_profile_fingerprint(profile)),
+        None => {
+            let uri = match &config.endpoint {
+                Endpoint::Uri { uri } => uri.clone(),
+                Endpoint::Tcp { host, port, .. } => format!("mongodb://{host}:{port}"),
+                Endpoint::SqliteFile { .. } => {
+                    return Err(Error::new(ErrorKind::Connection, "MongoDB does not support file-based connections"))
+                }
+            };
+            let fingerprint = mongo_uri_fingerprint(&uri);
+            (uri, fingerprint)
         }
-        None => match &config.endpoint {
-            Endpoint::Uri { uri } => uri.clone(),
-            Endpoint::Tcp { host, port, .. } => format!("mongodb://{host}:{port}"),
-            Endpoint::SqliteFile { .. } => {
-                return Err(Error::new(ErrorKind::Connection, "MongoDB does not support file-based connections"))
-            }
-        },
     };
 
-    let fingerprint = mongo_uri_fingerprint(&uri);
     if let Some(client) = mongo_cached_client(config.id, fingerprint) {
         return Ok(client);
     }
+
+    // SSH 隧道：先把目标改写成本地转发端口，再交给驱动；隧道随缓存客户端存活。
+    let mut tunnel = None;
+    let uri = match profile {
+        Some(profile) if profile.ssh.enabled => {
+            let (host, port) = profile.dial_endpoint();
+            let opened = open_tunnel_for_profile(
+                &profile.ssh,
+                (&host, port),
+                profile.advanced.connect_timeout_secs,
+            )?;
+            let uri = profile.to_tunnel_uri("127.0.0.1", opened.local_port);
+            tunnel = Some(opened);
+            uri
+        }
+        _ => base_uri,
+    };
 
     let client = mongo_build_client(&uri)?;
     // 并发冷启动（如同时发起 find 与字段抽样）可能各自建出一个池，后写覆盖先写：
@@ -144,6 +184,7 @@ fn mongo_connect(config: &ConnectionConfig) -> fluxdb_core::Result<MongoClient> 
             CachedMongoClient {
                 fingerprint,
                 client: client.clone(),
+                _tunnel: tunnel,
             },
         );
     }
@@ -402,6 +443,7 @@ mod mongo_wire_tests {
             CachedMongoClient {
                 fingerprint,
                 client,
+                _tunnel: None,
             },
         );
         assert!(mongo_cached_client(connection_id, fingerprint).is_some());

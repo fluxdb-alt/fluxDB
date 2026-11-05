@@ -46,6 +46,7 @@
                     password: SecretRef::inline("not-used"),
                 },
                 advanced: SqlServerAdvancedOptions::default(),
+                ssh: Default::default(),
             }),
             oracle_profile: None,
         }]));

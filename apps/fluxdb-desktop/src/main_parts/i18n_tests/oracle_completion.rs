@@ -124,6 +124,7 @@ fn dameng_completion_tab(connection_id: fluxdb_core::ConnectionId) -> Completion
                     encoding: String::new(),
                     application_name: "FluxDB E2E".into(),
                 },
+                ssh: Default::default(),
             }),
             sqlserver_profile: None,
             oracle_profile: None,
