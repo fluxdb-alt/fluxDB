@@ -48,6 +48,7 @@ fn smoke_config() -> Option<ConnectionConfig> {
                 password: SecretRef::inline(parts[3]),
             },
             advanced: DamengAdvancedOptions::default(),
+            ssh: Default::default(),
         }),
         sqlserver_profile: None,
         mongo_profile: None,

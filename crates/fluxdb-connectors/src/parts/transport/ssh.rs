@@ -528,6 +528,45 @@ pub(crate) fn ssh_auth_from_options(
     })
 }
 
+/// 按结构化 SSH 档案建隧道（MongoDB / SQL Server / Oracle / 达梦共用）。
+///
+/// `default_connect_timeout_secs` 在档案未显式配置超时时兜底；hostkey 一律校验，
+/// 与 PostgreSQL 传输路径保持一致，避免静默信任未知主机。
+pub(crate) fn open_tunnel_for_profile(
+    ssh: &fluxdb_core::SshTunnelProfile,
+    target: (&str, u16),
+    default_connect_timeout_secs: u32,
+) -> fluxdb_core::Result<SshTunnel> {
+    if !ssh.enabled {
+        return Err(fluxdb_core::Error::new(
+            fluxdb_core::ErrorKind::Connection,
+            "SSH 隧道未启用",
+        ));
+    }
+    if ssh.host.trim().is_empty() {
+        return Err(fluxdb_core::Error::new(
+            fluxdb_core::ErrorKind::Connection,
+            "请填写 SSH 隧道主机",
+        ));
+    }
+    let auth = SshAuthParams {
+        username: ssh.username.clone(),
+        password: ssh.password.value().map(str::to_string),
+        private_key_path: ssh.private_key.key.clone(),
+        passphrase: ssh.passphrase.value().map(str::to_string),
+    };
+    let options = SshTunnelOptions {
+        connect_timeout_secs: if ssh.connect_timeout_secs > 0 {
+            ssh.connect_timeout_secs
+        } else {
+            default_connect_timeout_secs
+        },
+        keepalive_interval_secs: ssh.keepalive_interval_secs,
+        verify_host_key: true,
+    };
+    open_tunnel_with((ssh.host.trim(), ssh.port), &auth, target, options)
+}
+
 /// 判断 resolved 配置是否启用了 SSH 隧道。
 pub(crate) fn ssh_enabled(options: &std::collections::BTreeMap<String, String>) -> bool {
     options

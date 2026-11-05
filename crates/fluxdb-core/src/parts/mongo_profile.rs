@@ -106,6 +106,9 @@ pub struct MongoConnectionProfile {
     pub basic: MongoBasicOptions,
     pub tls: MongoTlsOptions,
     pub advanced: MongoAdvancedOptions,
+    /// SSH 隧道；启用后驱动改为连接本地转发端口。
+    #[serde(default)]
+    pub ssh: SshTunnelProfile,
 }
 
 /// 允许原样透传给驱动的连接串参数（非凭据类）。
@@ -182,6 +185,7 @@ impl MongoConnectionProfile {
                 app_name: get("app_name").unwrap_or_else(|| "FluxDB".into()),
                 params: mongo_passthrough_params(opts),
             },
+            ssh: SshTunnelProfile::from_options(opts),
         }
     }
 
@@ -259,7 +263,23 @@ impl MongoConnectionProfile {
         for (key, value) in &a.params {
             ops.insert(key.clone(), value.clone());
         }
+        ops.extend(self.ssh.into_options());
         ops
+    }
+
+    /// 隧道内的连接串：目标改写为本地转发端口，并强制直连。
+    ///
+    /// 经隧道只能到达跳板机可达的那一个节点，拓扑发现拿到的主机名在本地不可达，
+    /// 因此 SSH 模式下不使用 SRV/副本集自动发现。
+    pub fn to_tunnel_uri(&self, local_host: &str, local_port: u16) -> String {
+        let mut profile = self.clone();
+        profile.srv = false;
+        profile.basic.hosts = vec![MongoHost {
+            host: local_host.to_string(),
+            port: local_port,
+        }];
+        profile.advanced.direct_connection = true;
+        profile.to_uri()
     }
 
     /// 拨号端点：首个种子节点的 `(host, port)`，供 UI 与连接信息展示。
@@ -288,6 +308,12 @@ impl MongoConnectionProfile {
         }
         if self.advanced.direct_connection && hosts.len() > 1 {
             return Some("直连模式只能填写一个主机".to_string());
+        }
+        if let Some(message) = self.ssh.validate() {
+            return Some(message);
+        }
+        if self.ssh.enabled && (self.srv || hosts.len() > 1) {
+            return Some("SSH 隧道仅支持单个 MongoDB 主机（不支持 SRV/多主机）".to_string());
         }
         if !self.basic.username.is_empty() && self.basic.password.value().is_none() {
             return Some("请填写密码".to_string());
@@ -477,6 +503,7 @@ impl MongoConnectionProfile {
                 ..Default::default()
             },
             advanced: MongoAdvancedOptions::default(),
+            ssh: SshTunnelProfile::default(),
         };
 
         if query.is_empty() {

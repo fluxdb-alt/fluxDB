@@ -225,7 +225,7 @@ SQL Server 的加密选项在同一页签中，以“加密”下拉框提供；
 4. 按需调整“SSH 调优”中的连接超时与心跳间隔；`0` 表示继承全局超时或不发送心跳。
 5. 返回底部点击“测试”，确认隧道和数据库连接均正常。
 
-SSH 隧道当前只对 MySQL、MariaDB、TiDB、PostgreSQL 和 Redis 提供。SQL Server、Oracle、DM8、SQLite 和 MongoDB 打开该页签时会提示不适用。
+SSH 隧道对 MySQL、MariaDB、TiDB、PostgreSQL、Redis、MongoDB、SQL Server、Oracle 和 DM8 提供；SQLite 为本地文件，打开该页签时会提示不适用。MongoDB 经隧道时只支持单个普通主机（不支持 SRV 与多主机种子列表），并强制直连单个节点。跳板机主机密钥必须在 `~/.ssh/known_hosts` 中（或用 `SSH_KNOWN_HOSTS` 指定文件），未知或变更的主机密钥会被拒绝。
 
 ### 2.7 高级设置
 

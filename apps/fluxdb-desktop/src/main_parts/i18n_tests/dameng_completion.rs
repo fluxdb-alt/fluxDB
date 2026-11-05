@@ -42,6 +42,7 @@
                     encoding: String::new(),
                     application_name: "FluxDB E2E".into(),
                 },
+                ssh: Default::default(),
             }),
             sqlserver_profile: None,
             mongo_profile: None,

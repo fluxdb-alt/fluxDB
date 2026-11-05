@@ -46,6 +46,7 @@ fn sqlserver_security_forms_keep_pending_state_and_password_preview(cx: &mut Tes
                 connect_timeout_secs: 1,
                 ..SqlServerAdvancedOptions::default()
             },
+            ssh: Default::default(),
         }),
         oracle_profile: None,
     };
@@ -715,6 +716,7 @@ fn failed_create_login_rename_refreshes_preview_without_the_old_identity(cx: &mu
                 connect_timeout_secs: 1,
                 ..SqlServerAdvancedOptions::default()
             },
+            ssh: Default::default(),
         }),
         oracle_profile: None,
     };

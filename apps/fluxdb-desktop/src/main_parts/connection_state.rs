@@ -909,6 +909,7 @@ impl NewConnectionForm {
                 fluxdb_core::DamengConnectionProfile::from_options(&config.options)
             });
             form.dameng_schema = profile.basic.schema.clone();
+            form.apply_ssh_tunnel_profile(&profile.ssh);
         }
 
         if config.kind == DatabaseKind::SqlServer {
@@ -963,6 +964,7 @@ impl NewConnectionForm {
             .value()
             .unwrap_or_default()
             .to_string();
+        self.apply_ssh_tunnel_profile(&profile.ssh);
     }
 
     /// 用一份 SQL Server 档案回填表单；档案是拨号与保存的事实来源。
@@ -983,6 +985,7 @@ impl NewConnectionForm {
         self.sqlserver_connect_timeout_secs = profile.advanced.connect_timeout_secs.to_string();
         self.sqlserver_query_timeout_secs = profile.advanced.query_timeout_secs.to_string();
         self.sqlserver_application_name = profile.advanced.application_name.clone();
+        self.apply_ssh_tunnel_profile(&profile.ssh);
     }
 
     /// 用一份 PostgreSQL 档案回填表单的 PG 专用编辑值。
@@ -1450,6 +1453,58 @@ impl NewConnectionForm {
         }
     }
 
+    /// SSH 隧道编辑值 → 结构化档案（MongoDB / SQL Server / Oracle / 达梦共用）。
+    ///
+    /// 密码类放 inline（storage 按连接 ID 写入加密凭据表）；私钥只存文件路径。
+    fn build_ssh_tunnel_profile(&self) -> fluxdb_core::SshTunnelProfile {
+        // 空值不写成 inline("")，避免 storage 为未填写的密码建空凭据槽。
+        let secret = |value: &str| {
+            let value = value.trim();
+            if value.is_empty() {
+                fluxdb_core::SecretRef::default()
+            } else {
+                fluxdb_core::SecretRef::inline(value.to_string())
+            }
+        };
+        fluxdb_core::SshTunnelProfile {
+            enabled: self.ssh_enabled,
+            host: self.ssh_host.trim().to_string(),
+            port: self.ssh_port.trim().parse::<u16>().unwrap_or(22),
+            username: self.ssh_username.trim().to_string(),
+            auth: fluxdb_core::SshAuth::parse(&self.ssh_auth),
+            password: secret(&self.ssh_password),
+            private_key: fluxdb_core::SecretRef::ref_key(self.ssh_private_key.trim().to_string()),
+            passphrase: secret(&self.ssh_passphrase),
+            connect_timeout_secs: self
+                .mysql_ssh_connect_timeout_secs
+                .trim()
+                .parse()
+                .unwrap_or(0),
+            keepalive_interval_secs: self.mysql_ssh_keepalive_secs.trim().parse().unwrap_or(0),
+        }
+    }
+
+    /// SSH 档案 → 表单编辑值；空档案（未启用且无字段）不改动当前输入。
+    fn apply_ssh_tunnel_profile(&mut self, ssh: &fluxdb_core::SshTunnelProfile) {
+        if !ssh.enabled && ssh.host.trim().is_empty() {
+            return;
+        }
+        self.ssh_enabled = ssh.enabled;
+        self.ssh_host = ssh.host.clone();
+        self.ssh_port = ssh.port.to_string();
+        self.ssh_username = ssh.username.clone();
+        self.ssh_auth = ssh.auth.as_str().to_string();
+        if let Some(password) = ssh.password.value() {
+            self.ssh_password = password.to_string();
+        }
+        self.ssh_private_key = ssh.private_key.key.clone();
+        if let Some(passphrase) = ssh.passphrase.value() {
+            self.ssh_passphrase = passphrase.to_string();
+        }
+        self.mysql_ssh_connect_timeout_secs = ssh.connect_timeout_secs.to_string();
+        self.mysql_ssh_keepalive_secs = ssh.keepalive_interval_secs.to_string();
+    }
+
     fn build_dameng_profile(&self) -> fluxdb_core::DamengConnectionProfile {
         fluxdb_core::DamengConnectionProfile {
             basic: fluxdb_core::DamengBasicOptions {
@@ -1470,6 +1525,7 @@ impl NewConnectionForm {
                 encoding: String::new(),
                 application_name: "FluxDB".into(),
             },
+            ssh: self.build_ssh_tunnel_profile(),
         }
     }
 
@@ -1503,6 +1559,7 @@ impl NewConnectionForm {
                     .unwrap_or(0),
                 application_name: self.sqlserver_application_name.trim().to_string(),
             },
+            ssh: self.build_ssh_tunnel_profile(),
         }
     }
 
@@ -1554,6 +1611,7 @@ impl NewConnectionForm {
                 server_name: self.tls_sni.trim().to_string(),
             },
             advanced: MongoAdvancedOptions::default(),
+            ssh: self.build_ssh_tunnel_profile(),
         }
     }
 
@@ -1589,6 +1647,7 @@ impl NewConnectionForm {
         self.tls_client_cert = profile.tls.client_cert.key.clone();
         self.tls_sni = profile.tls.server_name.clone();
         self.tls_verify = !profile.tls.allow_invalid_certificates;
+        self.apply_ssh_tunnel_profile(&profile.ssh);
     }
 
     /// 当前生效的 Oracle 寻址目标（Service Name 或 SID）。
@@ -1631,6 +1690,7 @@ impl NewConnectionForm {
                     self.oracle_wallet_password.clone(),
                 ),
             },
+            ssh: self.build_ssh_tunnel_profile(),
         }
     }
 }

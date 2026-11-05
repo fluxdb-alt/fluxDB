@@ -8,6 +8,9 @@
 pub struct DamengConnectionProfile {
     pub basic: DamengBasicOptions,
     pub advanced: DamengAdvancedOptions,
+    /// SSH 隧道；启用后拨号目标改写为本地转发端口。
+    #[serde(default)]
+    pub ssh: SshTunnelProfile,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -97,6 +100,7 @@ impl DamengConnectionProfile {
         if let Some(application_name) = opts.get("application_name") {
             profile.advanced.application_name = application_name.clone();
         }
+        profile.ssh = SshTunnelProfile::from_options(opts);
         profile
     }
 
@@ -124,6 +128,7 @@ impl DamengConnectionProfile {
             "application_name".into(),
             self.advanced.application_name.clone(),
         );
+        options.extend(self.ssh.into_options());
         options
     }
 
@@ -150,6 +155,6 @@ impl DamengConnectionProfile {
         {
             return Some("高级超时值不能超过 86400 秒".into());
         }
-        None
+        self.ssh.validate()
     }
 }

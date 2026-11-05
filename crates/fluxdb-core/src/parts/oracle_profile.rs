@@ -73,6 +73,9 @@ impl OraclePrivilege {
 pub struct OracleConnectionProfile {
     pub basic: OracleBasicOptions,
     pub advanced: OracleAdvancedOptions,
+    /// SSH 隧道；启用后拨号目标改写为本地转发端口。
+    #[serde(default)]
+    pub ssh: SshTunnelProfile,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -192,6 +195,7 @@ impl OracleConnectionProfile {
         if let Some(password) = opts.get("wallet_password") {
             profile.advanced.wallet_password = SecretRef::inline(password.clone());
         }
+        profile.ssh = SshTunnelProfile::from_options(opts);
         profile
     }
 
@@ -234,6 +238,7 @@ impl OracleConnectionProfile {
         if let Some(password) = self.advanced.wallet_password.value() {
             options.insert("wallet_password".into(), password.to_string());
         }
+        options.extend(self.ssh.into_options());
         options
     }
 
@@ -298,7 +303,7 @@ impl OracleConnectionProfile {
         {
             return Some("高级超时值不能超过 86400 秒".into());
         }
-        None
+        self.ssh.validate()
     }
 }
 

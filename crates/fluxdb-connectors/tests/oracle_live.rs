@@ -10,7 +10,8 @@ use fluxdb_core::{
     BackupMethod, BackupObjectKind, BackupObjectRef, BackupRequest, BackupScope, ConnectionConfig,
     ConnectionId, DatabaseKind, Endpoint, ObjectKind, ObjectPath, OracleAdvancedOptions,
     OracleBasicOptions, OracleConnectKind, OracleConnectionProfile, OraclePrivilege,
-    QueryExecutionOptions, QueryMode, QueryRequest, RestoreRequest, SecretRef,
+    QueryExecutionOptions, QueryMode, QueryRequest, RestoreRequest, SecretRef, SshAuth,
+    SshTunnelProfile,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -59,8 +60,27 @@ fn smoke_config() -> Option<ConnectionConfig> {
                 wallet_location: String::new(),
                 wallet_password: SecretRef::default(),
             },
+            ssh: ssh_profile(),
         }),
     })
+}
+
+/// `FLUXDB_ORACLE_SSH=host:port:user:password`；未设置时返回禁用档案。
+fn ssh_profile() -> SshTunnelProfile {
+    let Ok(raw) = std::env::var("FLUXDB_ORACLE_SSH") else {
+        return SshTunnelProfile::default();
+    };
+    let parts = raw.splitn(4, ':').collect::<Vec<_>>();
+    assert_eq!(parts.len(), 4, "FLUXDB_ORACLE_SSH=host:port:user:password");
+    SshTunnelProfile {
+        enabled: true,
+        host: parts[0].into(),
+        port: parts[1].parse().expect("SSH port"),
+        username: parts[2].into(),
+        auth: SshAuth::Password,
+        password: SecretRef::inline(parts[3]),
+        ..SshTunnelProfile::default()
+    }
 }
 
 fn owner(config: &ConnectionConfig) -> Option<String> {

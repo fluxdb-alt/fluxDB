@@ -931,7 +931,12 @@ fn connection_tab_bar(
     let view = cx.entity();
     let tabs_for_click = tabs.clone();
     tabs.iter()
-        .map(|(_, label)| Tab::from(label.clone()))
+        .enumerate()
+        // 页签下标是稳定业务顺序，供 UI 自动化按「连接信息/加密/SSH/高级」定位。
+        .map(|(index, (_, label))| {
+            Tab::from(label.clone())
+                .debug_selector(move || format!("new-connection-tab-{index}"))
+        })
         .fold(
             TabBar::new("new-connection-tabs")
                 .segmented()
@@ -977,7 +982,11 @@ fn new_connection_tab_content(
             | DatabaseKind::TiDb
             | DatabaseKind::MariaDb
             | DatabaseKind::Redis
-            | DatabaseKind::Postgres => ssh_form(kind, form, inputs, colors, window, cx),
+            | DatabaseKind::Postgres
+            | DatabaseKind::MongoDb
+            | DatabaseKind::SqlServer
+            | DatabaseKind::Oracle
+            | DatabaseKind::Dameng => ssh_form(kind, form, inputs, colors, window, cx),
             _ => redis_only_settings_hint(colors),
         },
         NewConnectionTab::Advanced => {
@@ -1433,7 +1442,16 @@ fn ssh_form(
     // 认证方式："password" 显示/可用密码，私钥方式显示/可用私钥与口令。
     let password_mode = form.ssh_auth != "private_key";
     let enabled = form.ssh_enabled;
-    let is_mysql = matches!(kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb);
+    let shows_tuning = matches!(
+        kind,
+        DatabaseKind::MySql
+            | DatabaseKind::TiDb
+            | DatabaseKind::MariaDb
+            | DatabaseKind::MongoDb
+            | DatabaseKind::SqlServer
+            | DatabaseKind::Oracle
+            | DatabaseKind::Dameng
+    );
     div()
         .flex()
         .flex_col()
@@ -1453,8 +1471,8 @@ fn ssh_form(
         .when(!enabled, |this| {
             this.child(ssh_tunnel_block(form, inputs, colors, window, cx).opacity(0.45))
         })
-        // MySQL/TiDB 额外：SSH 连接超时 + 心跳间隔。
-        .when(is_mysql, |this| {
+        // SSH 连接超时 + 心跳间隔（后端结构化档案已支持的类型）。
+        .when(shows_tuning, |this| {
             this.child(mysql_ssh_tuning_block(inputs, colors, window, cx))
         })
         // 密码认证区块：私钥模式时置灰。
@@ -1962,11 +1980,13 @@ fn toggle_row_light(
 ) -> Field {
     let view = cx.entity();
     let id = connection_toggle_id(field_id);
+    let debug_id = id.to_string();
     field()
         .label(label.into())
         .items_center()
         .child(
             Checkbox::new(id)
+                .debug_selector(move || debug_id.clone())
                 .checked(checked)
                 .on_click(move |new_checked, _, cx| {
                     let field_id = field_id;

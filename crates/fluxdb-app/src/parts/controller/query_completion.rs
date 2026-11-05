@@ -1399,6 +1399,7 @@ mod dameng_completion_index_tests {
                     encoding: String::new(),
                     application_name: "test".into(),
                 },
+                ssh: Default::default(),
             }),
             sqlserver_profile: None,
             mongo_profile: None,

@@ -21,6 +21,8 @@ mod i18n_e2e_tests {
     include!("i18n_tests/table_page_query.rs");
     include!("i18n_tests/dameng_connection.rs");
     include!("i18n_tests/sqlserver_connection.rs");
+    // 生产视图里的 MongoDB SSH 隧道端到端（Podman 容器 + 环境变量门控）。
+    include!("i18n_tests/ssh_tunnel_connection.rs");
     include!("i18n_tests/dameng_completion.rs");
     include!("i18n_tests/dameng_table_design.rs");
     include!("i18n_tests/table_design_types.rs");
