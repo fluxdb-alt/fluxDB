@@ -3,9 +3,21 @@
 // 整体保持 trait 的「无状态、每次调用按需拨号/复用会话」形态：`test_connection`
 // 拨一条隔离连接做 `SELECT version()` 探活后即弃；`execute` 走共享 runtime 的会话。
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PostgresConnector {
     config: Option<ConnectionConfig>,
+    /// 对外暴露的数据库类型：PostgreSQL 或复用同一套实现的 KingbaseES。
+    /// 实现内部分支只看 `config.kind.is_postgres_family()`，不依赖该字段。
+    kind: DatabaseKind,
+}
+
+impl Default for PostgresConnector {
+    fn default() -> Self {
+        Self {
+            config: None,
+            kind: DatabaseKind::Postgres,
+        }
+    }
 }
 
 impl PostgresConnector {
@@ -15,6 +27,7 @@ impl PostgresConnector {
 
     pub fn with_config(config: ConnectionConfig) -> Self {
         Self {
+            kind: config.kind,
             config: Some(config),
         }
     }
@@ -29,7 +42,7 @@ impl PostgresConnector {
 
 impl Connector for PostgresConnector {
     fn kind(&self) -> DatabaseKind {
-        DatabaseKind::Postgres
+        self.kind
     }
 
     fn list_objects(&self, path: Option<&ObjectPath>) -> fluxdb_core::Result<Vec<ObjectSummary>> {
@@ -560,7 +573,7 @@ impl Connector for PostgresConnector {
     }
 
     fn test_connection(&self, config: &ConnectionConfig) -> fluxdb_core::Result<()> {
-        if config.kind != DatabaseKind::Postgres {
+        if !config.kind.is_postgres_family() {
             return Err(Error::new(ErrorKind::Connection, "连接类型不匹配"));
         }
         let database = pg_request_database(config, None);

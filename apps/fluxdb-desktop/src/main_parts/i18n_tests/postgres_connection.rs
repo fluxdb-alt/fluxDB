@@ -175,6 +175,44 @@
         });
     }
 
+    /// KingbaseES 复用 PostgreSQL 表单：默认端口 / 账号 / 库名与 PG 页签必须生效。
+    ///
+    /// 守住 `DatabaseKind::Kingbase` 不会被通用表单接走，也不会默认回落到 5432、
+    /// 丢失 PostgreSQL 家族的 TLS / 高级页签。
+    #[gpui::test]
+    fn kingbase_connection_form_uses_postgres_defaults(cx: &mut TestAppContext) {
+        let _guard = locale_guard();
+        let (cx, view, _temp) = redis_e2e_view(cx);
+        redis_e2e_click(cx, "home-new-connection");
+        redis_e2e_click(cx, "new-connection-kind-kingbase");
+        cx.update(|_, cx| {
+            let this = view.read(cx);
+            assert_eq!(this.new_connection_kind, Some(fluxdb_core::DatabaseKind::Kingbase));
+            let form = &this.new_connection_form;
+            assert!(
+                form.name.starts_with("KingbaseES"),
+                "默认连接名应标识 KingbaseES: {}",
+                form.name
+            );
+            assert_eq!(form.port, "54321", "KingbaseES 默认端口是 54321");
+            assert_eq!(form.username, "system", "KingbaseES 默认账号是 system");
+            assert_eq!(form.database, "test", "KingbaseES 默认库是 test");
+        });
+        let placeholder = cx.update(|_, cx| view.read(cx).discovery_uri_placeholder_for_test(cx));
+        assert!(
+            placeholder.as_ref().contains("postgres://"),
+            "KingbaseES 应复用 PostgreSQL 连接串示例: {placeholder}"
+        );
+        // TLS 页复用 PG 表单：开启 TLS 后能渲染 PG 的 SSL 模式与私钥口令，
+        // 说明 Kingbase 没有被通用表单接走。
+        redis_e2e_click(cx, "new-connection-tab-1");
+        redis_e2e_click(cx, "new-connection-toggle-tls");
+        assert!(
+            cx.debug_bounds("connection-tls-client-key-passphrase").is_some(),
+            "KingbaseES 应复用 PostgreSQL 的 TLS 表单"
+        );
+    }
+
     /// PostgreSQL E2E 参数：`FLUXDB_PG_E2E=host:port:user:password:db`，缺失时跳过。
     struct PostgresE2eSettings {
         host: String,

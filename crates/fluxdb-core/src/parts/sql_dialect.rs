@@ -233,7 +233,7 @@ fn render_limit_offset(limit: u64, offset: u64) -> String {
 /// MySQL / MariaDB / TiDB 共用反引号方言；MongoDB/Redis 无「表数据预览」SQL，回退 MySQL 保持可渲染。
 pub fn sql_dialect(kind: DatabaseKind) -> &'static dyn SqlDialect {
     match kind {
-        DatabaseKind::Postgres => &PostgresDialect,
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => &PostgresDialect,
         DatabaseKind::Dameng => &DamengDialect,
         DatabaseKind::SqlServer => &SqlServerDialect,
         DatabaseKind::Oracle => &OracleDialect,

@@ -17,7 +17,7 @@ fn app_completion_dialect(kind: DatabaseKind) -> &'static dyn CompletionDialect 
             &fluxdb_completion::MYSQL
         }
         DatabaseKind::Sqlite => &fluxdb_completion::SQLITE,
-        DatabaseKind::Postgres => &fluxdb_completion::POSTGRES,
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => &fluxdb_completion::POSTGRES,
         DatabaseKind::Dameng => &fluxdb_completion::DAMENG,
         DatabaseKind::SqlServer => &fluxdb_completion::SQLSERVER,
         DatabaseKind::Oracle => &fluxdb_completion::ORACLE,
@@ -230,7 +230,7 @@ impl MetadataSource for IndexMetadataSource<'_> {
         // 达梦默认 schema 不是可靠的会话默认值：对象树里已展开的其他 schema
         // 也要并入候选；PostgreSQL 同样允许显式限定其他 schema，不能只给
         // search_path / 当前 schema 的表。插入文本由方言补 schema 限定。
-        let include_loaded_schemas = self.config.kind == DatabaseKind::Postgres
+        let include_loaded_schemas = self.config.kind.is_postgres_family()
             || (schema.is_some() && schema == self.fallback_schema.as_deref());
         if include_loaded_schemas {
             if tables.is_empty() {

@@ -607,6 +607,7 @@ impl NavicatMain {
             self.table_database_kind(object),
             Some(
                 DatabaseKind::Postgres
+                    | DatabaseKind::Kingbase
                     | DatabaseKind::Dameng
                     | DatabaseKind::SqlServer
                     | DatabaseKind::Oracle

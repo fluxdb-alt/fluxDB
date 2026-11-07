@@ -47,6 +47,7 @@ impl AppController {
                                 | DatabaseKind::TiDb
                                 | DatabaseKind::MariaDb
                                 | DatabaseKind::Postgres
+                                | DatabaseKind::Kingbase
                                 | DatabaseKind::Dameng
                         )
                 });

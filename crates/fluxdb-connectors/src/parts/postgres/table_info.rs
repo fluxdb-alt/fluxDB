@@ -10,7 +10,7 @@ fn pg_table_metadata(
     config: &ConnectionConfig,
     path: &ObjectPath,
 ) -> fluxdb_core::Result<TableStructure> {
-    if config.kind != DatabaseKind::Postgres {
+    if !config.kind.is_postgres_family() {
         return Err(Error::new(ErrorKind::Connection, "连接类型不匹配"));
     }
     let database = path
@@ -552,7 +552,7 @@ fn pg_load_table_design_metadata(
     config: &ConnectionConfig,
     path: &ObjectPath,
 ) -> fluxdb_core::Result<fluxdb_core::TableDesignMetadata> {
-    if config.kind != DatabaseKind::Postgres {
+    if !config.kind.is_postgres_family() {
         return Err(Error::new(ErrorKind::Connection, "连接类型不匹配"));
     }
     let database = path

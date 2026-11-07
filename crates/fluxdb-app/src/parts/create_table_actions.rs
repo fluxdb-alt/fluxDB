@@ -262,7 +262,9 @@ fn table_action_sql_provider(database_kind: DatabaseKind) -> &'static dyn TableA
         }
         DatabaseKind::Sqlite => &SQLITE_TABLE_ACTION_SQL_PROVIDER,
         DatabaseKind::SqlServer => &SQLSERVER_TABLE_ACTION_SQL_PROVIDER,
-        DatabaseKind::Postgres => &POSTGRES_TABLE_ACTION_SQL_PROVIDER,
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => {
+            &POSTGRES_TABLE_ACTION_SQL_PROVIDER
+        }
         DatabaseKind::MongoDb | DatabaseKind::Redis => &UNSUPPORTED_TABLE_ACTION_SQL_PROVIDER,
         DatabaseKind::Dameng => &DAMENG_TABLE_ACTION_SQL_PROVIDER,
         DatabaseKind::Oracle => &ORACLE_TABLE_ACTION_SQL_PROVIDER,

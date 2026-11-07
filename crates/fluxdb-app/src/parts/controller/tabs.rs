@@ -199,7 +199,7 @@ impl AppController {
                     return self.fail(Error::new(ErrorKind::Internal, "MySQL 用户与权限 provider 缺失"));
                 }
             },
-            DatabaseKind::Postgres => PrivilegeScope::Postgres,
+            DatabaseKind::Postgres | DatabaseKind::Kingbase => PrivilegeScope::Postgres,
             DatabaseKind::SqlServer => PrivilegeScope::SqlServer,
             // 达梦账号模型与 Oracle 同源（账号 = schema，角色 + 系统权限 + 对象权限），
             // 复用同一套面板，差异只体现在渲染方言（见 `UserAdminSqlDialect`）。

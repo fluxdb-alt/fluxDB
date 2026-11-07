@@ -69,8 +69,11 @@ async fn pg_catalog_table_ddl(client: &tokio_postgres::Client, database: &str, s
     }
     // identity/serial 的生成器属性来自 pg_sequence；serial 必须先建序列，再建列默认值。
     for row in client.query(
+        // Kingbase 的 pg_sequence 把 start/increment/min/max 报成 int2（值仍是 int8），
+        // tokio-postgres 按声明类型解码会失败；统一转 bigint 后再按 i64 读取。
         "SELECT a.attname, a.attidentity::text, sn.nspname, sc.relname,
-                format_type(s.seqtypid,NULL), s.seqstart, s.seqincrement, s.seqmin, s.seqmax, s.seqcache, s.seqcycle
+                format_type(s.seqtypid,NULL), s.seqstart::bigint, s.seqincrement::bigint,
+                s.seqmin::bigint, s.seqmax::bigint, s.seqcache::bigint, s.seqcycle
          FROM pg_attribute a JOIN pg_depend d ON d.refobjid=a.attrelid AND d.refobjsubid=a.attnum
               AND d.classid='pg_class'::regclass AND d.refclassid='pg_class'::regclass AND d.deptype IN ('a','i')
          JOIN pg_class sc ON sc.oid=d.objid AND sc.relkind='S'

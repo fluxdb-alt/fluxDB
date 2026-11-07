@@ -591,6 +591,7 @@ fn kind_rail(
                 DatabaseKind::TiDb,
                 DatabaseKind::MariaDb,
                 DatabaseKind::Postgres,
+                DatabaseKind::Kingbase,
                 DatabaseKind::SqlServer,
                 DatabaseKind::Oracle,
                 DatabaseKind::Dameng,
@@ -685,7 +686,7 @@ fn kind_rail(
                     div()
                         .text_size(px(11.5))
                         .text_color(colors.muted)
-                        .child(tr("app.connection.rail.drivers").replace("%{count}", "10")),
+                        .child(tr("app.connection.rail.drivers").replace("%{count}", "11")),
                 ),
         )
 }
@@ -757,6 +758,7 @@ fn database_kind_label(kind: DatabaseKind) -> &'static str {
         DatabaseKind::TiDb => "TiDB",
         DatabaseKind::MariaDb => "MariaDB",
         DatabaseKind::Postgres => "PostgreSQL",
+        DatabaseKind::Kingbase => "人大金仓 KingbaseES",
         DatabaseKind::SqlServer => "SQL Server",
         DatabaseKind::Oracle => "Oracle",
         DatabaseKind::Dameng => "达梦 DM8",
@@ -1077,6 +1079,7 @@ fn database_kind_element_suffix(kind: DatabaseKind) -> &'static str {
         DatabaseKind::MongoDb => "mongodb",
         DatabaseKind::Redis => "redis",
         DatabaseKind::Postgres => "postgres",
+        DatabaseKind::Kingbase => "kingbase",
         DatabaseKind::Dameng => "dameng",
         DatabaseKind::SqlServer => "sqlserver",
         DatabaseKind::Oracle => "oracle",
@@ -1092,6 +1095,7 @@ fn database_kind_icon_path(kind: DatabaseKind) -> &'static str {
         DatabaseKind::MongoDb => "db/mongodb.svg",
         DatabaseKind::Redis => "db/redis.svg",
         DatabaseKind::Postgres => "db/postgres.svg",
+        DatabaseKind::Kingbase => "db/kingbase.svg",
         DatabaseKind::Dameng => "db/dm.svg",
         DatabaseKind::SqlServer => "db/sqlserver.svg",
         DatabaseKind::Oracle => "db/oracle.svg",
@@ -1116,7 +1120,9 @@ fn new_connection_tab_content(
                 DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
                     mysql_advanced_form(form, inputs, colors, window, cx)
                 }
-                DatabaseKind::Postgres => postgres_advanced_form(form, inputs, colors, window, cx),
+                DatabaseKind::Postgres | DatabaseKind::Kingbase => {
+                    postgres_advanced_form(form, inputs, colors, window, cx)
+                }
                 DatabaseKind::Redis => advanced_form(form, inputs, colors, window, cx),
                 DatabaseKind::SqlServer => sqlserver_advanced_form(inputs, colors, window, cx),
                 DatabaseKind::Oracle => oracle_advanced_form(inputs, colors, window, cx),
@@ -1169,7 +1175,8 @@ fn network_security_form(
         | DatabaseKind::TiDb
         | DatabaseKind::MariaDb
         | DatabaseKind::Redis
-        | DatabaseKind::Postgres => Some(tls_form(kind, form, inputs, colors, window, cx)),
+        | DatabaseKind::Postgres
+        | DatabaseKind::Kingbase => Some(tls_form(kind, form, inputs, colors, window, cx)),
         DatabaseKind::SqlServer => Some(sqlserver_encryption_form(inputs, colors, window, cx)),
         // Oracle 的证书校验由 Wallet（含 TCPS 凭据）承担，没有独立开关。
         DatabaseKind::Oracle => Some(oracle_wallet_form(inputs, colors, window, cx)),
@@ -1201,6 +1208,7 @@ fn supports_ssh_tunnel(kind: DatabaseKind) -> bool {
             | DatabaseKind::MariaDb
             | DatabaseKind::Redis
             | DatabaseKind::Postgres
+            | DatabaseKind::Kingbase
             | DatabaseKind::MongoDb
             | DatabaseKind::SqlServer
             | DatabaseKind::Oracle
@@ -1266,7 +1274,7 @@ fn tls_parameters_block(
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let is_mysql = matches!(kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb);
-    let is_postgres = kind == DatabaseKind::Postgres;
+    let is_postgres = kind.is_postgres_family();
     // 只有 PostgreSQL（rustls）和 Redis（自建 TLS 流）能指定独立 SNI；
     // MySQL / MongoDB 驱动把 TLS 主机名固定为连接地址。
     let sni_supported = is_postgres || kind == DatabaseKind::Redis;
@@ -1710,6 +1718,7 @@ fn ssh_form(
             | DatabaseKind::Oracle
             | DatabaseKind::Dameng
             | DatabaseKind::Postgres
+            | DatabaseKind::Kingbase
     );
     // 隧道参数只在启用后渲染：置灰仍可编辑，但未启用时整套 SSH 档案
     // 都不会参与拨号，填了也只会被静默保存。
@@ -2318,7 +2327,7 @@ fn connection_uri_box(
                             Some(DatabaseKind::Redis) => this.import_redis_connection_string(cx),
                             // PostgreSQL 有独立的 URI 解析：sslmode/证书/应用名/超时等
                             // 都能落到档案；通用 SQL 解析会丢弃这些 query 参数。
-                            Some(DatabaseKind::Postgres) => {
+                            Some(DatabaseKind::Postgres | DatabaseKind::Kingbase) => {
                                 this.import_postgres_connection_string(cx)
                             }
                             _ => this.import_sql_connection_string(cx),
@@ -2587,7 +2596,7 @@ fn connection_form(
                     cx,
                 ));
         }
-        DatabaseKind::Postgres => {
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => {
             fields = fields
                 .child(host_port_row_light(
                     tr("app.connection.field.host_port"),

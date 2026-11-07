@@ -30,7 +30,7 @@ trait UserAdminPanel {
 /// 这是四个库唯一的汇合点：新增库只在这里加一条，不动其它库的代码。
 fn user_admin_panel_for(kind: DatabaseKind) -> Option<&'static dyn UserAdminPanel> {
     match kind {
-        DatabaseKind::Postgres => Some(&PostgresUserAdminPanel),
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => Some(&PostgresUserAdminPanel),
         DatabaseKind::SqlServer => Some(&SqlServerUserAdminPanel),
         // 达梦复用 Oracle 账号面板：账号 = schema，授权模型同源。
         DatabaseKind::Oracle | DatabaseKind::Dameng => Some(&OracleUserAdminPanel),

@@ -496,6 +496,7 @@ pub fn database_user_admin_provider(kind: DatabaseKind) -> Option<DatabaseUserAd
         | DatabaseKind::MongoDb
         | DatabaseKind::Redis
         | DatabaseKind::Postgres
+        | DatabaseKind::Kingbase
         | DatabaseKind::Dameng
         | DatabaseKind::SqlServer
         | DatabaseKind::Oracle => None,
@@ -508,6 +509,7 @@ pub fn supports_database_user_admin(kind: DatabaseKind) -> bool {
     matches!(
         kind,
         DatabaseKind::Postgres
+            | DatabaseKind::Kingbase
             | DatabaseKind::SqlServer
             | DatabaseKind::Oracle
             | DatabaseKind::Dameng

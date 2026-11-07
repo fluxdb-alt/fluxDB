@@ -20,7 +20,7 @@ pub fn table_data_import(kind: DatabaseKind) -> fluxdb_core::Result<Box<dyn Tabl
         DatabaseKind::MySql => Ok(Box::new(MySqlTableImport)),
         DatabaseKind::TiDb => Ok(Box::new(TiDbTableImport)),
         DatabaseKind::MariaDb => Ok(Box::new(MariaDbTableImport)),
-        DatabaseKind::Postgres => Ok(Box::new(PostgresTableImport)),
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => Ok(Box::new(PostgresTableImport)),
         DatabaseKind::Sqlite => Ok(Box::new(SqliteTableImport)),
         DatabaseKind::Dameng => Ok(Box::new(DamengTableImport)),
         DatabaseKind::SqlServer => Ok(Box::new(SqlServerTableImport)),
@@ -996,7 +996,7 @@ fn import_qualified_table(
                 fluxdb_core::MySqlDialect.quote_identifier(&request.object.name)
             ))
         }
-        DatabaseKind::Postgres => {
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => {
             let schema = request.object.schema.as_deref().unwrap_or("public");
             Ok(format!(
                 "{}.{}",
@@ -1083,7 +1083,9 @@ fn import_quote_identifier(kind: DatabaseKind, identifier: &str) -> String {
         DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
             fluxdb_core::MySqlDialect.quote_identifier(identifier)
         }
-        DatabaseKind::Postgres => fluxdb_core::PostgresDialect.quote_identifier(identifier),
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => {
+            fluxdb_core::PostgresDialect.quote_identifier(identifier)
+        }
         DatabaseKind::Sqlite => fluxdb_core::SqliteDialect.quote_identifier(identifier),
         DatabaseKind::Dameng => fluxdb_core::DamengDialect.quote_identifier(identifier),
         DatabaseKind::SqlServer => fluxdb_core::SqlServerDialect.quote_identifier(identifier),

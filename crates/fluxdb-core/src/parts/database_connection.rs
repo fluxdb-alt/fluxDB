@@ -441,7 +441,7 @@ impl ConnectionConfig {
                 .mysql_profile
                 .as_ref()
                 .map(|profile| profile as &dyn DatabaseConnection),
-            DatabaseKind::Postgres => self
+            DatabaseKind::Postgres | DatabaseKind::Kingbase => self
                 .postgres_profile
                 .as_ref()
                 .map(|profile| profile as &dyn DatabaseConnection),
@@ -476,7 +476,7 @@ impl ConnectionConfig {
                 .mysql_profile
                 .as_mut()
                 .map(|profile| profile as &mut dyn DatabaseConnection),
-            DatabaseKind::Postgres => self
+            DatabaseKind::Postgres | DatabaseKind::Kingbase => self
                 .postgres_profile
                 .as_mut()
                 .map(|profile| profile as &mut dyn DatabaseConnection),

@@ -50,7 +50,10 @@ impl AppController {
             .ok_or_else(|| Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))?;
         // PG：角色是集群级身份，直接经连接器 list_roles 读取（不用 user@host SQL 文字），
         // 映射为 DatabaseUserIdentity[user=role, host="", plugin=None] 以复用现有用户列表承载。
-        if self.connection_kind(admin.connection_id) == Some(DatabaseKind::Postgres) {
+        if self
+            .connection_kind(admin.connection_id)
+            .is_some_and(|kind| kind.is_postgres_family())
+        {
             let roles = self.list_pg_roles_for_connection(admin.connection_id)?;
             let role_identities: Vec<DatabaseUserIdentity> = roles
                 .into_iter()
@@ -144,7 +147,10 @@ impl AppController {
             .ok_or_else(|| Error::new(ErrorKind::Internal, "用户与权限标签页不存在"))?;
         // PG：角色「授权」= 其所在的组角色（成员关系），经连接器读取，非 SHOW GRANTS 文本解析。
         // 空结果也是成功空态：无成员关系的角色不允许回退 MySQL provider（那是错误路径）。
-        if self.connection_kind(admin.connection_id) == Some(DatabaseKind::Postgres) {
+        if self
+            .connection_kind(admin.connection_id)
+            .is_some_and(|kind| kind.is_postgres_family())
+        {
             let memberships = self.list_pg_memberships_for_connection(admin.connection_id)?;
             return Ok(pg_groups_for_member(&memberships, &user.user));
         }

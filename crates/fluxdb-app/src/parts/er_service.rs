@@ -388,6 +388,7 @@ fn database_kind_uses_schemas(kind: DatabaseKind) -> bool {
     matches!(
         kind,
         DatabaseKind::Postgres
+            | DatabaseKind::Kingbase
             | DatabaseKind::Dameng
             | DatabaseKind::SqlServer
             | DatabaseKind::Oracle

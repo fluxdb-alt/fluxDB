@@ -132,7 +132,7 @@ pub fn policy_for(kind: DatabaseKind) -> Option<&'static dyn SqlPolicy> {
     match kind {
         DatabaseKind::MySql | DatabaseKind::TiDb => Some(&MYSQL),
         DatabaseKind::MariaDb => Some(&MARIADB),
-        DatabaseKind::Postgres => Some(&POSTGRES),
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => Some(&POSTGRES),
         DatabaseKind::Sqlite => Some(&SQLITE),
         DatabaseKind::SqlServer => Some(&SQLSERVER),
         DatabaseKind::Dameng => Some(&DAMENG),

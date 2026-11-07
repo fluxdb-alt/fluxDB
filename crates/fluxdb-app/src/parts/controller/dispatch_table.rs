@@ -384,6 +384,7 @@ impl AppController {
                                     && matches!(
                                         create.database_kind,
                                         DatabaseKind::Postgres
+                                            | DatabaseKind::Kingbase
                                             | DatabaseKind::Dameng
                                             | DatabaseKind::SqlServer
                                     )

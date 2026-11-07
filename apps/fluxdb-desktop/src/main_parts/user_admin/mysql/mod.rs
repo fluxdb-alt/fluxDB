@@ -306,7 +306,7 @@ impl NavicatMain {
                 .connections
                 .iter()
                 .find(|connection| connection.config.id == connection_id)
-                .is_some_and(|connection| connection.config.kind == DatabaseKind::Postgres);
+                .is_some_and(|connection| connection.config.kind.is_postgres_family());
             if is_postgres {
                 self.start_user_admin_pg_roles_load(tab_id, cx);
                 return;

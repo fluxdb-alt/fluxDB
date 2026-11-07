@@ -673,6 +673,7 @@ pub fn add_ai_table_page_tools(
                 c.kind,
                 DatabaseKind::Sqlite
                     | DatabaseKind::Postgres
+                    | DatabaseKind::Kingbase
                     | DatabaseKind::MySql
                     | DatabaseKind::TiDb
                     | DatabaseKind::MariaDb
@@ -716,6 +717,7 @@ impl AppController {
                 | DatabaseKind::TiDb
                 | DatabaseKind::MariaDb
                 | DatabaseKind::Postgres
+                | DatabaseKind::Kingbase
                 | DatabaseKind::Dameng
                 | DatabaseKind::SqlServer
         ) {

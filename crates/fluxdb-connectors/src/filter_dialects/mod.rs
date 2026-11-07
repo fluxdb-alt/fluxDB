@@ -26,7 +26,7 @@ pub fn filter_dialect(kind: DatabaseKind) -> Option<&'static dyn FilterDialect> 
         DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
             Some(&mysql::MYSQL_SYNTAX)
         }
-        DatabaseKind::Postgres => Some(&postgres::POSTGRES_SYNTAX),
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => Some(&postgres::POSTGRES_SYNTAX),
         DatabaseKind::Sqlite => Some(&sqlite::SQLITE_SYNTAX),
         DatabaseKind::SqlServer => Some(&sqlserver::SQLSERVER_SYNTAX),
         // 达梦当前连接器使用 Oracle 风格标识符和 LIMIT/OFFSET；以 PostgreSQL
@@ -109,7 +109,7 @@ fn filter_syntax(kind: DatabaseKind) -> Option<FilterSyntax> {
         DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => {
             Some(FilterSyntax::MySql)
         }
-        DatabaseKind::Postgres => Some(FilterSyntax::Postgres),
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => Some(FilterSyntax::Postgres),
         DatabaseKind::Sqlite => Some(FilterSyntax::Sqlite),
         DatabaseKind::SqlServer => Some(FilterSyntax::SqlServer),
         DatabaseKind::Dameng => Some(FilterSyntax::Dameng),

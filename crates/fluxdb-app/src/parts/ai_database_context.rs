@@ -39,6 +39,7 @@ impl AppController {
             DatabaseKind::TiDb => "tidb",
             DatabaseKind::MariaDb => "mariadb",
             DatabaseKind::Postgres => "postgres",
+            DatabaseKind::Kingbase => "kingbase",
             DatabaseKind::Sqlite => "sqlite",
             DatabaseKind::Redis => "redis",
             DatabaseKind::MongoDb => "mongodb",

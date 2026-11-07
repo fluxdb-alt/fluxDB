@@ -13,7 +13,7 @@ fn pg_list_objects(
     config: &ConnectionConfig,
     path: Option<&ObjectPath>,
 ) -> fluxdb_core::Result<Vec<ObjectSummary>> {
-    if config.kind != DatabaseKind::Postgres {
+    if !config.kind.is_postgres_family() {
         return Err(Error::new(ErrorKind::Connection, "连接类型不匹配"));
     }
     match path {

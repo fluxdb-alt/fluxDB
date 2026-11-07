@@ -744,7 +744,8 @@ impl NavicatMain {
                 }
             }
             // PostgreSQL 同样走结构化档案校验（TLS 模式与证书、SSH/代理、超时）。
-            DatabaseKind::Postgres => {
+            // KingbaseES 复用同一份 PG 连接档案。
+            DatabaseKind::Postgres | DatabaseKind::Kingbase => {
                 let profile = form.build_postgres_profile();
                 if let Some(message) = profile.validate() {
                     return Err(message);
@@ -876,6 +877,7 @@ impl NavicatMain {
             | DatabaseKind::MariaDb
             | DatabaseKind::Redis
             | DatabaseKind::Postgres
+            | DatabaseKind::Kingbase
             | DatabaseKind::Dameng
             | DatabaseKind::SqlServer => Endpoint::Tcp {
                 host: form.host.trim().to_string(),

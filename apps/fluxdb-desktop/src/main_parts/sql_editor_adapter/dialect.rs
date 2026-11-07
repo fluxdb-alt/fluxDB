@@ -123,7 +123,7 @@ impl SqlDialect {
         match kind {
             DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => SqlDialect::Mysql,
             DatabaseKind::Sqlite => SqlDialect::Sqlite,
-            DatabaseKind::Postgres => SqlDialect::Postgres,
+            DatabaseKind::Postgres | DatabaseKind::Kingbase => SqlDialect::Postgres,
             DatabaseKind::Dameng => SqlDialect::Dameng,
             DatabaseKind::Oracle => SqlDialect::Oracle,
             DatabaseKind::SqlServer => SqlDialect::SqlServer,
@@ -189,7 +189,7 @@ fn completion_keyword_defs(
 pub fn data_filter_keywords(kind: DatabaseKind) -> Vec<KeywordDef> {
     match kind {
         DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => MYSQL_KEYWORDS.to_vec(),
-        DatabaseKind::Postgres => POSTGRES_KEYWORDS.to_vec(),
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => POSTGRES_KEYWORDS.to_vec(),
         DatabaseKind::Sqlite => SQLITE_KEYWORDS.to_vec(),
         DatabaseKind::SqlServer => SQLSERVER_KEYWORDS.to_vec(),
         DatabaseKind::Dameng => {
@@ -221,6 +221,7 @@ pub fn data_filter_dialect_name(kind: DatabaseKind) -> &'static str {
         DatabaseKind::MariaDb => "MariaDB",
         DatabaseKind::Sqlite => "SQLite",
         DatabaseKind::Postgres => "PostgreSQL",
+        DatabaseKind::Kingbase => "Kingbase",
         DatabaseKind::Dameng => "Dameng",
         DatabaseKind::SqlServer => "SQL Server",
         DatabaseKind::Oracle => "Oracle",

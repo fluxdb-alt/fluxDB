@@ -192,7 +192,7 @@ fn read_only_policy_for(kind: DatabaseKind) -> &'static dyn ReadOnlyPolicy {
         DatabaseKind::MySql => &MYSQL,
         DatabaseKind::TiDb => &TIDB,
         DatabaseKind::MariaDb => &MARIADB,
-        DatabaseKind::Postgres => &POSTGRES,
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => &POSTGRES,
         DatabaseKind::SqlServer => &SQLSERVER,
         DatabaseKind::Oracle => &ORACLE,
         DatabaseKind::Dameng => &DAMENG,

@@ -406,7 +406,7 @@ impl Render for NavicatMain {
                     .state()
                     .connections
                     .iter()
-                    .any(|c| c.config.id == menu.connection_id && c.config.kind == DatabaseKind::Postgres);
+                    .any(|c| c.config.id == menu.connection_id && c.config.kind.is_postgres_family());
                 let is_sqlserver = self
                     .controller
                     .state()

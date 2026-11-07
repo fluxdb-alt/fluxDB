@@ -31,7 +31,10 @@ pub fn connector_for(config: &ConnectionConfig) -> fluxdb_core::Result<Box<dyn C
             Box::new(MySqlConnector::with_config(config.clone()))
         }
         DatabaseKind::Sqlite => Box::new(SqliteConnector::with_config(config.clone())),
-        DatabaseKind::Postgres => Box::new(PostgresConnector::with_config(config.clone())),
+        // KingbaseES 在 PG 兼容模式下复用 PostgreSQL 连接器；Oracle 兼容模式不支持。
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => {
+            Box::new(PostgresConnector::with_config(config.clone()))
+        }
         DatabaseKind::Dameng => Box::new(DamengConnector::with_config(config.clone())),
         DatabaseKind::SqlServer => Box::new(SqlServerConnector::with_config(config.clone())),
         DatabaseKind::Oracle => Box::new(OracleConnector::with_config(config.clone())),

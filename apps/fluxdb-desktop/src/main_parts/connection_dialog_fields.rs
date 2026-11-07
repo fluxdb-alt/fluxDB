@@ -377,6 +377,7 @@ fn database_default_port(kind: DatabaseKind) -> &'static str {
         DatabaseKind::MongoDb => "27017",
         DatabaseKind::Redis => "6379",
         DatabaseKind::Postgres => "5432",
+        DatabaseKind::Kingbase => "54321",
         DatabaseKind::Dameng => "5236",
         DatabaseKind::SqlServer => "1433",
         DatabaseKind::Oracle => "1521",
@@ -557,7 +558,7 @@ fn connection_field_label(field: ConnectionField) -> SharedString {
 /// 连接串导入框的示例文案：按当前数据库类型给出对应 scheme。
 fn discovery_uri_placeholder(kind: Option<fluxdb_core::DatabaseKind>) -> SharedString {
     match kind {
-        Some(fluxdb_core::DatabaseKind::Postgres) => {
+        Some(fluxdb_core::DatabaseKind::Postgres | fluxdb_core::DatabaseKind::Kingbase) => {
             tr("app.connection.postgres.uri_placeholder")
         }
         _ => tr("app.connection.uri.placeholder"),

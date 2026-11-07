@@ -64,7 +64,7 @@ fn create_table_type_is_special(kind: DatabaseKind, data_type: &str) -> bool {
                 | "geometrycollection"
                 | "vector"
         ),
-        DatabaseKind::Postgres => matches!(
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => matches!(
             data_type,
             "oid"
                 | "regclass"
@@ -99,7 +99,7 @@ pub fn create_table_provider(kind: DatabaseKind) -> &'static dyn CreateTableProv
             &MYSQL_CREATE_TABLE_PROVIDER
         }
         DatabaseKind::Sqlite => &SQLITE_CREATE_TABLE_PROVIDER,
-        DatabaseKind::Postgres => &POSTGRES_CREATE_TABLE_PROVIDER,
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => &POSTGRES_CREATE_TABLE_PROVIDER,
         DatabaseKind::Dameng => &DAMENG_CREATE_TABLE_PROVIDER,
         DatabaseKind::SqlServer => &SQLSERVER_CREATE_TABLE_PROVIDER,
         DatabaseKind::Oracle => &ORACLE_CREATE_TABLE_PROVIDER,
