@@ -17,7 +17,7 @@ jobs:
           - os: macos-15-intel  # Intel x64
             target: x86_64-apple-darwin
             arch: x64
-          - os: macos-14        # Apple Silicon
+          - os: macos-15        # Apple Silicon
             target: aarch64-apple-darwin
             arch: arm64
           - os: windows-2022

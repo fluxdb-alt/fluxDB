@@ -40,7 +40,7 @@ jobs:
       matrix:
         include:
           # macOS (Apple Silicon)
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
           # Windows x64 (MSVC)
           - os: windows-2022
