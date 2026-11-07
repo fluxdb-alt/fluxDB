@@ -182,7 +182,9 @@ impl RedisConnection {
             let Err(error) = &result else {
                 return result;
             };
-            let Some(redirect) = redis_parse_redirect(&error.to_string()) else {
+            // 只解析服务端原始错误：`Display` 会带 `Query: ` 前缀，用它会让 MOVED/ASK
+            // 永远匹配不上，集群模式下读命令直接失败而不是跟随重定向。
+            let Some(redirect) = redis_parse_redirect(&error.message) else {
                 return result;
             };
             if redirects >= REDIS_MAX_REDIRECTS {
@@ -219,8 +221,14 @@ impl RedisConnection {
                 ));
             }
         };
-        // 重定向目标不能再走哨兵解析，否则会被解析回原主库。
+        // 重定向目标必须直连，不能再走拓扑解析：哨兵会把目标解析回原主库，
+        // 集群种子列表则会让重定向落到别的节点甚至原来的坏节点。
         target.options.remove("sentinel_master");
+        target.options.remove("sentinel_endpoints");
+        target.options.remove("cluster_enabled");
+        target.options.remove("cluster_start_nodes");
+        // 重定向目标已确定是集群节点，跳过自动探测（省掉每次重定向两次往返）。
+        target.options.insert("force_standalone".into(), "true".into());
         let database = self.database;
         let mut connection = redis_new_connection(&target)?;
         if let Some(database) = database {
@@ -280,6 +288,12 @@ struct RedisPoolKey {
     tls: bool,
     tls_server_name: String,
     sentinel_master: String,
+    /// 拓扑节点列表（哨兵节点或集群种子，已归一化为 `host:port,host:port`）。
+    /// 同主地址但节点列表不同的配置可能连到不同主库，不能共用连接。
+    topology_nodes: String,
+    /// `READONLY` 是连接级状态：开启后从节点才本地服务读命令。必须按模式分桶，
+    /// 否则关闭只读的连接可能复用到只读连接，或反过来让普通连接一直处于 READONLY。
+    cluster_readonly: bool,
 }
 
 /// 单个 key 最多缓存的空闲连接数。Redis 查询都是短命令，少量连接足够，
@@ -417,7 +431,20 @@ fn redis_dial_endpoint(
         if jump_host.is_empty() {
             return Err(Error::new(ErrorKind::Connection, "请填写 SSH 跳板机主机"));
         }
-        Some(SshTunnel::open((&jump_host, jump_port), &auth, (host, port))?)
+        Some(open_tunnel_with(
+            (&jump_host, jump_port),
+            &auth,
+            (host, port),
+            SshTunnelOptions {
+                host_key_policy: fluxdb_core::SshHostKeyPolicy::parse(
+                    options
+                        .get("ssh_host_key_policy")
+                        .map(String::as_str)
+                        .unwrap_or(""),
+                ),
+                ..Default::default()
+            },
+        )?)
     } else {
         None
     };
@@ -465,6 +492,13 @@ fn redis_pool_key(config: &ConnectionConfig) -> fluxdb_core::Result<RedisPoolKey
             .get("sentinel_master")
             .cloned()
             .unwrap_or_default(),
+        topology_nodes: config
+            .options
+            .get("sentinel_endpoints")
+            .or_else(|| config.options.get("cluster_start_nodes"))
+            .cloned()
+            .unwrap_or_default(),
+        cluster_readonly: redis_cluster_allow_readonly(config),
     })
 }
 
@@ -482,15 +516,80 @@ fn redis_pool_take(key: &RedisPoolKey) -> Option<RedisConnection> {
 }
 
 fn redis_new_connection(config: &ConnectionConfig) -> fluxdb_core::Result<RedisConnection> {
+    // 集群种子逐个尝试：单个节点宕机或不可达时不应整条连接失败。
+    // 非集群配置只有基础端点一个候选；哨兵模式交给 redis_resolve_endpoint 内部遍历。
+    let candidates = redis_connection_candidates(config)?;
+    let mut last_error = None;
+    for (host, port) in candidates {
+        match redis_new_connection_at(config, &host, port) {
+            Ok(connection) => return Ok(connection),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        Error::new(ErrorKind::Connection, "Redis 连接需要 TCP 主机和端口")
+    }))
+}
+
+/// 候选拨号地址：哨兵模式使用基础端点（真正目标由哨兵解析），
+/// 集群模式使用完整种子列表，其余模式只用基础端点。
+fn redis_connection_candidates(
+    config: &ConnectionConfig,
+) -> fluxdb_core::Result<Vec<(String, u16)>> {
     let Endpoint::Tcp { host, port, .. } = &config.endpoint else {
         return Err(Error::new(
             ErrorKind::Connection,
             "Redis 连接需要 TCP 主机和端口",
         ));
     };
-    // Sentinel 模式下先向哨兵问出当前主库地址，再连过去。
-    let (host, port) = redis_resolve_endpoint(config, host, *port)?;
-    let (stream, ssh_tunnel) = redis_dial_endpoint(config, &host, port)?;
+    // 与 from_options 的优先级保持一致：配置了主库名即视为哨兵模式，
+    // 不能把哨兵节点当普通节点直连。
+    if config
+        .options
+        .get("sentinel_master")
+        .is_some_and(|master| !master.trim().is_empty())
+    {
+        return Ok(vec![(host.clone(), *port)]);
+    }
+    let seeds = redis_endpoint_list(config.options.get("cluster_start_nodes").map(String::as_str));
+    if seeds.is_empty() {
+        return Ok(vec![(host.clone(), *port)]);
+    }
+    Ok(seeds)
+}
+
+fn redis_new_connection_at(
+    config: &ConnectionConfig,
+    host: &str,
+    port: u16,
+) -> fluxdb_core::Result<RedisConnection> {
+    // 显式配置了主库名：按哨兵处理，先问出主库地址再连。
+    if redis_has_explicit_sentinel(config) {
+        let (host, port) = redis_resolve_endpoint(config, host, port)?;
+        return redis_direct_connection(config, &host, port);
+    }
+
+    let mut connection = redis_direct_connection(config, host, port)?;
+    if !redis_auto_detect_enabled(config) {
+        return Ok(connection);
+    }
+    // 未显式指定拓扑：连上后向服务端确认（集群 / 哨兵 / 单机）。
+    // 哨兵地址不是数据节点，探测到后切到当前主库。
+    let Some(master) = redis_detect_sentinel_master(&mut connection)? else {
+        return Ok(connection);
+    };
+    let (master_host, master_port) = redis_query_sentinel_on(&mut connection, &master)?;
+    drop(connection);
+    redis_direct_connection(config, &master_host, master_port)
+}
+
+/// 直连指定地址并完成认证（不做拓扑解析，避免探测/重定向时递归）。
+fn redis_direct_connection(
+    config: &ConnectionConfig,
+    host: &str,
+    port: u16,
+) -> fluxdb_core::Result<RedisConnection> {
+    let (stream, ssh_tunnel) = redis_dial_endpoint(config, host, port)?;
     let mut connection = RedisConnection {
         reader: std::io::BufReader::new(stream),
         database: None,
@@ -499,7 +598,241 @@ fn redis_new_connection(config: &ConnectionConfig) -> fluxdb_core::Result<RedisC
         ssh_tunnel,
     };
     redis_auth(config, &mut connection)?;
+    // 集群副本默认只服务 READONLY 之后的读命令；非集群节点会回错，忽略即可。
+    if redis_cluster_allow_readonly(config) {
+        let _ = connection.command_once(&["READONLY"]);
+    }
     Ok(connection)
+}
+
+fn redis_has_explicit_sentinel(config: &ConnectionConfig) -> bool {
+    config
+        .options
+        .get("sentinel_master")
+        .is_some_and(|master| !master.trim().is_empty())
+}
+
+/// 自动探测条件：没有显式拓扑信息，且用户没有强制单机。
+fn redis_auto_detect_enabled(config: &ConnectionConfig) -> bool {
+    !redis_has_explicit_sentinel(config)
+        && !config
+            .options
+            .get("force_standalone")
+            .is_some_and(|value| matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "true" | "y" | "yes" | "1" | "on"
+            ))
+        && redis_endpoint_list(config.options.get("cluster_start_nodes").map(String::as_str))
+            .is_empty()
+}
+
+/// 探测节点是否为哨兵；是则返回要连接的主库名。
+///
+/// 探测命令在非哨兵节点上会返回错误（未知命令），这里必须容忍错误并清除
+/// `broken` 标记，否则一条可用的连接会被误判为不可复用。
+fn redis_detect_sentinel_master(
+    connection: &mut RedisConnection,
+) -> fluxdb_core::Result<Option<String>> {
+    // 集群节点一定不是哨兵，先确认可少一次无效探测。
+    if let Some(reply) = redis_probe(connection, &["CLUSTER", "INFO"]) {
+        let info = redis_value_text(reply);
+        if info.contains("cluster_enabled:1") {
+            return Ok(None);
+        }
+    }
+    let Some(reply) = redis_probe(connection, &["SENTINEL", "MASTERS"]) else {
+        return Ok(None);
+    };
+    let masters = redis_sentinel_master_names(reply);
+    match masters.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(Some(only.clone())),
+        many => Err(Error::new(
+            ErrorKind::Connection,
+            format!(
+                "该地址是 Redis Sentinel 且监控了多个主库（{}），请在「高级」页填写 Sentinel 主库名",
+                many.join(", ")
+            ),
+        )),
+    }
+}
+
+/// 探测命令：错误视为「该节点不支持此命令」，并恢复连接可用状态。
+fn redis_probe(connection: &mut RedisConnection, args: &[&str]) -> Option<RedisValue> {
+    match connection.command_once(args) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            connection.broken = false;
+            None
+        }
+    }
+}
+
+/// 从 `SENTINEL MASTERS` 回包里提取主库名（字段按 name/value 成对返回）。
+fn redis_sentinel_master_names(reply: RedisValue) -> Vec<String> {
+    let RedisValue::Array(entries) = reply else {
+        return Vec::new();
+    };
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let RedisValue::Array(fields) = entry else {
+                return None;
+            };
+            fields.chunks(2).find_map(|pair| {
+                let [name, value] = pair else { return None };
+                (redis_value_text(name.clone()) == "name")
+                    .then(|| redis_value_text(value.clone()))
+            })
+        })
+        .collect()
+}
+
+/// 集群「允许从节点读」开关。
+///
+/// 结构化档案回写的是 `cluster_readonly`；`cluster_allow_readonly` 是旧版
+/// URL 参数/历史连接使用的键，仅在缺少新键时兜底。新键优先，避免两者同时存在
+/// 时被旧值覆盖。
+fn redis_cluster_allow_readonly(config: &ConnectionConfig) -> bool {
+    config
+        .options
+        .get("cluster_readonly")
+        .or_else(|| config.options.get("cluster_allow_readonly"))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| matches!(value.as_str(), "true" | "y" | "yes" | "1" | "on"))
+}
+
+#[cfg(test)]
+mod cluster_readonly_option_tests {
+    use super::*;
+
+    fn config_with(options: &[(&str, &str)]) -> ConnectionConfig {
+        ConnectionConfig {
+            id: ConnectionId(0),
+            name: "test".into(),
+            kind: DatabaseKind::Redis,
+            endpoint: Endpoint::Tcp {
+                host: "127.0.0.1".into(),
+                port: 6379,
+                database: None,
+            },
+            options: options
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+            dameng_profile: None,
+            sqlserver_profile: None,
+            mongo_profile: None,
+            oracle_profile: None,
+        }
+    }
+
+    #[test]
+    fn reads_canonical_cluster_readonly_key() {
+        assert!(redis_cluster_allow_readonly(&config_with(&[(
+            "cluster_readonly",
+            "true"
+        )])));
+    }
+
+    #[test]
+    fn falls_back_to_legacy_cluster_allow_readonly_key() {
+        assert!(redis_cluster_allow_readonly(&config_with(&[(
+            "cluster_allow_readonly",
+            "yes"
+        )])));
+    }
+
+    #[test]
+    fn canonical_key_wins_over_legacy_key() {
+        assert!(!redis_cluster_allow_readonly(&config_with(&[
+            ("cluster_readonly", "false"),
+            ("cluster_allow_readonly", "true"),
+        ])));
+    }
+
+    /// 种子列表必须完整保留，不能只取第一个节点。
+    #[test]
+    fn cluster_candidates_use_every_seed() {
+        let config = config_with(&[("cluster_start_nodes", "10.0.0.1:7000, 10.0.0.2:7001,[::1]:7002")]);
+        let candidates = redis_connection_candidates(&config).expect("候选节点");
+        assert_eq!(
+            candidates,
+            vec![
+                ("10.0.0.1".to_string(), 7000),
+                ("10.0.0.2".to_string(), 7001),
+                ("::1".to_string(), 7002),
+            ]
+        );
+    }
+
+    /// 配了主库名就是哨兵模式：集群种子列表不能抢先生效。
+    #[test]
+    fn sentinel_master_takes_precedence_over_cluster_seeds() {
+        let config = config_with(&[
+            ("sentinel_master", "mymaster"),
+            ("cluster_start_nodes", "10.0.0.2:7000"),
+        ]);
+        let candidates = redis_connection_candidates(&config).expect("候选节点");
+        assert_eq!(candidates, vec![("127.0.0.1".to_string(), 6379)]);
+    }
+
+    /// 自动探测只在「没有任何显式拓扑信息」时启用。
+    #[test]
+    fn auto_detection_skipped_when_topology_is_explicit() {
+        assert!(redis_auto_detect_enabled(&config_with(&[])));
+        assert!(!redis_auto_detect_enabled(&config_with(&[(
+            "force_standalone",
+            "true"
+        )])));
+        assert!(!redis_auto_detect_enabled(&config_with(&[(
+            "sentinel_master",
+            "mymaster"
+        )])));
+        assert!(!redis_auto_detect_enabled(&config_with(&[(
+            "cluster_start_nodes",
+            "10.0.0.1:7000"
+        )])));
+    }
+
+    /// `SENTINEL MASTERS` 的字段顺序不固定，按 `name` 键取值。
+    #[test]
+    fn sentinel_master_names_reads_name_pairs() {
+        let text = |value: &str| RedisValue::Bulk(Some(value.as_bytes().to_vec()));
+        let reply = RedisValue::Array(vec![
+            RedisValue::Array(vec![text("name"), text("mymaster"), text("ip"), text("10.0.0.1")]),
+            RedisValue::Array(vec![text("port"), text("6379"), text("name"), text("other")]),
+            RedisValue::Array(vec![text("no-name-field")]),
+        ]);
+        assert_eq!(
+            redis_sentinel_master_names(reply),
+            vec!["mymaster".to_string(), "other".to_string()]
+        );
+    }
+
+    /// 非法项跳过，合法项保留。
+    #[test]
+    fn endpoint_list_skips_invalid_entries() {
+        assert_eq!(
+            redis_endpoint_list(Some("10.0.0.1:7000,,bad,10.0.0.3:x")),
+            vec![("10.0.0.1".to_string(), 7000)]
+        );
+        assert!(redis_endpoint_list(None).is_empty());
+    }
+
+    /// `Display` 会给消息加 `Query: ` 前缀；重定向解析必须用原始 `message`。
+    #[test]
+    fn redirect_parser_reads_raw_message() {
+        let error = Error::new(ErrorKind::Query, "MOVED 1810 127.0.0.1:7000");
+        assert!(redis_parse_redirect(&error.to_string()).is_none());
+        let redirect = redis_parse_redirect(&error.message).expect("应解析出 MOVED");
+        assert_eq!(redirect.host, "127.0.0.1");
+        assert_eq!(redirect.port, 7000);
+        assert!(!redirect.ask);
+    }
 }
 
 fn redis_tcp_connect(host: &str, port: u16) -> fluxdb_core::Result<std::net::TcpStream> {
@@ -713,8 +1046,34 @@ fn redis_resolve_endpoint(
         return Ok((host.to_string(), port));
     };
 
-    // 哨兵探测同样遵循 SSH/TLS：SSH 场景下哨兵也可能在跳板机后，直连会失败。
-    // 隧道句柄在本函数作用域内存活，探测结束即随析构关闭。
+    // 哨兵节点列表逐个尝试：单个哨兵不可达或拒绝服务时不能直接失败。
+    // 列表为空时退回调用方传入的基础端点。
+    let sentinels = redis_endpoint_list(config.options.get("sentinel_endpoints").map(String::as_str));
+    let candidates = if sentinels.is_empty() {
+        vec![(host.to_string(), port)]
+    } else {
+        sentinels
+    };
+    let mut last_error = None;
+    for (sentinel_host, sentinel_port) in candidates {
+        match redis_query_sentinel(config, &sentinel_host, sentinel_port, master) {
+            Ok(master_addr) => return Ok(master_addr),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        Error::new(ErrorKind::Connection, "没有可用的 Sentinel 节点")
+    }))
+}
+
+/// 向单个哨兵询问主库地址。探测同样遵循 SSH/TLS：SSH 场景下哨兵也可能在
+/// 跳板机后，直连会失败；隧道句柄在本函数作用域内存活，探测结束即关闭。
+fn redis_query_sentinel(
+    config: &ConnectionConfig,
+    host: &str,
+    port: u16,
+    master: &str,
+) -> fluxdb_core::Result<(String, u16)> {
     let (stream, _ssh_tunnel) = redis_dial_endpoint(config, host, port)?;
     let mut sentinel = RedisConnection {
         reader: std::io::BufReader::new(stream),
@@ -725,6 +1084,14 @@ fn redis_resolve_endpoint(
     };
     // 哨兵也可能要求认证，沿用同一套凭据。
     redis_auth(config, &mut sentinel)?;
+    redis_query_sentinel_on(&mut sentinel, master)
+}
+
+/// 在已连通的哨兵连接上询问主库地址（自动探测路径复用，避免二次拨号）。
+fn redis_query_sentinel_on(
+    sentinel: &mut RedisConnection,
+    master: &str,
+) -> fluxdb_core::Result<(String, u16)> {
     match sentinel.command(&["SENTINEL", "get-master-addr-by-name", master])? {
         RedisValue::Array(items) => match items.as_slice() {
             [master_host, master_port] => {
@@ -742,6 +1109,20 @@ fn redis_resolve_endpoint(
             format!("哨兵没有找到名为 {master} 的主库"),
         )),
     }
+}
+
+/// 解析逗号分隔的 `host:port` 列表，忽略空项与非法项。
+fn redis_endpoint_list(raw: Option<&str>) -> Vec<(String, u16)> {
+    raw.unwrap_or_default()
+        .split(',')
+        .filter_map(|item| {
+            let item = item.trim();
+            let (host, port) = item.rsplit_once(':')?;
+            let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+            let port = port.trim().parse::<u16>().ok()?;
+            (!host.is_empty()).then(|| (host.to_string(), port))
+        })
+        .collect()
 }
 
 fn redis_auth(

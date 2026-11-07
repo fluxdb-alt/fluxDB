@@ -1,6 +1,6 @@
 use fluxdb_core::{SqlServerEncryption, SqlServerConnectionProfile};
 use futures_util::TryStreamExt as _;
-use tiberius::{AuthMethod, Client, Config as TdsConfig, EncryptionLevel};
+use tiberius::{AuthMethod, Client, Config as TdsConfig, EncryptionLevel, SqlBrowser};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt as _};
 
@@ -167,22 +167,28 @@ pub fn sqlserver_close_query_session(
     })
 }
 
+/// 命名实例只在端口保持默认 1433 时交给 SQL Browser 解析；用户显式填了别的端口
+/// 就以端口为准（与 SQL Server 客户端一致，避免覆盖手工配置）。
+fn sqlserver_uses_browser(profile: &SqlServerConnectionProfile) -> bool {
+    !profile.basic.instance.trim().is_empty() && profile.basic.port == 1433
+}
+
 fn sqlserver_tiberius_config(
     profile: &SqlServerConnectionProfile,
 ) -> fluxdb_core::Result<TdsConfig> {
-    if !profile.basic.instance.trim().is_empty() {
-        return Err(Error::new(
-            ErrorKind::Unsupported,
-            "SQL Server 命名实例首版需要填写实际 TCP 端口；不支持 SQL Browser 自动解析",
-        ));
-    }
     if let Some(message) = profile.validate() {
         return Err(Error::new(ErrorKind::Connection, message));
     }
 
     let mut config = TdsConfig::new();
     config.host(profile.basic.host.trim());
-    config.port(profile.basic.port);
+    if sqlserver_uses_browser(profile) {
+        // 不设端口：驱动据此把 UDP 探测发往 SQL Browser 的 1434，
+        // 再用回复里的实际端口建 TCP；显式设置 1433 会让探测打到 SQL Server 端口。
+        config.instance_name(profile.basic.instance.trim());
+    } else {
+        config.port(profile.basic.port);
+    }
     if let Some(database) = sqlserver_database(
         // profile 已独立解析；这里传空配置只为复用同名 endpoint 取值逻辑。
         &ConnectionConfig {
@@ -236,13 +242,34 @@ async fn sqlserver_connect_raw(
     tunneled: bool,
 ) -> fluxdb_core::Result<Client<Compat<TokioTcpStream>>> {
     let mut config = sqlserver_tiberius_config(profile)?;
+    let mut use_browser = sqlserver_uses_browser(profile);
+    if use_browser && tunneled {
+        // SQL Browser 走 UDP 1434，SSH 隧道只转发 TCP；在本地猜端口会连错实例。
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "SQL Server 命名实例不支持 SSH 隧道，请在 SSH 隧道下填写实际端口",
+        ));
+    }
     let timeout = Duration::from_secs(u64::from(profile.advanced.connect_timeout_secs.max(1)));
     for redirects in 0..=2 {
         let address = config.get_addr();
         let connect = async {
-            let tcp = TokioTcpStream::connect(&address)
-                .await
-                .map_err(|error| sqlserver_io_error("连接 SQL Server", error))?;
+            let tcp = if use_browser {
+                // 复用驱动内置的 SQL Browser（UDP 1434）解析，按实例名找到实际端口。
+                TokioTcpStream::connect_named(&config).await.map_err(|error| {
+                    Error::new(
+                        ErrorKind::Connection,
+                        format!(
+                            "SQL Browser 解析命名实例「{}」失败：{error}",
+                            profile.basic.instance.trim()
+                        ),
+                    )
+                })?
+            } else {
+                TokioTcpStream::connect(&address)
+                    .await
+                    .map_err(|error| sqlserver_io_error("连接 SQL Server", error))?
+            };
             tcp.set_nodelay(true)
                 .map_err(|error| sqlserver_io_error("配置 SQL Server TCP", error))?;
             Client::connect(config.clone(), tcp.compat_write())
@@ -267,6 +294,8 @@ async fn sqlserver_connect_raw(
                 let (host, port) = parse_sqlserver_routing_error(&message)?;
                 config.host(host);
                 config.port(port);
+                // 重定向给出的是实际端口，后续不再走实例名解析。
+                use_browser = false;
             }
             Ok(Err(error)) => return Err(error),
             Err(_) => {
@@ -709,4 +738,34 @@ mod sqlserver_result_collection_tests {
 struct SqlServerResultSet {
     columns: Vec<Column>,
     rows: Vec<Row>,
+}
+
+#[cfg(test)]
+mod sqlserver_named_instance_tests {
+    use super::*;
+
+    fn profile(instance: &str, port: u16) -> SqlServerConnectionProfile {
+        let mut profile = SqlServerConnectionProfile::default();
+        profile.basic.host = "sql.example.com".into();
+        profile.basic.instance = instance.into();
+        profile.basic.port = port;
+        profile
+    }
+
+    /// 命名实例只在端口保持默认 1433 时交给 SQL Browser；显式端口优先。
+    #[test]
+    fn named_instance_uses_browser_only_on_default_port() {
+        assert!(sqlserver_uses_browser(&profile("SQLEXPRESS", 1433)));
+        assert!(!sqlserver_uses_browser(&profile("SQLEXPRESS", 1434)));
+        assert!(!sqlserver_uses_browser(&profile("", 1433)));
+    }
+
+    /// 走 SQL Browser 时不写死端口，探测地址必须是 1434；显式端口则原样保留。
+    #[test]
+    fn named_instance_probes_sql_browser_port() {
+        let config = sqlserver_tiberius_config(&profile("SQLEXPRESS", 1433)).expect("config");
+        assert_eq!(config.get_addr(), "sql.example.com:1434");
+        let config = sqlserver_tiberius_config(&profile("SQLEXPRESS", 1500)).expect("config");
+        assert_eq!(config.get_addr(), "sql.example.com:1500");
+    }
 }

@@ -20,6 +20,14 @@ mod i18n_e2e_tests {
     include!("i18n_tests/sql_editor_edit.rs");
     include!("i18n_tests/table_page_query.rs");
     include!("i18n_tests/dameng_connection.rs");
+    // 生产视图里的 Redis 拓扑显式选择 + 节点列表完整落库。
+    include!("i18n_tests/redis_topology.rs");
+    // 生产视图里的 PostgreSQL 连接串导入与真实库端到端（Podman 容器 + 环境变量门控）。
+    include!("i18n_tests/postgres_connection.rs");
+    // 连接表单字段按高频/低频分页展示。
+    include!("i18n_tests/connection_layout.rs");
+    // 编辑已有连接时档案必须完整回填（MySQL TLS、Oracle 下拉光标）。
+    include!("i18n_tests/connection_edit_roundtrip.rs");
     include!("i18n_tests/sqlserver_connection.rs");
     // 生产视图里的 MongoDB SSH 隧道端到端（Podman 容器 + 环境变量门控）。
     include!("i18n_tests/ssh_tunnel_connection.rs");
@@ -654,20 +662,6 @@ mod i18n_e2e_tests {
         assert_eq!(ssh[1].value(), "private_key");
         assert_eq!(ssh[0].title().as_ref(), "密码");
         assert_eq!(ssh[1].title().as_ref(), "私钥");
-
-        let cloud = [
-            ConnectionSelectOption {
-                value: "azure".into(),
-                label_key: "app.connection.cloud.azure",
-            },
-            ConnectionSelectOption {
-                value: "redis-cloud".into(),
-                label_key: "app.connection.cloud.redis_cloud",
-            },
-        ];
-        assert_eq!(cloud[0].value(), "azure");
-        assert_eq!(cloud[1].value(), "redis-cloud");
-        assert_eq!(cloud[1].title().as_ref(), "Redis Cloud");
 
         let fk = [
             ForeignKeyCheckOption {
@@ -1417,8 +1411,8 @@ mod i18n_e2e_tests {
             "Private key file"
         );
         assert_eq!(
-            rust_i18n::t!("app.connection.redis.sentinel").as_ref(),
-            "Sentinel mode"
+            rust_i18n::t!("app.connection.redis.force_standalone").as_ref(),
+            "Force standalone connection"
         );
         assert_eq!(
             rust_i18n::t!("app.ai.models.title").as_ref(),

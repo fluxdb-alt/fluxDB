@@ -29,7 +29,10 @@ pub enum PostgresSslMode {
 }
 
 /// TLS 相关参数。
+///
+/// `serde(default)` 保证新增字段（如私钥口令）不会让旧档案反序列化失败。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PostgresTlsOptions {
     /// 是否启用 TLS。
     pub enabled: bool,
@@ -41,6 +44,8 @@ pub struct PostgresTlsOptions {
     pub client_cert: SecretRef,
     /// 客户端私钥文件路径引用。
     pub client_key: SecretRef,
+    /// 客户端私钥口令（仅当私钥为 PKCS#8 加密格式时使用）。
+    pub client_key_passphrase: SecretRef,
     /// 独立 TLS server_name（SNI / 校验主机名）；空则取连接主机名。
     pub server_name: String,
 }
@@ -53,6 +58,7 @@ impl Default for PostgresTlsOptions {
             ca: SecretRef::default(),
             client_cert: SecretRef::default(),
             client_key: SecretRef::default(),
+            client_key_passphrase: SecretRef::default(),
             server_name: String::new(),
         }
     }
@@ -68,6 +74,7 @@ pub enum PostgresSshAuth {
 
 /// SSH 隧道参数。
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PostgresSshOptions {
     /// 是否启用 SSH 隧道。
     pub enabled: bool,
@@ -89,6 +96,8 @@ pub struct PostgresSshOptions {
     pub connect_timeout_secs: u32,
     /// SSH 心跳间隔（秒），默认 30；0 表示不发送。
     pub keepalive_interval_secs: u32,
+    /// 主机密钥校验策略；默认严格校验 known_hosts。
+    pub host_key_policy: SshHostKeyPolicy,
 }
 
 /// 代理类型。
@@ -287,6 +296,8 @@ impl PostgresConnectionProfile {
             ca: SecretRef::ref_key(get("tls_ca_ref").unwrap_or_default()),
             client_cert: SecretRef::ref_key(get("tls_client_cert_ref").unwrap_or_default()),
             client_key: SecretRef::ref_key(get("tls_client_key_ref").unwrap_or_default()),
+            // 口令只走加密凭据槽位，绝不从扁平 options 读取或回写明文。
+            client_key_passphrase: SecretRef::default(),
             server_name: get("tls_server_name").unwrap_or_default(),
         };
         let mut transport: Vec<PostgresTransportLayer> = Vec::new();
@@ -308,6 +319,9 @@ impl PostgresConnectionProfile {
             keepalive_interval_secs: get("ssh_keepalive_interval_secs")
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(30),
+            host_key_policy: SshHostKeyPolicy::parse(
+                get("ssh_host_key_policy").as_deref().unwrap_or(""),
+            ),
         };
         if ssh.enabled {
             transport.push(PostgresTransportLayer::Ssh(ssh));
@@ -437,6 +451,12 @@ impl PostgresConnectionProfile {
                     }
                     if ssh.keepalive_interval_secs != 30 {
                         ops.insert("ssh_keepalive_interval_secs".into(), ssh.keepalive_interval_secs.to_string());
+                    }
+                    if ssh.host_key_policy != SshHostKeyPolicy::Strict {
+                        ops.insert(
+                            "ssh_host_key_policy".into(),
+                            ssh.host_key_policy.as_str().into(),
+                        );
                     }
                 }
                 PostgresTransportLayer::Proxy(proxy) if proxy.enabled => {
@@ -574,8 +594,25 @@ impl PostgresConnectionProfile {
                     "application_name" => {
                         opts.insert("application_name".into(), v);
                     }
-                    "options" | "search_path" | "default_schema" => {
+                    "options" => {
+                        // libpq 的 options 是 `-c key=value` 串；只接收 FluxDB 有语义的键，
+                        // 其余明确报错，避免导入后静默丢失用户配置。
+                        let parsed = parse_pg_options_param(&v)?;
+                        if let Some(schema) = parsed.search_path {
+                            opts.insert("default_schema".into(), schema);
+                        }
+                        if let Some(timezone) = parsed.timezone {
+                            opts.insert("timezone".into(), timezone);
+                        }
+                        if let Some(secs) = parsed.statement_timeout_secs {
+                            opts.insert("query_timeout_secs".into(), secs.to_string());
+                        }
+                    }
+                    "search_path" | "default_schema" => {
                         opts.insert("default_schema".into(), v);
+                    }
+                    "timezone" | "TimeZone" => {
+                        opts.insert("timezone".into(), v);
                     }
                     // 仅记录/忽略的通用键：不缓存含凭据内容，交给 storage 决策。
                     "postgres" | "user" | "host" | "port" | "password" => {
@@ -592,6 +629,15 @@ impl PostgresConnectionProfile {
         }
 
         let mut profile = Self::from_options(&opts);
+
+        // URI 显式给了 sslmode 或证书路径就视为用户要求 TLS：FluxDB 默认关闭 TLS，
+        // 若不在这里打开，sslmode=require/verify-* 会被拨号层静默降级为明文。
+        let has_tls_material = !profile.tls.ca.key.is_empty()
+            || !profile.tls.client_cert.key.is_empty()
+            || !profile.tls.client_key.key.is_empty();
+        let ssl_mode_requested = opts.contains_key("ssl_mode");
+        profile.tls.enabled = profile.tls.ssl_mode != PostgresSslMode::Disabled
+            && (ssl_mode_requested || has_tls_material);
 
         // 路径段的数据库名：URL 未在 query 里显式给出 database 时，取路径名为库。
         let no_query_db = opts
@@ -685,6 +731,17 @@ impl PostgresConnectionProfile {
             // verify-full 需要可校验的主机名；纯 IP 需显式 server_name 或用 verify-ca。
             return Some("verify-full 模式需提供主机名或显式 TLS server_name".into());
         }
+        if let Some(proxy) = self.proxy() {
+            if proxy.host.trim().is_empty() {
+                return Some("请填写代理主机".into());
+            }
+            if proxy.port == 0 {
+                return Some("代理端口不合法".into());
+            }
+            if self.ssh().is_some() {
+                return Some("SSH 隧道与代理不能同时启用，请只保留一种".into());
+            }
+        }
         if let Some(ssh) = self.ssh() {
             if ssh.host.is_empty() {
                 return Some("请填写 SSH 隧道主机".into());
@@ -707,6 +764,72 @@ impl PostgresConnectionProfile {
         }
         None
     }
+}
+
+/// 连接 URI 中 `options` 参数可映射到 FluxDB 档案的会话设置。
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ParsedPgOptions {
+    /// `-c search_path=a,public` → 默认 schema。
+    search_path: Option<String>,
+    /// `-c timezone=Asia/Shanghai` → 会话时区。
+    timezone: Option<String>,
+    /// `-c statement_timeout=5s` → 查询超时（秒）。
+    statement_timeout_secs: Option<u32>,
+}
+
+/// 解析 libpq `options` 字符串（`-c key=value`，空格分隔）。
+///
+/// 只接受档案有语义的三个键；遇到其它键直接报错，避免导入后静默丢配置。
+fn parse_pg_options_param(raw: &str) -> std::result::Result<ParsedPgOptions, String> {
+    let mut parsed = ParsedPgOptions::default();
+    let mut tokens = raw.split_whitespace();
+    while let Some(token) = tokens.next() {
+        // 支持 `-c key=value`、`-ckey=value` 与裸 `key=value`。
+        let token = if token == "-c" {
+            tokens
+                .next()
+                .ok_or_else(|| "options 的 -c 缺少参数".to_string())?
+        } else {
+            token.strip_prefix("-c").unwrap_or(token)
+        };
+        let token = token.strip_prefix('=').unwrap_or(token);
+        let (key, value) = token
+            .split_once('=')
+            .ok_or_else(|| format!("options 参数 `{token}` 不是 key=value 形式"))?;
+        match key.to_ascii_lowercase().as_str() {
+            "search_path" => parsed.search_path = Some(value.to_string()),
+            "timezone" => parsed.timezone = Some(value.to_string()),
+            "statement_timeout" => {
+                parsed.statement_timeout_secs = Some(parse_pg_timeout_secs(value)?)
+            }
+            other => {
+                return Err(format!(
+                    "options 不支持 `{other}`（仅支持 search_path / timezone / statement_timeout）"
+                ));
+            }
+        }
+    }
+    Ok(parsed)
+}
+
+/// 把 PostgreSQL 超时值解析成秒：`5000`（毫秒）、`5s`、`250ms`。
+fn parse_pg_timeout_secs(raw: &str) -> std::result::Result<u32, String> {
+    let raw = raw.trim();
+    let invalid = || format!("无法解析 statement_timeout `{raw}`");
+    let (number, unit) = if let Some(value) = raw.strip_suffix("ms") {
+        (value, "ms")
+    } else if let Some(value) = raw.strip_suffix('s') {
+        (value, "s")
+    } else {
+        (raw, "ms")
+    };
+    let value: u64 = number.trim().parse().map_err(|_| invalid())?;
+    let secs = if unit == "ms" {
+        value.div_ceil(1000)
+    } else {
+        value
+    };
+    u32::try_from(secs).map_err(|_| invalid())
 }
 
 /// 解析 host[:port]，支持 IPv6（`[::1]:5432` 或 `[::1]`）。
@@ -750,3 +873,57 @@ fn parse_pg_hostport(authority: &str) -> std::result::Result<(String, String, u1
 // 百分号解码复用 redis_profile.rs 的 `percent_decode`（crate-root 作用域可见）：同一套
 // 宽松解码语义（非法转义按原样保留、UTF-8 lossy），不在此重复定义。
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `sslmode=require` 必须真正打开 TLS，否则拨号会静默降级为明文。
+    #[test]
+    fn from_uri_sslmode_enables_tls() {
+        let profile = PostgresConnectionProfile::from_uri(
+            "postgres://user:pass@db.local:5433/app?sslmode=require",
+        )
+        .expect("URI 应可解析");
+        assert_eq!(profile.tls.ssl_mode, PostgresSslMode::Require);
+        assert!(profile.tls.enabled);
+        assert_eq!(profile.basic.maintenance_database, "app");
+        assert_eq!(profile.basic.port, 5433);
+        assert_eq!(profile.basic.password.value(), Some("pass"));
+    }
+
+    /// `options` 里的 libpq `-c` 串联映射到 schema / 时区 / 查询超时。
+    #[test]
+    fn from_uri_options_maps_session_settings() {
+        let uri = "postgres://u@db/app?options=-c%20search_path%3Dapp%20-c%20timezone%3DAsia%2FShanghai%20-c%20statement_timeout%3D5s";
+        let profile = PostgresConnectionProfile::from_uri(uri).expect("URI 应可解析");
+        assert_eq!(profile.scope.default_schema, "app");
+        assert_eq!(profile.advanced.timezone, "Asia/Shanghai");
+        assert_eq!(profile.advanced.query_timeout_secs, 5);
+        // 无 sslmode / 证书，保持默认不启用 TLS。
+        assert!(!profile.tls.enabled);
+    }
+
+    /// 未知查询参数与未知 options 键都要显式报错，不静默丢弃。
+    #[test]
+    fn from_uri_rejects_unknown_params() {
+        let err = PostgresConnectionProfile::from_uri("postgres://db/app?channel_binding=require")
+            .expect_err("未知参数应报错");
+        assert!(err.contains("channel_binding"), "err = {err}");
+
+        let err = PostgresConnectionProfile::from_uri(
+            "postgres://db/app?options=-c%20lock_timeout%3D1s",
+        )
+        .expect_err("未知 options 键应报错");
+        assert!(err.contains("lock_timeout"), "err = {err}");
+    }
+
+    /// `statement_timeout` 的毫秒写法向上取整到秒。
+    #[test]
+    fn parse_timeout_units() {
+        assert_eq!(parse_pg_timeout_secs("250ms").unwrap(), 1);
+        assert_eq!(parse_pg_timeout_secs("5000").unwrap(), 5);
+        assert_eq!(parse_pg_timeout_secs("5s").unwrap(), 5);
+        assert!(parse_pg_timeout_secs("abc").is_err());
+    }
+}

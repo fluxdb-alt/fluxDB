@@ -11,27 +11,66 @@
 // - 通过 [`MysqlConnectionProfile::from_options`] 承接历史 `options` 扁平参数，
 //   通过 [`MysqlConnectionProfile::into_options`] 回写兼容参数供现有消费方复用。
 //
-// 范围说明：SSH 隧道已复用 Redis 的 `SshTunnel` 真正拨号；SOCKS5/HTTP 代理与
-// 断线重连在此仅建模并校验（`validate` 对 enabled 的代理返回"暂未支持"），首版不拨号。
+// 范围说明：SSH 隧道复用 Redis 的 `SshTunnel` 真正拨号；SOCKS5/HTTP 代理由连接器
+// （`transport/proxy.rs`）真正握手后转发，二者互斥。
 
-/// MySQL TLS 模式。
+/// MySQL TLS 模式，与 MySQL 官方 `--ssl-mode` 五档一致。
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum MysqlSslMode {
     /// 禁用 TLS。
     Disabled,
-    /// 优先 TLS（服务器支持则加密），默认。
+    /// 优先 TLS（服务器支持则加密，不支持则明文），默认。
     #[default]
     Preferred,
     /// 强制 TLS：服务器不支持则连接失败。
     Required,
+    /// 强制 TLS 并校验证书链，不校验主机名。
+    VerifyCa,
+    /// 强制 TLS 并校验证书链与主机名。
+    VerifyIdentity,
+}
+
+impl MysqlSslMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Preferred => "preferred",
+            Self::Required => "required",
+            Self::VerifyCa => "verify_ca",
+            Self::VerifyIdentity => "verify_identity",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "disabled" => Self::Disabled,
+            "required" => Self::Required,
+            "verify_ca" | "verify-ca" => Self::VerifyCa,
+            "verify_identity" | "verify-identity" | "verify_full" | "verify-full" => {
+                Self::VerifyIdentity
+            }
+            _ => Self::Preferred,
+        }
+    }
+
+    /// 是否需要校验证书链（CA 字段只在这两档下生效）。
+    pub fn verifies_certificate(self) -> bool {
+        matches!(self, Self::VerifyCa | Self::VerifyIdentity)
+    }
+
+    /// 是否需要校验主机名。
+    pub fn verifies_hostname(self) -> bool {
+        self == Self::VerifyIdentity
+    }
 }
 
 /// TLS 相关参数。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MysqlTlsOptions {
     /// 是否启用 TLS。
     pub enabled: bool,
-    /// TLS 模式（`Required` 时需先启用并配证书）。
+    /// TLS 模式。
     pub ssl_mode: MysqlSslMode,
     /// CA 证书文件路径引用。
     pub ca: SecretRef,
@@ -39,9 +78,12 @@ pub struct MysqlTlsOptions {
     pub client_cert: SecretRef,
     /// 客户端私钥文件路径引用。
     pub client_key: SecretRef,
-    /// SNI / 校验主机名（默认取连接主机名）。
+    /// SNI / 校验主机名（默认取连接主机名）。MySQL 驱动不支持独立覆盖，保留供归档。
     pub sni: String,
-    /// 是否校验证书。关闭仅用于自签环境。
+    /// 历史字段：旧版本用独立开关表达"校验证书"。
+    ///
+    /// 新逻辑以 `ssl_mode` 为准；此处仅用于把旧配置（`verify=true` +
+    /// `preferred/required`）迁移为 `verify_ca`，写回时由模式反推。
     pub verify: bool,
     /// 连接字符集（默认 utf8mb4）。
     pub charset: String,
@@ -58,9 +100,24 @@ impl Default for MysqlTlsOptions {
             client_cert: SecretRef::default(),
             client_key: SecretRef::default(),
             sni: String::new(),
-            verify: true,
+            verify: false,
             charset: "utf8mb4".into(),
             collation: String::new(),
+        }
+    }
+}
+
+impl MysqlTlsOptions {
+    /// 实际生效的 TLS 模式：兼容旧配置里的独立校验开关。
+    ///
+    /// 旧版本把"校验证书"放在 `verify` 布尔位，模式可能仍是 `preferred`；
+    /// 升级后统一映射为 `verify_ca`，避免安全级别被悄悄降低。
+    pub fn effective_ssl_mode(&self) -> MysqlSslMode {
+        match self.ssl_mode {
+            MysqlSslMode::Preferred | MysqlSslMode::Required if self.verify => {
+                MysqlSslMode::VerifyCa
+            }
+            mode => mode,
         }
     }
 }
@@ -75,6 +132,7 @@ pub enum MysqlSshAuth {
 
 /// SSH 隧道参数。
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MysqlSshOptions {
     /// 是否启用 SSH 隧道。
     pub enabled: bool,
@@ -96,6 +154,8 @@ pub struct MysqlSshOptions {
     pub connect_timeout_secs: u32,
     /// SSH 心跳间隔（秒），默认 30；0 表示不发送。
     pub keepalive_interval_secs: u32,
+    /// 主机密钥校验策略；默认严格校验 known_hosts。
+    pub host_key_policy: SshHostKeyPolicy,
 }
 
 /// 代理类型。
@@ -116,7 +176,7 @@ impl MysqlProxyType {
     }
 }
 
-/// 代理参数（首版仅建模与校验，不实际拨号）。
+/// 代理参数（SOCKS5 / HTTP CONNECT）。
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MysqlProxy {
     /// 是否启用代理。
@@ -133,7 +193,7 @@ pub struct MysqlProxy {
     pub password: SecretRef,
 }
 
-/// 传输层：SSH 隧道或（未拨号的）代理。`transport: Vec` 支持多跳扩展。
+/// 传输层：SSH 隧道或代理。`transport: Vec` 支持多跳扩展；两段目前互斥。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum MysqlTransportLayer {
     Ssh(MysqlSshOptions),
@@ -142,15 +202,21 @@ pub enum MysqlTransportLayer {
 
 /// 高级连接选项。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MysqlAdvancedOptions {
     /// 建连超时（秒），默认 5。
     pub connect_timeout_secs: u32,
     /// 查询超时（秒），0 表示不设限。
     pub query_timeout_secs: u32,
-    /// 连接空闲 TTL（秒），0 表示不回收。
-    pub idle_ttl_secs: u32,
-    /// TCP 长连接保活。
+    /// 底层 TCP 连接保活（`SO_KEEPALIVE`）。
+    ///
+    /// sqlx 不暴露套接字，开启后连接改经本地转发建立，由转发器设置保活；
+    /// 默认关闭以保持直连路径。
     pub tcp_keepalive: bool,
+    /// 会话时区（如 `+08:00` 或 `Asia/Shanghai`）；空表示沿用驱动默认。
+    pub timezone: String,
+    /// 连接建立后执行的初始化语句；按分号拆分后顺序执行（引号/注释内的分号不拆分）。
+    pub init_sql: String,
 }
 
 impl Default for MysqlAdvancedOptions {
@@ -158,14 +224,16 @@ impl Default for MysqlAdvancedOptions {
         Self {
             connect_timeout_secs: 5,
             query_timeout_secs: 0,
-            idle_ttl_secs: 0,
-            tcp_keepalive: true,
+            tcp_keepalive: false,
+            timezone: String::new(),
+            init_sql: String::new(),
         }
     }
 }
 
 /// 基础连接参数。
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MysqlBasicOptions {
     /// 目标主机。
     pub host: String,
@@ -177,10 +245,13 @@ pub struct MysqlBasicOptions {
     pub username: String,
     /// 认证密码（不安全）。
     pub password: SecretRef,
+    /// Unix socket 路径；非空时代替 TCP 主机/端口拨号。
+    pub socket_path: String,
 }
 
 /// MySQL 完整连接档案：承接 TLS / SSH / 代理 / 高级超时。
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MysqlConnectionProfile {
     pub basic: MysqlBasicOptions,
     pub tls: MysqlTlsOptions,
@@ -205,14 +276,11 @@ impl MysqlConnectionProfile {
             database: get("database").unwrap_or_default(),
             username: get("username").unwrap_or_else(|| "root".into()),
             password: SecretRef::inline(get("password").unwrap_or_default()),
+            socket_path: get("socket").unwrap_or_default(),
         };
         let tls = MysqlTlsOptions {
             enabled: connection_option_is_true(get("tls").as_ref()),
-            ssl_mode: match get("ssl_mode").as_deref() {
-                Some("disabled") => MysqlSslMode::Disabled,
-                Some("required") => MysqlSslMode::Required,
-                _ => MysqlSslMode::Preferred,
-            },
+            ssl_mode: MysqlSslMode::parse(get("ssl_mode").as_deref().unwrap_or("")),
             ca: SecretRef::ref_key(get("tls_ca_ref").unwrap_or_default()),
             client_cert: SecretRef::ref_key(get("tls_client_cert_ref").unwrap_or_default()),
             client_key: SecretRef::ref_key(get("tls_client_key_ref").unwrap_or_default()),
@@ -242,6 +310,9 @@ impl MysqlConnectionProfile {
             keepalive_interval_secs: get("ssh_keepalive_interval_secs")
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(30),
+            host_key_policy: SshHostKeyPolicy::parse(
+                get("ssh_host_key_policy").as_deref().unwrap_or(""),
+            ),
         };
         if ssh.enabled {
             transport.push(MysqlTransportLayer::Ssh(ssh));
@@ -273,12 +344,9 @@ impl MysqlConnectionProfile {
                 query_timeout_secs: get("query_timeout_secs")
                     .and_then(|p| p.parse().ok())
                     .unwrap_or(0),
-                idle_ttl_secs: get("idle_ttl_secs").and_then(|p| p.parse().ok()).unwrap_or(0),
-                // 缺省视为启用（默认 true）。
-                tcp_keepalive: match get("tcp_keepalive") {
-                    Some(v) => connection_option_is_true(Some(&v)),
-                    None => true,
-                },
+                tcp_keepalive: connection_option_is_true(get("tcp_keepalive").as_ref()),
+                timezone: get("timezone").unwrap_or_default(),
+                init_sql: get("init_sql").unwrap_or_default(),
             },
         }
     }
@@ -302,21 +370,19 @@ impl MysqlConnectionProfile {
         if let Some(password) = self.basic.password.value() {
             ops.insert("password".into(), password.to_string());
         }
+        if !self.basic.socket_path.trim().is_empty() {
+            ops.insert("socket".into(), self.basic.socket_path.trim().into());
+        }
 
         let t = &self.tls;
+        let mode = t.effective_ssl_mode();
         ops.insert("tls".into(), t.enabled.to_string());
-        ops.insert(
-            "ssl_mode".into(),
-            match t.ssl_mode {
-                MysqlSslMode::Disabled => "disabled".into(),
-                MysqlSslMode::Preferred => "preferred".into(),
-                MysqlSslMode::Required => "required".into(),
-            },
-        );
+        ops.insert("ssl_mode".into(), mode.as_str().into());
         if !t.sni.is_empty() {
             ops.insert("tls_server_name".into(), t.sni.clone());
         }
-        ops.insert("tls_insecure".into(), (!t.verify).to_string());
+        // 兼容字段：由模式反推，保证旧消费方看到的"是否校验"与新语义一致。
+        ops.insert("tls_insecure".into(), (!mode.verifies_certificate()).to_string());
         if !t.ca.key.is_empty() || !t.client_cert.key.is_empty() || !t.client_key.key.is_empty() {
             ops.insert("tls_ca_ref".into(), t.ca.key.clone());
             ops.insert("tls_client_cert_ref".into(), t.client_cert.key.clone());
@@ -358,6 +424,12 @@ impl MysqlConnectionProfile {
                     if ssh.keepalive_interval_secs != 30 {
                         ops.insert("ssh_keepalive_interval_secs".into(), ssh.keepalive_interval_secs.to_string());
                     }
+                    if ssh.host_key_policy != SshHostKeyPolicy::Strict {
+                        ops.insert(
+                            "ssh_host_key_policy".into(),
+                            ssh.host_key_policy.as_str().into(),
+                        );
+                    }
                 }
                 MysqlTransportLayer::Proxy(proxy) if proxy.enabled => {
                     ops.insert("proxy_enabled".into(), "true".into());
@@ -386,10 +458,13 @@ impl MysqlConnectionProfile {
         if a.query_timeout_secs > 0 {
             ops.insert("query_timeout_secs".into(), a.query_timeout_secs.to_string());
         }
-        if a.idle_ttl_secs > 0 {
-            ops.insert("idle_ttl_secs".into(), a.idle_ttl_secs.to_string());
-        }
         ops.insert("tcp_keepalive".into(), a.tcp_keepalive.to_string());
+        if !a.timezone.trim().is_empty() {
+            ops.insert("timezone".into(), a.timezone.trim().into());
+        }
+        if !a.init_sql.trim().is_empty() {
+            ops.insert("init_sql".into(), a.init_sql.clone());
+        }
 
         ops
     }
@@ -404,7 +479,7 @@ impl MysqlConnectionProfile {
         })
     }
 
-    /// 首个启用的代理层（无则 `None`；首版不拨号）。
+    /// 首个启用的代理层（无则 `None`）。
     pub fn proxy(&self) -> Option<&MysqlProxy> {
         self.transport.iter().find_map(|layer| match layer {
             MysqlTransportLayer::Proxy(proxy) if proxy.enabled => Some(proxy),
@@ -434,18 +509,30 @@ impl MysqlConnectionProfile {
 
     /// 校验：返回第一条不合法的中文错误；`None` 表示通过。
     pub fn validate(&self) -> Option<String> {
-        if self.basic.host.is_empty() {
+        let socket_path = self.basic.socket_path.trim();
+        if socket_path.is_empty() && self.basic.host.is_empty() {
             return Some("请填写主机".into());
         }
-        if self.basic.port == 0 {
+        if socket_path.is_empty() && self.basic.port == 0 {
             return Some("端口不合法".into());
         }
-        if self.tls.ssl_mode == MysqlSslMode::Required && !self.tls.enabled {
+        let mode = self.tls.effective_ssl_mode();
+        if mode != MysqlSslMode::Disabled && mode != MysqlSslMode::Preferred && !self.tls.enabled {
             return Some("强制 TLS 模式需先启用 TLS".into());
         }
-        if self.proxy().is_some() {
-            // 首版代理不拨号：阻止保存/启用一个无法生效的配置。
-            return Some("代理传输暂未支持，请先关闭代理或仅使用 SSH 隧道".into());
+        if !socket_path.is_empty() && (self.ssh().is_some() || self.proxy().is_some()) {
+            return Some("Unix Socket 与 SSH 隧道/代理不能同时启用".into());
+        }
+        if let Some(proxy) = self.proxy() {
+            if proxy.host.trim().is_empty() {
+                return Some("请填写代理主机".into());
+            }
+            if proxy.port == 0 {
+                return Some("代理端口不合法".into());
+            }
+            if self.ssh().is_some() {
+                return Some("SSH 隧道与代理不能同时启用，请只保留一种".into());
+            }
         }
         if let Some(ssh) = self.ssh() {
             if ssh.host.is_empty() {
@@ -461,13 +548,231 @@ impl MysqlConnectionProfile {
                 return Some("请填写 SSH 私钥文件路径".into());
             }
         }
-        if self.advanced.connect_timeout_secs > 86400
-            || self.advanced.query_timeout_secs > 86400
-            || self.advanced.idle_ttl_secs > 86400
-        {
+        if self.advanced.connect_timeout_secs > 86400 || self.advanced.query_timeout_secs > 86400 {
             return Some("高级超时值不能超过 86400 秒".into());
         }
         None
     }
 }
 
+/// 把初始化 SQL 拆成可逐条执行的语句。
+///
+/// 分隔符为分号；引号、反引号以及 `--`/`#`/`/* */` 注释内的分号不拆分。
+/// 空语句与纯空白会被丢弃，其余原文保留（注释随语句一起下发）。
+pub fn split_mysql_init_sql(raw: &str) -> Vec<String> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum State {
+        Normal,
+        Single,
+        Double,
+        Backtick,
+        LineComment,
+        BlockComment,
+    }
+
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut state = State::Normal;
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match state {
+            State::Normal => match ch {
+                ';' => {
+                    let statement = current.trim();
+                    if !statement.is_empty() {
+                        statements.push(statement.to_string());
+                    }
+                    current.clear();
+                }
+                '\'' => {
+                    state = State::Single;
+                    current.push(ch);
+                }
+                '"' => {
+                    state = State::Double;
+                    current.push(ch);
+                }
+                '`' => {
+                    state = State::Backtick;
+                    current.push(ch);
+                }
+                '#' => {
+                    state = State::LineComment;
+                    current.push(ch);
+                }
+                '-' if chars.peek() == Some(&'-') => {
+                    current.push(ch);
+                    current.push(chars.next().unwrap_or('-'));
+                    state = State::LineComment;
+                }
+                '/' if chars.peek() == Some(&'*') => {
+                    current.push(ch);
+                    current.push(chars.next().unwrap_or('*'));
+                    state = State::BlockComment;
+                }
+                _ => current.push(ch),
+            },
+            // 字符串里支持反斜杠转义与 `''` / `""` 双写；两种写法都不结束字符串。
+            State::Single | State::Double | State::Backtick => {
+                current.push(ch);
+                let quote = match state {
+                    State::Single => '\'',
+                    State::Double => '"',
+                    _ => '`',
+                };
+                if ch == '\\' {
+                    if let Some(escaped) = chars.next() {
+                        current.push(escaped);
+                    }
+                } else if ch == quote {
+                    if chars.peek() == Some(&quote) {
+                        current.push(chars.next().unwrap_or(quote));
+                    } else {
+                        state = State::Normal;
+                    }
+                }
+            }
+            State::LineComment => {
+                current.push(ch);
+                if ch == '\n' {
+                    state = State::Normal;
+                }
+            }
+            State::BlockComment => {
+                current.push(ch);
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    current.push(chars.next().unwrap_or('/'));
+                    state = State::Normal;
+                }
+            }
+        }
+    }
+    let statement = current.trim();
+    if !statement.is_empty() {
+        statements.push(statement.to_string());
+    }
+    statements
+}
+
+#[cfg(test)]
+mod mysql_profile_tests {
+    use super::*;
+
+    fn options() -> std::collections::BTreeMap<String, String> {
+        let mut options = std::collections::BTreeMap::new();
+        options.insert("host".into(), "db.example.com".into());
+        options.insert("port".into(), "3307".into());
+        options.insert("username".into(), "app".into());
+        options.insert("database".into(), "shop".into());
+        options
+    }
+
+    #[test]
+    fn effective_mode_migrates_legacy_verify_flag() {
+        let legacy = MysqlTlsOptions {
+            enabled: true,
+            ssl_mode: MysqlSslMode::Preferred,
+            verify: true,
+            ..MysqlTlsOptions::default()
+        };
+        assert_eq!(legacy.effective_ssl_mode(), MysqlSslMode::VerifyCa);
+        // 新模式不再被历史开关覆盖。
+        let explicit = MysqlTlsOptions {
+            enabled: true,
+            ssl_mode: MysqlSslMode::VerifyIdentity,
+            verify: true,
+            ..MysqlTlsOptions::default()
+        };
+        assert_eq!(explicit.effective_ssl_mode(), MysqlSslMode::VerifyIdentity);
+    }
+
+    #[test]
+    fn ssl_mode_parse_and_flags() {
+        assert_eq!(MysqlSslMode::parse("verify-ca"), MysqlSslMode::VerifyCa);
+        assert_eq!(
+            MysqlSslMode::parse("verify_identity"),
+            MysqlSslMode::VerifyIdentity
+        );
+        assert_eq!(MysqlSslMode::parse("bogus"), MysqlSslMode::Preferred);
+        assert!(MysqlSslMode::VerifyCa.verifies_certificate());
+        assert!(!MysqlSslMode::VerifyCa.verifies_hostname());
+        assert!(MysqlSslMode::VerifyIdentity.verifies_hostname());
+    }
+
+    #[test]
+    fn profile_roundtrip_keeps_new_fields() {
+        let mut flat = options();
+        flat.insert("ssl_mode".into(), "verify_identity".into());
+        flat.insert("collation".into(), "utf8mb4_0900_ai_ci".into());
+        flat.insert("socket".into(), String::new());
+        flat.insert("timezone".into(), "+08:00".into());
+        flat.insert("init_sql".into(), "SET NAMES utf8mb4;SET time_zone='+08:00'".into());
+        flat.insert("ssh_enabled".into(), "true".into());
+        flat.insert("ssh_host".into(), "jump".into());
+        flat.insert("ssh_username".into(), "ops".into());
+        flat.insert("ssh_host_key_policy".into(), "ignore".into());
+
+        let profile = MysqlConnectionProfile::from_options(&flat);
+        assert_eq!(profile.tls.ssl_mode, MysqlSslMode::VerifyIdentity);
+        assert_eq!(profile.tls.collation, "utf8mb4_0900_ai_ci");
+        assert_eq!(profile.advanced.timezone, "+08:00");
+        assert_eq!(profile.ssh().unwrap().host_key_policy, SshHostKeyPolicy::Ignore);
+
+        let written = profile.into_options();
+        assert_eq!(written.get("ssl_mode").map(String::as_str), Some("verify_identity"));
+        assert_eq!(written.get("collation").map(String::as_str), Some("utf8mb4_0900_ai_ci"));
+        assert_eq!(written.get("timezone").map(String::as_str), Some("+08:00"));
+        assert_eq!(
+            written.get("ssh_host_key_policy").map(String::as_str),
+            Some("ignore")
+        );
+    }
+
+    #[test]
+    fn socket_replaces_host_and_port_validation() {
+        let profile = MysqlConnectionProfile {
+            basic: MysqlBasicOptions {
+                socket_path: "/var/run/mysqld/mysqld.sock".into(),
+                port: 0,
+                ..MysqlBasicOptions::default()
+            },
+            ..MysqlConnectionProfile::default()
+        };
+        assert_eq!(profile.validate(), None);
+        // Socket 与 SSH 隧道互斥。
+        let profile = MysqlConnectionProfile {
+            transport: vec![MysqlTransportLayer::Ssh(MysqlSshOptions {
+                enabled: true,
+                host: "jump".into(),
+                username: "ops".into(),
+                ..MysqlSshOptions::default()
+            })],
+            ..profile
+        };
+        assert_eq!(
+            profile.validate().as_deref(),
+            Some("Unix Socket 与 SSH 隧道/代理不能同时启用")
+        );
+    }
+
+    #[test]
+    fn init_sql_splits_only_outside_quotes_and_comments() {
+        assert_eq!(
+            split_mysql_init_sql("SET NAMES utf8mb4; SET time_zone='+08:00'"),
+            vec!["SET NAMES utf8mb4", "SET time_zone='+08:00'"]
+        );
+        assert_eq!(
+            split_mysql_init_sql("INSERT INTO t VALUES ('a;b'); SELECT 1"),
+            vec!["INSERT INTO t VALUES ('a;b')", "SELECT 1"]
+        );
+        assert_eq!(
+            split_mysql_init_sql("SELECT 'it\\'s;fine'; SELECT 2"),
+            vec!["SELECT 'it\\'s;fine'", "SELECT 2"]
+        );
+        assert_eq!(
+            split_mysql_init_sql("SELECT 1 -- keep; together\n; SELECT 2"),
+            vec!["SELECT 1 -- keep; together", "SELECT 2"]
+        );
+        assert_eq!(split_mysql_init_sql(" ; ; "), Vec::<String>::new());
+    }
+}

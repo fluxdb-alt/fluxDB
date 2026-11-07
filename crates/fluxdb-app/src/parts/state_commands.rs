@@ -54,12 +54,8 @@ pub enum AppCommand {
     },
     MoveConnectionToTopLevel(ConnectionId),
     TestConnection(ConnectionConfig),
-    /// 从「连接串 / 云资源标识」自动发现一条 Redis 连接（URI 导入 / 云自动发现统一入口）。
-    /// `provider` 为云提供商标识（`azure` / `redis-cloud` / 空表示普通连接串导入）。
-    DiscoverRedisConnection {
-        provider: String,
-        connection_string: String,
-    },
+    /// 从 `redis://` 等连接串导入一条 Redis 连接草稿。
+    DiscoverRedisConnection { connection_string: String },
     /// 从 `mongodb://` / `mongodb+srv://` 连接串导入一条 MongoDB 连接草稿。
     DiscoverMongoConnection {
         connection_string: String,

@@ -42,8 +42,7 @@ use fluxdb_core::{
     UserFacingError, UserRoleMember, UserRoleMembership, WorkbenchHistoryItem,
     WorkbenchHistoryScope, WorkbenchHistoryStore, WriteCommit, WriteReviewOutcome,
     WriteRiskDecision, WriteRiskFacts, database_user_admin_provider, grants_from_query_result,
-    infer_cloud_from_host, redact_uri_password, role_memberships_from_grants,
-    set_sqlite_attached_database, sqlite_attached_database_path,
+    role_memberships_from_grants, set_sqlite_attached_database, sqlite_attached_database_path,
 };
 pub use fluxdb_core::{
     TableDataImport, TableImportFormat, TableImportProgress, TableImportReport, TableImportRequest,

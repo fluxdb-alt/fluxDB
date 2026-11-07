@@ -155,6 +155,7 @@ fn mysql_imports_all_export_formats() {
                 database: database.clone(),
                 username: parts[2].into(),
                 password: SecretRef::inline(parts[3]),
+                ..fluxdb_core::MysqlBasicOptions::default()
             },
             ..MysqlConnectionProfile::default()
         }),

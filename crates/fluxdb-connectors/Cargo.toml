@@ -16,6 +16,8 @@ tokio-postgres-rustls = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2"
 rustls-pki-types = "1"
+# 解密 PKCS#8 加密私钥（客户端证书 mTLS）；口令只在内存中使用。
+pkcs8 = { version = "0.11", features = ["encryption", "pem"] }
 webpki-roots = "0.26"
 base64 = "0.22"
 chrono = "0.4"
@@ -23,11 +25,11 @@ tracing = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] }
 # SQL Server 使用纯 Rust TDS；显式关闭默认 native-tls/winauth，避免 macOS
 # Security Framework 与 SQL Server TLS 的兼容问题，也避免引入 SSPI/GSSAPI。
-tiberius = { path = "../tiberius", default-features = false, features = ["tds73", "chrono", "rustls"] }
+tiberius = { path = "../tiberius", default-features = false, features = ["tds73", "chrono", "rustls", "sql-browser-tokio"] }
 dm-pure = { path = "../dm-pure" }
 # Oracle 使用官方纯 Rust 驱动（TTC 协议直连，无 Instant Client / OCI 依赖），
 # 因此不需要分发本地动态库；支持 12c 及以上服务端。
-oracledb = "26.0.0-beta.4"
+oracledb = "26.0.0-beta.5"
 csv = "1.4"
 serde_json = "1"
 # 仅用于 MongoDB 游标的 `DeserializeOwned` 约束（驱动游标要求）。

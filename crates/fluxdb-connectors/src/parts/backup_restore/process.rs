@@ -159,6 +159,17 @@ fn native_connection(
     let Endpoint::Tcp { host, port, .. } = &config.endpoint else {
         return Err(task_error("原生客户端需要 TCP 连接"));
     };
+    // 原生命令行工具不支持 SOCKS5 / HTTP CONNECT。明确拒绝，不能静默直连：
+    // 开通代理的连接通常无法从本机直达数据库，静默直连只会报一个误导性的网络错误。
+    let proxy_enabled = config
+        .options
+        .get("proxy_enabled")
+        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "y"));
+    if proxy_enabled {
+        return Err(task_error(
+            "原生备份/恢复工具不支持代理连接，请改用直连或 SSH 隧道",
+        ));
+    }
     let mut tunnel = None;
     if ssh_enabled(&config.options) {
         let auth = ssh_auth_from_options(&config.options, true)
@@ -174,7 +185,13 @@ fn native_connection(
             &auth,
             (host, *port),
             SshTunnelOptions {
-                verify_host_key: true,
+                host_key_policy: fluxdb_core::SshHostKeyPolicy::parse(
+                    config
+                        .options
+                        .get("ssh_host_key_policy")
+                        .map(String::as_str)
+                        .unwrap_or(""),
+                ),
                 ..Default::default()
             },
         )?);
@@ -202,15 +219,25 @@ fn mysql_tls(
         return Err(task_error(error));
     }
     let tls = &profile.tls;
-    if !tls.sni.is_empty() || (tunneled && tls.enabled && tls.verify) {
+    // 建连超时与主连接使用同一来源，避免备份工具用客户端默认值（通常无上限）。
+    let connect_timeout = profile.advanced.connect_timeout_secs.max(1);
+    command.arg(format!("--connect-timeout={connect_timeout}"));
+    if !tls.sni.is_empty() {
+        return Err(task_error("原生 MySQL 工具暂不支持独立 SNI，请清空 SNI 后再备份"));
+    }
+    // MariaDB 客户端只有 `--ssl-verify-server-cert`，它同时校验主机名；
+    // 经 SSH 隧道时主机已改写为 127.0.0.1，必然不匹配，明确拒绝而不是静默降级。
+    if mariadb && tunneled && tls.enabled && tls.verify {
         return Err(task_error(
-            "原生 MySQL 工具暂不支持此 SNI / SSH 主机名校验组合，请使用可保持 TLS 校验的直连配置",
+            "MariaDB 客户端在 SSH 隧道下无法同时校验证书主机名，请改用直连或关闭证书校验",
         ));
     }
+    // 与 sqlx 主连接共用 effective_ssl_mode，避免"界面选了 verify-ca、备份仍走 preferred"。
+    let effective = tls.effective_ssl_mode();
     if mariadb {
-        if tls.enabled {
+        if tls.enabled && effective != fluxdb_core::MysqlSslMode::Disabled {
             command.arg("--ssl");
-            if tls.verify {
+            if effective.verifies_certificate() {
                 command.arg("--ssl-verify-server-cert");
             }
         } else {
@@ -219,13 +246,13 @@ fn mysql_tls(
     } else {
         let mode = if !tls.enabled {
             "DISABLED"
-        } else if tls.verify {
-            "VERIFY_IDENTITY"
         } else {
-            match tls.ssl_mode {
+            match effective {
                 fluxdb_core::MysqlSslMode::Disabled => "DISABLED",
                 fluxdb_core::MysqlSslMode::Preferred => "PREFERRED",
                 fluxdb_core::MysqlSslMode::Required => "REQUIRED",
+                fluxdb_core::MysqlSslMode::VerifyCa => "VERIFY_CA",
+                fluxdb_core::MysqlSslMode::VerifyIdentity => "VERIFY_IDENTITY",
             }
         };
         command.arg(format!("--ssl-mode={mode}"));

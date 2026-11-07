@@ -43,10 +43,8 @@ pub use instance_profile::{PROFILE_ENV, instance_profile};
 
 use fluxdb_core::{
     ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot, ConnectionConfig, ConnectionId,
-    ErRebindEntity, ErRelationship, Error, ErrorKind, MysqlConnectionProfile, MysqlTransportLayer,
-    OracleConnectionProfile, PostgresConnectionProfile, PostgresTransportLayer,
-    RedisConnectionProfile, Result, RoutineRef, SavedQuery, SecretRef, Settings, SidebarLayout,
-    SqlServerConnectionProfile, TableRef, TriggerRef,
+    ErRebindEntity, ErRelationship, Error, ErrorKind, Result, RoutineRef, SavedQuery, SecretRef,
+    Settings, SidebarLayout, TableRef, TriggerRef,
 };
 
 /// ER 逻辑关系目录的 kv key 前缀：`er_rel:{scope}` 存该作用域的 `Vec<ErRelationship>`。
@@ -724,58 +722,11 @@ impl FileStorage {
                     .insert(PLAINTEXT_PASSWORD_OPTION.into(), secret);
             }
         }
-        if let Some(profile) = connection.redis_profile.as_mut() {
-            for (kind, slot) in profile_secret_slots_mut(profile) {
+        // 各数据库的凭据槽位统一走 `DatabaseConnection`，不再按类型写平行分支。
+        if let Some(profile) = connection.connection_profile_mut() {
+            for (slot_kind, slot) in profile.secret_slots_mut() {
                 if slot.inline.is_none() {
-                    slot.inline = self.best_effort_secret_read(id, kind);
-                }
-                slot.key.clear();
-            }
-        }
-        if let Some(profile) = connection.mysql_profile.as_mut() {
-            for (kind, slot) in mysql_profile_secret_slots_mut(profile) {
-                if slot.inline.is_none() {
-                    slot.inline = self.best_effort_secret_read(id, kind);
-                }
-                slot.key.clear();
-            }
-        }
-        if let Some(profile) = connection.postgres_profile.as_mut() {
-            for (kind, slot) in postgres_profile_secret_slots_mut(profile) {
-                if slot.inline.is_none() {
-                    slot.inline = self.best_effort_secret_read(id, kind);
-                }
-                slot.key.clear();
-            }
-        }
-        if let Some(profile) = connection.dameng_profile.as_mut() {
-            for (kind, slot) in dameng_profile_secret_slots_mut(profile) {
-                if slot.inline.is_none() {
-                    slot.inline = self.best_effort_secret_read(id, kind);
-                }
-                slot.key.clear();
-            }
-        }
-        if let Some(profile) = connection.sqlserver_profile.as_mut() {
-            for (kind, slot) in sqlserver_profile_secret_slots_mut(profile) {
-                if slot.inline.is_none() {
-                    slot.inline = self.best_effort_secret_read(id, kind);
-                }
-                slot.key.clear();
-            }
-        }
-        if let Some(profile) = connection.mongo_profile.as_mut() {
-            for (kind, slot) in mongo_profile_secret_slots_mut(profile) {
-                if slot.inline.is_none() {
-                    slot.inline = self.best_effort_secret_read(id, kind);
-                }
-                slot.key.clear();
-            }
-        }
-        if let Some(profile) = connection.oracle_profile.as_mut() {
-            for (kind, slot) in oracle_profile_secret_slots_mut(profile) {
-                if slot.inline.is_none() {
-                    slot.inline = self.best_effort_secret_read(id, kind);
+                    slot.inline = self.best_effort_secret_read(id, secret_slot_kind(slot_kind));
                 }
                 slot.key.clear();
             }
@@ -1071,78 +1022,49 @@ fn strip_plaintext_secrets(connection: &ConnectionConfig) -> ConnectionConfig {
     }
     connection.options.retain(|key, _| {
         let key = key.to_ascii_lowercase();
-        !key.contains("password") && !key.contains("secret")
+        !key.contains("password") && !key.contains("secret") && !key.contains("passphrase")
     });
     // 结构化档案里的受控值靠 `SecretRef.inline` 的 `#[serde(skip)]` 保证不落盘；
     // 这里再显式清空一份供盘上转储副本，双保险。
     if let Some(profile) = connection.redis_profile.as_mut() {
-        for (_, slot) in profile_secret_slots_mut(profile) {
-            slot.inline = None;
-        }
         // 导入来源元数据可能带明文口令（历史版本/其它导入路径），一律不落盘。
         profile.cloud.imported_name.clear();
     }
-    // MySQL 档案同理：清空全部受控值，保证盘上副本零明文。
-    if let Some(profile) = connection.mysql_profile.as_mut() {
-        for (_, slot) in mysql_profile_secret_slots_mut(profile) {
-            slot.inline = None;
-        }
-    }
-    // PostgreSQL 档案同理：清空全部受控值，保证盘上副本零明文。
-    if let Some(profile) = connection.postgres_profile.as_mut() {
-        for (_, slot) in postgres_profile_secret_slots_mut(profile) {
-            slot.inline = None;
-        }
-    }
-    if let Some(profile) = connection.dameng_profile.as_mut() {
-        for (_, slot) in dameng_profile_secret_slots_mut(profile) {
-            slot.inline = None;
-        }
-    }
-    if let Some(profile) = connection.sqlserver_profile.as_mut() {
-        for (_, slot) in sqlserver_profile_secret_slots_mut(profile) {
-            slot.inline = None;
-        }
-    }
-    // MongoDB 档案：只清密码受控值；TLS 证书路径是引用键而非密钥正文，保留在档案里。
-    if let Some(profile) = connection.mongo_profile.as_mut() {
-        for (_, slot) in mongo_profile_secret_slots_mut(profile) {
-            slot.inline = None;
-        }
-    }
-    if let Some(profile) = connection.oracle_profile.as_mut() {
-        for (_, slot) in oracle_profile_secret_slots_mut(profile) {
+    // 全部结构化档案共用一套受控槽位遍历：清空受控值，保证盘上副本零明文。
+    // 证书/私钥路径是引用键而非密钥正文，由 trait 排除在槽位之外。
+    if let Some(profile) = connection.connection_profile_mut() {
+        for (_, slot) in profile.secret_slots_mut() {
             slot.inline = None;
         }
     }
     connection
 }
 
-/// 合并 Redis/MySQL/PostgreSQL 的密码槽位，返回 `(secret_kind, SecretRef)`。
+/// 合并结构化档案的密码槽位，返回 `(secret_kind, SecretRef)`。
 fn profile_secret_slots_combined(connection: &ConnectionConfig) -> Vec<(&'static str, &SecretRef)> {
-    let mut slots: Vec<(&'static str, &SecretRef)> = Vec::new();
-    if let Some(profile) = connection.redis_profile.as_ref() {
-        slots.extend(profile_secret_slots(profile));
+    connection
+        .connection_profile()
+        .map(|profile| {
+            profile
+                .secret_slots()
+                .into_iter()
+                .map(|(slot_kind, secret)| (secret_slot_kind(slot_kind), secret))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `DatabaseConnection` 的语义槽位到凭据表键名的唯一映射。
+fn secret_slot_kind(slot: fluxdb_core::ConnectionSecretSlot) -> &'static str {
+    use fluxdb_core::ConnectionSecretSlot as Slot;
+    match slot {
+        Slot::DatabasePassword => connection_secrets::DATABASE_PASSWORD,
+        Slot::SshPassword => connection_secrets::SSH_PASSWORD,
+        Slot::SshPassphrase => connection_secrets::SSH_PASSPHRASE,
+        Slot::ProxyPassword => connection_secrets::PROXY_PASSWORD,
+        Slot::TlsClientKeyPassphrase => connection_secrets::TLS_CLIENT_KEY_PASSPHRASE,
+        Slot::OracleWalletPassword => connection_secrets::ORACLE_WALLET_PASSWORD,
     }
-    if let Some(profile) = connection.mysql_profile.as_ref() {
-        slots.extend(mysql_profile_secret_slots(profile));
-    }
-    if let Some(profile) = connection.postgres_profile.as_ref() {
-        slots.extend(postgres_profile_secret_slots(profile));
-    }
-    if let Some(profile) = connection.dameng_profile.as_ref() {
-        slots.extend(dameng_profile_secret_slots(profile));
-    }
-    if let Some(profile) = connection.sqlserver_profile.as_ref() {
-        slots.extend(sqlserver_profile_secret_slots(profile));
-    }
-    if let Some(profile) = connection.mongo_profile.as_ref() {
-        slots.extend(mongo_profile_secret_slots(profile));
-    }
-    if let Some(profile) = connection.oracle_profile.as_ref() {
-        slots.extend(oracle_profile_secret_slots(profile));
-    }
-    slots
 }
 
 fn credential_switch_error(error: Error, rollback_errors: Vec<String>) -> Error {
@@ -1156,260 +1078,4 @@ fn credential_switch_error(error: Error, rollback_errors: Vec<String>) -> Error 
             rollback_errors.join("；")
         ),
     )
-}
-
-fn profile_secret_slots(profile: &RedisConnectionProfile) -> Vec<(&'static str, &SecretRef)> {
-    let mut slots: Vec<(&'static str, &SecretRef)> = vec![(
-        connection_secrets::DATABASE_PASSWORD,
-        &profile.basic.password,
-    )];
-    if profile.ssh.enabled {
-        slots.push((connection_secrets::SSH_PASSWORD, &profile.ssh.password));
-        slots.push((connection_secrets::SSH_PASSPHRASE, &profile.ssh.passphrase));
-    }
-    slots
-}
-
-/// 可变版，供回填 / 剥离时原地改写槽位。
-fn profile_secret_slots_mut(
-    profile: &mut RedisConnectionProfile,
-) -> Vec<(&'static str, &mut SecretRef)> {
-    let mut slots: Vec<(&'static str, &mut SecretRef)> = vec![(
-        connection_secrets::DATABASE_PASSWORD,
-        &mut profile.basic.password,
-    )];
-    if profile.ssh.enabled {
-        slots.push((connection_secrets::SSH_PASSWORD, &mut profile.ssh.password));
-        slots.push((
-            connection_secrets::SSH_PASSPHRASE,
-            &mut profile.ssh.passphrase,
-        ));
-    }
-    slots
-}
-
-/// 遍历 MySQL 档案中需要走 SQLite 加密凭据表的「密码类」槽位。
-/// 返回 `(secret_kind, 该槽的 SecretRef)`。
-///
-/// 证书/私钥文件一律以文件路径引用（`key` 存路径，非密码语义），不在此列；
-/// 只有真正的密码（基础密码、SSH 密码、SSH 私钥口令、代理密码）才进 SQLite 加密凭据表。
-fn mysql_profile_secret_slots(profile: &MysqlConnectionProfile) -> Vec<(&'static str, &SecretRef)> {
-    let mut slots: Vec<(&'static str, &SecretRef)> = vec![(
-        connection_secrets::DATABASE_PASSWORD,
-        &profile.basic.password,
-    )];
-    for layer in &profile.transport {
-        match layer {
-            MysqlTransportLayer::Ssh(ssh) if ssh.enabled => {
-                slots.push((connection_secrets::SSH_PASSWORD, &ssh.password));
-                slots.push((connection_secrets::SSH_PASSPHRASE, &ssh.passphrase));
-            }
-            MysqlTransportLayer::Proxy(proxy) if proxy.enabled => {
-                slots.push((connection_secrets::PROXY_PASSWORD, &proxy.password));
-            }
-            _ => {}
-        }
-    }
-    slots
-}
-
-/// MySQL 档案槽位的可变版，供回填 / 剥离时原地改写槽位。
-fn mysql_profile_secret_slots_mut(
-    profile: &mut MysqlConnectionProfile,
-) -> Vec<(&'static str, &mut SecretRef)> {
-    // 解构以取得不重叠的借用（basic 与 transport 互不借用）。
-    let MysqlConnectionProfile {
-        basic, transport, ..
-    } = profile;
-    let mut slots: Vec<(&'static str, &mut SecretRef)> =
-        vec![(connection_secrets::DATABASE_PASSWORD, &mut basic.password)];
-    for layer in transport.iter_mut() {
-        match layer {
-            MysqlTransportLayer::Ssh(ssh) if ssh.enabled => {
-                slots.push((connection_secrets::SSH_PASSWORD, &mut ssh.password));
-                slots.push((connection_secrets::SSH_PASSPHRASE, &mut ssh.passphrase));
-            }
-            MysqlTransportLayer::Proxy(proxy) if proxy.enabled => {
-                slots.push((connection_secrets::PROXY_PASSWORD, &mut proxy.password));
-            }
-            _ => {}
-        }
-    }
-    slots
-}
-
-/// 遍历 PostgreSQL 档案中需要走 SQLite 加密凭据表的「密码类」槽位。
-/// 返回 `(secret_kind, 该槽的 SecretRef)`。
-///
-/// 证书/私钥文件一律以文件路径引用（`key` 存路径，非密码语义），不在此列；
-/// 只有真正的密码（基础密码、SSH 密码、SSH 私钥口令、代理密码）才进 SQLite 加密凭据表。
-fn postgres_profile_secret_slots(
-    profile: &PostgresConnectionProfile,
-) -> Vec<(&'static str, &SecretRef)> {
-    let mut slots: Vec<(&'static str, &SecretRef)> = vec![(
-        connection_secrets::DATABASE_PASSWORD,
-        &profile.basic.password,
-    )];
-    for layer in &profile.transport {
-        match layer {
-            PostgresTransportLayer::Ssh(ssh) if ssh.enabled => {
-                slots.push((connection_secrets::SSH_PASSWORD, &ssh.password));
-                slots.push((connection_secrets::SSH_PASSPHRASE, &ssh.passphrase));
-            }
-            PostgresTransportLayer::Proxy(proxy) if proxy.enabled => {
-                slots.push((connection_secrets::PROXY_PASSWORD, &proxy.password));
-            }
-            _ => {}
-        }
-    }
-    slots
-}
-
-/// PostgreSQL 档案槽位的可变版，供回填 / 剥离时原地改写槽位。
-fn postgres_profile_secret_slots_mut(
-    profile: &mut PostgresConnectionProfile,
-) -> Vec<(&'static str, &mut SecretRef)> {
-    // 解构以取得不重叠的借用（basic 与 transport 互不借用）。
-    let PostgresConnectionProfile {
-        basic, transport, ..
-    } = profile;
-    let mut slots: Vec<(&'static str, &mut SecretRef)> =
-        vec![(connection_secrets::DATABASE_PASSWORD, &mut basic.password)];
-    for layer in transport.iter_mut() {
-        match layer {
-            PostgresTransportLayer::Ssh(ssh) if ssh.enabled => {
-                slots.push((connection_secrets::SSH_PASSWORD, &mut ssh.password));
-                slots.push((connection_secrets::SSH_PASSPHRASE, &mut ssh.passphrase));
-            }
-            PostgresTransportLayer::Proxy(proxy) if proxy.enabled => {
-                slots.push((connection_secrets::PROXY_PASSWORD, &mut proxy.password));
-            }
-            _ => {}
-        }
-    }
-    slots
-}
-
-fn dameng_profile_secret_slots(
-    profile: &fluxdb_core::DamengConnectionProfile,
-) -> Vec<(&'static str, &SecretRef)> {
-    let mut slots = vec![(
-        connection_secrets::DATABASE_PASSWORD,
-        &profile.basic.password,
-    )];
-    if profile.ssh.enabled {
-        slots.push((connection_secrets::SSH_PASSWORD, &profile.ssh.password));
-        slots.push((connection_secrets::SSH_PASSPHRASE, &profile.ssh.passphrase));
-    }
-    slots
-}
-
-fn dameng_profile_secret_slots_mut(
-    profile: &mut fluxdb_core::DamengConnectionProfile,
-) -> Vec<(&'static str, &mut SecretRef)> {
-    let fluxdb_core::DamengConnectionProfile { basic, ssh, .. } = profile;
-    let mut slots = vec![(connection_secrets::DATABASE_PASSWORD, &mut basic.password)];
-    if ssh.enabled {
-        slots.push((connection_secrets::SSH_PASSWORD, &mut ssh.password));
-        slots.push((connection_secrets::SSH_PASSPHRASE, &mut ssh.passphrase));
-    }
-    slots
-}
-
-fn sqlserver_profile_secret_slots(
-    profile: &SqlServerConnectionProfile,
-) -> Vec<(&'static str, &SecretRef)> {
-    let mut slots = vec![(
-        connection_secrets::DATABASE_PASSWORD,
-        &profile.basic.password,
-    )];
-    if profile.ssh.enabled {
-        slots.push((connection_secrets::SSH_PASSWORD, &profile.ssh.password));
-        slots.push((connection_secrets::SSH_PASSPHRASE, &profile.ssh.passphrase));
-    }
-    slots
-}
-
-fn sqlserver_profile_secret_slots_mut(
-    profile: &mut SqlServerConnectionProfile,
-) -> Vec<(&'static str, &mut SecretRef)> {
-    let SqlServerConnectionProfile { basic, ssh, .. } = profile;
-    let mut slots = vec![(connection_secrets::DATABASE_PASSWORD, &mut basic.password)];
-    if ssh.enabled {
-        slots.push((connection_secrets::SSH_PASSWORD, &mut ssh.password));
-        slots.push((connection_secrets::SSH_PASSPHRASE, &mut ssh.passphrase));
-    }
-    slots
-}
-
-/// MongoDB 档案的密码槽位；TLS 证书走文件路径引用，不进加密凭据表。
-fn mongo_profile_secret_slots(
-    profile: &fluxdb_core::MongoConnectionProfile,
-) -> Vec<(&'static str, &SecretRef)> {
-    let mut slots = vec![(
-        connection_secrets::DATABASE_PASSWORD,
-        &profile.basic.password,
-    )];
-    if profile.ssh.enabled {
-        slots.push((connection_secrets::SSH_PASSWORD, &profile.ssh.password));
-        slots.push((connection_secrets::SSH_PASSPHRASE, &profile.ssh.passphrase));
-    }
-    slots
-}
-
-fn mongo_profile_secret_slots_mut(
-    profile: &mut fluxdb_core::MongoConnectionProfile,
-) -> Vec<(&'static str, &mut SecretRef)> {
-    let fluxdb_core::MongoConnectionProfile { basic, ssh, .. } = profile;
-    let mut slots = vec![(connection_secrets::DATABASE_PASSWORD, &mut basic.password)];
-    if ssh.enabled {
-        slots.push((connection_secrets::SSH_PASSWORD, &mut ssh.password));
-        slots.push((connection_secrets::SSH_PASSPHRASE, &mut ssh.passphrase));
-    }
-    slots
-}
-
-/// Oracle 受控槽位：登录密码、Wallet 口令与 SSH 密码/口令。
-/// 各槽位分开存，避免改其中一项时误删其它凭据。
-fn oracle_profile_secret_slots(
-    profile: &OracleConnectionProfile,
-) -> Vec<(&'static str, &SecretRef)> {
-    let mut slots = vec![
-        (
-            connection_secrets::DATABASE_PASSWORD,
-            &profile.basic.password,
-        ),
-        (
-            connection_secrets::ORACLE_WALLET_PASSWORD,
-            &profile.advanced.wallet_password,
-        ),
-    ];
-    if profile.ssh.enabled {
-        slots.push((connection_secrets::SSH_PASSWORD, &profile.ssh.password));
-        slots.push((connection_secrets::SSH_PASSPHRASE, &profile.ssh.passphrase));
-    }
-    slots
-}
-
-fn oracle_profile_secret_slots_mut(
-    profile: &mut OracleConnectionProfile,
-) -> Vec<(&'static str, &mut SecretRef)> {
-    let OracleConnectionProfile {
-        basic,
-        advanced,
-        ssh,
-        ..
-    } = profile;
-    let mut slots = vec![
-        (connection_secrets::DATABASE_PASSWORD, &mut basic.password),
-        (
-            connection_secrets::ORACLE_WALLET_PASSWORD,
-            &mut advanced.wallet_password,
-        ),
-    ];
-    if ssh.enabled {
-        slots.push((connection_secrets::SSH_PASSWORD, &mut ssh.password));
-        slots.push((connection_secrets::SSH_PASSPHRASE, &mut ssh.passphrase));
-    }
-    slots
 }

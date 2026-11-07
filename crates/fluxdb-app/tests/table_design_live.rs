@@ -196,6 +196,7 @@ fn mysql_design_snapshot_uses_one_metadata_read() {
                 database: database.into(),
                 username: parts[2].into(),
                 password: SecretRef::inline(parts[3]),
+                ..fluxdb_core::MysqlBasicOptions::default()
             },
             ..MysqlConnectionProfile::default()
         }),

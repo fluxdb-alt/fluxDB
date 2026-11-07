@@ -126,6 +126,14 @@ fn pg_config_generation(config: &ConnectionConfig) -> u64 {
                 key.hash(&mut hasher);
                 value.hash(&mut hasher);
             }
+            // 私钥口令不进扁平 options（避免明文落盘），但改口令必须让旧会话失效。
+            "tls_client_key_passphrase".hash(&mut hasher);
+            profile
+                .tls
+                .client_key_passphrase
+                .value()
+                .unwrap_or_default()
+                .hash(&mut hasher);
         }
         // 无结构化档案（历史连接）：退回扁平参数，仍能反映配置变更。
         None => {
@@ -295,7 +303,7 @@ async fn pg_connect_transport(
         let options = SshTunnelOptions {
             connect_timeout_secs: if ssh.connect_timeout_secs > 0 { ssh.connect_timeout_secs } else { profile.connect_timeout_secs() },
             keepalive_interval_secs: ssh.keepalive_interval_secs,
-            verify_host_key: true,
+            host_key_policy: ssh.host_key_policy,
         };
         Some(tokio::task::spawn_blocking(move || open_tunnel_with((ssh.host.as_str(), ssh.port), &auth, (&host, port), options))
             .await.map_err(|e| Error::new(ErrorKind::Connection, format!("SSH 任务失败: {e}")))??)

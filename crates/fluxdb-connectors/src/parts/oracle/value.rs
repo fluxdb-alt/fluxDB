@@ -20,7 +20,7 @@ fn oracle_meta_text(row: &OracleRow, index: usize) -> Option<String> {
         return Some(value.to_string());
     }
     if let Ok(Some(value)) = row.get::<Option<OracleTimestamp>>(index) {
-        return Some(oracle_timestamp_text(&value, false));
+        return Some(oracle_timestamp_text(&value));
     }
     None
 }
@@ -58,12 +58,7 @@ fn oracle_cell_value(row: &mut OracleRow, index: usize, column: &Column) -> Cell
         Err(_) => {}
     }
     match row.get::<Option<OracleTimestamp>>(index) {
-        Ok(Some(value)) => {
-            return CellValue::Text(oracle_timestamp_text(
-                &value,
-                oracle_column_has_time_zone(column),
-            ));
-        }
+        Ok(Some(value)) => return CellValue::Text(oracle_timestamp_text(&value)),
         Ok(None) => return CellValue::Null,
         Err(_) => {}
     }
@@ -258,16 +253,10 @@ fn oracle_bytes_cell_value(column: &Column, value: &[u8]) -> CellValue {
     CellValue::Bytes(value.to_vec())
 }
 
-fn oracle_column_has_time_zone(column: &Column) -> bool {
-    column
-        .type_name
-        .as_deref()
-        .is_some_and(|type_name| type_name.to_ascii_uppercase().contains("TIME ZONE"))
-}
-
 /// 时间戳展示文本。Oracle `DATE` 与 `TIMESTAMP` 都按 `YYYY-MM-DD HH:MM:SS[.fffffffff]`
-/// 展示；只有带时区的列才追加偏移，避免给普通 TIMESTAMP 伪造时区。
-fn oracle_timestamp_text(value: &OracleTimestamp, with_time_zone: bool) -> String {
+/// 展示。驱动 26.0.0-beta.5 不再暴露时区偏移（只有 `is_utc` 标记），因此带时区的列
+/// 按驱动返回的墙上时间原样展示，不追加可能错误的偏移。
+fn oracle_timestamp_text(value: &OracleTimestamp) -> String {
     let mut text = format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
         value.year(),
@@ -283,11 +272,6 @@ fn oracle_timestamp_text(value: &OracleTimestamp, with_time_zone: bool) -> Strin
         text.push('.');
         text.push_str(fraction.trim_end_matches('0'));
     }
-    if with_time_zone {
-        let hour = value.tz_hour_offset();
-        let minute = value.tz_minute_offset().abs();
-        text.push_str(&format!("{hour:+03}:{minute:02}"));
-    }
     text
 }
 
@@ -300,7 +284,7 @@ fn oracle_json_text(value: &OracleJsonValue) -> String {
         OracleJsonValue::BinaryDouble(value) => value.to_string(),
         OracleJsonValue::BinaryFloat(value) => value.to_string(),
         OracleJsonValue::String(value) => quote_json_string(value),
-        OracleJsonValue::Timestamp(value) => quote_json_string(&oracle_timestamp_text(value, true)),
+        OracleJsonValue::Timestamp(value) => quote_json_string(&oracle_timestamp_text(value)),
         OracleJsonValue::IntervalDS(value) => quote_json_string(&value.to_string()),
         OracleJsonValue::IntervalYM(value) => quote_json_string(&value.to_string()),
         OracleJsonValue::JsonArray(items) => {

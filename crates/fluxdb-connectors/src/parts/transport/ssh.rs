@@ -26,15 +26,18 @@ pub(crate) struct SshAuthParams {
     pub(crate) passphrase: Option<String>,
 }
 
-/// 隧道行为选项（默认兼容旧路径：单连接、无心跳、首连即接受）。
+/// 隧道行为选项。
+///
+/// 默认校验远端主机密钥：所有数据库共用同一套拨号路径，不能因为某个
+/// 连接器漏传选项就静默退化。测试通过 `SSH_KNOWN_HOSTS` 注入已知主机。
 #[derive(Clone, Copy)]
 pub(crate) struct SshTunnelOptions {
     /// SSH 建连超时；0 用默认 5s。
     pub(crate) connect_timeout_secs: u32,
     /// 心跳间隔（秒）；0 表示不发送。
     pub(crate) keepalive_interval_secs: u32,
-    /// 是否校验远端主机密钥（`~/.ssh/known_hosts`）；false = 首连即接受。
-    pub(crate) verify_host_key: bool,
+    /// 远端主机密钥校验策略：严格 / 首次信任 / 不校验。
+    pub(crate) host_key_policy: fluxdb_core::SshHostKeyPolicy,
 }
 
 impl Default for SshTunnelOptions {
@@ -42,7 +45,7 @@ impl Default for SshTunnelOptions {
         Self {
             connect_timeout_secs: 5,
             keepalive_interval_secs: 0,
-            verify_host_key: false,
+            host_key_policy: fluxdb_core::SshHostKeyPolicy::Strict,
         }
     }
 }
@@ -68,16 +71,6 @@ impl Drop for SshTunnel {
     }
 }
 
-impl SshTunnel {
-    /// 建隧道（不校验 hostkey），供 MySQL / Redis 兼容路径，行为与旧实现一致。
-    pub(crate) fn open(
-        jump: (&str, u16),
-        auth: &SshAuthParams,
-        target: (&str, u16),
-    ) -> fluxdb_core::Result<SshTunnel> {
-        open_tunnel_with(jump, auth, target, SshTunnelOptions::default())
-    }
-}
 
 /// 建隧道，可指定建连超时 / 心跳 / hostkey 校验（PostgreSQL 传输路径使用）。
 pub(crate) fn open_tunnel_with(
@@ -128,9 +121,10 @@ pub(crate) fn open_tunnel_with(
         )
     })?;
 
-    // 可选 hostkey 校验：未知/变更主机密钥拒绝，不默认信任。
-    if options.verify_host_key {
-        verify_host_key(&session, jump_host, jump_port)?;
+    // hostkey 校验：严格档未知/变更即拒绝；首次信任档只放行未知主机；
+    // 不校验档跳过（仅调试用途）。
+    if options.host_key_policy != fluxdb_core::SshHostKeyPolicy::Ignore {
+        verify_host_key(&session, jump_host, jump_port, options.host_key_policy)?;
     }
 
     if !auth.private_key_path.is_empty() {
@@ -432,27 +426,35 @@ fn ssh_known_hosts_path(
         ))
 }
 
-/// 校验远端主机密钥：读取 `~/.ssh/known_hosts`；未知或变更即拒绝。
+/// 校验远端主机密钥。
 ///
-/// 匹配口径与多数连接工具一致：按「主机:端口」精确匹配；未收录 → 拒绝（返回含指纹的错误，
-/// 由上层决定是否引导用户信任），不默认信任。
+/// 匹配口径与多数连接工具一致：按「主机:端口」精确匹配。
+/// - 严格档：未知主机或指纹变更一律拒绝，错误里带指纹，便于用户手工核对。
+/// - 首次信任档：未知主机记录指纹到 known_hosts 后继续；**已记录但指纹变更仍拒绝**，
+///   避免把"第一次信任"变成"永远信任"。
+/// - 不校验档：在调用方跳过本函数。
 fn verify_host_key(
     session: &ssh2::Session,
     host: &str,
     port: u16,
+    policy: fluxdb_core::SshHostKeyPolicy,
 ) -> fluxdb_core::Result<()> {
-    let key = session
+    let (key, key_type) = session
         .host_key()
-        .map(|(key, _)| key.to_vec())
+        .map(|(key, key_type)| (key.to_vec(), key_type))
         .ok_or_else(|| {
             fluxdb_core::Error::new(fluxdb_core::ErrorKind::Connection, "SSH 会话未提供主机密钥")
         })?;
     let fingerprint = host_key_fingerprint(session);
+    let accept_new = policy == fluxdb_core::SshHostKeyPolicy::AcceptNew;
 
     // known_hosts 路径：优先 $SSH_KNOWN_HOSTS（测试可注入），否则 ~/.ssh/known_hosts。
     let file = ssh_known_hosts_path(std::env::var_os("SSH_KNOWN_HOSTS"), dirs::home_dir())?;
-    // 仅当存在 known_hosts 文件时校验；无文件按「未知主机」拒绝，避免静默放行。
+    // 无文件按「未知主机」处理：严格档拒绝，首次信任档创建记录。
     if !file.exists() {
+        if accept_new {
+            return trust_new_host(session, &file, host, port, &key, key_type, &fingerprint);
+        }
         return Err(fluxdb_core::Error::new(
             fluxdb_core::ErrorKind::Connection,
             format!("SSH 主机密钥未知主机 {host}:{port}，指纹 {fingerprint}"),
@@ -478,11 +480,90 @@ fn verify_host_key(
             fluxdb_core::ErrorKind::Connection,
             format!("SSH 主机密钥变更，拒绝连接 {host}:{port}（指纹 {fingerprint}）"),
         )),
-        ssh2::CheckResult::NotFound | ssh2::CheckResult::Failure => Err(fluxdb_core::Error::new(
+        ssh2::CheckResult::Failure => Err(fluxdb_core::Error::new(
+            fluxdb_core::ErrorKind::Connection,
+            format!("SSH known_hosts 校验失败 {host}:{port}（指纹 {fingerprint}）"),
+        )),
+        ssh2::CheckResult::NotFound if accept_new => {
+            trust_new_host(session, &file, host, port, &key, key_type, &fingerprint)
+        }
+        ssh2::CheckResult::NotFound => Err(fluxdb_core::Error::new(
             fluxdb_core::ErrorKind::Connection,
             format!("SSH 主机密钥未知主机 {host}:{port}，指纹 {fingerprint}"),
         )),
     }
+}
+
+/// 首次信任：把主机密钥写入 known_hosts 后放行。
+///
+/// 写入失败必须报错而不是静默继续：否则用户以为已信任，下次连接仍会被拦，
+/// 且无法判断首次信任是否真正生效。
+fn trust_new_host(
+    session: &ssh2::Session,
+    file: &std::path::Path,
+    host: &str,
+    port: u16,
+    key: &[u8],
+    key_type: ssh2::HostKeyType,
+    fingerprint: &str,
+) -> fluxdb_core::Result<()> {
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            fluxdb_core::Error::new(
+                fluxdb_core::ErrorKind::Connection,
+                format!("创建 SSH 目录失败（{}）：{error}", parent.display()),
+            )
+        })?;
+    }
+    let mut kh = session.known_hosts().map_err(|e| {
+        fluxdb_core::Error::new(
+            fluxdb_core::ErrorKind::Connection,
+            format!("SSH known_hosts 初始化失败: {e}"),
+        )
+    })?;
+    // 已存在的文件先读入，写回时才不会丢掉其他主机记录。
+    if file.exists() {
+        kh.read_file(file, ssh2::KnownHostFileKind::OpenSSH)
+            .map_err(|error| {
+                fluxdb_core::Error::new(
+                    fluxdb_core::ErrorKind::Connection,
+                    format!("读取 SSH known_hosts 失败（{}）：{error}", file.display()),
+                )
+            })?;
+    }
+    // OpenSSH 非默认端口写作 `[host]:port`，与 check_port 的匹配口径一致。
+    let entry = if port == 22 {
+        host.to_string()
+    } else {
+        format!("[{host}]:{port}")
+    };
+    kh.add(
+        &entry,
+        key,
+        "fluxdb first-use",
+        ssh2::KnownHostKeyFormat::from(key_type),
+    )
+    .map_err(|error| {
+        fluxdb_core::Error::new(
+            fluxdb_core::ErrorKind::Connection,
+            format!("写入 SSH known_hosts 失败（{}）：{error}", file.display()),
+        )
+    })?;
+    kh.write_file(file, ssh2::KnownHostFileKind::OpenSSH)
+        .map_err(|error| {
+            fluxdb_core::Error::new(
+                fluxdb_core::ErrorKind::Connection,
+                format!("保存 SSH known_hosts 失败（{}）：{error}", file.display()),
+            )
+        })?;
+    tracing::info!(
+        target: "fluxdb_connectors",
+        host,
+        port,
+        fingerprint,
+        "已按首次信任策略记录 SSH 主机密钥"
+    );
+    Ok(())
 }
 
 /// 主机密钥指纹（SHA256 base64 形式，OpenSSH 风格）；取不到时给占位说明。
@@ -562,7 +643,7 @@ pub(crate) fn open_tunnel_for_profile(
             default_connect_timeout_secs
         },
         keepalive_interval_secs: ssh.keepalive_interval_secs,
-        verify_host_key: true,
+        host_key_policy: ssh.host_key_policy,
     };
     open_tunnel_with((ssh.host.trim(), ssh.port), &auth, target, options)
 }

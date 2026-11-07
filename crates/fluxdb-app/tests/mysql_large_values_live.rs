@@ -37,6 +37,7 @@ fn smoke_config(database: &str) -> ConnectionConfig {
                 database: database.into(),
                 username: parts[2].into(),
                 password: SecretRef::inline(parts[3]),
+                ..fluxdb_core::MysqlBasicOptions::default()
             },
             ..MysqlConnectionProfile::default()
         }),

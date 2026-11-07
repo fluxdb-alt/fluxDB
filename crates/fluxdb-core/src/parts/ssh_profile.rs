@@ -28,8 +28,43 @@ impl SshAuth {
     }
 }
 
+/// SSH 主机密钥校验策略。
+///
+/// 三种取值对应 `ssh_host_key_policy` 扁平键；缺省为 [`Self::Strict`]，
+/// 与历史行为一致，避免升级后静默放宽校验。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SshHostKeyPolicy {
+    /// 必须命中 known_hosts；未知主机或指纹变更一律拒绝。
+    #[default]
+    Strict,
+    /// 未知主机记录指纹后继续；已记录但指纹变更仍拒绝。
+    AcceptNew,
+    /// 不校验主机密钥（仅限调试，不校验等于放弃跳板机身份认证）。
+    Ignore,
+}
+
+impl SshHostKeyPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::AcceptNew => "accept_new",
+            Self::Ignore => "ignore",
+        }
+    }
+
+    /// 解析扁平键值；未知/空值回落到严格校验，不静默放宽。
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "accept_new" | "accept-new" | "tofu" => Self::AcceptNew,
+            "ignore" | "none" | "off" => Self::Ignore,
+            _ => Self::Strict,
+        }
+    }
+}
+
 /// SSH 跳板机与隧道行为参数。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SshTunnelProfile {
     /// 是否启用 SSH 隧道。
     pub enabled: bool,
@@ -51,6 +86,8 @@ pub struct SshTunnelProfile {
     pub connect_timeout_secs: u32,
     /// SSH 心跳间隔（秒）；0 表示不发送。
     pub keepalive_interval_secs: u32,
+    /// 主机密钥校验策略；默认严格校验 known_hosts。
+    pub host_key_policy: SshHostKeyPolicy,
 }
 
 impl Default for SshTunnelProfile {
@@ -66,6 +103,7 @@ impl Default for SshTunnelProfile {
             passphrase: SecretRef::default(),
             connect_timeout_secs: 0,
             keepalive_interval_secs: 0,
+            host_key_policy: SshHostKeyPolicy::Strict,
         }
     }
 }
@@ -101,6 +139,9 @@ impl SshTunnelProfile {
             keepalive_interval_secs: get("ssh_keepalive_interval_secs")
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(0),
+            host_key_policy: SshHostKeyPolicy::parse(
+                get("ssh_host_key_policy").as_deref().unwrap_or(""),
+            ),
         }
     }
 
@@ -134,6 +175,12 @@ impl SshTunnelProfile {
             options.insert(
                 "ssh_keepalive_interval_secs".into(),
                 self.keepalive_interval_secs.to_string(),
+            );
+        }
+        if self.host_key_policy != SshHostKeyPolicy::Strict {
+            options.insert(
+                "ssh_host_key_policy".into(),
+                self.host_key_policy.as_str().into(),
             );
         }
         options
@@ -207,5 +254,36 @@ mod ssh_profile_tests {
             ..profile
         };
         assert_eq!(profile.validate(), None);
+    }
+
+    #[test]
+    fn host_key_policy_parses_and_roundtrips() {
+        assert_eq!(SshHostKeyPolicy::parse(""), SshHostKeyPolicy::Strict);
+        assert_eq!(
+            SshHostKeyPolicy::parse("accept-new"),
+            SshHostKeyPolicy::AcceptNew
+        );
+        assert_eq!(SshHostKeyPolicy::parse("ignore"), SshHostKeyPolicy::Ignore);
+        assert_eq!(SshHostKeyPolicy::Ignore.as_str(), "ignore");
+
+        let mut options = std::collections::BTreeMap::new();
+        options.insert("ssh_enabled".into(), "true".into());
+        options.insert("ssh_host".into(), "jump".into());
+        options.insert("ssh_username".into(), "ops".into());
+        options.insert("ssh_host_key_policy".into(), "accept_new".into());
+        let profile = SshTunnelProfile::from_options(&options);
+        assert_eq!(profile.host_key_policy, SshHostKeyPolicy::AcceptNew);
+        // 默认 strict 不落盘，避免旧档案被改写。
+        assert_eq!(
+            SshTunnelProfile::default().into_options().get("ssh_host_key_policy"),
+            None
+        );
+        assert_eq!(
+            profile
+                .into_options()
+                .get("ssh_host_key_policy")
+                .map(String::as_str),
+            Some("accept_new")
+        );
     }
 }

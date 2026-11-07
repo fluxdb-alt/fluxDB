@@ -86,10 +86,6 @@
             assert_eq!(this.new_connection_form.database, "DAMENG");
             assert_eq!(this.new_connection_form.dameng_schema, "SYSDBA");
             assert_eq!(
-                rust_i18n::t!("app.connection.dameng.instance").as_ref(),
-                "インスタンス"
-            );
-            assert_eq!(
                 rust_i18n::t!("app.connection.dameng.schema").as_ref(),
                 "スキーマ"
             );
@@ -111,6 +107,39 @@
                 window.draw(cx).clear(cx);
             });
         }
+
+        // 高级页：达梦高级参数必须可见并写回表单。
+        let bounds = cx
+            .debug_bounds("new-connection-tab-2")
+            .expect("advanced tab");
+        cx.simulate_click(bounds.center(), Modifiers::default());
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        for (selector, text) in [
+            ("connection-dameng-connect-timeout", "12"),
+            ("connection-dameng-query-timeout", "30"),
+            ("connection-dameng-application-name", "dm-e2e"),
+        ] {
+            let bounds = cx
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("missing advanced field: {selector}"));
+            cx.simulate_click(bounds.center(), Modifiers::default());
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            });
+            cx.simulate_keystrokes("cmd-a");
+            cx.simulate_input(text);
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            });
+        }
+        cx.update(|_, cx| {
+            let form = &view.read(cx).new_connection_form;
+            assert_eq!(form.dameng_connect_timeout_secs, "12");
+            assert_eq!(form.dameng_query_timeout_secs, "30");
+            assert_eq!(form.dameng_application_name, "dm-e2e");
+        });
 
         let bounds = cx
             .debug_bounds("new-connection-save")

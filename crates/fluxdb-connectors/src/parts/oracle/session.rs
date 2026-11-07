@@ -141,8 +141,12 @@ fn oracle_connect_with_schema(
             .set_program(application_name)
             .map_err(|error| oracle_error("Oracle 客户端程序名无效", error))?;
     }
-    // 驱动的 TCP 建连超时不读取配置（无公开开关），因此 `connect_timeout_secs`
-    // 目前只用于说明；语句超时由 post-connect 的 call timeout 承担。
+    // 建连超时由驱动的 transport 层执行，覆盖 DNS/TCP/TLS 握手；0 表示不设限。
+    if profile.advanced.connect_timeout_secs > 0 {
+        options = options.set_transport_connect_timeout(Some(Duration::from_secs(u64::from(
+            profile.advanced.connect_timeout_secs,
+        ))));
+    }
     let connection =
         oracledb::connect(options).map_err(|error| oracle_error("建立 Oracle 连接失败", error))?;
     if profile.advanced.query_timeout_secs > 0 {

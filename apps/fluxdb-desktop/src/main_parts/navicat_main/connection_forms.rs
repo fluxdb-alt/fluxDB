@@ -44,6 +44,15 @@ impl NavicatMain {
     }
 
     fn create_connection_from_form(&mut self, cx: &mut Context<Self>) {
+        self.submit_new_connection(true, cx);
+    }
+
+    /// 「仅保存」：只校验并落库，不测试、不自动打开连接。
+    fn save_connection_without_test(&mut self, cx: &mut Context<Self>) {
+        self.submit_new_connection(false, cx);
+    }
+
+    fn submit_new_connection(&mut self, open_after_save: bool, cx: &mut Context<Self>) {
         let kind = self.new_connection_kind.unwrap_or(DatabaseKind::MySql);
         self.saving_connection = true;
         if let Err(message) = self.validate_new_connection(kind) {
@@ -91,11 +100,17 @@ impl NavicatMain {
             self.new_connection_kind = None;
             self.new_connection_password_visible = false;
             self.editing_connection_id = None;
-            if matches!(event, fluxdb_app::AppEvent::ConnectionUpdated(_)) {
+            if open_after_save && matches!(event, fluxdb_app::AppEvent::ConnectionUpdated(_)) {
                 self.open_connection_from_sidebar(config.id, cx);
             }
             self.saving_connection = false;
             cx.notify();
+            return;
+        }
+
+        // 仅保存：跳过建连测试，直接落库；不自动打开连接。
+        if !open_after_save {
+            self.persist_new_connection(draft, open_after_save, cx);
             return;
         }
 
@@ -163,6 +178,11 @@ impl NavicatMain {
                 return;
             }
         }
+        self.persist_new_connection(draft, true, cx);
+    }
+
+    /// 新建连接的落库收尾：保存成功才关闭弹框；`open_after_save` 区分「保存并连接」与「仅保存」。
+    fn persist_new_connection(&mut self, draft: ConnectionDraft, open_after_save: bool, cx: &mut Context<Self>) {
         let previous = self.controller.clone();
         let event = self
             .controller
@@ -206,7 +226,9 @@ impl NavicatMain {
                 }
             }
             self.persist_sidebar_layout();
-            self.open_connection_from_sidebar(config.id, cx);
+            if open_after_save {
+                self.open_connection_from_sidebar(config.id, cx);
+            }
         }
         self.saving_connection = false;
         cx.notify();
@@ -240,6 +262,8 @@ impl NavicatMain {
         self.new_connection_inputs
             .sync_from_form(&self.new_connection_form, window, cx);
         self.sync_new_connection_selects(window, cx);
+        self.new_connection_inputs
+            .refresh_placeholders(Some(config.kind), window, cx);
         self.new_connection_inputs.password.update(cx, |input, cx| {
             input.set_masked(true, window, cx);
         });
@@ -266,6 +290,8 @@ impl NavicatMain {
         self.new_connection_inputs
             .sync_from_form(&self.new_connection_form, window, cx);
         self.sync_new_connection_selects(window, cx);
+        self.new_connection_inputs
+            .refresh_placeholders(Some(kind), window, cx);
         self.new_connection_inputs.password.update(cx, |input, cx| {
             input.set_masked(true, window, cx);
         });
@@ -286,6 +312,8 @@ impl NavicatMain {
         self.new_connection_inputs
             .sync_from_form(&self.new_connection_form, window, cx);
         self.sync_new_connection_selects(window, cx);
+        self.new_connection_inputs
+            .refresh_placeholders(Some(kind), window, cx);
         self.new_connection_inputs.password.update(cx, |input, cx| {
             input.set_masked(true, window, cx);
         });
@@ -294,21 +322,15 @@ impl NavicatMain {
         cx.notify();
     }
 
-    /// 打开新建/编辑连接弹框时，把表单里的 SSH 认证方式 / 云提供方同步到对应 Select 光标，
+    /// 打开新建/编辑连接弹框时，把表单里的 SSH 认证方式同步到对应 Select 光标，
     /// 保证下拉与表单字段一致（SelectState 独立维护光标）。
     fn sync_new_connection_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // 下拉值已与表单字段一致，不再经过展示文案转换。
         let ssh_auth = self.new_connection_form.ssh_auth.clone();
-        let cloud_provider = self.new_connection_form.cloud_provider.clone();
         self.new_connection_inputs
             .ssh_auth_select
             .update(cx, |select, cx| {
                 select.set_selected_value(&ssh_auth, window, cx);
-            });
-        self.new_connection_inputs
-            .cloud_provider_select
-            .update(cx, |select, cx| {
-                select.set_selected_value(&cloud_provider, window, cx);
             });
         // SSL 模式下拉回填：选项值与表单字段值相同，直接同步光标。
         let pg_ssl_mode = self.new_connection_form.pg_tls_ssl_mode.clone();
@@ -317,11 +339,35 @@ impl NavicatMain {
             .update(cx, |select, cx| {
                 select.set_selected_value(&pg_ssl_mode, window, cx);
             });
-        let mysql_ssl_mode = self.new_connection_form.mysql_tls_ssl_mode.clone();
+        // MySQL SSL 模式：选项集随隧道/代理状态变化，同步时同时收敛档位。
+        self.sync_mysql_ssl_mode_options(window, cx);
+        // SSH 主机密钥策略：编辑旧连接时必须回填，否则默认 strict 会改变行为。
+        let host_key_policy = self.new_connection_form.ssh_host_key_policy.clone();
         self.new_connection_inputs
-            .mysql_ssl_mode_select
+            .ssh_host_key_policy_select
             .update(cx, |select, cx| {
-                select.set_selected_value(&mysql_ssl_mode, window, cx);
+                select.set_selected_value(&host_key_policy, window, cx);
+            });
+        // 代理类型由下拉独立维护光标，编辑已有连接时必须按档案回填。
+        let mysql_proxy_type = self.new_connection_form.mysql_proxy_type.clone();
+        self.new_connection_inputs
+            .mysql_proxy_type_select
+            .update(cx, |select, cx| {
+                select.set_selected_value(&mysql_proxy_type, window, cx);
+            });
+        // Oracle 寻址方式与登录身份同样是独立光标：编辑 SID / SYSDBA 连接时
+        // 必须回填，否则下拉显示默认项，用户一碰就写错档案。
+        let oracle_connect_kind = self.new_connection_form.oracle_connect_kind.clone();
+        self.new_connection_inputs
+            .oracle_connect_kind_select
+            .update(cx, |select, cx| {
+                select.set_selected_value(&oracle_connect_kind, window, cx);
+            });
+        let oracle_privilege = self.new_connection_form.oracle_privilege.clone();
+        self.new_connection_inputs
+            .oracle_privilege_select
+            .update(cx, |select, cx| {
+                select.set_selected_value(&oracle_privilege, window, cx);
             });
         // SQL Server 加密模式同样由下拉独立维护光标，编辑连接时必须从档案回填。
         let sqlserver_encryption = self.new_connection_form.sqlserver_encryption.clone();
@@ -395,12 +441,16 @@ impl NavicatMain {
             ConnectionField::Password => form.password = value,
             ConnectionField::Database | ConnectionField::MongoDefaultDb => form.database = value,
             ConnectionField::DamengSchema => form.dameng_schema = value,
+            ConnectionField::DamengConnectTimeout => form.dameng_connect_timeout_secs = value,
+            ConnectionField::DamengQueryTimeout => form.dameng_query_timeout_secs = value,
+            ConnectionField::DamengApplicationName => form.dameng_application_name = value,
             ConnectionField::UrlParams => form.url_params = value,
             ConnectionField::SqlitePath => form.sqlite_path = value,
             ConnectionField::MongoAuthDb => form.mongo_auth_db = value,
             ConnectionField::TlsCa => form.tls_ca = value,
             ConnectionField::TlsClientCert => form.tls_client_cert = value,
             ConnectionField::TlsClientKey => form.tls_client_key = value,
+            ConnectionField::TlsClientKeyPassphrase => form.tls_client_key_passphrase = value,
             ConnectionField::TlsSni => form.tls_sni = value,
             ConnectionField::SshHost => form.ssh_host = value,
             ConnectionField::SshPort => form.ssh_port = value,
@@ -413,9 +463,13 @@ impl NavicatMain {
             ConnectionField::PgApplicationName => form.pg_application_name = value,
             ConnectionField::PgConnectTimeoutSecs => form.pg_connect_timeout_secs = value,
             ConnectionField::PgQueryTimeoutSecs => form.pg_query_timeout_secs = value,
+            ConnectionField::PgTimezone => form.pg_timezone = value,
             // —— MySQL / TiDB 专用 ——
             ConnectionField::MysqlCharset => form.mysql_charset = value,
-            ConnectionField::MysqlProxyType => form.mysql_proxy_type = value,
+            ConnectionField::MysqlCollation => form.mysql_collation = value,
+            ConnectionField::MysqlSocketPath => form.mysql_socket_path = value,
+            ConnectionField::MysqlTimezone => form.mysql_timezone = value,
+            ConnectionField::MysqlInitSql => form.mysql_init_sql = value,
             ConnectionField::MysqlSshConnectTimeout => form.mysql_ssh_connect_timeout_secs = value,
             ConnectionField::MysqlSshKeepalive => form.mysql_ssh_keepalive_secs = value,
             ConnectionField::MysqlProxyHost => form.mysql_proxy_host = value,
@@ -424,7 +478,6 @@ impl NavicatMain {
             ConnectionField::MysqlProxyPassword => form.mysql_proxy_password = value,
             ConnectionField::MysqlConnectTimeout => form.mysql_connect_timeout_secs = value,
             ConnectionField::MysqlQueryTimeout => form.mysql_query_timeout_secs = value,
-            ConnectionField::MysqlIdleTtl => form.mysql_idle_ttl_secs = value,
             ConnectionField::SqlServerSchema => form.sqlserver_schema = value,
             ConnectionField::SqlServerInstance => form.sqlserver_instance = value,
             ConnectionField::SqlServerConnectTimeout => form.sqlserver_connect_timeout_secs = value,
@@ -442,8 +495,7 @@ impl NavicatMain {
             ConnectionField::SentinelMasterName => form.sentinel_master_name = value,
             ConnectionField::SentinelEndpoints => form.sentinel_endpoints = value,
             ConnectionField::ClusterStartNodes => form.cluster_start_nodes = value,
-            ConnectionField::CloudSubscription => form.cloud_subscription = value,
-            ConnectionField::CloudResource => form.cloud_resource = value,
+            ConnectionField::AiKeyPrefixes => form.ai_key_prefixes = value,
             ConnectionField::DiscoveryUri => form.discovery_uri = value,
         }
         cx.notify();
@@ -454,6 +506,7 @@ impl NavicatMain {
         &mut self,
         field: ConnectionToggleField,
         value: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let form = &mut self.new_connection_form;
@@ -463,6 +516,7 @@ impl NavicatMain {
             ConnectionToggleField::TlsVerify => form.tls_verify = value,
             ConnectionToggleField::SshEnabled => form.ssh_enabled = value,
             ConnectionToggleField::ClusterAllowReadonly => form.cluster_allow_readonly = value,
+            ConnectionToggleField::ForceStandalone => form.force_standalone = value,
             ConnectionToggleField::MysqlProxyEnabled => form.mysql_proxy_enabled = value,
             ConnectionToggleField::MysqlTcpKeepalive => form.mysql_tcp_keepalive = value,
             ConnectionToggleField::PgTcpKeepalive => form.pg_tcp_keepalive = value,
@@ -471,7 +525,41 @@ impl NavicatMain {
             ConnectionToggleField::MongoSrv => form.mongo_srv = value,
             ConnectionToggleField::ReadOnly => form.read_only = value,
         }
+        // 隧道/代理会把拨号目标改写成 127.0.0.1，verify_identity 的证书主机名校验
+        // 不可能通过；此时从下拉里移除该档位，已选中的回落到 verify_ca。
+        if matches!(
+            field,
+            ConnectionToggleField::SshEnabled | ConnectionToggleField::MysqlProxyEnabled
+        ) {
+            self.sync_mysql_ssl_mode_options(window, cx);
+        }
         cx.notify();
+    }
+
+    /// 按当前传输层状态收敛 MySQL SSL 模式下拉：
+    /// 直连可选五档；走 SSH 隧道或代理时隐藏 `verify_identity`（无法校验主机名）。
+    fn sync_mysql_ssl_mode_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let form = &mut self.new_connection_form;
+        let tunneled = form.ssh_enabled || form.mysql_proxy_enabled;
+        if tunneled && form.mysql_tls_ssl_mode == "verify_identity" {
+            form.mysql_tls_ssl_mode = "verify_ca".to_string();
+        }
+        let mode = form.mysql_tls_ssl_mode.clone();
+        let mut modes = vec![
+            "disabled".to_string(),
+            "preferred".to_string(),
+            "required".to_string(),
+            "verify_ca".to_string(),
+        ];
+        if !tunneled {
+            modes.push("verify_identity".to_string());
+        }
+        self.new_connection_inputs
+            .mysql_ssl_mode_select
+            .update(cx, |select, cx| {
+                select.set_items(SearchableVec::new(modes), window, cx);
+                select.set_selected_value(&mode, window, cx);
+            });
     }
 
     fn choose_sqlite_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -667,6 +755,19 @@ impl NavicatMain {
                 if let Some(message) = profile.validate() {
                     return Err(message);
                 }
+                let connect_timeout = form
+                    .dameng_connect_timeout_secs
+                    .trim()
+                    .parse::<u32>()
+                    .map_err(|_| tr("app.connection.dameng.connect_timeout_invalid").to_string())?;
+                let query_timeout = form
+                    .dameng_query_timeout_secs
+                    .trim()
+                    .parse::<u32>()
+                    .map_err(|_| tr("app.connection.dameng.query_timeout_invalid").to_string())?;
+                if connect_timeout == 0 || connect_timeout > 86400 || query_timeout > 86400 {
+                    return Err(tr("app.connection.dameng.timeout_out_of_range").to_string());
+                }
             }
             // MongoDB 走结构化档案校验（种子列表 / SRV 单主机 / 用户名必须带密码）。
             DatabaseKind::MongoDb => {
@@ -688,9 +789,6 @@ impl NavicatMain {
                 let profile = form.build_sqlserver_profile();
                 if let Some(message) = profile.validate() {
                     return Err(message);
-                }
-                if !profile.basic.instance.trim().is_empty() {
-                    return Err(tr("app.connection.sqlserver.instance_requires_port").to_string());
                 }
                 let connect_timeout = form
                     .sqlserver_connect_timeout_secs
@@ -747,15 +845,17 @@ impl NavicatMain {
         if form.read_only {
             options.insert("read_only".to_string(), "true".to_string());
         }
-        if !form.url_params.trim().is_empty() {
-            options.insert("url_params".to_string(), form.url_params.trim().to_string());
-            // Redis 没有连接串，用同一个「参数」输入框承载 tls / tls_insecure /
-            // tls_server_name / sentinel_master 这几个开关，逐个拆成独立选项。
-            if kind == DatabaseKind::Redis {
-                for (name, value) in redis_option_pairs(&form.url_params) {
-                    options.insert(name, value);
-                }
+        if kind == DatabaseKind::Redis {
+            // AI Key 授权前缀是 AI 工具的范围配置，不是连接协议参数：
+            // 单独成键，不再经过自由文本参数框与白名单。
+            if !form.ai_key_prefixes.trim().is_empty() {
+                options.insert(
+                    "ai_key_prefixes".to_string(),
+                    form.ai_key_prefixes.trim().to_string(),
+                );
             }
+        } else if !form.url_params.trim().is_empty() {
+            options.insert("url_params".to_string(), form.url_params.trim().to_string());
         }
         if form.mongo_srv {
             options.insert("srv".to_string(), "true".to_string());
@@ -810,68 +910,25 @@ impl NavicatMain {
             },
         };
 
-        // Redis 专用：把表单里的 TLS/SSH/Advanced 字段组装成结构化档案，
-        // 作为拨号 / 保存的主来源（同时保留扁平 options 作兼容冗余）。
-        let redis_profile = if kind == DatabaseKind::Redis {
-            Some(form.build_redis_profile())
-        } else {
-            None
-        };
-
-        // MySQL/TiDB 专用：把表单里的 TLS/SSH/Proxy/Advanced 字段组装成结构化档案。
-        let mysql_profile = if matches!(kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb) {
-            Some(form.build_mysql_profile())
-        } else {
-            None
-        };
-
-        // PostgreSQL 专用：组装结构化档案——缺它 PG 连接无法拨号（连接器要求 profile）。
-        let postgres_profile = if kind == DatabaseKind::Postgres {
-            Some(form.build_postgres_profile())
-        } else {
-            None
-        };
-        let dameng_profile = if kind == DatabaseKind::Dameng {
-            Some(form.build_dameng_profile())
-        } else {
-            None
-        };
-        // SQL Server 档案是拨号、加密模式与 schema 作用域的事实来源；
-        // 密码仍在 storage 落盘前按连接 ID 写入加密凭据表。
-        let sqlserver_profile = if kind == DatabaseKind::SqlServer {
-            Some(form.build_sqlserver_profile())
-        } else {
-            None
-        };
-        // Oracle 档案是拨号目标（Service Name / SID）、登录身份与 Wallet 的事实来源；
-        // 密码与 Wallet 口令在落盘前由 storage 按连接 ID 写入加密凭据表。
-        let oracle_profile = if kind == DatabaseKind::Oracle {
-            Some(form.build_oracle_profile())
-        } else {
-            None
-        };
-
-        ConnectionDraft {
+        // 各数据库的结构化档案由表单实现填充，新增数据库不再改这里。
+        let mut draft = ConnectionDraft {
             name: form.name.trim().to_string(),
             kind,
             endpoint,
             options,
-            redis_profile,
-            mysql_profile,
-            postgres_profile,
-            dameng_profile,
-            sqlserver_profile,
-            // MongoDB 档案是拨号事实来源：缺它连接器只能退回 endpoint 拼 URI，会丢 SRV/认证库。
-            mongo_profile: if kind == DatabaseKind::MongoDb {
-                Some(form.build_mongo_profile())
-            } else {
-                None
-            },
-            oracle_profile,
-        }
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+            dameng_profile: None,
+            sqlserver_profile: None,
+            mongo_profile: None,
+            oracle_profile: None,
+        };
+        connection_form_spec(kind).build_into(form, &mut draft);
+        draft
     }
 
-    /// Redis 连接串导入 / 云自动发现入口：把 URI 与当前云 provider 交给 app 层解析。
+    /// Redis 连接串导入：把 URI 交给 app 层解析。
     /// 解析结果（`AppEvent::RedisConnectionDiscovered`）异步回流后回填表单（见下）。
     fn import_redis_connection_string(&mut self, cx: &mut Context<Self>) {
         let Some(kind) = self.new_connection_kind else {
@@ -881,7 +938,6 @@ impl NavicatMain {
             return;
         }
         let connection_string = self.new_connection_form.discovery_uri.clone();
-        let provider = self.new_connection_form.cloud_provider.clone();
         if connection_string.trim().is_empty() {
             self.new_connection_form.test_status = Some(ConnectionTestStatus::Error(
                 tr("app.connection.error.redis_uri_required").to_string(),
@@ -896,10 +952,7 @@ impl NavicatMain {
         self._redis_discover_task = Some(cx.spawn(async move |view, cx| {
             let event = cx
                 .background_spawn(async move {
-                    controller.dispatch(AppCommand::DiscoverRedisConnection {
-                        provider,
-                        connection_string,
-                    })
+                    controller.dispatch(AppCommand::DiscoverRedisConnection { connection_string })
                 })
                 .await;
             let _ = cx.update(|cx| {
@@ -1002,12 +1055,7 @@ impl NavicatMain {
     /// 真正的输入框实体同步放在 `NavicatMain::render`（有 `Window`）里消费该标记。
     fn apply_redis_discovered_draft(&mut self, draft: &ConnectionDraft, _cx: &mut Context<Self>) {
         if let Some(profile) = draft.redis_profile.as_ref() {
-            // 连接串里没有的云 provider 保留用户当前选择。
-            let current_provider = self.new_connection_form.cloud_provider.clone();
             let form = &mut self.new_connection_form;
-            if profile.cloud.provider.is_empty() && !current_provider.is_empty() {
-                form.cloud_provider = current_provider;
-            }
             form.apply_profile(profile);
             // 连接名缺省用解析出的名称；已有填写的名字保留。
             if form.name.trim().is_empty() {
@@ -1016,22 +1064,210 @@ impl NavicatMain {
         }
         self.redis_discovery_pending_sync = true;
     }
+
+    /// PostgreSQL 连接串导入：解析 FAQ 白名单参数并回填全部 PG 表单字段。
+    ///
+    /// 与通用 SQL 导入的区别：`sslmode` / 证书路径 / `application_name` /
+    /// `connect_timeout` / `options` 都会真正落到档案，不再静默丢弃。
+    fn import_postgres_connection_string(&mut self, cx: &mut Context<Self>) {
+        let raw = self.new_connection_form.discovery_uri.trim().to_string();
+        let profile = match fluxdb_core::PostgresConnectionProfile::from_uri(&raw) {
+            Ok(profile) => profile,
+            Err(message) => {
+                self.new_connection_form.test_status = Some(ConnectionTestStatus::Error(message));
+                cx.notify();
+                return;
+            }
+        };
+        let ssl_mode = match profile.tls.ssl_mode {
+            fluxdb_core::PostgresSslMode::Disabled => "disable",
+            fluxdb_core::PostgresSslMode::Prefer => "prefer",
+            fluxdb_core::PostgresSslMode::Require => "require",
+            fluxdb_core::PostgresSslMode::VerifyCa => "verify-ca",
+            fluxdb_core::PostgresSslMode::VerifyFull => "verify-full",
+        };
+        let default_port = database_default_port(DatabaseKind::Postgres);
+        let form = &mut self.new_connection_form;
+        form.host = profile.basic.host;
+        form.port = if profile.basic.port == 0 {
+            default_port.to_string()
+        } else {
+            profile.basic.port.to_string()
+        };
+        form.username = profile.basic.username;
+        form.password = profile
+            .basic
+            .password
+            .value()
+            .unwrap_or_default()
+            .to_string();
+        form.database = profile.basic.maintenance_database;
+        form.tls_enabled = profile.tls.enabled;
+        form.pg_tls_ssl_mode = ssl_mode.to_string();
+        form.tls_ca = profile.tls.ca.key;
+        form.tls_client_cert = profile.tls.client_cert.key;
+        form.tls_client_key = profile.tls.client_key.key;
+        form.tls_sni = profile.tls.server_name;
+        form.pg_default_schema = profile.scope.default_schema;
+        form.pg_application_name = profile.advanced.application_name;
+        form.pg_connect_timeout_secs = profile.advanced.connect_timeout_secs.to_string();
+        form.pg_query_timeout_secs = profile.advanced.query_timeout_secs.to_string();
+        form.pg_timezone = profile.advanced.timezone;
+        if form.name.trim().is_empty() {
+            form.name = format!("{} - {}", database_kind_label(DatabaseKind::Postgres), form.host);
+        }
+        form.test_status = Some(ConnectionTestStatus::Success(
+            tr("app.connection.toast.uri_imported").to_string(),
+        ));
+        // 表单值已更新，但输入框是独立实体，等下一次渲染统一回填。
+        self.redis_discovery_pending_sync = true;
+        cx.notify();
+    }
+
+    /// SQL 类型连接串导入：`mysql://user:pass@host:3306/db?k=v` 形式回填表单。
+    /// 参数只在 MySQL 系列保留——其它驱动没有通用 DSN 参数入口，留空避免假配置。
+    fn import_sql_connection_string(&mut self, cx: &mut Context<Self>) {
+        let Some(kind) = self.new_connection_kind else {
+            return;
+        };
+        let raw = self.new_connection_form.discovery_uri.trim().to_string();
+        let parsed = match parse_sql_connection_uri(&raw) {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                self.new_connection_form.test_status = Some(ConnectionTestStatus::Error(message));
+                cx.notify();
+                return;
+            }
+        };
+        let default_port = database_default_port(kind);
+        let form = &mut self.new_connection_form;
+        form.host = parsed.host;
+        form.port = if parsed.port.is_empty() {
+            default_port.to_string()
+        } else {
+            parsed.port
+        };
+        form.username = parsed.username;
+        form.password = parsed.password;
+        match kind {
+            DatabaseKind::Oracle => form.oracle_service_name = parsed.database,
+            DatabaseKind::Sqlite => {}
+            _ => form.database = parsed.database,
+        }
+        if matches!(
+            kind,
+            DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb
+        ) {
+            form.url_params = parsed.params;
+        }
+        if form.name.trim().is_empty() {
+            form.name = format!("{} - {}", database_kind_label(kind), form.host);
+        }
+        form.test_status = Some(ConnectionTestStatus::Success(
+            tr("app.connection.toast.uri_imported").to_string(),
+        ));
+        // 表单值已更新，但输入框是独立实体，等下一次渲染统一回填。
+        self.redis_discovery_pending_sync = true;
+        cx.notify();
+    }
 }
 
-/// 从 `key=value&key2=value2` 里挑出 Redis 认识的连接选项。
-/// 只放行白名单里的键，避免把任意参数灌进连接配置。
-fn redis_option_pairs(raw: &str) -> Vec<(String, String)> {
-    // ai_key_prefixes：AI Redis 工具的 Key 授权前缀（逗号分隔），供参数授权校验使用。
-    const ALLOWED: [&str; 5] = [
-        "tls",
-        "tls_insecure",
-        "tls_server_name",
-        "sentinel_master",
-        "ai_key_prefixes",
-    ];
-    raw.split('&')
-        .filter_map(|pair| pair.split_once('='))
-        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_string()))
-        .filter(|(name, value)| ALLOWED.contains(&name.as_str()) && !value.is_empty())
-        .collect()
+/// SQL 连接串的解析结果（字段已做百分号解码）。
+struct ParsedSqlConnectionUri {
+    host: String,
+    port: String,
+    username: String,
+    password: String,
+    database: String,
+    params: String,
+}
+
+/// 解析 `scheme://user:pass@host:port/database?k=v`。
+///
+/// 只做语法拆分，不判断 scheme 与当前数据库类型是否匹配；密码里的 `@` 用最后一个
+/// `@` 切分，避免被当成主机分隔符。
+fn parse_sql_connection_uri(raw: &str) -> Result<ParsedSqlConnectionUri, String> {
+    let invalid = || tr("app.connection.error.uri_parse").to_string();
+    let (_, rest) = raw.split_once("://").ok_or_else(invalid)?;
+    let (rest, params) = match rest.split_once('?') {
+        Some((rest, params)) => (rest, params),
+        None => (rest, ""),
+    };
+    let (authority, database) = match rest.split_once('/') {
+        Some((authority, database)) => (authority, database),
+        None => (rest, ""),
+    };
+    let (userinfo, host_port) = match authority.rsplit_once('@') {
+        Some((userinfo, host_port)) => (userinfo, host_port),
+        None => ("", authority),
+    };
+    let (username, password) = match userinfo.split_once(':') {
+        Some((username, password)) => (username, password),
+        None => (userinfo, ""),
+    };
+    let (host, port) = match host_port.rsplit_once(':') {
+        Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) => (host, port),
+        _ => (host_port, ""),
+    };
+    if host.trim().is_empty() {
+        return Err(invalid());
+    }
+    Ok(ParsedSqlConnectionUri {
+        host: host.to_string(),
+        port: port.to_string(),
+        username: percent_decode_uri_component(username),
+        password: percent_decode_uri_component(password),
+        database: percent_decode_uri_component(database),
+        params: params.to_string(),
+    })
+}
+
+/// 连接串里的用户名/密码/库名可能带 `%40` 等转义，回填前先解码。
+fn percent_decode_uri_component(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let Ok(value) = u8::from_str_radix(&input[index + 1..index + 3], 16)
+        {
+            out.push(value);
+            index += 3;
+            continue;
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod sql_connection_uri_tests {
+    use super::{parse_sql_connection_uri, percent_decode_uri_component};
+
+    #[test]
+    fn parses_mysql_url_with_query_and_last_at_in_password() {
+        let parsed =
+            parse_sql_connection_uri("mysql://root:p%40ss@db.local:3307/app?charset=utf8mb4")
+                .expect("合法连接串应能解析");
+        assert_eq!(parsed.host, "db.local");
+        assert_eq!(parsed.port, "3307");
+        assert_eq!(parsed.username, "root");
+        assert_eq!(parsed.password, "p@ss");
+        assert_eq!(parsed.database, "app");
+        assert_eq!(parsed.params, "charset=utf8mb4");
+    }
+
+    #[test]
+    fn rejects_strings_without_host() {
+        assert!(parse_sql_connection_uri("mysql://").is_err());
+        assert!(parse_sql_connection_uri("127.0.0.1:3306/app").is_err());
+    }
+
+    #[test]
+    fn decodes_percent_escapes_without_touching_plain_text() {
+        assert_eq!(percent_decode_uri_component("a%2Fb"), "a/b");
+        assert_eq!(percent_decode_uri_component("plain"), "plain");
+    }
 }

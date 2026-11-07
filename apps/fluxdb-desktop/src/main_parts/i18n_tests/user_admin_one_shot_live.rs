@@ -71,6 +71,8 @@ fn mysql_one_shot_config(parts: &[String]) -> fluxdb_core::ConnectionConfig {
                 database: "mysql".into(),
                 username: parts[2].clone(),
                 password: fluxdb_core::SecretRef::inline(parts[3].clone()),
+                ..fluxdb_core::MysqlBasicOptions::default()
+
             },
             ..fluxdb_core::MysqlConnectionProfile::default()
         }),

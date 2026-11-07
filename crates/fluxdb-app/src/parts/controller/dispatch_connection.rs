@@ -178,29 +178,11 @@ impl AppController {
                 let result = test_connection(&config);
                 AppEvent::ConnectionTested(config.id, result)
             }
-            AppCommand::DiscoverRedisConnection {
-                provider,
-                connection_string,
-            } => {
-                // 统一走连接串/URI 解析，作为「连接串导入 + 云自动发现」的单一入口。
+            AppCommand::DiscoverRedisConnection { connection_string } => {
+                // 统一走连接串/URI 解析。
                 // `from_uri` 支持 redis:// / rediss:// / redis+sentinel:// / redis-cluster://。
                 match RedisConnectionProfile::from_uri(&connection_string) {
-                    Ok(mut profile) => {
-                        // 云自动发现：把云元数据记录进档案，供弹框与后续对接展示。
-                        if !provider.is_empty() {
-                            profile.cloud.provider = provider.clone();
-                            // 记录来源需抹掉口令，避免明文口令随导入元数据落盘。
-                            profile.cloud.imported_name = redact_uri_password(&connection_string);
-                            // 从托管主机名推断资源/订阅标识，让云元数据有真实语义。
-                            let (host, _) = profile.dial_endpoint();
-                            let (resource, subscription) = infer_cloud_from_host(&provider, &host);
-                            if profile.cloud.resource.is_empty() {
-                                profile.cloud.resource = resource;
-                            }
-                            if profile.cloud.subscription.is_empty() {
-                                profile.cloud.subscription = subscription;
-                            }
-                        }
+                    Ok(profile) => {
                         let (host, port) = profile.dial_endpoint();
                         let name = if host.is_empty() {
                             "Redis-新连接".to_string()

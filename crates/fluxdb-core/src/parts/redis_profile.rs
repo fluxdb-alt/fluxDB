@@ -57,6 +57,7 @@ pub struct RedisTlsOptions {
 
 /// SSH 隧道参数。
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RedisSshOptions {
     /// 是否启用 SSH 隧道。
     pub enabled: bool,
@@ -74,6 +75,8 @@ pub struct RedisSshOptions {
     pub private_key: SecretRef,
     /// 私钥口令（可选）。
     pub passphrase: SecretRef,
+    /// 主机密钥校验策略；默认严格校验 known_hosts。
+    pub host_key_policy: SshHostKeyPolicy,
 }
 
 /// SSH 认证方式。
@@ -113,6 +116,12 @@ pub struct RedisTopology {
     pub kind: RedisTopologyKind,
     pub sentinel: RedisSentinelOptions,
     pub cluster: RedisClusterOptions,
+    /// 强制按单机直连，跳过连接时的拓扑探测。
+    ///
+    /// 仅用于探测会误判的部署（如代理/端口转发后面藏着真实集群节点）；
+    /// 默认 false，由连接器自行识别单机 / Sentinel / Cluster。
+    #[serde(default)]
+    pub force_standalone: bool,
 }
 
 /// 云 / 托管发现来源信息（Azure、Redis Cloud 等）。
@@ -136,24 +145,6 @@ pub struct RedisConnectionProfile {
     pub ssh: RedisSshOptions,
     pub topology: RedisTopology,
     pub cloud: RedisCloudOptions,
-}
-
-/// 从「云 provider + 目标主机」推断云端 resource / subscription 元数据。
-///
-/// 用于「连接串导入 + 云 provider 选择」这一真实可用云发现主路径：让 `RedisCloudOptions`
-/// 不只存 provider，还能从托管主机名里解析出资源标识，供弹框与后续日志/展示使用。
-/// 解析不出具体账号/订阅时保持为空（诚实地不臆造，仅填能确定的部分）。
-pub fn infer_cloud_from_host(provider: &str, host: &str) -> (String, String) {
-    let host = host.trim();
-    let first_label = host.split('.').next().unwrap_or("").to_string();
-    match provider {
-        // Azure：`mycache.redis.cache.windows.net` → resource = 缓存名 mycache。
-        "azure" => (first_label, String::new()),
-        // Redis Cloud：`redis-12345.c263...redns.redis-cloud.com` → resource = 库标识 redis-12345。
-        "redis-cloud" => (first_label, String::new()),
-        // 其余/未知：resource 用整段主机，subscription 留空待用户补充。
-        _ => (host.to_string(), String::new()),
-    }
 }
 
 impl RedisConnectionProfile {
@@ -187,6 +178,9 @@ impl RedisConnectionProfile {
             password: SecretRef::inline(get("ssh_password").unwrap_or_default()),
             private_key: SecretRef::ref_key(get("ssh_private_key_ref").unwrap_or_default()),
             passphrase: SecretRef::inline(get("ssh_passphrase").unwrap_or_default()),
+            host_key_policy: SshHostKeyPolicy::parse(
+                get("ssh_host_key_policy").as_deref().unwrap_or(""),
+            ),
         };
         let topology = RedisTopology {
             kind: if get("sentinel_master").is_some() {
@@ -209,6 +203,7 @@ impl RedisConnectionProfile {
                 start_nodes: split_host_port_list(get("cluster_start_nodes").as_deref()),
                 allow_readonly: connection_option_is_true(get("cluster_readonly").as_ref()),
             },
+            force_standalone: connection_option_is_true(get("force_standalone").as_ref()),
         };
         Self {
             basic: RedisBasicOptions {
@@ -288,6 +283,17 @@ impl RedisConnectionProfile {
             if !self.ssh.private_key.key.is_empty() {
                 ops.insert("ssh_private_key_ref".into(), self.ssh.private_key.key.clone());
             }
+            // 口令必须回写：隧道只从扁平参数读 `ssh_passphrase`，漏掉会让加密私钥
+            // 在握手时因缺口令失败。
+            if let Some(passphrase) = self.ssh.passphrase.value() {
+                ops.insert("ssh_passphrase".into(), passphrase.to_string());
+            }
+            if self.ssh.host_key_policy != SshHostKeyPolicy::Strict {
+                ops.insert(
+                    "ssh_host_key_policy".into(),
+                    self.ssh.host_key_policy.as_str().into(),
+                );
+            }
         }
 
         match self.topology.kind {
@@ -309,8 +315,15 @@ impl RedisConnectionProfile {
                         self.topology.cluster.start_nodes.join(","),
                     );
                 }
-                ops.insert("cluster_readonly".into(), self.topology.cluster.allow_readonly.to_string());
             }
+        }
+        // 自动探测模式下档案仍报 Standalone，只读开关必须独立回写，
+        // 否则探测到集群后 READONLY 开关不会生效。
+        if self.topology.cluster.allow_readonly {
+            ops.insert("cluster_readonly".into(), "true".into());
+        }
+        if self.topology.force_standalone {
+            ops.insert("force_standalone".into(), "true".into());
         }
 
         if !self.cloud.provider.is_empty() {
@@ -590,6 +603,7 @@ fn parse_redis_uri(uri: &str) -> std::result::Result<RedisConnectionProfile, Str
                 start_nodes,
                 allow_readonly,
             },
+            force_standalone: false,
         },
         cloud: RedisCloudOptions::default(),
     };
@@ -631,24 +645,5 @@ fn parse_authority(authority: &str) -> std::result::Result<(String, u16, Option<
         return Err("缺少主机地址".to_string());
     }
     Ok((host, port, user, password))
-}
-
-/// 抹掉连接串里的口令（`:password@` → 仅保留 `user@`），
-/// 供导入元数据 `imported_name` 记录来源时使用，避免明文口令随元数据落盘。
-pub fn redact_uri_password(uri: &str) -> String {
-    // 先切开 scheme(`://`) 前缀，仅在 authority 的 userinfo 段内抹掉口令，
-    // 避免把 `://` 的斜杠误判为 user/pass 的分隔符。
-    let (prefix, rest) = match uri.find("://") {
-        Some(idx) => (&uri[..idx + 3], &uri[idx + 3..]),
-        None => ("", uri),
-    };
-    match rest.rsplit_once('@') {
-        Some((userinfo, hostport)) => {
-            // 只保留 userinfo 中的用户名，丢弃 `:密码` 段；无密码时不改动。
-            let user = userinfo.split_once(':').map(|(u, _)| u).unwrap_or(userinfo);
-            format!("{prefix}{user}@{hostport}")
-        }
-        None => uri.to_string(),
-    }
 }
 
