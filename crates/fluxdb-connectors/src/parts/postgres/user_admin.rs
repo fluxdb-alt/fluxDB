@@ -75,7 +75,7 @@ fn quote_pg_string_literal(value: &str) -> String {
 
 /// 列出角色（同步入口）。
 fn pg_list_roles(config: &ConnectionConfig) -> fluxdb_core::Result<Vec<PgRole>> {
-    if config.kind != DatabaseKind::Postgres {
+    if !config.kind.is_postgres_family() {
         return Err(Error::new(ErrorKind::Connection, "连接类型不支持角色管理"));
     }
     let database = pg_request_database(config, None);
@@ -596,7 +596,7 @@ pub fn pg_list_object_grants(
     config: &ConnectionConfig,
     scope: &PgObjectGrantScope,
 ) -> fluxdb_core::Result<PgObjectGrants> {
-    if config.kind != DatabaseKind::Postgres {
+    if !config.kind.is_postgres_family() {
         return Err(Error::new(ErrorKind::Connection, "连接类型不支持对象权限"));
     }
     let relkind_inline = match scope {
@@ -692,7 +692,7 @@ pub fn pg_role_effective_grants(
     scope: &PgObjectGrantScope,
     role: &str,
 ) -> fluxdb_core::Result<Vec<PgEffectivePrivilege>> {
-    if config.kind != DatabaseKind::Postgres {
+    if !config.kind.is_postgres_family() {
         return Err(Error::new(ErrorKind::Connection, "连接类型不支持角色有效权限"));
     }
     let relkind_inline = match scope {
@@ -1041,7 +1041,7 @@ pub fn pg_apply_role_plan(
     config: &ConnectionConfig,
     plan: &PgRoleSavePlan,
 ) -> fluxdb_core::Result<Vec<String>> {
-    if config.kind != DatabaseKind::Postgres {
+    if !config.kind.is_postgres_family() {
         return Err(Error::new(ErrorKind::Connection, "连接类型不支持角色变更计划"));
     }
     if plan.is_empty() {
@@ -1081,7 +1081,7 @@ pub fn pg_list_grant_targets(
     config: &ConnectionConfig,
     database: &str,
 ) -> fluxdb_core::Result<PgGrantTargetLists> {
-    if config.kind != DatabaseKind::Postgres {
+    if !config.kind.is_postgres_family() {
         return Err(Error::new(ErrorKind::Connection, "连接类型不支持权限目标枚举"));
     }
     // 首次进入权限页还没有数据库选择；用连接档案的维护库完成目标枚举。

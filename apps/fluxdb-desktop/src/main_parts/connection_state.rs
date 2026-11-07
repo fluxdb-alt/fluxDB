@@ -846,6 +846,13 @@ impl NewConnectionForm {
                 form.username = "postgres".to_string();
                 form.database = "postgres".to_string();
             }
+            DatabaseKind::Kingbase => {
+                form.name = format!("KingbaseES Local {index}");
+                form.host = "127.0.0.1".to_string();
+                form.port = "54321".to_string();
+                form.username = "system".to_string();
+                form.database = "test".to_string();
+            }
             DatabaseKind::Dameng => {
                 form.name = format!("DM8 Local {index}");
                 form.host = "127.0.0.1".to_string();
@@ -1458,11 +1465,9 @@ impl NewConnectionForm {
         fluxdb_core::PostgresConnectionProfile {
             basic: PostgresBasicOptions {
                 host: self.host.trim().to_string(),
-                port: self
-                    .port
-                    .trim()
-                    .parse::<u16>()
-                    .unwrap_or_else(|_| database_default_port_u16(DatabaseKind::Postgres)),
+                // 非法/空端口保留为 0，由档案校验报错；不要静默回落到 5432，
+                // 因为同一档案构建器也被 Kingbase（默认 54321）复用。
+                port: self.port.trim().parse::<u16>().unwrap_or(0),
                 // 维护库：保留表单原文（允许留空）。留空时拨号由
                 // `PostgresConnectionProfile::maintenance_database()` 回落 postgres 默认。
                 maintenance_database: self.database.trim().to_string(),

@@ -293,7 +293,7 @@ static SQLITE_FORM_SPEC: SqliteFormSpec = SqliteFormSpec;
 pub(crate) fn connection_form_spec(kind: DatabaseKind) -> &'static dyn ConnectionFormSpec {
     match kind {
         DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => &MYSQL_FORM_SPEC,
-        DatabaseKind::Postgres => &POSTGRES_FORM_SPEC,
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => &POSTGRES_FORM_SPEC,
         DatabaseKind::Redis => &REDIS_FORM_SPEC,
         DatabaseKind::Dameng => &DAMENG_FORM_SPEC,
         DatabaseKind::SqlServer => &SQLSERVER_FORM_SPEC,

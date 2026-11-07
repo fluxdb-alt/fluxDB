@@ -699,7 +699,7 @@ fn run_table_data_export(
         db_kind,
     )?;
     // PostgreSQL 走一致快照导出（单 REPEATABLE READ 事务），其余按既有逐页手动循环。
-    let canceled = if db_kind == DatabaseKind::Postgres {
+    let canceled = if db_kind.is_postgres_family() {
         let mut exported: u64 = 0;
         let started_at = Instant::now();
         let mut on_page = |page: DataPage| -> bool {

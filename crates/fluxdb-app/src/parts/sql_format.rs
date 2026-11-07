@@ -990,6 +990,7 @@ fn format_sql_with_options(sql: &str, dialect: DatabaseKind) -> String {
                 | DatabaseKind::MongoDb
                 | DatabaseKind::Redis
                 | DatabaseKind::Postgres
+                | DatabaseKind::Kingbase
                 | DatabaseKind::Dameng
                 | DatabaseKind::SqlServer
                 | DatabaseKind::Oracle => Dialect::Generic,

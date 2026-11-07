@@ -803,7 +803,10 @@ impl AppController {
         database: Option<&str>,
     ) -> fluxdb_core::Result<Vec<(Option<String>, Option<String>)>> {
         let database_matches = |candidate: Option<&str>| {
-            !matches!(config.kind, DatabaseKind::Postgres | DatabaseKind::SqlServer)
+            !matches!(
+                config.kind,
+                DatabaseKind::Postgres | DatabaseKind::Kingbase | DatabaseKind::SqlServer
+            )
                 || database.is_none_or(|database| {
                     candidate.is_none_or(|candidate| candidate.eq_ignore_ascii_case(database))
                 })

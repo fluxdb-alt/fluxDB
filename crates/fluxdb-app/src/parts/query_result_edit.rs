@@ -102,6 +102,7 @@ fn editable_query_object(request: &QueryRequest, kind: DatabaseKind) -> Option<O
     let (database, schema, name) = match (kind, parts.as_slice()) {
         (
             DatabaseKind::Postgres
+            | DatabaseKind::Kingbase
             | DatabaseKind::Dameng
             | DatabaseKind::SqlServer
             | DatabaseKind::Oracle,
@@ -109,6 +110,7 @@ fn editable_query_object(request: &QueryRequest, kind: DatabaseKind) -> Option<O
         ) => (request.database.clone(), None, name.clone()),
         (
             DatabaseKind::Postgres
+            | DatabaseKind::Kingbase
             | DatabaseKind::Dameng
             | DatabaseKind::SqlServer
             | DatabaseKind::Oracle,
@@ -116,6 +118,7 @@ fn editable_query_object(request: &QueryRequest, kind: DatabaseKind) -> Option<O
         ) => (request.database.clone(), Some(schema.clone()), name.clone()),
         (
             DatabaseKind::Postgres
+            | DatabaseKind::Kingbase
             | DatabaseKind::Dameng
             | DatabaseKind::SqlServer
             | DatabaseKind::Oracle,
@@ -209,7 +212,9 @@ fn parse_sql_identifier(input: &str, kind: DatabaseKind) -> Option<(String, &str
     let raw = &input[..end];
     // 未加引号的标识符：PG/达梦折叠小写，Oracle 折叠大写，其余按原样。
     let name = match kind {
-        DatabaseKind::Postgres | DatabaseKind::Dameng => raw.to_ascii_lowercase(),
+        DatabaseKind::Postgres | DatabaseKind::Kingbase | DatabaseKind::Dameng => {
+            raw.to_ascii_lowercase()
+        }
         DatabaseKind::Oracle => raw.to_ascii_uppercase(),
         _ => raw.to_string(),
     };

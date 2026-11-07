@@ -9,6 +9,10 @@ pub enum DatabaseKind {
     MongoDb,
     Redis,
     Postgres,
+    /// 人大金仓 KingbaseES：在 PG 兼容模式下复用 PostgreSQL wire protocol、
+    /// `pg_catalog` 与双引号方言，连接器、方言与补全按 PostgreSQL 家族处理。
+    /// Oracle 兼容模式下的行为差异不在支持范围内。
+    Kingbase,
     Dameng,
     SqlServer,
     Oracle,
@@ -26,9 +30,19 @@ impl DatabaseKind {
         )
     }
 
+    /// 是否属于 PostgreSQL 协议家族（PostgreSQL / KingbaseES PG 兼容模式）。
+    ///
+    /// 二者共享 wire protocol、`pg_catalog` 与双引号标识符；新增与 PG 相关的
+    /// 方言/补全/过滤分支时应统一用它判断，避免只写 `DatabaseKind::Postgres`
+    /// 把 Kingbase 漏在支持范围外。
+    pub fn is_postgres_family(self) -> bool {
+        matches!(self, DatabaseKind::Postgres | DatabaseKind::Kingbase)
+    }
+
     /// 是否支持「按块追加写入」大字段（上传替换的流式路径）。
     ///
-    /// 只有实现了逐块追加的连接器才返回 true。Oracle/达梦暂时为 false：
+    /// 只有实现了逐块追加的连接器才返回 true。Oracle/达梦暂时为 false；
+    /// Kingbase 也未在真实实例上验证逐块写入，先按 false 让上层明确拒绝超阈值上传。
     /// 它们的真流式路径依赖 LOB 定位符与驱动侧写接口，尚未在本仓库验证过，
     /// 与其给出一个可能写坏数据的路径，不如让上层明确拒绝超阈值上传。
     ///

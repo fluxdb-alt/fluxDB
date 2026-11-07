@@ -155,7 +155,7 @@ pub fn identifier_needs_quote(
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return true;
     }
-    if kind == DatabaseKind::Postgres && name.chars().any(|c| c.is_ascii_uppercase()) {
+    if kind.is_postgres_family() && name.chars().any(|c| c.is_ascii_uppercase()) {
         return true;
     }
     reserved(name)

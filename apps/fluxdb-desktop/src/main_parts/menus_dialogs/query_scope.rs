@@ -232,6 +232,7 @@ fn automatic_query_database(config: &ConnectionConfig) -> Option<String> {
         }
         DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb | DatabaseKind::MongoDb => None,
         DatabaseKind::Postgres => Some("postgres".to_string()),
+        DatabaseKind::Kingbase => connection_default_database(config).or_else(|| Some("test".to_string())),
         DatabaseKind::Dameng => {
             connection_default_database(config).or_else(|| Some("DAMENG".to_string()))
         }

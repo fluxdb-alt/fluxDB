@@ -2273,12 +2273,12 @@ impl AppController {
         if create.is_design()
             || matches!(
                 create.database_kind,
-                DatabaseKind::Postgres | DatabaseKind::SqlServer
+                DatabaseKind::Postgres | DatabaseKind::Kingbase | DatabaseKind::SqlServer
             )
         {
             if matches!(
                 create.database_kind,
-                DatabaseKind::Postgres | DatabaseKind::SqlServer
+                DatabaseKind::Postgres | DatabaseKind::Kingbase | DatabaseKind::SqlServer
             ) {
                 self.ensure_design_not_stale(&create)?;
             }

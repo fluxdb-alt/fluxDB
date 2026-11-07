@@ -2,7 +2,7 @@
 
 > 适用范围：FluxDB Desktop 当前版本。截图取自 macOS；Windows / Linux 的操作路径一致，快捷键按平台替换。
 >
-> 支持的数据源：MySQL、MariaDB、TiDB、PostgreSQL、SQL Server、SQLite、达梦 DM8、Oracle、Redis、MongoDB
+> 支持的数据源：MySQL、MariaDB、TiDB、PostgreSQL、人大金仓 KingbaseES、SQL Server、SQLite、达梦 DM8、Oracle、Redis、MongoDB
 > 项目仍处于早期开发阶段。执行写入、删除、清空、恢复或权限变更前，请先备份重要数据，并确认当前连接和数据库无误。
 
 ## 目录
@@ -160,6 +160,7 @@ FluxDB 用标签页承载所有功能页面，常见的标签页包括：
 | MariaDB | 主机、端口、用户名、密码、数据库、Unix Socket | 3306 |
 | TiDB | 主机、端口、用户名、密码、数据库、Unix Socket | 4000 |
 | PostgreSQL | 主机、端口、用户名、密码、数据库、默认 Schema；也可粘贴 `postgres://` 连接串导入 | 5432 |
+| 人大金仓 KingbaseES | 复用 PostgreSQL 连接表单与档案，填写主机、端口、用户名（通常是 `system`）、密码、数据库、默认 Schema；需服务端使用 PG 兼容模式 | 54321 |
 | SQL Server | 主机、端口、用户名、密码、默认数据库、Schema、实例名 | 1433 |
 | Oracle | 主机、端口、用户名、密码、Service Name 或 SID、默认 Schema、登录身份 | 1521 |
 | 达梦 DM8 | 主机、端口、用户名、密码、Schema；高级页可调建连/查询超时与应用名 | 5236 |
@@ -203,7 +204,7 @@ FluxDB 用标签页承载所有功能页面，常见的标签页包括：
 
 ### 2.5 配置 TLS/SSL
 
-MySQL、MariaDB、TiDB、PostgreSQL 和 Redis 可在“TLS/SSL”页签中配置加密连接：
+MySQL、MariaDB、TiDB、PostgreSQL、KingbaseES 和 Redis 可在“TLS/SSL”页签中配置加密连接：
 
 1. 勾选“启用 TLS”。取消勾选即明确禁用加密（MySQL 系会下发 `ssl-mode=DISABLED`，不再按驱动默认尝试加密）。未启用时证书、校验与 SSL 模式控件不显示，避免填写后被连接器忽略。
 2. 选择 SSL 模式：
@@ -227,7 +228,7 @@ SQL Server 的加密选项在同一页签中，以“加密”下拉框提供；
 5. 选择“主机密钥校验”策略：默认严格模式只接受 `~/.ssh/known_hosts`（或用 `SSH_KNOWN_HOSTS` 指定文件）中已记录的密钥；“首次使用自动接受并记录”会在首次连接时把密钥写入 known_hosts；选择“不校验”会跳过主机密钥验证，仅建议在受控网络排障时临时使用。
 6. 返回底部点击“测试”，确认隧道和数据库连接均正常。
 
-SSH 隧道对 MySQL、MariaDB、TiDB、PostgreSQL、Redis、MongoDB、SQL Server、Oracle 和 DM8 提供，且对连接测试、对象浏览、SQL 执行、数据读写与取消操作全部生效；SQLite 为本地文件，打开该页签时会提示不适用。MongoDB 经隧道时只支持单个普通主机（不支持 SRV 与多主机种子列表），并强制直连单个节点。无论选择哪种策略，已记录但发生变更的主机密钥都会被拒绝。
+SSH 隧道对 MySQL、MariaDB、TiDB、PostgreSQL、KingbaseES、Redis、MongoDB、SQL Server、Oracle 和 DM8 提供，且对连接测试、对象浏览、SQL 执行、数据读写与取消操作全部生效；SQLite 为本地文件，打开该页签时会提示不适用。MongoDB 经隧道时只支持单个普通主机（不支持 SRV 与多主机种子列表），并强制直连单个节点。无论选择哪种策略，已记录但发生变更的主机密钥都会被拒绝。
 
 ### 2.7 高级设置
 
@@ -237,6 +238,7 @@ SSH 隧道对 MySQL、MariaDB、TiDB、PostgreSQL、Redis、MongoDB、SQL Server
 | --- | --- |
 | MySQL / MariaDB / TiDB | 连接参数（URL 参数、字符集、排序规则）；代理（类型下拉选择 SOCKS5 / HTTP CONNECT，另填主机、端口、可选用户名密码）；建连超时、查询超时、TCP 保活。 |
 | PostgreSQL | 建连超时、查询超时、应用名、会话时区、TCP 保活、代理，以及是否显示其他数据库和系统 Schema。 |
+| KingbaseES | 与 PostgreSQL 相同（PG 兼容模式），复用同一份连接档案。 |
 | Redis | 拓扑自动识别：主机 / 端口可填单机节点、哨兵地址或集群任一节点，连接时先探测是否为集群、再探测是否为哨兵，都不是则按单机连接。“连接行为”中可填 Sentinel 主库名（只监控一个主库时可留空，监控多个主库时必须填写），或勾选“强制按单机连接”跳过探测（仅用于代理 / 端口转发导致误判的场景）；识别为集群后可勾选是否发送 `READONLY` 允许读从节点。“AI 访问范围”的“AI Key 授权前缀”限制 AI 工具可访问的 Key，逗号分隔，留空不限制。旧连接里显式保存的哨兵 / 集群节点仍会生效，编辑时地址回填到主机 / 端口。 |
 | SQL Server | 建连超时、查询超时、应用名；命名实例在端口保持默认 `1433` 时经 SQL Browser（UDP 1434）解析实际端口，显式填写端口则以端口为准。 |
 | Oracle | 建连超时、查询超时、应用名。 |
@@ -370,7 +372,7 @@ DM8 当前不提供触发器设计页签，新建表时只能配置表、列、�
 | 类型 | 层级 |
 | --- | --- |
 | MySQL / MariaDB / TiDB / SQLite | 连接 → 数据库 → 表、视图、函数、存储过程等分组 |
-| PostgreSQL / SQL Server / 达梦 DM8 | 连接 → 数据库 → Schema → 对象分组 |
+| PostgreSQL / KingbaseES / SQL Server / 达梦 DM8 | 连接 → 数据库 → Schema → 对象分组 |
 | Oracle | 连接 → 容器（PDB）→ Schema → 表、视图 |
 | Redis | 连接 → 逻辑库（`0`～`15`），Key 在数据库页签中查看 |
 | MongoDB | 连接 → 数据库 → 集合 |
@@ -391,7 +393,7 @@ DM8 当前不提供触发器设计页签，新建表时只能配置表、列、�
 | --- | --- |
 | 打开连接 / 关闭连接 | 建立或释放当前连接会话；关闭时如果该连接下还有标签页，会先弹出确认。 |
 | 新建查询 | 打开查询编辑器，先选择连接和数据库作用域；MongoDB 连接不提供。 |
-| 用户与权限 | 打开该连接的用户和权限管理页；MySQL、MariaDB、TiDB、PostgreSQL、SQL Server、Oracle、DM8 可用，SQLite 显示为不可用。 |
+| 用户与权限 | 打开该连接的用户和权限管理页；MySQL、MariaDB、TiDB、PostgreSQL、KingbaseES、SQL Server、Oracle、DM8 可用（KingbaseES 沿用 PostgreSQL 实现，尚未单独回归），SQLite 显示为不可用。 |
 | 执行 SQL 文件 | 选择本地 SQL 文件并在该连接上执行，仅 SQL 类型连接提供。 |
 | 新建数据库 | 在服务端创建数据库；Redis 不提供。 |
 | 移至分组 / 取消分组 | 把连接放入分组或移回顶层。 |
@@ -422,7 +424,7 @@ SQL 类型连接：
 
 - 打开或关闭数据库。
 - 置顶或取消置顶；置顶只在当前应用会话内生效。
-- 新建表、新建 schema（PostgreSQL、SQL Server、DM8、Oracle）、执行 SQL 文件、备份。
+- 新建表、新建 schema（PostgreSQL、KingbaseES、SQL Server、DM8、Oracle）、执行 SQL 文件、备份。
 - 新建查询、在数据库中查找。
 - 刷新或删除数据库。
 
@@ -438,7 +440,7 @@ MongoDB 连接：
 - 创建集合、打开命令行终端或命令工作台。
 - 刷新或删除数据库。
 
-PostgreSQL、SQL Server、DM8 和 Oracle 的 Schema 节点还有独立菜单，可新建查询、新建表、设置默认 schema 或刷新。
+PostgreSQL、KingbaseES、SQL Server、DM8 和 Oracle 的 Schema 节点还有独立菜单，可新建查询、新建表、设置默认 schema 或刷新。
 
 “设置默认数据库”和“设置默认 schema”当前只提示入口已就绪，不会保存默认值。需要固定默认库时，打开“编辑连接”，在“数据库”中填写；新建查询后也可以在编辑器顶部切换作用域。
 
@@ -477,7 +479,7 @@ PostgreSQL、SQL Server、DM8 和 Oracle 的 Schema 节点还有独立菜单，�
 新建查询时，如果当前没有明确的连接或数据库，FluxDB 会打开作用域选择窗口：
 
 1. 在左侧选择连接；未连接的连接会显示连接入口，连接后再列出数据库。
-2. 在右侧选择数据库。PostgreSQL 默认 `postgres`，SQLite 默认 `main`，DM8 默认 `DAMENG`，Redis 默认 `db0`。
+2. 在右侧选择数据库。PostgreSQL 默认 `postgres`，KingbaseES 默认 `test`，SQLite 默认 `main`，DM8 默认 `DAMENG`，Redis 默认 `db0`。
 3. 点击数据库条目进入编辑器。
 
 编辑器顶部显示当前连接和数据库，作用域在创建后固定；需要换库时新建查询，或在 SQL 中显式限定库名。执行前请核对顶部作用域，避免把语句发到错误环境。
@@ -1144,6 +1146,7 @@ FluxDB 把账号、成员关系和授权收在同一个页签里，打开连接�
 | --- | --- | --- |
 | MySQL / MariaDB / TiDB | 用户与权限 | 用户、角色与库级权限 |
 | PostgreSQL | 用户与角色 | 集群级角色、成员关系与对象权限 |
+| KingbaseES | 用户与角色 | 沿用 PostgreSQL 页面与 `pg_catalog` 查询，尚未在 Kingbase 上单独回归 |
 | SQL Server | 用户与角色 | 登录名、数据库用户、服务器/数据库角色与显式权限 |
 | Oracle / 达梦 DM8 | 用户与权限 | 账号（即 Schema）、角色、系统权限与对象权限 |
 
@@ -1969,7 +1972,7 @@ MongoDB 的空库不会实际存在，因此“新建数据库”必须同时指
 
 ### 12.6 数据库支持
 
-该分区列出 10 种内置连接器，每一项都标记“已支持”：
+该分区列出 11 种内置连接器，每一项都标记“已支持”：
 
 | 数据库 | 连接器来源 | 主要能力 |
 | --- | --- | --- |
@@ -1978,6 +1981,7 @@ MongoDB 的空库不会实际存在，因此“新建数据库”必须同时指
 | MariaDB | 复用 MySQL 协议连接器 | 连接测试、对象浏览、数据查看、SQL 执行、表结构、用户管理；兼容 mariadb-dump / mariadb 客户端 |
 | SQLite | 内置 SQLx SQLite 连接器 | 本地文件连接、对象浏览、数据查看、SQL 执行、表结构 |
 | PostgreSQL | 内置 tokio-postgres 连接器 | 连接测试、对象浏览、数据查看、SQL 执行、表结构、用户管理 |
+| 人大金仓 KingbaseES | 复用 PostgreSQL 连接器（PG 兼容模式） | 连接测试、对象浏览、数据查看与编辑、SQL 执行、表结构设计；用户管理页沿用 PostgreSQL 实现；暂不支持原生备份 |
 | 达梦 DM8 | 内置达梦连接器 | 连接测试、对象浏览、数据查看、SQL 执行、表结构、用户管理 |
 | SQL Server | 内置 TDS（tiberius）连接器 | 连接测试、对象浏览、数据查看、T-SQL 执行、表结构、用户管理 |
 | Oracle | 内置 Oracle 连接器 | 连接测试、对象浏览、数据查看、SQL 执行、表结构、用户管理 |

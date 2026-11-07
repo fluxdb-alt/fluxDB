@@ -63,7 +63,7 @@ impl AppController {
         };
         let guarded = if self
             .connection_config(object.connection_id)
-            .is_some_and(|c| c.kind == DatabaseKind::Postgres)
+            .is_some_and(|c| c.kind.is_postgres_family())
         {
             postgres_changes_with_original_values(&changes, &before_page).map_err(UserFacingError::from)?
         } else {

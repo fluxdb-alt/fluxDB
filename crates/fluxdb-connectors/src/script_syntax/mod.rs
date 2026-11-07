@@ -145,7 +145,7 @@ fn dialect_for(kind: DatabaseKind) -> &'static dyn SqlParserDialect {
     static MSSQL: MsSqlDialect = MsSqlDialect {};
     match kind {
         DatabaseKind::Oracle => &ORACLE,
-        DatabaseKind::Postgres => &POSTGRES,
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => &POSTGRES,
         DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => &MYSQL,
         DatabaseKind::Sqlite => &SQLITE,
         DatabaseKind::SqlServer => &MSSQL,

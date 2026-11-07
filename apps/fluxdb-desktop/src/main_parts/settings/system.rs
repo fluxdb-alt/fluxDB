@@ -577,7 +577,7 @@ struct DatabaseSupportEntry {
 }
 
 /// 内置连接器清单，顺序与 `DatabaseKind` 保持一致；新增数据库类型时必须同步补齐。
-fn database_support_entries() -> [DatabaseSupportEntry; 10] {
+fn database_support_entries() -> [DatabaseSupportEntry; 11] {
     [
         DatabaseSupportEntry {
             kind: DatabaseKind::MySql,
@@ -603,6 +603,11 @@ fn database_support_entries() -> [DatabaseSupportEntry; 10] {
             kind: DatabaseKind::Postgres,
             source: tr("app.settings.database_support.postgres_source"),
             detail: tr("app.settings.database_support.postgres_detail"),
+        },
+        DatabaseSupportEntry {
+            kind: DatabaseKind::Kingbase,
+            source: tr("app.settings.database_support.kingbase_source"),
+            detail: tr("app.settings.database_support.kingbase_detail"),
         },
         DatabaseSupportEntry {
             kind: DatabaseKind::Dameng,

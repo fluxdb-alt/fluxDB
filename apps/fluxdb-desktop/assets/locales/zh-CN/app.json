@@ -3694,6 +3694,8 @@
       "sqlite_detail": "支持本地文件连接、对象浏览、数据查看、SQL 执行和表结构能力",
       "postgres_source": "内置 tokio-postgres 连接器",
       "postgres_detail": "支持连接测试、对象浏览、数据查看、SQL 执行、表结构和用户管理",
+      "kingbase_source": "复用 PostgreSQL 连接器（PG 兼容模式）",
+      "kingbase_detail": "支持连接测试、对象浏览、数据查看与编辑、SQL 执行和表结构设计；用户管理页沿用 PostgreSQL 实现；需使用 PG 兼容模式，暂不支持原生备份",
       "dameng_source": "内置达梦 DM8 连接器",
       "dameng_detail": "支持连接测试、对象浏览、数据查看、SQL 执行、表结构和用户管理",
       "sqlserver_source": "内置 TDS（tiberius）连接器",

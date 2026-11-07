@@ -3694,6 +3694,8 @@
       "sqlite_detail": "Supports local file connections, object browsing, data viewing, SQL execution, and table structure",
       "postgres_source": "Built-in tokio-postgres connector",
       "postgres_detail": "Supports connection tests, object browsing, data viewing, SQL execution, table structure, and user management",
+      "kingbase_source": "Reuses the PostgreSQL connector (PG compatibility mode)",
+      "kingbase_detail": "Supports connection tests, object browsing, data viewing and editing, SQL execution, and table design; the users page reuses the PostgreSQL implementation; requires PG compatibility mode and does not yet support native backup",
       "dameng_source": "Built-in DM8 connector",
       "dameng_detail": "Supports connection tests, object browsing, data viewing, SQL execution, table structure, and user management",
       "sqlserver_source": "Built-in TDS (tiberius) connector",

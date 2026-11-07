@@ -1374,7 +1374,7 @@ fn row_identity_sql(identity: &RowIdentity, db_kind: DatabaseKind) -> String {
 /// 单元格 SQL 字面量（按方言）：PG bytea 用 `'\x..'::bytea`（`X'..'` 非法）、jsonb 用 `::jsonb`；
 /// MySQL/SQLite 保持 `X'..'`、裸文本。
 fn sql_preview_cell_literal(value: &CellValue, db_kind: DatabaseKind) -> String {
-    let is_pg = db_kind == DatabaseKind::Postgres;
+    let is_pg = db_kind.is_postgres_family();
     match value {
         CellValue::Null => "NULL".to_string(),
         CellValue::Bool(true) => "TRUE".to_string(),

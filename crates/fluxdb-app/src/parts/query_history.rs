@@ -6,7 +6,7 @@ impl AppController {
     ) {
         let executed_at_unix_secs = current_unix_secs();
         let persistent = request.session_id.is_some() && self.connection_config(request.connection_id)
-            .is_some_and(|config| config.kind == DatabaseKind::Postgres);
+            .is_some_and(|config| config.kind.is_postgres_family());
         let mut recorded_in_run: Vec<usize> = if persistent {
             self.state.query_history.iter().enumerate().filter(|(_, entry)|
                 entry.connection_id == request.connection_id && entry.session_id == request.session_id
@@ -1172,7 +1172,7 @@ fn sql_history_object_name(sql: &str) -> Option<String> {
 /// PG 的限定层级是 schema.table（不带库名，库由连接决定）；MySQL/TiDB/SQLite 是
 /// database.table。schema/database 未知时退化为裸表名，由连接的 search_path/默认库解析。
 fn sql_history_object_name_for_path(object: &ObjectPath, kind: DatabaseKind) -> String {
-    let qualifier = if kind == DatabaseKind::Postgres {
+    let qualifier = if kind.is_postgres_family() {
         object.schema.as_deref()
     } else {
         object.database.as_deref()
@@ -1231,7 +1231,7 @@ fn sql_history_row_identity_for_rollback_in(
 
 /// 按方言给标识符加引号（PG 用双引号，MySQL/TiDB/SQLite 用反引号）。
 fn sql_history_quote_ident_for(value: &str, kind: DatabaseKind) -> String {
-    if kind == DatabaseKind::Postgres {
+    if kind.is_postgres_family() {
         fluxdb_core::PostgresDialect.quote_identifier(value)
     } else {
         fluxdb_core::MySqlDialect.quote_identifier(value)
@@ -1280,7 +1280,7 @@ fn sql_history_value_literal_for_type(
     kind: DatabaseKind,
     type_name: Option<&str>,
 ) -> String {
-    let postgres = kind == DatabaseKind::Postgres;
+    let postgres = kind.is_postgres_family();
     match value {
         CellValue::Null => "NULL".to_string(),
         CellValue::Bool(value) => {

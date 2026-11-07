@@ -282,7 +282,9 @@ fn create_table_design_type_parts(
     let raw_type = provider.normalize_metadata_type(raw_type);
     let raw_type = raw_type.as_str();
     match database_kind {
-        DatabaseKind::Postgres => create_table_postgres_design_type_parts(raw_type),
+        DatabaseKind::Postgres | DatabaseKind::Kingbase => {
+            create_table_postgres_design_type_parts(raw_type)
+        }
         DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => create_table_mysql_design_type_parts(raw_type),
         DatabaseKind::Sqlite => create_table_sqlite_design_type_parts(raw_type),
         _ => create_table_split_column_type(raw_type),

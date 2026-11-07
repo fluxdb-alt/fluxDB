@@ -17,6 +17,7 @@ impl AiConnectionsListTool {
                     config.kind,
                     fluxdb_core::DatabaseKind::Sqlite
                         | fluxdb_core::DatabaseKind::Postgres
+                        | fluxdb_core::DatabaseKind::Kingbase
                         | fluxdb_core::DatabaseKind::MySql
                         | fluxdb_core::DatabaseKind::TiDb
                         | fluxdb_core::DatabaseKind::MariaDb

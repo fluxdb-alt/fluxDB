@@ -65,6 +65,7 @@ impl AiRuntimeHandle {
                                     | DatabaseKind::TiDb
                                     | DatabaseKind::MariaDb
                                     | DatabaseKind::Postgres
+                                    | DatabaseKind::Kingbase
                                     | DatabaseKind::Dameng
                                     | DatabaseKind::SqlServer
                             )

@@ -83,7 +83,7 @@ impl TableDataImportForm {
             return None;
         }
         Some(match kind {
-            DatabaseKind::Postgres | DatabaseKind::Sqlite => {
+            DatabaseKind::Postgres | DatabaseKind::Kingbase | DatabaseKind::Sqlite => {
                 tr("app.data.data_import.truncate_rollback_safe").to_string()
             }
             _ => tr("app.data.data_import.truncate_rollback_unsafe").to_string(),

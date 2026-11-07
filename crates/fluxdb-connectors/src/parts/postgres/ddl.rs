@@ -10,7 +10,7 @@ fn pg_create_database(
     config: &ConnectionConfig,
     request: &CreateDatabaseRequest,
 ) -> fluxdb_core::Result<()> {
-    if config.kind != DatabaseKind::Postgres {
+    if !config.kind.is_postgres_family() {
         return Err(Error::new(ErrorKind::Connection, "连接类型不支持新建数据库"));
     }
     if config.id != request.connection_id {
@@ -155,7 +155,7 @@ fn pg_delete_database(
     connection_id: ConnectionId,
     database: &str,
 ) -> fluxdb_core::Result<()> {
-    if config.kind != DatabaseKind::Postgres {
+    if !config.kind.is_postgres_family() {
         return Err(Error::new(ErrorKind::Connection, "连接类型不支持删除数据库"));
     }
     if config.id != connection_id {
