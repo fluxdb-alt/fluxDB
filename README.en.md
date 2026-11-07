@@ -19,6 +19,14 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 
 ## Latest changes
 
+### v0.1.16
+
+- **KingbaseES support**: reuses the PostgreSQL connection path in PG compatibility mode for connection tests, database/schema and object browsing, SQL queries and completion, data viewing and editing, table structure viewing and design, and the users and privileges entry. The default port is 54321, with TLS, SSH, proxy and connection-string import.
+- **First-release limits**: PG compatibility mode only; native backup/restore and external `psql` / `ksql` entries are not supported yet; the users and privileges page reuses the PostgreSQL implementation and has not been separately regression-tested.
+- **Fixes**: fixed a panic when opening table DDL on Kingbase (`pg_sequence` numeric columns are declared `int2`; the query now casts to `::bigint`), and the connection-kind rail now reports 11 built-in drivers.
+
+[Full release notes](./release-notes/v0.1.16/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.15
 
 - **MariaDB support**: reuses the MySQL protocol path for object browsing, SQL queries and completion, table design, data editing, import/export, backup and restore, and users/privileges, with MariaDB-specific read-only and AI SQL policies.
@@ -30,18 +38,6 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 - **Settings and quit**: the settings database list now covers all ten built-in connectors, and quitting with unsaved changes or running queries asks for confirmation first.
 
 [Full release notes](./release-notes/v0.1.15/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
-
-### v0.1.14
-
-- **MongoDB support**: connection-string import with SRV discovery, database/collection/view browsing, a collection workspace (documents, aggregation, indexes, info), filters projection and sort, a visual condition builder, SQL-style query completion, document create/edit/duplicate/delete, JSON / JSONL / CSV import and export, collection rename and drop, index view and drop, a database-level command workbench and command-line terminal, and AI page context with controlled execution.
-- **MongoDB workspace aligned with Compass**: the aggregation pipeline is now draggable stage cards with single-stage preview; the condition builder is an expression tree with AND / OR / NOR, `$elemMatch` and `$not`; the indexes page shows type, size and usage stats with sortable headers and index drop; document and JSON views support window-level text selection.
-- **MongoDB first-release limits**: no database-level backup/restore (`mongodump` / `mongorestore`) and no performance-metrics panel; no cross-database collection moves, bulk delete, in-table row editing, transactions or change streams. See [Database support](#database-support).
-- **Oversized values no longer drop rows**: when a cell exceeds the result-page budget its body is offloaded to local controlled storage and only a preview plus size is kept, viewable in chunks; upload replacement now streams in chunks. Applies to MySQL, SQLite, PostgreSQL, SQL Server and Dameng DM8.
-- **MongoDB performance**: the document area uses a virtualized list with whole-page parse caching, and each connection reuses a cached MongoClient pool, cutting connection setup for queries and collection opens.
-- **Redis fixes**: a newly created key stays in its database tab and is selected; servers without the RedisJSON module can store a JSON key as a string and use the JSON editor; the command signature hint hides once all arguments are filled.
-- **Stability fixes**: fixed rows with large values failing to update or delete in PostgreSQL and in tables without primary keys, SQL Server dropping rows over budget, crashes when importing non-ASCII values into MongoDB, filter/sort popovers not anchored to the control that opened them, and ghost-button hover text matching the background in the light theme.
-
-[Full release notes](./release-notes/v0.1.14/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
 
 ## Why FluxDB
 
