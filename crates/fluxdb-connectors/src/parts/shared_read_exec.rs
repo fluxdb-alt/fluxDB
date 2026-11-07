@@ -27,7 +27,7 @@ const MYSQL_CANCELLED_NOT_EXECUTED: &str = "已取消：未执行";
 /// 调用方在语句之间检查 `should_cancel` 决定是否继续发下一条，本函数只在运行中的
 /// 语句上触发 kill。
 async fn mysql_run_statement_cancellable(
-    url: &str,
+    plan: &MySqlConnectionPlan,
     connection: &mut MySqlConnection,
     conn_id: u64,
     statement: &str,
@@ -91,27 +91,63 @@ async fn mysql_run_statement_cancellable(
         }
     };
     tokio::pin!(run);
-    let mut cancel_sent = false;
-    let mut cancel_succeeded = false;
+    let started = Instant::now();
+    let query_timeout = plan.query_timeout();
+    let mut kill_sent = false;
+    let mut kill_succeeded = false;
+    let mut timeout_hit = false;
     loop {
         tokio::select! {
             outcome = &mut run => {
                 let mut outcome = outcome;
-                // 只有服务端确认接收 KILL，且主连接以错误结束时，才能认定本语句由
-                // 用户取消；若 KILL 没赶上而语句正常完成，仍保留真实成功结果。
-                outcome.user_cancelled = cancel_succeeded && outcome.error.is_some();
+                // 超过档案里的查询超时：语句已被 KILL 打断，统一报「查询超时」，不返回
+                // 被打断后的结果。注意 `SLEEP()` 被 KILL 时不会报错，而是返回 `1` 并正常
+                // 结束，只看 error 会把超时误判成成功，因此这里以截止时间为准。
+                // 语句也可能在 100ms 计时 tick 之前就返回（服务端 max_execution_time 同样
+                // 会打断），此时 timeout_hit 还没置位；用截止时间兜底，避免 select 分支
+                // 竞争把已超时的语句误报成成功。
+                let timed_out = timeout_hit
+                    || (!kill_sent
+                        && query_timeout.is_some_and(|limit| started.elapsed() >= limit));
+                if timed_out {
+                    if let Some(error) = outcome.error.take() {
+                        tracing::info!(
+                            target: "fluxdb_connectors",
+                            connection_id = conn_id,
+                            timeout_secs = query_timeout.map(|limit| limit.as_secs()).unwrap_or(0),
+                            server_message = %error.message,
+                            "MySQL 查询超时已中止语句"
+                        );
+                    }
+                    outcome.page = None;
+                    outcome.affected_rows = 0;
+                    outcome.error = Some(Error::new(
+                        ErrorKind::Query,
+                        format!(
+                            "查询超时（超过 {} 秒）",
+                            query_timeout.map(|limit| limit.as_secs()).unwrap_or(0)
+                        ),
+                    ));
+                }
+                // 用户主动取消：只有服务端确认接收 KILL，且主连接以错误结束时，才能认定
+                // 本语句被取消；若 KILL 没赶上而语句正常完成，仍保留真实成功结果。
+                outcome.user_cancelled = kill_succeeded && !timed_out && outcome.error.is_some();
                 return outcome;
             },
             _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                if !cancel_sent && should_cancel() {
-                    cancel_sent = true;
+                let timed_out = query_timeout.is_some_and(|limit| started.elapsed() >= limit);
+                if !kill_sent && (should_cancel() || timed_out) {
+                    kill_sent = true;
+                    // 用户主动停止优先于超时：两者都命中时按取消语义标注结果待核实。
+                    timeout_hit = timed_out && !should_cancel();
                     // KILL QUERY 只中止当前语句，随后主连接会收到该语句超时/中断错误。
-                    match mysql_send_kill_query(url, conn_id).await {
+                    match mysql_send_kill_query(plan, conn_id).await {
                         Ok(()) => {
-                            cancel_succeeded = true;
+                            kill_succeeded = true;
                             tracing::info!(
                                 target: "fluxdb_connectors",
                                 connection_id = conn_id,
+                                timed_out = timeout_hit,
                                 "MySQL 已向服务端发送 KILL QUERY"
                             );
                         }
@@ -130,15 +166,13 @@ async fn mysql_run_statement_cancellable(
 
 /// 另开一条短连接对 `conn_id` 下发 `KILL QUERY`（只中止语句、不关连接）。失败不冒泡，
 /// 由主连接收到的错误表达；避免 KILL 通了但因意外关闭 kill 连接而静默。
-async fn mysql_send_kill_query(url: &str, conn_id: u64) -> fluxdb_core::Result<()> {
-    let options = url
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
-    let mut kill_conn = match tokio::time::timeout(Duration::from_secs(5), options.connect()).await {
-        Ok(Ok(connection)) => connection,
-        Ok(Err(error)) => return Err(mysql_error(error)),
-        Err(_) => return Err(Error::new(ErrorKind::Connection, "取消连接超时")),
-    };
+///
+/// 复用同一条 SSH 隧道与建连超时：隧道模式下 kill 连接同样只能经本地转发端口进入。
+async fn mysql_send_kill_query(
+    plan: &MySqlConnectionPlan,
+    conn_id: u64,
+) -> fluxdb_core::Result<()> {
+    let mut kill_conn = plan.connect().await?;
     let killed = sqlx::raw_sql(&format!("KILL QUERY {}", conn_id))
         .execute(&mut kill_conn)
         .await
@@ -165,27 +199,21 @@ pub(crate) fn mysql_execute_parameterized(
             "参数化执行只接受单条语句；不支持多语句脚本",
         ));
     }
-    let url = mysql_connection_url(config)?;
-    let options = url
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    // 计划持有 SSH 隧道与超时；必须活到语句执行结束。
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
     runtime.block_on(async {
-        let connect = tokio::time::timeout(Duration::from_secs(5), options.connect()).await;
-        let mut connection = match connect {
-            Ok(Ok(connection)) => connection,
-            Ok(Err(error)) => return Err(mysql_error(error)),
-            Err(_) => return Err(Error::new(ErrorKind::Connection, "连接超时")),
-        };
+        let mut connection = plan.connect().await?;
         if let Some(database) = request.database.as_deref().filter(|database| !database.is_empty()) {
             sqlx::raw_sql(&format!("USE {}", fluxdb_core::MySqlDialect.quote_identifier(database)))
                 .execute(&mut connection)
                 .await
                 .map_err(mysql_error)?;
         }
+        let run = async {
         let pagination = query_execution_pagination(request.options.page_offset, request.options.page_size);
         let started = std::time::Instant::now();
         if statement_returns_rows(&statement) {
@@ -241,6 +269,21 @@ pub(crate) fn mysql_execute_parameterized(
             results: Vec::new(),
             rollback_snapshots: Vec::new(),
         })
+        };
+        // 参数化路径不做 KILL QUERY，超时只放弃客户端等待；默认 0（不限制），
+        // 仅为用户显式设置的查询超时兜底，避免单条语句无限挂住执行器。
+        let execution = match plan.query_timeout() {
+            Some(limit) => tokio::time::timeout(limit, run)
+                .await
+                .map_err(|_| {
+                    Error::new(
+                        ErrorKind::Query,
+                        format!("查询超时（超过 {} 秒）", limit.as_secs()),
+                    )
+                })??,
+            None => run.await?,
+        };
+        Ok(execution)
     })
 }
 
@@ -282,22 +325,15 @@ fn mysql_execute_query_with_progress(
         return Err(Error::new(ErrorKind::Query, "查询不能为空"));
     }
 
-    let url = mysql_connection_url(config)?;
-    let options = url
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    // 计划持有 SSH 隧道与超时；必须活到本批次所有语句执行结束。
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let connect = tokio::time::timeout(Duration::from_secs(5), options.connect()).await;
-        let mut connection = match connect {
-            Ok(Ok(connection)) => connection,
-            Ok(Err(error)) => return Err(mysql_error(error)),
-            Err(_) => return Err(Error::new(ErrorKind::Connection, "连接超时")),
-        };
+        let mut connection = plan.connect().await?;
 
         if let Some(database) = request.database.as_deref().filter(|database| !database.is_empty())
         {
@@ -362,7 +398,7 @@ fn mysql_execute_query_with_progress(
             }
             let started = std::time::Instant::now();
             let outcome = mysql_run_statement_cancellable(
-                &url,
+                &plan,
                 &mut connection,
                 conn_id,
                 &statement,

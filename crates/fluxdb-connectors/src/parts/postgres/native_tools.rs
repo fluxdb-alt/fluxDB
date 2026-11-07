@@ -399,7 +399,7 @@ pub fn pg_open_native_ssh_tunnel(
             inherited_connect_timeout_secs
         },
         keepalive_interval_secs: ssh.keepalive_interval_secs,
-        verify_host_key: true,
+        host_key_policy: ssh.host_key_policy,
     };
     let tunnel = open_tunnel_with(
         (&ssh.host, ssh.port),

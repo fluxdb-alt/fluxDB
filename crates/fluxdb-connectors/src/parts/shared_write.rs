@@ -507,22 +507,18 @@ fn mysql_create_database(
     if let Endpoint::Tcp { database, .. } = &mut server_config.endpoint {
         *database = None;
     }
-    let url = mysql_connection_url(&server_config)?;
-    let options = url
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    // 档案是拨号的唯一事实来源：同步清掉档案里的库名，避免解析时又把默认库带回来。
+    if let Some(profile) = server_config.mysql_profile.as_mut() {
+        profile.basic.database.clear();
+    }
+    let plan = mysql_connection_plan(&server_config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let connect = tokio::time::timeout(Duration::from_secs(5), options.connect()).await;
-        let mut connection = match connect {
-            Ok(Ok(connection)) => connection,
-            Ok(Err(error)) => return Err(mysql_error(error)),
-            Err(_) => return Err(Error::new(ErrorKind::Connection, "连接超时")),
-        };
+        let mut connection = plan.connect().await?;
 
         sqlx::query(&sql)
             .execute(&mut connection)
@@ -549,22 +545,18 @@ fn mysql_delete_database(
     if let Endpoint::Tcp { database, .. } = &mut server_config.endpoint {
         *database = None;
     }
-    let url = mysql_connection_url(&server_config)?;
-    let options = url
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    // 档案是拨号的唯一事实来源：同步清掉档案里的库名，避免解析时又把默认库带回来。
+    if let Some(profile) = server_config.mysql_profile.as_mut() {
+        profile.basic.database.clear();
+    }
+    let plan = mysql_connection_plan(&server_config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let connect = tokio::time::timeout(Duration::from_secs(5), options.connect()).await;
-        let mut connection = match connect {
-            Ok(Ok(connection)) => connection,
-            Ok(Err(error)) => return Err(mysql_error(error)),
-            Err(_) => return Err(Error::new(ErrorKind::Connection, "连接超时")),
-        };
+        let mut connection = plan.connect().await?;
 
         sqlx::query(&sql)
             .execute(&mut connection)

@@ -7,7 +7,7 @@
 // 证书正文、私钥不落日志；文件路径来自 profile 的 `SecretRef`（本地文件引用）。
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
 use rustls::server::ParsedCertificate;
 use rustls::DigitallySignedStruct;
 
@@ -118,7 +118,10 @@ fn pg_tls_client_auth(
                     format!("客户端证书文件无证书 {cert_path}"),
                 ));
             }
-            let private_key = pg_read_private_key(key_path)?;
+            let private_key = pg_read_private_key(
+                key_path,
+                profile.tls.client_key_passphrase.value(),
+            )?;
             builder.with_client_auth_cert(certs, private_key).map_err(|e| {
                 fluxdb_core::Error::new(
                     fluxdb_core::ErrorKind::Connection,
@@ -159,27 +162,51 @@ fn pg_read_pem_certs(
         })
 }
 
-fn pg_read_private_key(path: &str) -> fluxdb_core::Result<PrivateKeyDer<'static>> {
-    let file = std::fs::File::open(path).map_err(|e| {
+/// 读取客户端私钥：明文 PEM 优先；加密私钥仅支持 PKCS#8（`ENCRYPTED PRIVATE KEY`）。
+///
+/// 口令只在内存中使用，不落日志；旧式 OpenSSL `Proc-Type: 4,ENCRYPTED` 头不支持，
+/// 会给出明确错误而不是把「无密钥」当成文件为空。
+fn pg_read_private_key(
+    path: &str,
+    passphrase: Option<&str>,
+) -> fluxdb_core::Result<PrivateKeyDer<'static>> {
+    let bytes = std::fs::read(path).map_err(|e| {
         fluxdb_core::Error::new(
             fluxdb_core::ErrorKind::Connection,
             format!("客户端私钥读取失败 {path}: {e}"),
         )
     })?;
-    let mut reader = std::io::BufReader::new(file);
-    rustls_pemfile::private_key(&mut reader)
-        .map_err(|e| {
-            fluxdb_core::Error::new(
-                fluxdb_core::ErrorKind::Connection,
-                format!("客户端私钥解析失败 {path}: {e}"),
-            )
-        })?
-        .ok_or_else(|| {
-            fluxdb_core::Error::new(
-                fluxdb_core::ErrorKind::Connection,
-                format!("客户端私钥文件无密钥 {path}"),
-            )
-        })
+    if let Some(key) = rustls_pemfile::private_key(&mut &bytes[..]).map_err(|e| {
+        fluxdb_core::Error::new(
+            fluxdb_core::ErrorKind::Connection,
+            format!("客户端私钥解析失败 {path}: {e}"),
+        )
+    })? {
+        return Ok(key);
+    }
+
+    let Some(passphrase) = passphrase.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Err(fluxdb_core::Error::new(
+            fluxdb_core::ErrorKind::Connection,
+            format!("客户端私钥已加密或格式不受支持，请填写私钥口令（仅支持 PKCS#8 加密私钥） {path}"),
+        ));
+    };
+    use pkcs8::der::DecodePem;
+    let encrypted = pkcs8::EncryptedPrivateKeyInfoOwned::from_pem(&bytes).map_err(|e| {
+        fluxdb_core::Error::new(
+            fluxdb_core::ErrorKind::Connection,
+            format!("加密私钥解析失败 {path}: {e}"),
+        )
+    })?;
+    let decrypted = encrypted.decrypt(passphrase).map_err(|e| {
+        fluxdb_core::Error::new(
+            fluxdb_core::ErrorKind::Connection,
+            format!("私钥口令错误或加密格式不受支持 {path}: {e}"),
+        )
+    })?;
+    Ok(PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+        decrypted.as_bytes().to_vec(),
+    )))
 }
 
 /// require：不校验服务器证书，仅加密。

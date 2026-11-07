@@ -16,6 +16,7 @@ include!("parts/dameng_profile.rs");
 include!("parts/mongo_profile.rs");
 include!("parts/sqlserver_profile.rs");
 include!("parts/oracle_profile.rs");
+include!("parts/database_connection.rs");
 include!("parts/sqlserver_user_admin.rs");
 include!("parts/oracle_user_admin.rs");
 include!("parts/postgres_identity.rs");

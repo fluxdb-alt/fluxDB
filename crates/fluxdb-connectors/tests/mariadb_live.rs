@@ -40,6 +40,7 @@ fn smoke_config() -> Option<ConnectionConfig> {
                     database: String::new(),
                     username: parts[2].into(),
                     password: SecretRef::inline(parts[3]),
+                    ..fluxdb_core::MysqlBasicOptions::default()
                 },
                 ..MysqlConnectionProfile::default()
             }),

@@ -10,13 +10,36 @@ fn redis_glob_escape(value: &str) -> String {
 }
 
 /// 选库；复用的连接若已在目标 DB 上则跳过，省掉一次往返。
+///
+/// 自动探测到集群时档案仍按单机保存，调用方有可能发 SELECT：集群只接受 DB 0，
+/// 这里把 DB 0 的拒绝视为无需选库，非 0 则给出明确错误而不是原始英文回包。
 fn redis_select(connection: &mut RedisConnection, database: u32) -> fluxdb_core::Result<()> {
     if connection.database == Some(database) {
         return Ok(());
     }
-    let result = redis_expect_ok(connection.command(&["SELECT", &database.to_string()])?);
-    connection.database = result.is_ok().then_some(database);
-    result
+    match connection.command(&["SELECT", &database.to_string()]) {
+        Ok(value) => {
+            let result = redis_expect_ok(value);
+            connection.database = result.is_ok().then_some(database);
+            result
+        }
+        Err(error) if redis_is_cluster_select_error(&error.message) => {
+            // 服务端拒绝 SELECT 是模式限制，不是连接故障。
+            connection.broken = false;
+            if database == 0 {
+                Ok(())
+            } else {
+                Err(Error::new(ErrorKind::Query, "Redis Cluster 只支持 DB 0"))
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn redis_is_cluster_select_error(message: &str) -> bool {
+    message
+        .to_ascii_lowercase()
+        .contains("select is not allowed in cluster mode")
 }
 
 /// 解析对象路径里的目标数据库号。

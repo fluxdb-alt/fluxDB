@@ -8,16 +8,14 @@ fn mysql_qualified_table(database: &str, table: &str) -> String {
 
 fn mysql_indexes(config: &ConnectionConfig, path: &ObjectPath) -> fluxdb_core::Result<Vec<IndexInfo>> {
     let database = mysql_database_for_path(config, path)?;
-    let options = mysql_connection_url(config)?
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let mut connection = options.connect().await.map_err(mysql_error)?;
+        let mut connection = plan.connect().await?;
         let rows = sqlx::query(mysql_indexes_query())
             .bind(&database)
             .bind(&path.name)
@@ -77,18 +75,15 @@ fn mysql_foreign_keys_with_cancel(
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<ForeignKeyInfo>> {
     let database = mysql_database_for_path(config, path)?;
-    let options = mysql_connection_url(config)?
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let Some(mut connection) = await_with_cancel(options.connect(), should_cancel)
-            .await
-            .map_err(mysql_error)? else {
+        let Some(mut connection) = await_with_cancel(plan.connect(), should_cancel)
+            .await? else {
             tracing::debug!(target: "fluxdb_connectors", op = "metadata_cancel", kind = "connect", "MySQL metadata connection cancelled");
             return Ok(Vec::new());
         };
@@ -151,16 +146,14 @@ fn mysql_foreign_keys_for_tables(
     database: &str,
     tables: &[String],
 ) -> fluxdb_core::Result<Vec<(String, ForeignKeyInfo)>> {
-    let options = mysql_connection_url(config)?
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let mut connection = options.connect().await.map_err(mysql_error)?;
+        let mut connection = plan.connect().await?;
         let rows = if tables.is_empty() {
             sqlx::query(
                 r#"
@@ -241,16 +234,14 @@ fn mysql_triggers(
     path: &ObjectPath,
 ) -> fluxdb_core::Result<Vec<TriggerInfo>> {
     let database = mysql_database_for_path(config, path)?;
-    let options = mysql_connection_url(config)?
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let mut connection = options.connect().await.map_err(mysql_error)?;
+        let mut connection = plan.connect().await?;
         let rows = sqlx::query(
             r#"
             SELECT
@@ -294,16 +285,14 @@ fn mysql_table_ddl(config: &ConnectionConfig, path: &ObjectPath) -> fluxdb_core:
         fluxdb_core::MySqlDialect.quote_identifier(&database),
         fluxdb_core::MySqlDialect.quote_identifier(&path.name)
     );
-    let options = mysql_connection_url(config)?
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let mut connection = options.connect().await.map_err(mysql_error)?;
+        let mut connection = plan.connect().await?;
         let row = sqlx::query(&sql)
             .fetch_one(&mut connection)
             .await
@@ -319,16 +308,14 @@ fn mysql_load_table_design_metadata(
     path: &ObjectPath,
 ) -> fluxdb_core::Result<fluxdb_core::TableDesignMetadata> {
     let database = mysql_database_for_path(config, path)?;
-    let options = mysql_connection_url(config)?
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let mut connection = options.connect().await.map_err(mysql_error)?;
+        let mut connection = plan.connect().await?;
         let columns = mysql_columns(&mut connection, &database, &path.name).await?;
         let index_rows = sqlx::query(mysql_indexes_query())
             .bind(&database)

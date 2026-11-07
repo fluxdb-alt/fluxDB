@@ -17,18 +17,15 @@ fn mysql_completion_tables_with_cancel(
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<CompletionTable>> {
     let database = completion_database(config, database)?;
-    let options = mysql_connection_url(config)?
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let Some(mut connection) = await_with_cancel(options.connect(), should_cancel)
-            .await
-            .map_err(mysql_error)? else {
+        let Some(mut connection) = await_with_cancel(plan.connect(), should_cancel)
+            .await? else {
             tracing::debug!(target: "fluxdb_connectors", op = "metadata_cancel", kind = "connect", "MySQL metadata connection cancelled");
             return Ok(Vec::new());
         };
@@ -98,18 +95,15 @@ fn mysql_completion_columns_with_cancel(
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<CompletionColumn>> {
     let database = completion_database(config, database)?;
-    let options = mysql_connection_url(config)?
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let Some(mut connection) = await_with_cancel(options.connect(), should_cancel)
-            .await
-            .map_err(mysql_error)? else {
+        let Some(mut connection) = await_with_cancel(plan.connect(), should_cancel)
+            .await? else {
             tracing::debug!(target: "fluxdb_connectors", op = "metadata_cancel", kind = "connect", "MySQL metadata connection cancelled");
             return Ok(Vec::new());
         };
@@ -146,18 +140,15 @@ fn mysql_completion_columns_for_tables_with_cancel(
     }
 
     let database = completion_database(config, database)?;
-    let options = mysql_connection_url(config)?
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let Some(mut connection) = await_with_cancel(options.connect(), should_cancel)
-            .await
-            .map_err(mysql_error)? else {
+        let Some(mut connection) = await_with_cancel(plan.connect(), should_cancel)
+            .await? else {
             tracing::debug!(target: "fluxdb_connectors", op = "metadata_cancel", kind = "connect", "MySQL metadata connection cancelled");
             return Ok(Vec::new());
         };
@@ -235,18 +226,15 @@ fn mysql_completion_routines_with_cancel(
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<CompletionRoutine>> {
     let database = completion_database(config, database)?;
-    let options = mysql_connection_url(config)?
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let Some(mut connection) = await_with_cancel(options.connect(), should_cancel)
-            .await
-            .map_err(mysql_error)? else {
+        let Some(mut connection) = await_with_cancel(plan.connect(), should_cancel)
+            .await? else {
             tracing::debug!(target: "fluxdb_connectors", op = "metadata_cancel", kind = "connect", "MySQL metadata connection cancelled");
             return Ok(Vec::new());
         };
@@ -312,18 +300,15 @@ fn mysql_completion_triggers_with_cancel(
     should_cancel: &dyn Fn() -> bool,
 ) -> fluxdb_core::Result<Vec<CompletionTrigger>> {
     let database = completion_database(config, database)?;
-    let options = mysql_connection_url(config)?
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let Some(mut connection) = await_with_cancel(options.connect(), should_cancel)
-            .await
-            .map_err(mysql_error)? else {
+        let Some(mut connection) = await_with_cancel(plan.connect(), should_cancel)
+            .await? else {
             tracing::debug!(target: "fluxdb_connectors", op = "metadata_cancel", kind = "connect", "MySQL metadata connection cancelled");
             return Ok(Vec::new());
         };

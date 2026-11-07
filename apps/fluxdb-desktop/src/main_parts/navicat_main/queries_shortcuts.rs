@@ -1196,7 +1196,8 @@ impl NavicatMain {
     fn preview_locale(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let locale = fluxdb_i18n::effective_locale(&self.settings_editor_draft.locale);
         apply_ui_locale(&locale, cx);
-        self.new_connection_inputs.refresh_placeholders(window, cx);
+        self.new_connection_inputs
+            .refresh_placeholders(self.new_connection_kind, window, cx);
         self.preview_settings(cx);
     }
 

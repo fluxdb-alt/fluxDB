@@ -42,22 +42,14 @@ fn mysql_load_data_with_expression(
         .as_deref()
         .ok_or_else(|| Error::new(ErrorKind::Query, "缺少数据库名称"))?;
     let pagination = Pagination::new(offset, limit);
-    let url = mysql_connection_url(config)?;
-    let options = url
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let connect = tokio::time::timeout(Duration::from_secs(5), options.connect()).await;
-        let mut connection = match connect {
-            Ok(Ok(connection)) => connection,
-            Ok(Err(error)) => return Err(mysql_error(error)),
-            Err(_) => return Err(Error::new(ErrorKind::Connection, "连接超时")),
-        };
+        let mut connection = plan.connect().await?;
 
         let columns = mysql_columns(&mut connection, database, &path.name).await?;
         mysql_ensure_columns_available(database, &path.name, &columns)?;
@@ -160,22 +152,14 @@ fn mysql_preview_data_export(
         .database
         .as_deref()
         .ok_or_else(|| Error::new(ErrorKind::Query, "缺少数据库名称"))?;
-    let url = mysql_connection_url(config)?;
-    let options = url
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let connect = tokio::time::timeout(Duration::from_secs(5), options.connect()).await;
-        let mut connection = match connect {
-            Ok(Ok(connection)) => connection,
-            Ok(Err(error)) => return Err(mysql_error(error)),
-            Err(_) => return Err(Error::new(ErrorKind::Connection, "连接超时")),
-        };
+        let mut connection = plan.connect().await?;
 
         let columns = mysql_columns(&mut connection, database, &path.name).await?;
         let table_name = format!(
@@ -231,22 +215,14 @@ fn mysql_load_cell_binary(
         .database
         .as_deref()
         .ok_or_else(|| Error::new(ErrorKind::Query, "缺少数据库名称"))?;
-    let url = mysql_connection_url(config)?;
-    let options = url
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let connect = tokio::time::timeout(Duration::from_secs(5), options.connect()).await;
-        let mut connection = match connect {
-            Ok(Ok(connection)) => connection,
-            Ok(Err(error)) => return Err(mysql_error(error)),
-            Err(_) => return Err(Error::new(ErrorKind::Connection, "连接超时")),
-        };
+        let mut connection = plan.connect().await?;
 
         let columns = mysql_columns(&mut connection, database, &path.name).await?;
         ensure_column_exists(column, &columns)?;

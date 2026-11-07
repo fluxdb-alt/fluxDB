@@ -6,34 +6,20 @@ fn mysql_list_objects(
         return Err(Error::new(ErrorKind::Connection, "连接类型不匹配"));
     }
 
-    let url = mysql_connection_url(config)?;
-    let options = url
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let configured_database = match &config.endpoint {
         Endpoint::Tcp { database, .. } => {
             database.as_deref().filter(|database| !database.is_empty())
         }
         _ => None,
     };
-    let connect_timeout = Duration::from_secs(5);
-    ensure_mysql_classic_greeting(
-        options.get_host(),
-        options.get_port(),
-        mysql_greeting_probe_timeout(connect_timeout),
-    )?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let connect = tokio::time::timeout(connect_timeout, options.connect()).await;
-        let mut connection = match connect {
-            Ok(Ok(connection)) => connection,
-            Ok(Err(error)) => return Err(mysql_error(error)),
-            Err(_) => return Err(Error::new(ErrorKind::Connection, "连接超时")),
-        };
+        let mut connection = plan.connect().await?;
 
         let objects = if let Some(path) = path {
             let database = path

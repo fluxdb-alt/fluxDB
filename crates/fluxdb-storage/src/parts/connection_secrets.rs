@@ -15,6 +15,8 @@ pub(crate) const DATABASE_PASSWORD: &str = "database_password";
 pub(crate) const SSH_PASSWORD: &str = "ssh_password";
 pub(crate) const SSH_PASSPHRASE: &str = "ssh_passphrase";
 pub(crate) const PROXY_PASSWORD: &str = "proxy_password";
+/// TLS 客户端私钥口令（加密私钥）。
+pub(crate) const TLS_CLIENT_KEY_PASSPHRASE: &str = "tls_client_key_passphrase";
 pub(crate) const ENDPOINT_URI: &str = "endpoint_uri";
 pub(crate) const URL_PARAMS: &str = "url_params";
 /// Oracle Wallet 口令：与登录密码分开存，改密码不会误删 Wallet 凭据。

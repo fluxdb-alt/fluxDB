@@ -300,8 +300,8 @@ impl ObjectGroup {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NewConnectionTab {
     Connection,
+    /// 网络与安全：TLS/加密与 SSH 隧道合并在一页。
     Tls,
-    Ssh,
     Advanced,
 }
 
@@ -316,6 +316,12 @@ enum ConnectionField {
     Password,
     Database,
     DamengSchema,
+    /// 达梦建连超时（秒，默认 5）
+    DamengConnectTimeout,
+    /// 达梦查询超时（秒，0=不设限）
+    DamengQueryTimeout,
+    /// 达梦应用名（DM 会话可见）
+    DamengApplicationName,
     UrlParams,
     SqlitePath,
     MongoDefaultDb,
@@ -327,6 +333,8 @@ enum ConnectionField {
     TlsClientCert,
     /// TLS 客户端私钥文件路径
     TlsClientKey,
+    /// TLS 客户端私钥口令
+    TlsClientKeyPassphrase,
     /// TLS SNI / 校验主机名
     TlsSni,
     /// SSH 隧道主机
@@ -347,10 +355,8 @@ enum ConnectionField {
     SentinelEndpoints,
     /// Cluster 起始节点列表（换行分隔）
     ClusterStartNodes,
-    /// 云订阅/账号标识
-    CloudSubscription,
-    /// 云资源/数据库标识
-    CloudResource,
+    /// AI Redis 工具的 Key 授权前缀（逗号分隔）
+    AiKeyPrefixes,
     /// 连接串导入框
     DiscoveryUri,
     // —— PostgreSQL 专用文本字段 ——
@@ -362,11 +368,19 @@ enum ConnectionField {
     PgConnectTimeoutSecs,
     /// 查询超时（秒）
     PgQueryTimeoutSecs,
+    /// 会话时区（空表示服务器默认）
+    PgTimezone,
     // —— MySQL / TiDB 专用文本字段 ——
     /// 连接字符集
     MysqlCharset,
-    /// 代理类型："socks5" / "http_connect"
-    MysqlProxyType,
+    /// 排序规则；留空跟随服务器默认
+    MysqlCollation,
+    /// Unix socket 路径；非空时代替 TCP 拨号
+    MysqlSocketPath,
+    /// 会话时区（如 +08:00 / Asia/Shanghai）
+    MysqlTimezone,
+    /// 连接建立后执行的初始化 SQL（分号分隔）
+    MysqlInitSql,
     /// SSH 连接超时（秒），0 表示继承全局
     MysqlSshConnectTimeout,
     /// SSH 心跳间隔（秒），0 表示不发送
@@ -383,12 +397,10 @@ enum ConnectionField {
     MysqlConnectTimeout,
     /// 查询超时（秒），0 表示不设限
     MysqlQueryTimeout,
-    /// 连接空闲 TTL（秒），0 表示不回收
-    MysqlIdleTtl,
     // —— SQL Server 专用文本字段 ——
     /// 默认 schema；空表示连接后读取 `SCHEMA_NAME()`，最终回退 `dbo`。
     SqlServerSchema,
-    /// 命名实例；首版不解析 SQL Browser，用户需同时填写实际端口。
+    /// 命名实例；非空且端口为默认值时经 SQL Browser（UDP 1434）解析实际端口。
     SqlServerInstance,
     /// 建连超时（秒），默认 5
     SqlServerConnectTimeout,
@@ -403,7 +415,7 @@ enum ConnectionField {
     OracleSid,
     /// 登录后切换的默认 Schema；只改名称解析，不授予任何权限。
     OracleSchema,
-    /// 建连超时（秒）
+    /// 建连超时（秒），0 表示不设限
     OracleConnectTimeout,
     /// 语句超时（秒），0 表示不设限
     OracleQueryTimeout,
@@ -426,6 +438,8 @@ enum ConnectionToggleField {
     SshEnabled,
     /// Cluster 是否允许命令重定向到从节点
     ClusterAllowReadonly,
+    /// 强制按单机直连（跳过拓扑自动探测）
+    ForceStandalone,
     /// 是否启用 MySQL/TiDB 代理
     MysqlProxyEnabled,
     /// 是否启用 MySQL/TiDB TCP 长连接保活
@@ -452,6 +466,16 @@ struct NewConnectionForm {
     color: String,
     database: String,
     dameng_schema: String,
+    // —— 达梦专用编辑值 ——
+    /// 建连超时（秒），默认 5
+    dameng_connect_timeout_secs: String,
+    /// 查询超时（秒），0 表示不设限
+    dameng_query_timeout_secs: String,
+    /// 应用名，写入 DM 会话
+    dameng_application_name: String,
+    /// 服务器字符集提示；空表示驱动握手自动检测。
+    /// 界面不暴露（手填错误会乱码），仅在编辑时原样保留，避免保存丢值。
+    dameng_encoding: String,
     url_params: String,
     sqlite_path: String,
     mongo_srv: bool,
@@ -464,6 +488,8 @@ struct NewConnectionForm {
     tls_ca: String,
     tls_client_cert: String,
     tls_client_key: String,
+    /// 客户端私钥口令（仅 PostgreSQL mTLS 加密私钥使用）
+    tls_client_key_passphrase: String,
     tls_sni: String,
     tls_verify: bool,
     ssh_enabled: bool,
@@ -475,11 +501,21 @@ struct NewConnectionForm {
     ssh_password: String,
     ssh_private_key: String,
     ssh_passphrase: String,
+    /// SSH 主机密钥策略："strict" / "accept_new" / "ignore"
+    ssh_host_key_policy: String,
     // —— MySQL / TiDB 专用编辑值 ——
-    /// TLS 模式："disabled" / "preferred" / "required"
+    /// TLS 模式："disabled" / "preferred" / "required" / "verify_ca" / "verify_identity"
     mysql_tls_ssl_mode: String,
+    /// Unix Socket 路径；非空时替代 TCP 主机/端口拨号
+    mysql_socket_path: String,
     /// 连接字符集
     mysql_charset: String,
+    /// 连接排序规则（空表示服务端默认）
+    mysql_collation: String,
+    /// 会话时区（空表示驱动默认）
+    mysql_timezone: String,
+    /// 连接初始化 SQL（分号分隔，建连后逐条执行）
+    mysql_init_sql: String,
     /// SSH 连接超时（秒），0 表示继承全局
     mysql_ssh_connect_timeout_secs: String,
     /// SSH 心跳间隔（秒），0 表示不发送
@@ -496,8 +532,6 @@ struct NewConnectionForm {
     mysql_connect_timeout_secs: String,
     /// 查询超时（秒），0 表示不设限
     mysql_query_timeout_secs: String,
-    /// 连接空闲 TTL（秒），0 表示不回收
-    mysql_idle_ttl_secs: String,
     /// 是否启用 TCP 长连接保活
     mysql_tcp_keepalive: bool,
     // —— PostgreSQL 专用编辑值 ——
@@ -511,6 +545,8 @@ struct NewConnectionForm {
     pg_connect_timeout_secs: String,
     /// 查询/语句超时（秒），0 表示不设限
     pg_query_timeout_secs: String,
+    /// 会话时区（如 Asia/Shanghai），空表示服务器默认
+    pg_timezone: String,
     /// TCP 保活
     pg_tcp_keepalive: bool,
     /// 对象树是否显示其他数据库
@@ -538,16 +574,23 @@ struct NewConnectionForm {
     oracle_application_name: String,
     oracle_wallet_location: String,
     oracle_wallet_password: String,
+    /// Redis 拓扑：`standalone` / `sentinel` / `cluster`。
+    ///
+    /// 界面不再让用户选择：连接时由连接器自动探测。该值仅由连接串导入与
+    /// 旧档案回填写入，保留用于兼容历史节点列表。
+    redis_topology: String,
+    /// Sentinel 主库名（可选）。自动探测只能识别「这是哨兵」，多主库时
+    /// 需要用户指明连哪个；单主库可留空。
     sentinel_master_name: String,
-    /// Sentinel 节点列表，换行分隔
+    /// Sentinel 节点列表，换行分隔（旧档案/导入专用，界面不再展示）
     sentinel_endpoints: String,
-    /// Cluster 起始节点列表，换行分隔
+    /// Cluster 起始节点列表，换行分隔（旧档案/导入专用，界面不再展示）
     cluster_start_nodes: String,
     cluster_allow_readonly: bool,
-    /// 云提供商标识："azure" / "redis-cloud" / ""（非云）
-    cloud_provider: String,
-    cloud_subscription: String,
-    cloud_resource: String,
+    /// 强制按单机直连，跳过拓扑自动探测（代理/端口转发场景的逃生开关）。
+    force_standalone: bool,
+    /// AI Redis 工具的 Key 授权前缀（逗号分隔），非连接协议参数。
+    ai_key_prefixes: String,
     /// Redis 连接串导入框内容
     discovery_uri: String,
     test_status: Option<ConnectionTestStatus>,
@@ -564,12 +607,16 @@ struct NewConnectionInputs {
     password: Entity<InputState>,
     database: Entity<InputState>,
     dameng_schema: Entity<InputState>,
+    dameng_connect_timeout: Entity<InputState>,
+    dameng_query_timeout: Entity<InputState>,
+    dameng_application_name: Entity<InputState>,
     url_params: Entity<InputState>,
     sqlite_path: Entity<InputState>,
     mongo_auth_db: Entity<InputState>,
     tls_ca: Entity<InputState>,
     tls_client_cert: Entity<InputState>,
     tls_client_key: Entity<InputState>,
+    tls_client_key_passphrase: Entity<InputState>,
     tls_sni: Entity<InputState>,
     ssh_host: Entity<InputState>,
     ssh_port: Entity<InputState>,
@@ -586,6 +633,7 @@ struct NewConnectionInputs {
     pg_application_name: Entity<InputState>,
     pg_connect_timeout: Entity<InputState>,
     pg_query_timeout: Entity<InputState>,
+    pg_timezone: Entity<InputState>,
     /// —— SQL Server 专用 ——
     sqlserver_encryption_select: Entity<SelectState<SearchableVec<ConnectionSelectOption>>>,
     sqlserver_schema: Entity<InputState>,
@@ -605,7 +653,14 @@ struct NewConnectionInputs {
     oracle_wallet_location: Entity<InputState>,
     oracle_wallet_password: Entity<InputState>,
     mysql_charset: Entity<InputState>,
-    mysql_proxy_type: Entity<InputState>,
+    mysql_socket_path: Entity<InputState>,
+    mysql_collation: Entity<InputState>,
+    mysql_timezone: Entity<InputState>,
+    mysql_init_sql: Entity<InputState>,
+    /// SSH 主机密钥策略下拉（共享给所有支持 SSH 隧道的库）。
+    ssh_host_key_policy_select: Entity<SelectState<SearchableVec<ConnectionSelectOption>>>,
+    /// 代理类型下拉：自由文本会让拼写错误静默退回 SOCKS5。
+    mysql_proxy_type_select: Entity<SelectState<SearchableVec<ConnectionSelectOption>>>,
     mysql_ssh_connect_timeout: Entity<InputState>,
     mysql_ssh_keepalive: Entity<InputState>,
     mysql_proxy_host: Entity<InputState>,
@@ -614,20 +669,18 @@ struct NewConnectionInputs {
     mysql_proxy_password: Entity<InputState>,
     mysql_connect_timeout: Entity<InputState>,
     mysql_query_timeout: Entity<InputState>,
-    mysql_idle_ttl: Entity<InputState>,
     sentinel_master_name: Entity<InputState>,
     sentinel_endpoints: Entity<InputState>,
     cluster_start_nodes: Entity<InputState>,
-    cloud_subscription: Entity<InputState>,
-    cloud_resource: Entity<InputState>,
+    ai_key_prefixes: Entity<InputState>,
     discovery_uri: Entity<InputState>,
+    /// 左侧数据库类型搜索框（仅过滤列表，不参与连接配置）。
+    kind_search: Entity<InputState>,
     /// —— MongoDB 专用 ——
     /// 认证机制下拉（默认由驱动协商；X509 / AWS 必须显式指定）。
     mongo_auth_mechanism_select: Entity<SelectState<SearchableVec<ConnectionSelectOption>>>,
     /// SSH 认证方式下拉（SelectState 实体，避免渲染期读 NavicatMain 触发重入 panic）。
     ssh_auth_select: Entity<SelectState<SearchableVec<ConnectionSelectOption>>>,
-    /// 云提供方下拉（同上）。
-    cloud_provider_select: Entity<SelectState<SearchableVec<ConnectionSelectOption>>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -668,6 +721,10 @@ impl NewConnectionForm {
             color: DEFAULT_CONNECTION_COLOR.to_string(),
             database: String::new(),
             dameng_schema: String::new(),
+            dameng_connect_timeout_secs: "5".to_string(),
+            dameng_query_timeout_secs: "0".to_string(),
+            dameng_application_name: "FluxDB".to_string(),
+            dameng_encoding: String::new(),
             url_params: String::new(),
             sqlite_path: String::new(),
             mongo_srv: false,
@@ -679,6 +736,7 @@ impl NewConnectionForm {
             tls_ca: String::new(),
             tls_client_cert: String::new(),
             tls_client_key: String::new(),
+            tls_client_key_passphrase: String::new(),
             tls_sni: String::new(),
             tls_verify: true,
             ssh_enabled: false,
@@ -689,10 +747,16 @@ impl NewConnectionForm {
             ssh_password: String::new(),
             ssh_private_key: String::new(),
             ssh_passphrase: String::new(),
+            ssh_host_key_policy: "strict".to_string(),
             mysql_tls_ssl_mode: "preferred".to_string(),
+            mysql_socket_path: String::new(),
             mysql_charset: "utf8mb4".to_string(),
+            mysql_collation: String::new(),
+            mysql_timezone: String::new(),
+            mysql_init_sql: String::new(),
             mysql_ssh_connect_timeout_secs: "0".to_string(),
-            mysql_ssh_keepalive_secs: "0".to_string(),
+            // 与档案默认值一致：30 秒心跳，避免 NAT/防火墙静默断开长连接。
+            mysql_ssh_keepalive_secs: "30".to_string(),
             mysql_proxy_enabled: false,
             mysql_proxy_type: "socks5".to_string(),
             mysql_proxy_host: String::new(),
@@ -701,13 +765,13 @@ impl NewConnectionForm {
             mysql_proxy_password: String::new(),
             mysql_connect_timeout_secs: "5".to_string(),
             mysql_query_timeout_secs: "0".to_string(),
-            mysql_idle_ttl_secs: "0".to_string(),
-            mysql_tcp_keepalive: true,
+            mysql_tcp_keepalive: false,
             pg_tls_ssl_mode: "prefer".to_string(),
             pg_default_schema: String::new(),
             pg_application_name: String::new(),
             pg_connect_timeout_secs: "5".to_string(),
             pg_query_timeout_secs: "0".to_string(),
+            pg_timezone: String::new(),
             pg_tcp_keepalive: false,
             pg_show_other_databases: false,
             pg_show_system_schemas: false,
@@ -727,13 +791,13 @@ impl NewConnectionForm {
             oracle_application_name: "FluxDB".to_string(),
             oracle_wallet_location: String::new(),
             oracle_wallet_password: String::new(),
+            redis_topology: "standalone".to_string(),
             sentinel_master_name: String::new(),
             sentinel_endpoints: String::new(),
             cluster_start_nodes: String::new(),
             cluster_allow_readonly: false,
-            cloud_provider: String::new(),
-            cloud_subscription: String::new(),
-            cloud_resource: String::new(),
+            force_standalone: false,
+            ai_key_prefixes: String::new(),
             discovery_uri: String::new(),
             test_status: None,
         };
@@ -863,76 +927,8 @@ impl NewConnectionForm {
             }
         }
 
-        // Redis 档案回填：优先结构化档案；缺省时用历史扁平参数迁移（兼容旧连接）。
-        if config.kind == DatabaseKind::Redis {
-            let profile = config.redis_profile.clone().or_else(|| {
-                Some(fluxdb_core::RedisConnectionProfile::from_options(
-                    &config.options,
-                ))
-            });
-            if let Some(profile) = profile {
-                form.apply_profile(&profile);
-                // 档案是事实来源，其派生的 host/port/账号覆盖上面的扁平 endpoint 值。
-                if !profile.basic.host.is_empty() {
-                    form.host = profile.basic.host.clone();
-                }
-                form.port = profile.basic.port.to_string();
-            }
-        }
-
-        // MySQL / TiDB 档案回填：同样优先结构化档案，缺省时用历史扁平参数迁移。
-        if matches!(config.kind, DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb) {
-            let profile = config.mysql_profile.clone().or_else(|| {
-                Some(fluxdb_core::MysqlConnectionProfile::from_options(
-                    &config.options,
-                ))
-            });
-            if let Some(profile) = profile {
-                form.apply_mysql_profile(&profile);
-            }
-        }
-
-        // PostgreSQL 档案回填：结构化档案优先，缺省时用历史扁平参数迁移。
-        if config.kind == DatabaseKind::Postgres {
-            let profile = config.postgres_profile.clone().or_else(|| {
-                Some(fluxdb_core::PostgresConnectionProfile::from_options(
-                    &config.options,
-                ))
-            });
-            if let Some(profile) = profile {
-                form.apply_postgres_profile(&profile);
-            }
-        }
-
-        if config.kind == DatabaseKind::Dameng {
-            let profile = config.dameng_profile.clone().unwrap_or_else(|| {
-                fluxdb_core::DamengConnectionProfile::from_options(&config.options)
-            });
-            form.dameng_schema = profile.basic.schema.clone();
-            form.apply_ssh_tunnel_profile(&profile.ssh);
-        }
-
-        if config.kind == DatabaseKind::SqlServer {
-            let profile = config.sqlserver_profile.clone().unwrap_or_else(|| {
-                fluxdb_core::SqlServerConnectionProfile::from_options(&config.options)
-            });
-            form.apply_sqlserver_profile(&profile);
-        }
-
-        // MongoDB 档案同样是拨号事实来源；旧连接没有档案时按扁平参数迁移。
-        if config.kind == DatabaseKind::MongoDb {
-            let profile = config
-                .mongo_profile
-                .clone()
-                .unwrap_or_else(|| fluxdb_core::MongoConnectionProfile::from_options(&config.options));
-            form.apply_mongo_profile(&profile);
-        }
-        if config.kind == DatabaseKind::Oracle {
-            let profile = config.oracle_profile.clone().unwrap_or_else(|| {
-                fluxdb_core::OracleConnectionProfile::from_options(&config.options)
-            });
-            form.apply_oracle_profile(&profile);
-        }
+        // 各数据库的档案回填由表单实现负责；新增数据库不再改这里。
+        connection_form_spec(config.kind).apply_to_form(config, &mut form);
 
         form
     }
@@ -995,6 +991,12 @@ impl NewConnectionForm {
         self.tls_ca = profile.tls.ca.key.clone();
         self.tls_client_cert = profile.tls.client_cert.key.clone();
         self.tls_client_key = profile.tls.client_key.key.clone();
+        self.tls_client_key_passphrase = profile
+            .tls
+            .client_key_passphrase
+            .value()
+            .unwrap_or_default()
+            .to_string();
         self.tls_sni = profile.tls.server_name.clone();
         self.pg_tls_ssl_mode = match profile.tls.ssl_mode {
             fluxdb_core::PostgresSslMode::Disabled => "disable".to_string(),
@@ -1007,6 +1009,7 @@ impl NewConnectionForm {
         self.pg_application_name = profile.advanced.application_name.clone();
         self.pg_connect_timeout_secs = profile.advanced.connect_timeout_secs.to_string();
         self.pg_query_timeout_secs = profile.advanced.query_timeout_secs.to_string();
+        self.pg_timezone = profile.advanced.timezone.clone();
         self.pg_tcp_keepalive = profile.advanced.tcp_keepalive;
         self.pg_show_other_databases = profile.scope.show_other_databases;
         self.pg_show_system_schemas = profile.scope.show_system_schemas;
@@ -1035,6 +1038,7 @@ impl NewConnectionForm {
             }
             self.mysql_ssh_connect_timeout_secs = ssh.connect_timeout_secs.to_string();
             self.mysql_ssh_keepalive_secs = ssh.keepalive_interval_secs.to_string();
+            self.ssh_host_key_policy = ssh.host_key_policy.as_str().to_string();
         }
         if let Some(proxy) = profile.transport.iter().find_map(|layer| match layer {
             fluxdb_core::PostgresTransportLayer::Proxy(proxy) => Some(proxy),
@@ -1093,26 +1097,38 @@ impl NewConnectionForm {
         if let Some(passphrase) = profile.ssh.passphrase.inline.as_deref() {
             self.ssh_passphrase = passphrase.to_string();
         }
-        // 拓扑：Sentinel / Cluster
+        self.ssh_host_key_policy = profile.ssh.host_key_policy.as_str().to_string();
+        // 拓扑：显式模式，URI 导入 / 编辑旧连接时回填到对应选项。
+        self.redis_topology = match profile.topology.kind {
+            fluxdb_core::RedisTopologyKind::Standalone => "standalone",
+            fluxdb_core::RedisTopologyKind::Sentinel => "sentinel",
+            fluxdb_core::RedisTopologyKind::Cluster => "cluster",
+        }
+        .to_string();
         self.sentinel_master_name = profile.topology.sentinel.master_name.clone();
         self.sentinel_endpoints = profile.topology.sentinel.endpoints.join("\n");
         self.cluster_start_nodes = profile.topology.cluster.start_nodes.join("\n");
         self.cluster_allow_readonly = profile.topology.cluster.allow_readonly;
-        // 云自动发现来源
-        self.cloud_provider = profile.cloud.provider.clone();
-        self.cloud_subscription = profile.cloud.subscription.clone();
-        self.cloud_resource = profile.cloud.resource.clone();
     }
 
     /// 用一份 MySQL/TiDB 档案回填表单的所有 MySQL 专用编辑值。
     fn apply_mysql_profile(&mut self, profile: &fluxdb_core::MysqlConnectionProfile) {
-        // TLS 模式
-        self.mysql_tls_ssl_mode = match profile.tls.ssl_mode {
-            fluxdb_core::MysqlSslMode::Disabled => "disabled".to_string(),
-            fluxdb_core::MysqlSslMode::Preferred => "preferred".to_string(),
-            fluxdb_core::MysqlSslMode::Required => "required".to_string(),
-        };
+        // TLS 模式：旧档案的 verify=true 统一展示为 verify_ca，保存后完成迁移。
+        let effective_mode = profile.tls.effective_ssl_mode();
+        self.mysql_tls_ssl_mode = effective_mode.as_str().to_string();
+        self.mysql_socket_path = profile.basic.socket_path.clone();
         self.mysql_charset = profile.tls.charset.clone();
+        self.mysql_collation = profile.tls.collation.clone();
+        self.mysql_timezone = profile.advanced.timezone.clone();
+        self.mysql_init_sql = profile.advanced.init_sql.clone();
+        // TLS 开关与证书/校验位必须和 ssl_mode 一起回填：缺少这些赋值时，
+        // 「编辑已有连接再保存」会按表单默认值把 TLS 静默重置为关闭。
+        self.tls_enabled = profile.tls.enabled;
+        self.tls_ca = profile.tls.ca.key.clone();
+        self.tls_client_cert = profile.tls.client_cert.key.clone();
+        self.tls_client_key = profile.tls.client_key.key.clone();
+        self.tls_sni = profile.tls.sni.clone();
+        self.tls_verify = profile.tls.verify;
         // SSH 隧道（复用共享字段，另补 MySQL 专用超时）
         if let Some(ssh) = profile.ssh() {
             self.ssh_enabled = ssh.enabled;
@@ -1132,6 +1148,7 @@ impl NewConnectionForm {
             }
             self.mysql_ssh_connect_timeout_secs = ssh.connect_timeout_secs.to_string();
             self.mysql_ssh_keepalive_secs = ssh.keepalive_interval_secs.to_string();
+            self.ssh_host_key_policy = ssh.host_key_policy.as_str().to_string();
         }
         // 代理
         if let Some(proxy) = profile.proxy() {
@@ -1150,7 +1167,6 @@ impl NewConnectionForm {
         // 高级超时
         self.mysql_connect_timeout_secs = profile.advanced.connect_timeout_secs.to_string();
         self.mysql_query_timeout_secs = profile.advanced.query_timeout_secs.to_string();
-        self.mysql_idle_ttl_secs = profile.advanced.idle_ttl_secs.to_string();
         self.mysql_tcp_keepalive = profile.advanced.tcp_keepalive;
     }
 
@@ -1198,23 +1214,36 @@ impl NewConnectionForm {
             password: inline_secret(&self.ssh_password),
             private_key: file_ref(&self.ssh_private_key),
             passphrase: inline_secret(&self.ssh_passphrase),
+            host_key_policy: fluxdb_core::SshHostKeyPolicy::parse(&self.ssh_host_key_policy),
         };
 
-        let sentinel_endpoints = split_endpoints(&self.sentinel_endpoints);
-        let cluster_start_nodes = split_endpoints(&self.cluster_start_nodes);
-        // 依据已填写的字段推断拓扑类型：优先 Sentinel，其次 Cluster，否则单点。
-        let kind = if !self.sentinel_master_name.trim().is_empty() || !sentinel_endpoints.is_empty()
-        {
+        // 拓扑不再由用户选择：填了主库名才按哨兵处理；旧档案带回的节点列表
+        // 继续按对应模式拨号；其余一律交给连接器自动探测。
+        let kind = if !self.sentinel_master_name.trim().is_empty() {
             RedisTopologyKind::Sentinel
-        } else if !cluster_start_nodes.is_empty() {
+        } else if !split_endpoints(&self.cluster_start_nodes).is_empty() {
             RedisTopologyKind::Cluster
         } else {
             RedisTopologyKind::Standalone
         };
+        let sentinel_endpoints = if kind == RedisTopologyKind::Sentinel {
+            split_endpoints(&self.sentinel_endpoints)
+        } else {
+            Vec::new()
+        };
+        let cluster_start_nodes = if kind == RedisTopologyKind::Cluster {
+            split_endpoints(&self.cluster_start_nodes)
+        } else {
+            Vec::new()
+        };
         let topology = RedisTopology {
             kind,
             sentinel: RedisSentinelOptions {
-                master_name: self.sentinel_master_name.trim().to_string(),
+                master_name: if kind == RedisTopologyKind::Sentinel {
+                    self.sentinel_master_name.trim().to_string()
+                } else {
+                    String::new()
+                },
                 endpoints: sentinel_endpoints,
                 username: Some(self.username.trim().to_string()).filter(|u| !u.is_empty()),
                 password: inline_secret(&self.password),
@@ -1224,13 +1253,11 @@ impl NewConnectionForm {
                 start_nodes: cluster_start_nodes,
                 allow_readonly: self.cluster_allow_readonly,
             },
+            force_standalone: self.force_standalone,
         };
-        let cloud = RedisCloudOptions {
-            provider: self.cloud_provider.trim().to_string(),
-            subscription: self.cloud_subscription.trim().to_string(),
-            resource: self.cloud_resource.trim().to_string(),
-            imported_name: String::new(),
-        };
+        // 云自动发现需要 Azure / Redis Cloud 的凭据与 API 调用，当前没有接入；
+        // 不落任何猜测出来的云元数据，避免界面展示不存在的发现结果。
+        let cloud = RedisCloudOptions::default();
 
         RedisConnectionProfile {
             basic: RedisBasicOptions {
@@ -1263,21 +1290,18 @@ impl NewConnectionForm {
         let file_ref = |path: &str| SecretRef::ref_key(path.trim().to_string());
         let inline_secret = |value: &str| SecretRef::inline(value.trim().to_string());
 
+        let ssl_mode = MysqlSslMode::parse(&self.mysql_tls_ssl_mode);
         let tls = MysqlTlsOptions {
             enabled: self.tls_enabled,
-            ssl_mode: match self.mysql_tls_ssl_mode.trim() {
-                "disabled" => MysqlSslMode::Disabled,
-                "required" => MysqlSslMode::Required,
-                // 缺省/非法值统一按 Preferred 处理。
-                _ => MysqlSslMode::Preferred,
-            },
+            ssl_mode,
             ca: file_ref(&self.tls_ca),
             client_cert: file_ref(&self.tls_client_cert),
             client_key: file_ref(&self.tls_client_key),
             sni: self.tls_sni.trim().to_string(),
-            verify: self.tls_verify,
+            // verify 仅为历史字段，由模式反推，保证旧档案迁移后不再出现"模式与开关不一致"。
+            verify: ssl_mode.verifies_certificate(),
             charset: self.mysql_charset.trim().to_string(),
-            collation: String::new(),
+            collation: self.mysql_collation.trim().to_string(),
         };
 
         // 传输层列表：仅把「已启用的 SSH 隧道 / 代理」压入。
@@ -1302,6 +1326,7 @@ impl NewConnectionForm {
                     .parse()
                     .unwrap_or(0),
                 keepalive_interval_secs: self.mysql_ssh_keepalive_secs.trim().parse().unwrap_or(0),
+                host_key_policy: fluxdb_core::SshHostKeyPolicy::parse(&self.ssh_host_key_policy),
             }));
         }
         if self.mysql_proxy_enabled {
@@ -1314,11 +1339,8 @@ impl NewConnectionForm {
                 enabled: true,
                 proxy_type,
                 host: self.mysql_proxy_host.trim().to_string(),
-                port: self
-                    .mysql_proxy_port
-                    .trim()
-                    .parse()
-                    .unwrap_or(proxy_type.default_port()),
+                // 非法端口保留为 0，交给档案校验报错；不再静默回落到默认端口。
+                port: self.mysql_proxy_port.trim().parse().unwrap_or(0),
                 username: self.mysql_proxy_username.trim().to_string(),
                 password: inline_secret(&self.mysql_proxy_password),
             }));
@@ -1331,14 +1353,16 @@ impl NewConnectionForm {
                 database: non_empty_option(&self.database).unwrap_or_default(),
                 username: self.username.trim().to_string(),
                 password: inline_secret(&self.password),
+                socket_path: self.mysql_socket_path.trim().to_string(),
             },
             tls,
             transport,
             advanced: MysqlAdvancedOptions {
                 connect_timeout_secs: self.mysql_connect_timeout_secs.trim().parse().unwrap_or(5),
                 query_timeout_secs: self.mysql_query_timeout_secs.trim().parse().unwrap_or(0),
-                idle_ttl_secs: self.mysql_idle_ttl_secs.trim().parse().unwrap_or(0),
                 tcp_keepalive: self.mysql_tcp_keepalive,
+                timezone: self.mysql_timezone.trim().to_string(),
+                init_sql: self.mysql_init_sql.trim().to_string(),
             },
         }
     }
@@ -1369,6 +1393,12 @@ impl NewConnectionForm {
             ca: file_ref(&self.tls_ca),
             client_cert: file_ref(&self.tls_client_cert),
             client_key: file_ref(&self.tls_client_key),
+            // 空口令不留凭据槽位；口令只走 SecretRef.inline（storage 加密落盘）。
+            client_key_passphrase: if self.tls_client_key_passphrase.trim().is_empty() {
+                SecretRef::default()
+            } else {
+                inline_secret(&self.tls_client_key_passphrase)
+            },
             server_name: self.tls_sni.trim().to_string(),
         };
 
@@ -1400,6 +1430,9 @@ impl NewConnectionForm {
                         .trim()
                         .parse()
                         .unwrap_or(0),
+                    host_key_policy: fluxdb_core::SshHostKeyPolicy::parse(
+                        &self.ssh_host_key_policy,
+                    ),
                 }),
             );
         }
@@ -1414,7 +1447,8 @@ impl NewConnectionForm {
                         PostgresProxyType::Socks5
                     },
                     host: self.mysql_proxy_host.trim().to_string(),
-                    port: self.mysql_proxy_port.trim().parse::<u16>().unwrap_or(1080),
+                    // 非法端口保留为 0，交给档案校验报错。
+                    port: self.mysql_proxy_port.trim().parse().unwrap_or(0),
                     username: self.mysql_proxy_username.trim().to_string(),
                     password: inline_secret(&self.mysql_proxy_password),
                 }),
@@ -1445,10 +1479,11 @@ impl NewConnectionForm {
             advanced: PostgresAdvancedOptions {
                 connect_timeout_secs: self.pg_connect_timeout_secs.trim().parse().unwrap_or(5),
                 query_timeout_secs: self.pg_query_timeout_secs.trim().parse().unwrap_or(0),
-                idle_ttl_secs: self.mysql_idle_ttl_secs.trim().parse().unwrap_or(0),
+                // PostgreSQL 连接器不复用连接，空闲 TTL 无消费方，固定 0。
+                idle_ttl_secs: 0,
                 tcp_keepalive: self.pg_tcp_keepalive,
                 application_name: self.pg_application_name.trim().to_string(),
-                timezone: String::new(),
+                timezone: self.pg_timezone.trim().to_string(),
             },
         }
     }
@@ -1481,6 +1516,7 @@ impl NewConnectionForm {
                 .parse()
                 .unwrap_or(0),
             keepalive_interval_secs: self.mysql_ssh_keepalive_secs.trim().parse().unwrap_or(0),
+            host_key_policy: fluxdb_core::SshHostKeyPolicy::parse(&self.ssh_host_key_policy),
         }
     }
 
@@ -1503,6 +1539,7 @@ impl NewConnectionForm {
         }
         self.mysql_ssh_connect_timeout_secs = ssh.connect_timeout_secs.to_string();
         self.mysql_ssh_keepalive_secs = ssh.keepalive_interval_secs.to_string();
+        self.ssh_host_key_policy = ssh.host_key_policy.as_str().to_string();
     }
 
     fn build_dameng_profile(&self) -> fluxdb_core::DamengConnectionProfile {
@@ -1520,10 +1557,19 @@ impl NewConnectionForm {
                 password: fluxdb_core::SecretRef::inline(self.password.trim().to_string()),
             },
             advanced: fluxdb_core::DamengAdvancedOptions {
-                connect_timeout_secs: 5,
-                query_timeout_secs: 0,
-                encoding: String::new(),
-                application_name: "FluxDB".into(),
+                // 输入合法性由 validate_new_connection 前置校验；此处兜底默认值。
+                connect_timeout_secs: self
+                    .dameng_connect_timeout_secs
+                    .trim()
+                    .parse()
+                    .unwrap_or(5),
+                query_timeout_secs: self
+                    .dameng_query_timeout_secs
+                    .trim()
+                    .parse()
+                    .unwrap_or(0),
+                encoding: self.dameng_encoding.trim().to_string(),
+                application_name: self.dameng_application_name.trim().to_string(),
             },
             ssh: self.build_ssh_tunnel_profile(),
         }
@@ -1573,6 +1619,9 @@ impl NewConnectionForm {
             MongoAdvancedOptions, MongoBasicOptions, MongoConnectionProfile, MongoHost,
             MongoTlsOptions, SecretRef,
         };
+        // 独立「端口」输入框是默认端口：host 里显式写了 `:port` 时以显式值为准，
+        // 否则用端口框，未填才回落 27017。此前端口框被完全忽略，非默认端口连不上。
+        let default_port = self.port.trim().parse::<u16>().unwrap_or(27017);
         let hosts: Vec<MongoHost> = self
             .host
             .split(',')
@@ -1581,9 +1630,12 @@ impl NewConnectionForm {
             .map(|item| match item.rsplit_once(':') {
                 Some((host, port)) if port.parse::<u16>().is_ok() => MongoHost {
                     host: host.trim_matches(['[', ']']).to_string(),
-                    port: port.parse().unwrap_or(27017),
+                    port: port.parse().unwrap_or(default_port),
                 },
-                _ => MongoHost::new(item.trim_matches(['[', ']'])),
+                _ => MongoHost {
+                    host: item.trim_matches(['[', ']']).to_string(),
+                    port: default_port,
+                },
             })
             .collect();
         let file_ref = |path: &str| SecretRef::ref_key(path.trim().to_string());
@@ -1696,8 +1748,13 @@ impl NewConnectionForm {
 }
 
 impl NewConnectionInputs {
-    /// 输入框 placeholder 在创建时缓存；切换语言后更新，保留已输入内容。
-    fn refresh_placeholders(&self, window: &mut Window, cx: &mut Context<NavicatMain>) {
+    /// 输入框 placeholder 在创建时缓存；切换语言或数据库类型后更新，保留已输入内容。
+    fn refresh_placeholders(
+        &self,
+        kind: Option<DatabaseKind>,
+        window: &mut Window,
+        cx: &mut Context<NavicatMain>,
+    ) {
         let inputs = [
             (&self.name, ConnectionField::Name),
             (&self.host, ConnectionField::Host),
@@ -1706,12 +1763,28 @@ impl NewConnectionInputs {
             (&self.password, ConnectionField::Password),
             (&self.database, ConnectionField::Database),
             (&self.dameng_schema, ConnectionField::DamengSchema),
+            (
+                &self.dameng_connect_timeout,
+                ConnectionField::DamengConnectTimeout,
+            ),
+            (
+                &self.dameng_query_timeout,
+                ConnectionField::DamengQueryTimeout,
+            ),
+            (
+                &self.dameng_application_name,
+                ConnectionField::DamengApplicationName,
+            ),
             (&self.url_params, ConnectionField::UrlParams),
             (&self.sqlite_path, ConnectionField::SqlitePath),
             (&self.mongo_auth_db, ConnectionField::MongoAuthDb),
             (&self.tls_ca, ConnectionField::TlsCa),
             (&self.tls_client_cert, ConnectionField::TlsClientCert),
             (&self.tls_client_key, ConnectionField::TlsClientKey),
+            (
+                &self.tls_client_key_passphrase,
+                ConnectionField::TlsClientKeyPassphrase,
+            ),
             (&self.tls_sni, ConnectionField::TlsSni),
             (&self.ssh_host, ConnectionField::SshHost),
             (&self.ssh_port, ConnectionField::SshPort),
@@ -1729,8 +1802,12 @@ impl NewConnectionInputs {
                 ConnectionField::PgConnectTimeoutSecs,
             ),
             (&self.pg_query_timeout, ConnectionField::PgQueryTimeoutSecs),
+            (&self.pg_timezone, ConnectionField::PgTimezone),
             (&self.sqlserver_schema, ConnectionField::SqlServerSchema),
-            (&self.sqlserver_instance, ConnectionField::SqlServerInstance),
+            (
+                &self.sqlserver_instance,
+                ConnectionField::SqlServerInstance,
+            ),
             (
                 &self.sqlserver_connect_timeout,
                 ConnectionField::SqlServerConnectTimeout,
@@ -1767,7 +1844,10 @@ impl NewConnectionInputs {
                 ConnectionField::OracleWalletPassword,
             ),
             (&self.mysql_charset, ConnectionField::MysqlCharset),
-            (&self.mysql_proxy_type, ConnectionField::MysqlProxyType),
+            (&self.mysql_collation, ConnectionField::MysqlCollation),
+            (&self.mysql_socket_path, ConnectionField::MysqlSocketPath),
+            (&self.mysql_timezone, ConnectionField::MysqlTimezone),
+            (&self.mysql_init_sql, ConnectionField::MysqlInitSql),
             (
                 &self.mysql_ssh_connect_timeout,
                 ConnectionField::MysqlSshConnectTimeout,
@@ -1794,7 +1874,6 @@ impl NewConnectionInputs {
                 &self.mysql_query_timeout,
                 ConnectionField::MysqlQueryTimeout,
             ),
-            (&self.mysql_idle_ttl, ConnectionField::MysqlIdleTtl),
             (
                 &self.sentinel_master_name,
                 ConnectionField::SentinelMasterName,
@@ -1804,15 +1883,17 @@ impl NewConnectionInputs {
                 &self.cluster_start_nodes,
                 ConnectionField::ClusterStartNodes,
             ),
-            (&self.cloud_subscription, ConnectionField::CloudSubscription),
-            (&self.cloud_resource, ConnectionField::CloudResource),
-            (&self.discovery_uri, ConnectionField::DiscoveryUri),
+            (&self.ai_key_prefixes, ConnectionField::AiKeyPrefixes),
         ];
         for (input, field) in inputs {
             input.update(cx, |input, cx| {
                 input.set_placeholder(connection_field_placeholder(field), window, cx);
             });
         }
+        // 连接串示例随数据库类型变化：PostgreSQL 显示 postgres://，不要继续展示 MySQL 示例。
+        self.discovery_uri.update(cx, |input, cx| {
+            input.set_placeholder(discovery_uri_placeholder(kind), window, cx);
+        });
     }
 
     fn new(window: &mut Window, cx: &mut Context<NavicatMain>) -> Self {
@@ -1847,6 +1928,13 @@ impl NewConnectionInputs {
             input_state(ConnectionField::Database, false, window, cx);
         let (dameng_schema, dameng_schema_subscription) =
             input_state(ConnectionField::DamengSchema, false, window, cx);
+        // —— 达梦专用文本输入 ——
+        let (dameng_connect_timeout, dameng_connect_timeout_subscription) =
+            input_state(ConnectionField::DamengConnectTimeout, false, window, cx);
+        let (dameng_query_timeout, dameng_query_timeout_subscription) =
+            input_state(ConnectionField::DamengQueryTimeout, false, window, cx);
+        let (dameng_application_name, dameng_application_name_subscription) =
+            input_state(ConnectionField::DamengApplicationName, false, window, cx);
         let (url_params, url_params_subscription) =
             input_state(ConnectionField::UrlParams, false, window, cx);
         let (sqlite_path, sqlite_path_subscription) =
@@ -1859,6 +1947,8 @@ impl NewConnectionInputs {
             input_state(ConnectionField::TlsClientCert, false, window, cx);
         let (tls_client_key, tls_client_key_subscription) =
             input_state(ConnectionField::TlsClientKey, false, window, cx);
+        let (tls_client_key_passphrase, tls_client_key_passphrase_subscription) =
+            input_state(ConnectionField::TlsClientKeyPassphrase, true, window, cx);
         let (tls_sni, tls_sni_subscription) =
             input_state(ConnectionField::TlsSni, false, window, cx);
         let (ssh_host, ssh_host_subscription) =
@@ -1882,6 +1972,8 @@ impl NewConnectionInputs {
             input_state(ConnectionField::PgConnectTimeoutSecs, false, window, cx);
         let (pg_query_timeout, pg_query_timeout_subscription) =
             input_state(ConnectionField::PgQueryTimeoutSecs, false, window, cx);
+        let (pg_timezone, pg_timezone_subscription) =
+            input_state(ConnectionField::PgTimezone, false, window, cx);
         // —— SQL Server 专用文本输入 ——
         let (sqlserver_schema, sqlserver_schema_subscription) =
             input_state(ConnectionField::SqlServerSchema, false, window, cx);
@@ -1913,8 +2005,14 @@ impl NewConnectionInputs {
         // —— MySQL / TiDB 专用文本输入 ——
         let (mysql_charset, mysql_charset_subscription) =
             input_state(ConnectionField::MysqlCharset, false, window, cx);
-        let (mysql_proxy_type, mysql_proxy_type_subscription) =
-            input_state(ConnectionField::MysqlProxyType, false, window, cx);
+        let (mysql_collation, mysql_collation_subscription) =
+            input_state(ConnectionField::MysqlCollation, false, window, cx);
+        let (mysql_socket_path, mysql_socket_path_subscription) =
+            input_state(ConnectionField::MysqlSocketPath, false, window, cx);
+        let (mysql_timezone, mysql_timezone_subscription) =
+            input_state(ConnectionField::MysqlTimezone, false, window, cx);
+        let (mysql_init_sql, mysql_init_sql_subscription) =
+            input_state(ConnectionField::MysqlInitSql, false, window, cx);
         let (mysql_ssh_connect_timeout, mysql_ssh_connect_timeout_subscription) =
             input_state(ConnectionField::MysqlSshConnectTimeout, false, window, cx);
         let (mysql_ssh_keepalive, mysql_ssh_keepalive_subscription) =
@@ -1931,20 +2029,23 @@ impl NewConnectionInputs {
             input_state(ConnectionField::MysqlConnectTimeout, false, window, cx);
         let (mysql_query_timeout, mysql_query_timeout_subscription) =
             input_state(ConnectionField::MysqlQueryTimeout, false, window, cx);
-        let (mysql_idle_ttl, mysql_idle_ttl_subscription) =
-            input_state(ConnectionField::MysqlIdleTtl, false, window, cx);
         let (sentinel_master_name, sentinel_master_name_subscription) =
             input_state(ConnectionField::SentinelMasterName, false, window, cx);
         let (sentinel_endpoints, sentinel_endpoints_subscription) =
             input_state(ConnectionField::SentinelEndpoints, false, window, cx);
         let (cluster_start_nodes, cluster_start_nodes_subscription) =
             input_state(ConnectionField::ClusterStartNodes, false, window, cx);
-        let (cloud_subscription, cloud_subscription_s) =
-            input_state(ConnectionField::CloudSubscription, false, window, cx);
-        let (cloud_resource, cloud_resource_s) =
-            input_state(ConnectionField::CloudResource, false, window, cx);
+        let (ai_key_prefixes, ai_key_prefixes_subscription) =
+            input_state(ConnectionField::AiKeyPrefixes, false, window, cx);
         let (discovery_uri, discovery_uri_s) =
             input_state(ConnectionField::DiscoveryUri, false, window, cx);
+        // 左侧类型搜索：只影响列表过滤，不进入连接配置，因此不参与表单同步。
+        let kind_search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(tr("app.connection.search_kind"))
+        });
+        let kind_search_s = cx.subscribe(&kind_search, |_, _, _: &InputEvent, cx| {
+            cx.notify();
+        });
 
         // SSH 认证方式下拉：选项为展示文案，订阅回调里映射回表单字段值。
         let ssh_auth_select = cx.new(|cx| {
@@ -1980,21 +2081,21 @@ impl NewConnectionInputs {
                 }
             },
         );
-        // 云提供方下拉：同上。
-        let cloud_provider_select = cx.new(|cx| {
+        // SSH 主机密钥策略：默认严格校验 known_hosts；其余两档需用户显式选择。
+        let ssh_host_key_policy_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(vec![
                     ConnectionSelectOption {
-                        value: String::new(),
-                        label_key: "app.connection.cloud.none",
+                        value: "strict".into(),
+                        label_key: "app.connection.ssh.host_key_policy_strict",
                     },
                     ConnectionSelectOption {
-                        value: "azure".into(),
-                        label_key: "app.connection.cloud.azure",
+                        value: "accept_new".into(),
+                        label_key: "app.connection.ssh.host_key_policy_accept_new",
                     },
                     ConnectionSelectOption {
-                        value: "redis-cloud".into(),
-                        label_key: "app.connection.cloud.redis_cloud",
+                        value: "ignore".into(),
+                        label_key: "app.connection.ssh.host_key_policy_ignore",
                     },
                 ]),
                 Some(IndexPath::new(0)),
@@ -2002,24 +2103,19 @@ impl NewConnectionInputs {
                 cx,
             )
         });
-        let cloud_provider_select_s = cx.subscribe(
-            &cloud_provider_select,
+        let ssh_host_key_policy_select_s = cx.subscribe(
+            &ssh_host_key_policy_select,
             move |this: &mut NavicatMain,
                   _select,
                   event: &SelectEvent<SearchableVec<ConnectionSelectOption>>,
                   cx| {
                 let SelectEvent::Confirm(value) = event;
                 if let Some(value) = value {
-                    this.new_connection_form.cloud_provider = match value.value().as_str() {
-                        "azure" => "azure".to_string(),
-                        "redis-cloud" => "redis-cloud".to_string(),
-                        _ => String::new(),
-                    };
+                    this.new_connection_form.ssh_host_key_policy = value.value().clone();
                     cx.notify();
                 }
             },
         );
-
         // PG SSL 模式下拉：选项值即表单值（disable/prefer/require/verify-ca/verify-full）。
         let pg_ssl_mode_select = cx.new(|cx| {
             SelectState::new(
@@ -2048,13 +2144,15 @@ impl NewConnectionInputs {
                 }
             },
         );
-        // MySQL/TiDB SSL 模式下拉：选项值即表单值（disabled/preferred/required）。
+        // MySQL/TiDB SSL 模式下拉：选项值即表单值，与 MySQL 官方 --ssl-mode 五档一致。
         let mysql_ssl_mode_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(vec![
                     "disabled".to_string(),
                     "preferred".to_string(),
                     "required".to_string(),
+                    "verify_ca".to_string(),
+                    "verify_identity".to_string(),
                 ]),
                 Some(IndexPath::new(1)),
                 window,
@@ -2070,6 +2168,38 @@ impl NewConnectionInputs {
                 let SelectEvent::Confirm(value) = event;
                 if let Some(value) = value {
                     this.new_connection_form.mysql_tls_ssl_mode = value.clone();
+                    cx.notify();
+                }
+            },
+        );
+        // MySQL/TiDB 代理类型下拉：只有这两种取值会被连接器识别，
+        // 用下拉代替自由文本，避免拼写差异被静默解释成 SOCKS5。
+        let mysql_proxy_type_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(vec![
+                    ConnectionSelectOption {
+                        value: "socks5".into(),
+                        label_key: "app.connection.mysql.proxy_type_socks5",
+                    },
+                    ConnectionSelectOption {
+                        value: "http_connect".into(),
+                        label_key: "app.connection.mysql.proxy_type_http_connect",
+                    },
+                ]),
+                Some(IndexPath::new(0)),
+                window,
+                cx,
+            )
+        });
+        let mysql_proxy_type_select_s = cx.subscribe(
+            &mysql_proxy_type_select,
+            move |this: &mut NavicatMain,
+                  _select,
+                  event: &SelectEvent<SearchableVec<ConnectionSelectOption>>,
+                  cx| {
+                let SelectEvent::Confirm(value) = event;
+                if let Some(value) = value {
+                    this.new_connection_form.mysql_proxy_type = value.value().clone();
                     cx.notify();
                 }
             },
@@ -2226,12 +2356,16 @@ impl NewConnectionInputs {
             password,
             database,
             dameng_schema,
+            dameng_connect_timeout,
+            dameng_query_timeout,
+            dameng_application_name,
             url_params,
             sqlite_path,
             mongo_auth_db,
             tls_ca,
             tls_client_cert,
             tls_client_key,
+            tls_client_key_passphrase,
             tls_sni,
             ssh_host,
             ssh_port,
@@ -2244,6 +2378,7 @@ impl NewConnectionInputs {
             pg_application_name,
             pg_connect_timeout,
             pg_query_timeout,
+            pg_timezone,
             sqlserver_encryption_select,
             sqlserver_schema,
             sqlserver_instance,
@@ -2262,7 +2397,12 @@ impl NewConnectionInputs {
             oracle_wallet_password,
             mysql_ssl_mode_select,
             mysql_charset,
-            mysql_proxy_type,
+            mysql_collation,
+            mysql_socket_path,
+            mysql_timezone,
+            mysql_init_sql,
+            ssh_host_key_policy_select,
+            mysql_proxy_type_select,
             mysql_ssh_connect_timeout,
             mysql_ssh_keepalive,
             mysql_proxy_host,
@@ -2271,16 +2411,14 @@ impl NewConnectionInputs {
             mysql_proxy_password,
             mysql_connect_timeout,
             mysql_query_timeout,
-            mysql_idle_ttl,
             sentinel_master_name,
             sentinel_endpoints,
             cluster_start_nodes,
-            cloud_subscription,
-            cloud_resource,
+            ai_key_prefixes,
             discovery_uri,
+            kind_search,
             mongo_auth_mechanism_select,
             ssh_auth_select,
-            cloud_provider_select,
             _subscriptions: vec![
                 name_subscription,
                 host_subscription,
@@ -2289,12 +2427,16 @@ impl NewConnectionInputs {
                 password_subscription,
                 database_subscription,
                 dameng_schema_subscription,
+                dameng_connect_timeout_subscription,
+                dameng_query_timeout_subscription,
+                dameng_application_name_subscription,
                 url_params_subscription,
                 sqlite_path_subscription,
                 mongo_auth_db_subscription,
                 tls_ca_subscription,
                 tls_client_cert_subscription,
                 tls_client_key_subscription,
+                tls_client_key_passphrase_subscription,
                 tls_sni_subscription,
                 ssh_host_subscription,
                 ssh_port_subscription,
@@ -2307,6 +2449,7 @@ impl NewConnectionInputs {
                 pg_application_name_subscription,
                 pg_connect_timeout_subscription,
                 pg_query_timeout_subscription,
+                pg_timezone_subscription,
                 sqlserver_encryption_select_s,
                 sqlserver_schema_subscription,
                 sqlserver_instance_subscription,
@@ -2314,8 +2457,13 @@ impl NewConnectionInputs {
                 sqlserver_query_timeout_subscription,
                 sqlserver_application_name_subscription,
                 mysql_ssl_mode_select_s,
+                mysql_proxy_type_select_s,
                 mysql_charset_subscription,
-                mysql_proxy_type_subscription,
+                mysql_collation_subscription,
+                mysql_socket_path_subscription,
+                mysql_timezone_subscription,
+                mysql_init_sql_subscription,
+                ssh_host_key_policy_select_s,
                 mysql_ssh_connect_timeout_subscription,
                 mysql_ssh_keepalive_subscription,
                 mysql_proxy_host_subscription,
@@ -2324,16 +2472,14 @@ impl NewConnectionInputs {
                 mysql_proxy_password_subscription,
                 mysql_connect_timeout_subscription,
                 mysql_query_timeout_subscription,
-                mysql_idle_ttl_subscription,
                 sentinel_master_name_subscription,
                 sentinel_endpoints_subscription,
                 cluster_start_nodes_subscription,
-                cloud_subscription_s,
-                cloud_resource_s,
+                ai_key_prefixes_subscription,
                 discovery_uri_s,
+                kind_search_s,
                 mongo_auth_mechanism_select_s,
                 ssh_auth_select_s,
-                cloud_provider_select_s,
                 oracle_service_name_subscription,
                 oracle_sid_subscription,
                 oracle_schema_subscription,
@@ -2357,12 +2503,16 @@ impl NewConnectionInputs {
             ConnectionField::Password => &self.password,
             ConnectionField::Database | ConnectionField::MongoDefaultDb => &self.database,
             ConnectionField::DamengSchema => &self.dameng_schema,
+            ConnectionField::DamengConnectTimeout => &self.dameng_connect_timeout,
+            ConnectionField::DamengQueryTimeout => &self.dameng_query_timeout,
+            ConnectionField::DamengApplicationName => &self.dameng_application_name,
             ConnectionField::UrlParams => &self.url_params,
             ConnectionField::SqlitePath => &self.sqlite_path,
             ConnectionField::MongoAuthDb => &self.mongo_auth_db,
             ConnectionField::TlsCa => &self.tls_ca,
             ConnectionField::TlsClientCert => &self.tls_client_cert,
             ConnectionField::TlsClientKey => &self.tls_client_key,
+            ConnectionField::TlsClientKeyPassphrase => &self.tls_client_key_passphrase,
             ConnectionField::TlsSni => &self.tls_sni,
             ConnectionField::SshHost => &self.ssh_host,
             ConnectionField::SshPort => &self.ssh_port,
@@ -2374,6 +2524,7 @@ impl NewConnectionInputs {
             ConnectionField::PgApplicationName => &self.pg_application_name,
             ConnectionField::PgConnectTimeoutSecs => &self.pg_connect_timeout,
             ConnectionField::PgQueryTimeoutSecs => &self.pg_query_timeout,
+            ConnectionField::PgTimezone => &self.pg_timezone,
             ConnectionField::SqlServerSchema => &self.sqlserver_schema,
             ConnectionField::SqlServerInstance => &self.sqlserver_instance,
             ConnectionField::SqlServerConnectTimeout => &self.sqlserver_connect_timeout,
@@ -2388,7 +2539,10 @@ impl NewConnectionInputs {
             ConnectionField::OracleWalletLocation => &self.oracle_wallet_location,
             ConnectionField::OracleWalletPassword => &self.oracle_wallet_password,
             ConnectionField::MysqlCharset => &self.mysql_charset,
-            ConnectionField::MysqlProxyType => &self.mysql_proxy_type,
+            ConnectionField::MysqlCollation => &self.mysql_collation,
+            ConnectionField::MysqlSocketPath => &self.mysql_socket_path,
+            ConnectionField::MysqlTimezone => &self.mysql_timezone,
+            ConnectionField::MysqlInitSql => &self.mysql_init_sql,
             ConnectionField::MysqlSshConnectTimeout => &self.mysql_ssh_connect_timeout,
             ConnectionField::MysqlSshKeepalive => &self.mysql_ssh_keepalive,
             ConnectionField::MysqlProxyHost => &self.mysql_proxy_host,
@@ -2397,12 +2551,10 @@ impl NewConnectionInputs {
             ConnectionField::MysqlProxyPassword => &self.mysql_proxy_password,
             ConnectionField::MysqlConnectTimeout => &self.mysql_connect_timeout,
             ConnectionField::MysqlQueryTimeout => &self.mysql_query_timeout,
-            ConnectionField::MysqlIdleTtl => &self.mysql_idle_ttl,
             ConnectionField::SentinelMasterName => &self.sentinel_master_name,
+            ConnectionField::AiKeyPrefixes => &self.ai_key_prefixes,
             ConnectionField::SentinelEndpoints => &self.sentinel_endpoints,
             ConnectionField::ClusterStartNodes => &self.cluster_start_nodes,
-            ConnectionField::CloudSubscription => &self.cloud_subscription,
-            ConnectionField::CloudResource => &self.cloud_resource,
             ConnectionField::DiscoveryUri => &self.discovery_uri,
         }
     }
@@ -2422,6 +2574,24 @@ impl NewConnectionInputs {
         self.set_value(
             ConnectionField::DamengSchema,
             &form.dameng_schema,
+            window,
+            cx,
+        );
+        self.set_value(
+            ConnectionField::DamengConnectTimeout,
+            &form.dameng_connect_timeout_secs,
+            window,
+            cx,
+        );
+        self.set_value(
+            ConnectionField::DamengQueryTimeout,
+            &form.dameng_query_timeout_secs,
+            window,
+            cx,
+        );
+        self.set_value(
+            ConnectionField::DamengApplicationName,
+            &form.dameng_application_name,
             window,
             cx,
         );
@@ -2447,6 +2617,12 @@ impl NewConnectionInputs {
             window,
             cx,
         );
+        self.set_value(
+            ConnectionField::TlsClientKeyPassphrase,
+            &form.tls_client_key_passphrase,
+            window,
+            cx,
+        );
         self.set_value(ConnectionField::TlsSni, &form.tls_sni, window, cx);
         self.set_value(ConnectionField::SshHost, &form.ssh_host, window, cx);
         self.set_value(ConnectionField::SshPort, &form.ssh_port, window, cx);
@@ -2461,6 +2637,37 @@ impl NewConnectionInputs {
         self.set_value(
             ConnectionField::SshPassphrase,
             &form.ssh_passphrase,
+            window,
+            cx,
+        );
+        // —— PostgreSQL 专用 ——
+        self.set_value(
+            ConnectionField::PgDefaultSchema,
+            &form.pg_default_schema,
+            window,
+            cx,
+        );
+        self.set_value(
+            ConnectionField::PgApplicationName,
+            &form.pg_application_name,
+            window,
+            cx,
+        );
+        self.set_value(
+            ConnectionField::PgConnectTimeoutSecs,
+            &form.pg_connect_timeout_secs,
+            window,
+            cx,
+        );
+        self.set_value(
+            ConnectionField::PgQueryTimeoutSecs,
+            &form.pg_query_timeout_secs,
+            window,
+            cx,
+        );
+        self.set_value(
+            ConnectionField::PgTimezone,
+            &form.pg_timezone,
             window,
             cx,
         );
@@ -2547,8 +2754,26 @@ impl NewConnectionInputs {
             cx,
         );
         self.set_value(
-            ConnectionField::MysqlProxyType,
-            &form.mysql_proxy_type,
+            ConnectionField::MysqlCollation,
+            &form.mysql_collation,
+            window,
+            cx,
+        );
+        self.set_value(
+            ConnectionField::MysqlSocketPath,
+            &form.mysql_socket_path,
+            window,
+            cx,
+        );
+        self.set_value(
+            ConnectionField::MysqlTimezone,
+            &form.mysql_timezone,
+            window,
+            cx,
+        );
+        self.set_value(
+            ConnectionField::MysqlInitSql,
+            &form.mysql_init_sql,
             window,
             cx,
         );
@@ -2601,12 +2826,6 @@ impl NewConnectionInputs {
             cx,
         );
         self.set_value(
-            ConnectionField::MysqlIdleTtl,
-            &form.mysql_idle_ttl_secs,
-            window,
-            cx,
-        );
-        self.set_value(
             ConnectionField::SentinelMasterName,
             &form.sentinel_master_name,
             window,
@@ -2625,14 +2844,8 @@ impl NewConnectionInputs {
             cx,
         );
         self.set_value(
-            ConnectionField::CloudSubscription,
-            &form.cloud_subscription,
-            window,
-            cx,
-        );
-        self.set_value(
-            ConnectionField::CloudResource,
-            &form.cloud_resource,
+            ConnectionField::AiKeyPrefixes,
+            &form.ai_key_prefixes,
             window,
             cx,
         );
@@ -2687,5 +2900,15 @@ impl NavicatMain {
                 .placeholder()
                 .clone(),
         )
+    }
+
+    /// 连接串导入框的示例必须跟随当前数据库类型，避免 PostgreSQL 弹框展示 mysql:// 示例。
+    fn discovery_uri_placeholder_for_test(&self, cx: &App) -> SharedString {
+        self.new_connection_inputs
+            .discovery_uri
+            .read(cx)
+            .presentation()
+            .placeholder()
+            .clone()
     }
 }

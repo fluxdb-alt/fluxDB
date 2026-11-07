@@ -2072,20 +2072,43 @@
     "search_kind": "搜索数据库类型",
     "test": "测试",
     "save_and_connect": "保存并连接",
-    "redis_only": "该设置仅对 Redis 连接可用",
+    "save_only": "仅保存",
+    "builtin_driver": "内置驱动",
+    "no_options": "当前数据库类型暂无可配置项",
+    "rail": {
+      "relational": "关系型数据库",
+      "nosql": "NoSQL 与缓存",
+      "drivers": "%{count} 种内置驱动"
+    },
+    "group": {
+      "server": "服务器",
+      "file": "数据库文件"
+    },
+    "uri": {
+      "placeholder": "粘贴连接串快速填充：mysql://root:******@127.0.0.1:3306/app",
+      "parse_action": "解析填入"
+    },
     "read_only": {
       "hint": "开启后，通过此连接写入数据、修改结构、导入或编辑表数据都会被拒绝；查询、导出和复制不受影响。"
     },
     "tab": {
       "connection": "连接信息",
-      "tls": "TLS/SSL",
-      "ssh": "SSH 隧道/代理",
+      "network": "网络与安全",
       "advanced": "高级"
+    },
+    "section": {
+      "connection_behavior": "连接行为",
+      "connection_parameters": "连接参数",
+      "timeouts": "超时与回收",
+      "session": "会话",
+      "topology": "拓扑"
     },
     "field": {
       "name": "名称",
+      "name_placeholder": "例如：生产库 · 订单服务",
       "color": "颜色",
       "host": "主机",
+      "host_port": "主机 / 端口",
       "port": "端口",
       "username": "用户名",
       "password": "密码",
@@ -2118,17 +2141,21 @@
       "redis_uri_parse": "连接串解析失败",
       "create_first": "请先创建连接",
       "mongo_uri_required": "请填写 MongoDB 连接串",
-      "mongo_uri_parse": "解析 MongoDB 连接串失败"
+      "mongo_uri_parse": "解析 MongoDB 连接串失败",
+      "uri_parse": "连接串格式不正确，例如 mysql://user:pass@127.0.0.1:3306/app"
     },
     "tls": {
       "title": "传输层安全 (TLS)",
-      "enabled": "启用 TLS",
+      "enable_hint": "启用 TLS 后可配置证书、校验方式与 SSL 模式。",
+      "ca_hint": "当前校验方式不会读取 CA 证书；启用证书校验或切换到 verify-ca / verify-full 后可配置。",
       "ca": "CA 证书",
       "ca_prompt": "选择 TLS CA 证书文件",
       "client_cert": "客户端证书",
       "client_cert_prompt": "选择 TLS 客户端证书文件",
       "client_key": "客户端密钥",
       "client_key_prompt": "选择 TLS 客户端私钥文件",
+      "client_key_passphrase": "客户端私钥口令",
+      "client_key_passphrase_optional": "私钥口令，可选（仅 PKCS#8 加密私钥）",
       "sni": "SNI / 主机名",
       "sni_optional": "服务器名指示（SNI），可选",
       "verify": "校验服务器证书",
@@ -2146,18 +2173,29 @@
       "show_system_schemas": "显示系统 schema",
       "application_name_optional": "应用名，可选",
       "query_timeout_hint": "单位：秒；0=不设限（statement_timeout）",
-      "connect_timeout_hint": "单位：秒"
+      "connect_timeout_hint": "单位：秒",
+      "timezone": "会话时区",
+      "timezone_placeholder": "如 Asia/Shanghai，可选",
+      "timezone_hint": "留空使用服务器默认时区",
+      "uri_placeholder": "粘贴连接串快速填充：postgres://postgres:******@127.0.0.1:5432/postgres"
     },
     "dameng": {
-      "instance": "实例",
       "schema": "Schema",
-      "schema_optional": "默认 schema，可选（如 SYSDBA）"
+      "schema_optional": "默认 schema，可选（如 SYSDBA）",
+      "connect_timeout": "建连超时",
+      "connect_timeout_hint": "秒，1-86400",
+      "connect_timeout_invalid": "建连超时必须是 1 到 86400 之间的整数",
+      "query_timeout": "查询超时",
+      "query_timeout_hint": "秒；0 表示不设限",
+      "query_timeout_invalid": "查询超时必须是 0 到 86400 之间的整数",
+      "timeout_out_of_range": "超时值超出范围（建连 1-86400 秒，查询 0-86400 秒）",
+      "application_name": "应用名",
+      "application_name_optional": "应用名，可选"
     },
     "sqlserver": {
       "instance": "实例名",
-      "instance_optional": "命名实例，可选",
-      "instance_hint": "命名实例请填写实际端口；首版不解析 SQL Browser",
-      "instance_requires_port": "首版不解析 SQL Browser；命名实例请清空实例名并直接填写实际端口",
+      "instance_optional": "命名实例，可选（经 SQL Browser 解析端口）",
+      "instance_hint": "实例名非空且端口为 1433 时经 SQL Browser 解析实际端口；SSH 隧道需填写实际端口",
       "schema": "默认 Schema",
       "schema_optional": "默认 schema，可选（如 dbo）",
       "encryption": "加密",
@@ -2210,7 +2248,7 @@
     },
     "ssh": {
       "title": "SSH 隧道",
-      "enabled": "启用 SSH 隧道",
+      "enable_hint": "启用 SSH 隧道后可配置跳板机参数与认证方式。",
       "host": "SSH 主机",
       "port": "SSH 端口",
       "username": "SSH 用户名",
@@ -2224,36 +2262,49 @@
       "connect_timeout": "连接超时",
       "keepalive": "心跳间隔",
       "connect_timeout_hint": "0=继承全局超时",
-      "keepalive_hint": "0=不发送心跳"
+      "keepalive_hint": "0=不发送心跳",
+      "host_key_policy": "主机密钥校验",
+      "host_key_policy_strict": "严格（仅接受 known_hosts 中已记录的密钥）",
+      "host_key_policy_accept_new": "首次使用自动接受并记录",
+      "host_key_policy_ignore": "不校验（不安全）"
     },
     "mysql": {
       "proxy": "代理",
-      "proxy_enabled": "启用代理",
-      "advanced": "高级选项",
+      "proxy_enable_hint": "启用代理后可配置代理类型、地址与认证信息。",
       "connect_timeout": "建连超时",
       "query_timeout": "查询超时",
       "query_timeout_hint": "单位：秒；0=不设限",
-      "idle_ttl": "空闲 TTL",
-      "idle_ttl_hint": "单位：秒；0=不回收",
-      "reuse_note": "启用连接复用后生效",
       "tcp_keepalive": "TCP 长连接保活",
       "proxy_type": "代理类型",
+      "proxy_type_socks5": "SOCKS5",
+      "proxy_type_http_connect": "HTTP CONNECT",
       "proxy_username": "用户名",
       "proxy_password": "密码",
-      "connect_timeout_hint": "单位：秒；0=使用默认值"
+      "connect_timeout_hint": "单位：秒；0=使用默认值",
+      "socket_path": "Unix Socket",
+      "socket_path_placeholder": "/var/run/mysqld/mysqld.sock",
+      "socket_path_hint": "填写后改用 Unix socket 拨号，忽略主机/端口",
+      "collation": "排序规则",
+      "collation_placeholder": "留空跟随服务器默认",
+      "timezone": "会话时区",
+      "init_sql": "初始化 SQL",
+      "init_sql_placeholder": "SET NAMES utf8mb4",
+      "init_sql_hint": "建连后执行；多条语句用分号分隔"
     },
     "redis": {
-      "sentinel": "Sentinel 模式",
       "sentinel_master": "主库名",
       "sentinel_endpoints": "节点列表",
-      "cluster": "Cluster 模式",
       "cluster_nodes": "起始节点",
       "cluster_readonly": "允许重定向到从节点",
-      "cloud": "云自动发现",
-      "cloud_provider": "云提供方",
-      "cloud_subscription": "订阅 / 账号",
-      "cloud_resource": "资源 / 数据库",
-      "import": "连接串导入",
+      "auto_detect_hint": "可填单机节点、哨兵地址或集群任一节点，连接时自动识别拓扑",
+      "connect_behavior": "连接行为",
+      "sentinel_master_optional": "Sentinel 主库名（可选）",
+      "sentinel_master_hint": "自动识别为哨兵且只监控一个主库时可留空；监控多个主库时必须填写",
+      "force_standalone": "强制按单机连接",
+      "force_standalone_help": "跳过拓扑自动识别。仅在代理或端口转发导致误判时使用。",
+      "ai_scope": "AI 访问范围",
+      "ai_key_prefixes": "AI Key 授权前缀",
+      "ai_key_prefixes_help": "AI Redis 工具只允许访问这些前缀的 Key，逗号分隔；留空表示不限制。",
       "uri": "连接串 / URI",
       "import_action": "导入 / 发现"
     },
@@ -2262,23 +2313,20 @@
       "failed_unsaved": "连接失败，未保存",
       "test_success": "测试连接成功",
       "test_failed": "测试连接失败",
-      "parsing_uri": "正在解析连接串..."
+      "parsing_uri": "正在解析连接串...",
+      "untested": "未测试"
     },
     "secret": {
       "private_key": "私钥",
       "password": "密码"
-    },
-    "cloud": {
-      "none": "不使用云",
-      "azure": "Azure",
-      "redis_cloud": "Redis Cloud"
     },
     "picker": {
       "sqlite": "选择 SQLite 数据库文件"
     },
     "toast": {
       "redis_imported": "已导入 Redis 连接串",
-      "mongo_imported": "已导入 MongoDB 连接串"
+      "mongo_imported": "已导入 MongoDB 连接串",
+      "uri_imported": "已按连接串填入"
     },
     "copy_name": "%{name} 副本",
     "label": "连接",
@@ -4890,7 +4938,6 @@
     "app_msg_ssh_tunnel_disabled": "SSH 隧道未启用",
     "app_msg_advanced_timeout_too_large": "高级超时值不能超过 86400 秒",
     "app_msg_tls_require_enabled_first": "强制 TLS 模式需先启用 TLS",
-    "app_msg_proxy_transport_unsupported": "代理传输暂未支持，请先关闭代理或仅使用 SSH 隧道",
     "app_msg_connection_string_unrecognized": "无法识别的连接字符串",
     "app_msg_host_address_missing": "缺少主机地址",
     "app_msg_sentinel_master_name_required": "请填写 Sentinel 主库名",

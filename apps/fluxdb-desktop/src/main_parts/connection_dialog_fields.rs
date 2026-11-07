@@ -1,3 +1,32 @@
+/// 表单标签：小号加粗、左对齐；`required` 为真时追加红色星号。
+fn form_field_label(
+    text: SharedString,
+    colors: UiColors,
+    required: bool,
+) -> impl Fn(&mut Window, &mut App) -> Div + 'static {
+    move |_, _| {
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(colors.muted)
+                    .child(text.clone()),
+            )
+            .when(required, |this| {
+                this.child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(colors.danger)
+                        .child("*"),
+                )
+            })
+    }
+}
+
 fn field_row_light(
     label: impl Into<SharedString>,
     field_id: ConnectionField,
@@ -8,7 +37,7 @@ fn field_row_light(
     cx: &mut Context<NavicatMain>,
 ) -> Field {
     let hint = connection_field_hint(field_id);
-    let mut row = field().label(label.into()).items_center();
+    let mut row = field().label_fn(form_field_label(label.into(), colors, false));
     if !hint.is_empty() {
         row = row.description_fn(move |_, _| {
             div()
@@ -28,10 +57,11 @@ fn connection_field_hint(field: ConnectionField) -> SharedString {
         ConnectionField::MysqlSshKeepalive => tr("app.connection.ssh.keepalive_hint"),
         ConnectionField::PgConnectTimeoutSecs => tr("app.connection.postgres.connect_timeout_hint"),
         ConnectionField::PgQueryTimeoutSecs => tr("app.connection.postgres.query_timeout_hint"),
+        ConnectionField::PgTimezone => tr("app.connection.postgres.timezone_hint"),
         ConnectionField::MysqlConnectTimeout => tr("app.connection.mysql.connect_timeout_hint"),
         ConnectionField::MysqlQueryTimeout => tr("app.connection.mysql.query_timeout_hint"),
-        ConnectionField::MysqlIdleTtl => tr("app.connection.mysql.idle_ttl_hint"),
-        ConnectionField::SqlServerInstance => tr("app.connection.sqlserver.instance_hint"),
+        ConnectionField::MysqlSocketPath => tr("app.connection.mysql.socket_path_hint"),
+        ConnectionField::MysqlInitSql => tr("app.connection.mysql.init_sql_hint"),
         ConnectionField::SqlServerConnectTimeout => {
             tr("app.connection.sqlserver.connect_timeout_hint")
         }
@@ -42,9 +72,6 @@ fn connection_field_hint(field: ConnectionField) -> SharedString {
         ConnectionField::OracleServiceName => tr("app.connection.oracle.service_name_hint"),
         ConnectionField::OracleSid => tr("app.connection.oracle.sid_hint"),
         ConnectionField::OracleSchema => tr("app.connection.oracle.schema_hint"),
-        ConnectionField::OracleConnectTimeout => {
-            tr("app.connection.oracle.connect_timeout_hint")
-        }
         ConnectionField::OracleQueryTimeout => tr("app.connection.oracle.query_timeout_hint"),
         ConnectionField::OracleApplicationName => {
             tr("app.connection.oracle.application_name_hint")
@@ -55,6 +82,8 @@ fn connection_field_hint(field: ConnectionField) -> SharedString {
     }
 }
 
+/// 主机 / 端口合并为一个输入组：共用一层边框，端口固定窄列，中间一条分隔线。
+/// 焦点落在任一输入框时整组高亮，避免两个独立输入框宽度互不对齐。
 fn host_port_row_light(
     label: impl Into<SharedString>,
     inputs: &NewConnectionInputs,
@@ -62,23 +91,50 @@ fn host_port_row_light(
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Field {
-    field().label(label.into()).items_center().child(
-        div()
-            .w_full()
-            .flex()
-            .items_center()
-            .gap_3()
-            .child(
-                input_box_light(ConnectionField::Host, inputs, false, colors, window, cx)
-                    .flex_1()
-                    .min_w(px(0.)),
-            )
-            .child(
-                input_box_light(ConnectionField::Port, inputs, false, colors, window, cx)
-                    .w(px(96.))
-                    .flex_none(),
-            ),
-    )
+    let focused = inputs
+        .for_field(ConnectionField::Host)
+        .focus_handle(cx)
+        .is_focused(window)
+        || inputs
+            .for_field(ConnectionField::Port)
+            .focus_handle(cx)
+            .is_focused(window);
+    field()
+        .label_fn(form_field_label(label.into(), colors, true))
+        .child(
+            div()
+                .w_full()
+                .h(px(36.))
+                .rounded(colors.radius_lg)
+                .border_1()
+                .border_color(if focused {
+                    if colors.is_dark {
+                        rgb(0x8ab4ff)
+                    } else {
+                        rgb(0x111111)
+                    }
+                } else {
+                    colors.border
+                })
+                .bg(colors.input_bg)
+                .flex()
+                .items_center()
+                .overflow_hidden()
+                .child(
+                    bare_input_light(ConnectionField::Host, inputs)
+                        .flex_1()
+                        .min_w(px(0.)),
+                )
+                .child(
+                    div()
+                        .w(px(92.))
+                        .h_full()
+                        .flex_none()
+                        .border_l_1()
+                        .border_color(colors.border)
+                        .child(bare_input_light(ConnectionField::Port, inputs)),
+                ),
+        )
 }
 
 fn sqlite_file_row_light(
@@ -88,8 +144,11 @@ fn sqlite_file_row_light(
     cx: &mut Context<NavicatMain>,
 ) -> Field {
     field()
-        .label(tr("app.connection.field.file_path"))
-        .items_center()
+        .label_fn(form_field_label(
+            tr("app.connection.field.file_path"),
+            colors,
+            true,
+        ))
         .child(
             div()
                 .w_full()
@@ -112,24 +171,6 @@ fn sqlite_file_row_light(
         )
 }
 
-
-fn color_row_light(selected_color: &str, colors: UiColors, cx: &mut Context<NavicatMain>) -> Field {
-    let mut swatches = div().flex().items_center().gap_2();
-    for &(hex, value) in CONNECTION_COLOR_PALETTE {
-        swatches = swatches.child(color_swatch_light(
-            hex,
-            rgb(value),
-            selected_color == hex,
-            colors,
-            cx,
-        ));
-    }
-
-    field()
-        .label(tr("app.connection.field.color"))
-        .items_center()
-        .child(swatches)
-}
 
 fn color_swatch_light(
     hex: &'static str,
@@ -195,15 +236,8 @@ fn connection_test_status(status: &ConnectionTestStatus) -> Stateful<Div> {
         .child(text)
 }
 
-fn input_box_light(
-    field: ConnectionField,
-    inputs: &NewConnectionInputs,
-    secure: bool,
-    colors: UiColors,
-    window: &mut Window,
-    cx: &mut Context<NavicatMain>,
-) -> Div {
-    let focused = inputs.for_field(field).focus_handle(cx).is_focused(window);
+/// 无外框输入本体：容器（输入组、连接串框）自己提供边框，这里只渲染输入元素。
+fn bare_input_light(field: ConnectionField, inputs: &NewConnectionInputs) -> Div {
     // 稳定 ElementId 按字段业务身份派生：同一字段在不同页签/数据库类型下仍是同一个控件，
     // UI 自动化与无障碍树都不必依赖 placeholder 文案或列表下标。
     let input = Input::new(inputs.for_field(field))
@@ -216,7 +250,26 @@ fn input_box_light(
     div()
         .debug_selector(move || connection_field_element_id(field).to_string())
         .w_full()
-        .h(px(34.))
+        .h_full()
+        .flex()
+        .items_center()
+        .overflow_hidden()
+        .child(input.w_full().h_full().px_3().text_size(px(13.5)))
+}
+
+fn input_box_light(
+    field: ConnectionField,
+    inputs: &NewConnectionInputs,
+    secure: bool,
+    colors: UiColors,
+    window: &mut Window,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let focused = inputs.for_field(field).focus_handle(cx).is_focused(window);
+
+    div()
+        .w_full()
+        .h(px(36.))
         .rounded(colors.radius_lg)
         .border_1()
         .border_color(if focused {
@@ -229,17 +282,10 @@ fn input_box_light(
             colors.border
         })
         .bg(colors.input_bg)
-        .shadow(vec![box_shadow(
-            px(0.),
-            px(1.),
-            px(4.),
-            px(0.),
-            hsla(0., 0., 0., if focused { 0.08 } else { 0.11 }),
-        )])
         .flex()
         .items_center()
         .overflow_hidden()
-        .child(input.w_full().h_full().px_3().text_size(px(14.)))
+        .child(bare_input_light(field, inputs))
         .when(secure, |this| this.child(password_eye_button(colors, cx)))
 }
 
@@ -361,75 +407,8 @@ fn first_connection_field(kind: DatabaseKind) -> ConnectionField {
 }
 
 fn connection_fields(kind: DatabaseKind) -> &'static [ConnectionField] {
-    match kind {
-        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => &[
-            ConnectionField::Name,
-            ConnectionField::Host,
-            ConnectionField::Port,
-            ConnectionField::Username,
-            ConnectionField::Password,
-            ConnectionField::Database,
-            ConnectionField::UrlParams,
-        ],
-        DatabaseKind::Sqlite => &[ConnectionField::Name, ConnectionField::SqlitePath],
-        DatabaseKind::MongoDb => &[
-            ConnectionField::Name,
-            ConnectionField::Host,
-            ConnectionField::Port,
-            ConnectionField::Username,
-            ConnectionField::Password,
-            ConnectionField::MongoDefaultDb,
-            ConnectionField::MongoAuthDb,
-        ],
-        DatabaseKind::Redis => &[
-            ConnectionField::Name,
-            ConnectionField::Host,
-            ConnectionField::Port,
-            ConnectionField::Username,
-            ConnectionField::Password,
-            ConnectionField::UrlParams,
-        ],
-        DatabaseKind::Postgres => &[
-            ConnectionField::Name,
-            ConnectionField::Host,
-            ConnectionField::Port,
-            ConnectionField::Username,
-            ConnectionField::Password,
-            ConnectionField::Database,
-            ConnectionField::UrlParams,
-        ],
-        DatabaseKind::Dameng => &[
-            ConnectionField::Name,
-            ConnectionField::Host,
-            ConnectionField::Port,
-            ConnectionField::Username,
-            ConnectionField::Password,
-            ConnectionField::Database,
-            ConnectionField::DamengSchema,
-        ],
-        DatabaseKind::SqlServer => &[
-            ConnectionField::Name,
-            ConnectionField::Host,
-            ConnectionField::Port,
-            ConnectionField::Username,
-            ConnectionField::Password,
-            ConnectionField::Database,
-            ConnectionField::SqlServerSchema,
-            ConnectionField::SqlServerInstance,
-        ],
-        // Service Name 与 SID 都列出来：由「连接方式」下拉决定哪一个生效，
-        // 隐藏另一半反而让用户不清楚自己填的是哪一种寻址。
-        DatabaseKind::Oracle => &[
-            ConnectionField::Name,
-            ConnectionField::Host,
-            ConnectionField::Port,
-            ConnectionField::Username,
-            ConnectionField::Password,
-            ConnectionField::OracleServiceName,
-            ConnectionField::OracleSid,
-            ConnectionField::OracleSchema,
-        ],
-    }
+    // 字段清单由各数据库的表单实现声明，新增数据库不再改这里。
+    connection_form_spec(kind).connection_fields()
 }
 
 /// 文本字段输入框的稳定 `ElementId`，按字段业务身份命名（如 `connection-name`）。
@@ -444,6 +423,9 @@ fn connection_field_element_id(field: ConnectionField) -> &'static str {
         ConnectionField::Password => "connection-password",
         ConnectionField::Database => "connection-database",
         ConnectionField::DamengSchema => "connection-dameng-schema",
+        ConnectionField::DamengConnectTimeout => "connection-dameng-connect-timeout",
+        ConnectionField::DamengQueryTimeout => "connection-dameng-query-timeout",
+        ConnectionField::DamengApplicationName => "connection-dameng-application-name",
         ConnectionField::UrlParams => "connection-url-params",
         ConnectionField::SqlitePath => "connection-sqlite-path",
         ConnectionField::MongoDefaultDb => "connection-mongo-default-db",
@@ -451,6 +433,7 @@ fn connection_field_element_id(field: ConnectionField) -> &'static str {
         ConnectionField::TlsCa => "connection-tls-ca",
         ConnectionField::TlsClientCert => "connection-tls-client-cert",
         ConnectionField::TlsClientKey => "connection-tls-client-key",
+        ConnectionField::TlsClientKeyPassphrase => "connection-tls-client-key-passphrase",
         ConnectionField::TlsSni => "connection-tls-sni",
         ConnectionField::SshHost => "connection-ssh-host",
         ConnectionField::SshPort => "connection-ssh-port",
@@ -461,15 +444,18 @@ fn connection_field_element_id(field: ConnectionField) -> &'static str {
         ConnectionField::SentinelMasterName => "connection-sentinel-master-name",
         ConnectionField::SentinelEndpoints => "connection-sentinel-endpoints",
         ConnectionField::ClusterStartNodes => "connection-cluster-start-nodes",
-        ConnectionField::CloudSubscription => "connection-cloud-subscription",
-        ConnectionField::CloudResource => "connection-cloud-resource",
+        ConnectionField::AiKeyPrefixes => "connection-ai-key-prefixes",
         ConnectionField::DiscoveryUri => "connection-discovery-uri",
         ConnectionField::PgDefaultSchema => "connection-pg-default-schema",
         ConnectionField::PgApplicationName => "connection-pg-application-name",
         ConnectionField::PgConnectTimeoutSecs => "connection-pg-connect-timeout-secs",
         ConnectionField::PgQueryTimeoutSecs => "connection-pg-query-timeout-secs",
+        ConnectionField::PgTimezone => "connection-pg-timezone",
         ConnectionField::MysqlCharset => "connection-mysql-charset",
-        ConnectionField::MysqlProxyType => "connection-mysql-proxy-type",
+        ConnectionField::MysqlCollation => "connection-mysql-collation",
+        ConnectionField::MysqlSocketPath => "connection-mysql-socket-path",
+        ConnectionField::MysqlTimezone => "connection-mysql-timezone",
+        ConnectionField::MysqlInitSql => "connection-mysql-init-sql",
         ConnectionField::MysqlSshConnectTimeout => "connection-mysql-ssh-connect-timeout",
         ConnectionField::MysqlSshKeepalive => "connection-mysql-ssh-keepalive",
         ConnectionField::MysqlProxyHost => "connection-mysql-proxy-host",
@@ -478,7 +464,6 @@ fn connection_field_element_id(field: ConnectionField) -> &'static str {
         ConnectionField::MysqlProxyPassword => "connection-mysql-proxy-password",
         ConnectionField::MysqlConnectTimeout => "connection-mysql-connect-timeout",
         ConnectionField::MysqlQueryTimeout => "connection-mysql-query-timeout",
-        ConnectionField::MysqlIdleTtl => "connection-mysql-idle-ttl",
         ConnectionField::SqlServerSchema => "connection-sqlserver-schema",
         ConnectionField::SqlServerInstance => "connection-sqlserver-instance",
         ConnectionField::SqlServerConnectTimeout => "connection-sqlserver-connect-timeout",
@@ -508,6 +493,9 @@ fn connection_field_label(field: ConnectionField) -> SharedString {
         ConnectionField::Password => tr("app.connection.optional"),
         ConnectionField::Database => tr("app.connection.field.database"),
         ConnectionField::DamengSchema => tr("app.connection.dameng.schema"),
+        ConnectionField::DamengConnectTimeout => tr("app.connection.dameng.connect_timeout"),
+        ConnectionField::DamengQueryTimeout => tr("app.connection.dameng.query_timeout"),
+        ConnectionField::DamengApplicationName => tr("app.connection.dameng.application_name"),
         ConnectionField::UrlParams => tr("app.connection.field.url_params"),
         ConnectionField::SqlitePath => tr("app.connection.field.file_path"),
         ConnectionField::MongoDefaultDb => tr("app.connection.field.default_db"),
@@ -515,6 +503,9 @@ fn connection_field_label(field: ConnectionField) -> SharedString {
         ConnectionField::TlsCa => tr("app.connection.tls.ca"),
         ConnectionField::TlsClientCert => tr("app.connection.tls.client_cert"),
         ConnectionField::TlsClientKey => tr("app.connection.tls.client_key"),
+        ConnectionField::TlsClientKeyPassphrase => {
+            tr("app.connection.tls.client_key_passphrase")
+        }
         ConnectionField::TlsSni => tr("app.connection.tls.sni"),
         ConnectionField::SshHost => tr("app.connection.ssh.host"),
         ConnectionField::SshPort => tr("app.connection.ssh.port"),
@@ -525,15 +516,18 @@ fn connection_field_label(field: ConnectionField) -> SharedString {
         ConnectionField::SentinelMasterName => tr("app.connection.redis.sentinel_master"),
         ConnectionField::SentinelEndpoints => tr("app.connection.redis.sentinel_endpoints"),
         ConnectionField::ClusterStartNodes => tr("app.connection.redis.cluster_nodes"),
-        ConnectionField::CloudSubscription => tr("app.connection.redis.cloud_subscription"),
-        ConnectionField::CloudResource => tr("app.connection.redis.cloud_resource"),
+        ConnectionField::AiKeyPrefixes => tr("app.connection.redis.ai_key_prefixes"),
         ConnectionField::DiscoveryUri => tr("app.connection.redis.uri"),
         ConnectionField::PgDefaultSchema => tr("app.connection.postgres.default_schema"),
         ConnectionField::PgApplicationName => tr("app.connection.postgres.application_name"),
         ConnectionField::PgConnectTimeoutSecs => tr("app.connection.postgres.connect_timeout"),
         ConnectionField::PgQueryTimeoutSecs => tr("app.connection.postgres.query_timeout"),
+        ConnectionField::PgTimezone => tr("app.connection.postgres.timezone"),
         ConnectionField::MysqlCharset => tr("app.connection.tls.charset"),
-        ConnectionField::MysqlProxyType => tr("app.connection.mysql.proxy_type"),
+        ConnectionField::MysqlCollation => tr("app.connection.mysql.collation"),
+        ConnectionField::MysqlSocketPath => tr("app.connection.mysql.socket_path"),
+        ConnectionField::MysqlTimezone => tr("app.connection.mysql.timezone"),
+        ConnectionField::MysqlInitSql => tr("app.connection.mysql.init_sql"),
         ConnectionField::MysqlSshConnectTimeout => tr("app.connection.ssh.connect_timeout"),
         ConnectionField::MysqlSshKeepalive => tr("app.connection.ssh.keepalive"),
         ConnectionField::MysqlProxyHost => tr("app.connection.field.host"),
@@ -542,7 +536,6 @@ fn connection_field_label(field: ConnectionField) -> SharedString {
         ConnectionField::MysqlProxyPassword => tr("app.connection.mysql.proxy_password"),
         ConnectionField::MysqlConnectTimeout => tr("app.connection.mysql.connect_timeout"),
         ConnectionField::MysqlQueryTimeout => tr("app.connection.mysql.query_timeout"),
-        ConnectionField::MysqlIdleTtl => tr("app.connection.mysql.idle_ttl"),
         ConnectionField::SqlServerSchema => tr("app.connection.sqlserver.schema"),
         ConnectionField::SqlServerInstance => tr("app.connection.sqlserver.instance"),
         ConnectionField::SqlServerConnectTimeout => tr("app.connection.sqlserver.connect_timeout"),
@@ -561,15 +554,30 @@ fn connection_field_label(field: ConnectionField) -> SharedString {
     }
 }
 
+/// 连接串导入框的示例文案：按当前数据库类型给出对应 scheme。
+fn discovery_uri_placeholder(kind: Option<fluxdb_core::DatabaseKind>) -> SharedString {
+    match kind {
+        Some(fluxdb_core::DatabaseKind::Postgres) => {
+            tr("app.connection.postgres.uri_placeholder")
+        }
+        _ => tr("app.connection.uri.placeholder"),
+    }
+}
+
 fn connection_field_placeholder(field: ConnectionField) -> SharedString {
     match field {
-        ConnectionField::Name => tr("app.connection.field.name"),
+        ConnectionField::Name => tr("app.connection.field.name_placeholder"),
         ConnectionField::Host => "127.0.0.1".into(),
         ConnectionField::Port => tr("app.connection.field.port"),
         ConnectionField::Username => tr("app.connection.field.username"),
         ConnectionField::Password => tr("app.connection.optional"),
         ConnectionField::Database => tr("app.connection.field.database"),
         ConnectionField::DamengSchema => tr("app.connection.dameng.schema_optional"),
+        ConnectionField::DamengConnectTimeout => "5".into(),
+        ConnectionField::DamengQueryTimeout => tr("app.connection.dameng.query_timeout_hint"),
+        ConnectionField::DamengApplicationName => {
+            tr("app.connection.dameng.application_name_optional")
+        }
         ConnectionField::MongoDefaultDb => tr("app.connection.optional"),
         ConnectionField::UrlParams => "key=value&key2=value2".into(),
         ConnectionField::SqlitePath => "/path/to/database.db or :memory:".into(),
@@ -577,6 +585,9 @@ fn connection_field_placeholder(field: ConnectionField) -> SharedString {
         ConnectionField::TlsCa => tr("app.connection.tls.ca"),
         ConnectionField::TlsClientCert => tr("app.connection.tls.client_cert"),
         ConnectionField::TlsClientKey => tr("app.connection.tls.client_key"),
+        ConnectionField::TlsClientKeyPassphrase => {
+            tr("app.connection.tls.client_key_passphrase_optional")
+        }
         ConnectionField::TlsSni => tr("app.connection.tls.sni_optional"),
         ConnectionField::SshHost => tr("app.connection.ssh.host"),
         ConnectionField::SshPort => "22".into(),
@@ -591,9 +602,13 @@ fn connection_field_placeholder(field: ConnectionField) -> SharedString {
         }
         ConnectionField::PgConnectTimeoutSecs => "5".into(),
         ConnectionField::PgQueryTimeoutSecs => tr("app.connection.postgres.query_timeout_hint"),
+        ConnectionField::PgTimezone => tr("app.connection.postgres.timezone_placeholder"),
         // —— MySQL / TiDB ——
         ConnectionField::MysqlCharset => "utf8mb4".into(),
-        ConnectionField::MysqlProxyType => "socks5 (socks5/http_connect)".into(),
+        ConnectionField::MysqlCollation => tr("app.connection.mysql.collation_placeholder"),
+        ConnectionField::MysqlSocketPath => tr("app.connection.mysql.socket_path_placeholder"),
+        ConnectionField::MysqlTimezone => "+08:00".into(),
+        ConnectionField::MysqlInitSql => tr("app.connection.mysql.init_sql_placeholder"),
         ConnectionField::MysqlSshConnectTimeout => tr("app.connection.ssh.connect_timeout_hint"),
         ConnectionField::MysqlSshKeepalive => tr("app.connection.ssh.keepalive_hint"),
         ConnectionField::MysqlProxyHost => tr("app.connection.field.host"),
@@ -602,13 +617,11 @@ fn connection_field_placeholder(field: ConnectionField) -> SharedString {
         ConnectionField::MysqlProxyPassword => tr("app.connection.optional"),
         ConnectionField::MysqlConnectTimeout => "5".into(),
         ConnectionField::MysqlQueryTimeout => tr("app.connection.mysql.query_timeout_hint"),
-        ConnectionField::MysqlIdleTtl => tr("app.connection.mysql.idle_ttl_hint"),
         ConnectionField::SentinelMasterName => tr("app.connection.redis.sentinel_master"),
         ConnectionField::SentinelEndpoints => "host:port, host:port".into(),
         ConnectionField::ClusterStartNodes => "host:port, host:port".into(),
-        ConnectionField::CloudSubscription => tr("app.connection.redis.cloud_subscription"),
-        ConnectionField::CloudResource => tr("app.connection.redis.cloud_resource"),
-        ConnectionField::DiscoveryUri => tr("app.connection.redis.uri"),
+        ConnectionField::AiKeyPrefixes => "app:,session:".into(),
+        ConnectionField::DiscoveryUri => tr("app.connection.uri.placeholder"),
         ConnectionField::SqlServerSchema => tr("app.connection.sqlserver.schema_optional"),
         ConnectionField::SqlServerInstance => tr("app.connection.sqlserver.instance_optional"),
         ConnectionField::SqlServerConnectTimeout => "5".into(),
@@ -619,7 +632,7 @@ fn connection_field_placeholder(field: ConnectionField) -> SharedString {
         ConnectionField::OracleServiceName => "FREEPDB1 / ORCLPDB1".into(),
         ConnectionField::OracleSid => "ORCL".into(),
         ConnectionField::OracleSchema => tr("app.connection.oracle.schema_optional"),
-        ConnectionField::OracleConnectTimeout => "8".into(),
+        ConnectionField::OracleConnectTimeout => tr("app.connection.oracle.connect_timeout_hint"),
         ConnectionField::OracleQueryTimeout => tr("app.connection.oracle.query_timeout_hint"),
         ConnectionField::OracleApplicationName => {
             tr("app.connection.oracle.application_name_optional")

@@ -36,33 +36,16 @@ impl Connector for MySqlConnector {
             return Err(Error::new(ErrorKind::Connection, "连接类型不匹配"));
         }
 
-        let (options, _tunnel) = mysql_dial(config)?;
-        let profile = config.mysql_profile.as_ref();
-        // 建连超时：档案优先，缺省 5 秒。
-        let connect_timeout = profile
-            .map(|p| Duration::from_secs(u64::from(p.connect_timeout_secs())))
-            .unwrap_or(Duration::from_secs(5));
-        // 查询超时：仅当 >0 时对探活 ping 生效（全量 per-query 延后到执行器）。
-        let query_timeout = profile
-            .and_then(|p| (p.advanced.query_timeout_secs > 0).then_some(p.advanced.query_timeout_secs))
-            .map(|secs| Duration::from_secs(u64::from(secs)));
-        ensure_mysql_classic_greeting(
-            options.get_host(),
-            options.get_port(),
-            mysql_greeting_probe_timeout(connect_timeout),
-        )?;
+        // 计划持有 SSH 隧道：必须活到 ping 结束，Drop 时关闭转发。
+        let plan = mysql_connection_plan(config)?;
+        let query_timeout = plan.query_timeout();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
         runtime.block_on(async {
-            let connect = tokio::time::timeout(connect_timeout, options.connect()).await;
-            let mut connection = match connect {
-                Ok(Ok(connection)) => connection,
-                Ok(Err(error)) => return Err(mysql_error(error)),
-                Err(_) => return Err(Error::new(ErrorKind::Connection, "连接超时")),
-            };
+            let mut connection = plan.connect().await?;
 
             let ping = match query_timeout {
                 Some(limit) => tokio::time::timeout(limit, connection.ping()).await,

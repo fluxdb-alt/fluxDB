@@ -616,7 +616,6 @@ fn localize_backend_error_text(text: &str) -> String {
         "SSH 隧道未启用" => "app.backend_error.app_msg_ssh_tunnel_disabled",
         "高级超时值不能超过 86400 秒" => "app.backend_error.app_msg_advanced_timeout_too_large",
         "强制 TLS 模式需先启用 TLS" => "app.backend_error.app_msg_tls_require_enabled_first",
-        "代理传输暂未支持，请先关闭代理或仅使用 SSH 隧道" => "app.backend_error.app_msg_proxy_transport_unsupported",
         "无法识别的连接字符串" => "app.backend_error.app_msg_connection_string_unrecognized",
         "缺少主机地址" => "app.backend_error.app_msg_host_address_missing",
         "请填写 Sentinel 主库名" => "app.backend_error.app_msg_sentinel_master_name_required",

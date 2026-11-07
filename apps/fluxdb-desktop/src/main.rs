@@ -83,7 +83,7 @@ use gpui_component::{
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::Dialog,
-    form::{Field, field, h_form},
+    form::{Field, field, v_form},
     group_box::{GroupBox, GroupBoxVariant, GroupBoxVariants as _},
     h_flex,
     highlighter::{LanguageConfig, LanguageRegistry},
@@ -139,6 +139,7 @@ include!("main_parts/navicat_main_impl.rs");
 include!("main_parts/connection_dialog.rs");
 include!("main_parts/connection_dialog_query_history.rs");
 include!("main_parts/connection_dialog_fields.rs");
+include!("main_parts/connection_form_spec.rs");
 include!("main_parts/tabs_workspace.rs");
 include!("main_parts/sidebar.rs");
 include!("main_parts/menus_dialogs.rs");

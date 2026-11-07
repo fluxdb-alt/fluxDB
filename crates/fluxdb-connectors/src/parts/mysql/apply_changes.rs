@@ -2,16 +2,14 @@ fn mysql_apply_changes(config: &ConnectionConfig, changes: &DataChangeSet) -> fl
     validate_data_changes(changes)?;
 
     let database = mysql_database_for_path(config, &changes.object)?;
-    let options = mysql_connection_url(config)?
-        .parse::<MySqlConnectOptions>()
-        .map_err(|error| Error::new(ErrorKind::Connection, error.to_string()))?;
+    let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
 
     runtime.block_on(async {
-        let mut connection = options.connect().await.map_err(mysql_error)?;
+        let mut connection = plan.connect().await?;
         let result = async {
             let columns = mysql_columns(&mut connection, &database, &changes.object.name).await?;
             let mut transaction = connection.begin().await.map_err(mysql_error)?;

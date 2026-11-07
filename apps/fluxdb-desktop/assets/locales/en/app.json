@@ -2072,20 +2072,43 @@
     "search_kind": "Search database types",
     "test": "Test",
     "save_and_connect": "Save and connect",
-    "redis_only": "This setting is only available for Redis connections",
+    "save_only": "Save only",
+    "builtin_driver": "Built-in driver",
+    "no_options": "No options for this database type",
+    "rail": {
+      "relational": "Relational",
+      "nosql": "NoSQL & cache",
+      "drivers": "%{count} built-in drivers"
+    },
+    "group": {
+      "server": "Server",
+      "file": "Database file"
+    },
+    "uri": {
+      "placeholder": "Paste a connection string to fill the form: mysql://root:******@127.0.0.1:3306/app",
+      "parse_action": "Fill from string"
+    },
     "read_only": {
       "hint": "When enabled, writes, schema changes, imports and table edits through this connection are rejected; queries, exports and copies are unaffected."
     },
     "tab": {
       "connection": "Connection",
-      "tls": "TLS/SSL",
-      "ssh": "SSH tunnel / proxy",
+      "network": "Network & security",
       "advanced": "Advanced"
+    },
+    "section": {
+      "connection_behavior": "Connection behavior",
+      "connection_parameters": "Connection parameters",
+      "timeouts": "Timeouts & recycling",
+      "session": "Session",
+      "topology": "Topology"
     },
     "field": {
       "name": "Name",
+      "name_placeholder": "e.g. Production · Orders",
       "color": "Color",
       "host": "Host",
+      "host_port": "Host / port",
       "port": "Port",
       "username": "Username",
       "password": "Password",
@@ -2118,17 +2141,21 @@
       "redis_uri_parse": "Could not parse the connection string",
       "create_first": "Create a connection first",
       "mongo_uri_required": "Enter a MongoDB connection string",
-      "mongo_uri_parse": "Failed to parse the MongoDB connection string"
+      "mongo_uri_parse": "Failed to parse the MongoDB connection string",
+      "uri_parse": "Invalid connection string, for example mysql://user:pass@127.0.0.1:3306/app"
     },
     "tls": {
       "title": "Transport Layer Security (TLS)",
-      "enabled": "Enable TLS",
+      "enable_hint": "Enable TLS to configure certificates, verification, and SSL mode.",
+      "ca_hint": "The current verification mode does not read a CA certificate; enable certificate verification or switch to verify-ca / verify-full to configure one.",
       "ca": "CA certificate",
       "ca_prompt": "Choose a TLS CA certificate",
       "client_cert": "Client certificate",
       "client_cert_prompt": "Choose a TLS client certificate",
       "client_key": "Client key",
       "client_key_prompt": "Choose a TLS client private key",
+      "client_key_passphrase": "Client key passphrase",
+      "client_key_passphrase_optional": "Key passphrase, optional (PKCS#8 encrypted keys only)",
       "sni": "SNI / hostname",
       "sni_optional": "Server name indication (SNI), optional",
       "verify": "Verify server certificate",
@@ -2146,18 +2173,29 @@
       "show_system_schemas": "Show system schemas",
       "application_name_optional": "Application name, optional",
       "query_timeout_hint": "Seconds; 0=unlimited (statement_timeout)",
-      "connect_timeout_hint": "Seconds"
+      "connect_timeout_hint": "Seconds",
+      "timezone": "Session time zone",
+      "timezone_placeholder": "e.g. Asia/Shanghai, optional",
+      "timezone_hint": "Empty uses the server default",
+      "uri_placeholder": "Paste a connection string to fill: postgres://postgres:******@127.0.0.1:5432/postgres"
     },
     "dameng": {
-      "instance": "Instance",
       "schema": "Schema",
-      "schema_optional": "Default schema, optional (for example SYSDBA)"
+      "schema_optional": "Default schema, optional (for example SYSDBA)",
+      "connect_timeout": "Connect timeout",
+      "connect_timeout_hint": "Seconds, 1-86400",
+      "connect_timeout_invalid": "Connect timeout must be an integer from 1 to 86400",
+      "query_timeout": "Query timeout",
+      "query_timeout_hint": "Seconds; 0=unlimited",
+      "query_timeout_invalid": "Query timeout must be an integer from 0 to 86400",
+      "timeout_out_of_range": "Timeout is out of range (connect 1-86400 seconds, query 0-86400 seconds)",
+      "application_name": "Application name",
+      "application_name_optional": "Application name, optional"
     },
     "sqlserver": {
       "instance": "Instance",
-      "instance_optional": "Named instance, optional",
-      "instance_hint": "Enter the actual port for a named instance; SQL Browser resolution is not available yet",
-      "instance_requires_port": "SQL Browser resolution is not available yet; leave the instance empty and enter the actual port",
+      "instance_optional": "Named instance, optional (resolved via SQL Browser)",
+      "instance_hint": "When an instance is set and the port is 1433, the actual port is resolved via SQL Browser; SSH tunnels require the actual port",
       "schema": "Default schema",
       "schema_optional": "Default schema, optional (for example dbo)",
       "encryption": "Encryption",
@@ -2210,7 +2248,7 @@
     },
     "ssh": {
       "title": "SSH tunnel",
-      "enabled": "Enable SSH tunnel",
+      "enable_hint": "Enable the SSH tunnel to configure jump host settings and authentication.",
       "host": "SSH host",
       "port": "SSH port",
       "username": "SSH username",
@@ -2224,36 +2262,49 @@
       "connect_timeout": "Connect timeout",
       "keepalive": "Keepalive",
       "connect_timeout_hint": "Seconds; 0 inherits the global timeout",
-      "keepalive_hint": "Seconds; 0 disables keepalive"
+      "keepalive_hint": "Seconds; 0 disables keepalive",
+      "host_key_policy": "Host key verification",
+      "host_key_policy_strict": "Strict (only keys already in known_hosts)",
+      "host_key_policy_accept_new": "Accept and record on first use",
+      "host_key_policy_ignore": "Do not verify (insecure)"
     },
     "mysql": {
       "proxy": "Proxy",
-      "proxy_enabled": "Enable proxy",
-      "advanced": "Advanced options",
+      "proxy_enable_hint": "Enable the proxy to configure its type, address, and credentials.",
       "connect_timeout": "Connect timeout",
       "query_timeout": "Query timeout",
       "query_timeout_hint": "Seconds; 0=unlimited",
-      "idle_ttl": "Idle TTL",
-      "idle_ttl_hint": "Seconds; 0=no reclamation",
-      "reuse_note": "Applies after connection reuse is enabled",
       "tcp_keepalive": "TCP keepalive",
       "proxy_type": "Proxy type",
+      "proxy_type_socks5": "SOCKS5",
+      "proxy_type_http_connect": "HTTP CONNECT",
       "proxy_username": "Username",
       "proxy_password": "Password",
-      "connect_timeout_hint": "Seconds; 0=default"
+      "connect_timeout_hint": "Seconds; 0=default",
+      "socket_path": "Unix socket",
+      "socket_path_placeholder": "/var/run/mysqld/mysqld.sock",
+      "socket_path_hint": "Uses the Unix socket instead of the host/port",
+      "collation": "Collation",
+      "collation_placeholder": "Empty follows the server default",
+      "timezone": "Session time zone",
+      "init_sql": "Initialization SQL",
+      "init_sql_placeholder": "SET NAMES utf8mb4",
+      "init_sql_hint": "Runs after connecting; separate statements with semicolons"
     },
     "redis": {
-      "sentinel": "Sentinel mode",
       "sentinel_master": "Primary name",
       "sentinel_endpoints": "Node list",
-      "cluster": "Cluster mode",
       "cluster_nodes": "Start nodes",
       "cluster_readonly": "Allow redirects to replicas",
-      "cloud": "Cloud auto-discovery",
-      "cloud_provider": "Cloud provider",
-      "cloud_subscription": "Subscription / account",
-      "cloud_resource": "Resource / database",
-      "import": "Import connection string",
+      "auto_detect_hint": "Enter a standalone node, a Sentinel address, or any cluster node; topology is detected on connect",
+      "connect_behavior": "Connection behavior",
+      "sentinel_master_optional": "Sentinel master name (optional)",
+      "sentinel_master_hint": "Leave empty when the Sentinel watches a single master; required when it monitors multiple masters",
+      "force_standalone": "Force standalone connection",
+      "force_standalone_help": "Skips topology detection. Use only when a proxy or port forward causes a wrong detection.",
+      "ai_scope": "AI access scope",
+      "ai_key_prefixes": "AI key prefixes",
+      "ai_key_prefixes_help": "AI Redis tools may only access keys with these prefixes, comma separated; empty means unrestricted.",
       "uri": "Connection string / URI",
       "import_action": "Import / discover"
     },
@@ -2262,23 +2313,20 @@
       "failed_unsaved": "Connection failed; not saved",
       "test_success": "Connection test succeeded",
       "test_failed": "Connection test failed",
-      "parsing_uri": "Parsing connection string..."
+      "parsing_uri": "Parsing connection string...",
+      "untested": "Not tested"
     },
     "secret": {
       "private_key": "Private key",
       "password": "Password"
-    },
-    "cloud": {
-      "none": "No cloud",
-      "azure": "Azure",
-      "redis_cloud": "Redis Cloud"
     },
     "picker": {
       "sqlite": "Select a SQLite database file"
     },
     "toast": {
       "redis_imported": "Redis connection string imported",
-      "mongo_imported": "MongoDB connection string imported"
+      "mongo_imported": "MongoDB connection string imported",
+      "uri_imported": "Filled from connection string"
     },
     "copy_name": "%{name} copy",
     "label": "Connection",
@@ -4890,7 +4938,6 @@
     "app_msg_ssh_tunnel_disabled": "SSH tunnel is not enabled",
     "app_msg_advanced_timeout_too_large": "The advanced timeout cannot exceed 86400 seconds",
     "app_msg_tls_require_enabled_first": "Require TLS mode requires TLS to be enabled first",
-    "app_msg_proxy_transport_unsupported": "Proxy transport is not supported yet; disable the proxy or use only an SSH tunnel",
     "app_msg_connection_string_unrecognized": "Unrecognized connection string",
     "app_msg_host_address_missing": "Missing host address",
     "app_msg_sentinel_master_name_required": "Enter the Sentinel master name",
