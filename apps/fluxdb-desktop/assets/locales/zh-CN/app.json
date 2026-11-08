@@ -3192,6 +3192,7 @@
   },
   "database_backup": {
     "title": "数据库备份",
+    "cancel_task": "取消任务",
     "tab": {
       "general": "常规",
       "objects": "对象选择",
@@ -3256,6 +3257,7 @@
   },
   "database_restore": {
     "title": "恢复数据库",
+    "cancel_task": "取消任务",
     "unsupported": "此数据库尚不支持恢复",
     "tab": {
       "general": "常规",

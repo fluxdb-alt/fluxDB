@@ -3192,6 +3192,7 @@
   },
   "database_backup": {
     "title": "Database backup",
+    "cancel_task": "Cancel task",
     "tab": {
       "general": "General",
       "objects": "Objects",
@@ -3256,6 +3257,7 @@
   },
   "database_restore": {
     "title": "Restore database",
+    "cancel_task": "Cancel task",
     "unsupported": "This database does not support restore yet",
     "tab": {
       "general": "General",
