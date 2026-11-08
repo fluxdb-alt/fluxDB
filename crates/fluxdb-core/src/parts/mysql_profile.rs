@@ -112,9 +112,13 @@ impl MysqlTlsOptions {
     ///
     /// 旧版本把"校验证书"放在 `verify` 布尔位，模式可能仍是 `preferred`；
     /// 升级后统一映射为 `verify_ca`，避免安全级别被悄悄降低。
+    ///
+    /// 仅在 TLS 启用时迁移：旧版 `Default` 就是 `verify: true`，TLS 关闭时
+    /// 该位没有实际含义；无条件迁移会产出「TLS 关 + verify_ca」的非法态，
+    /// 校验无法保存且模式下拉在 TLS 关闭时不渲染，用户无法回退。
     pub fn effective_ssl_mode(&self) -> MysqlSslMode {
         match self.ssl_mode {
-            MysqlSslMode::Preferred | MysqlSslMode::Required if self.verify => {
+            MysqlSslMode::Preferred | MysqlSslMode::Required if self.enabled && self.verify => {
                 MysqlSslMode::VerifyCa
             }
             mode => mode,
@@ -684,6 +688,34 @@ mod mysql_profile_tests {
             ..MysqlTlsOptions::default()
         };
         assert_eq!(explicit.effective_ssl_mode(), MysqlSslMode::VerifyIdentity);
+    }
+
+    /// 旧版 `Default` 是 `verify: true`，TLS 关闭时不能迁移成 `verify_ca`，
+    /// 否则表单回填出「TLS 关 + 强制模式」，校验拒绝保存且无法在界面上改回。
+    #[test]
+    fn effective_mode_ignores_legacy_verify_when_tls_disabled() {
+        let legacy_disabled = MysqlTlsOptions {
+            enabled: false,
+            ssl_mode: MysqlSslMode::Preferred,
+            verify: true,
+            ..MysqlTlsOptions::default()
+        };
+        assert_eq!(
+            legacy_disabled.effective_ssl_mode(),
+            MysqlSslMode::Preferred
+        );
+
+        // 显式选了强制档却没启用 TLS 仍要保留原值，由 validate 拦截。
+        let explicit_required = MysqlTlsOptions {
+            enabled: false,
+            ssl_mode: MysqlSslMode::Required,
+            verify: true,
+            ..MysqlTlsOptions::default()
+        };
+        assert_eq!(
+            explicit_required.effective_ssl_mode(),
+            MysqlSslMode::Required
+        );
     }
 
     #[test]
