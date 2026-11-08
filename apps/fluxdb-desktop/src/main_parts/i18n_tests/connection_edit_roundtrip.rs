@@ -310,6 +310,49 @@
         assert_eq!(rebuilt.tls.effective_ssl_mode(), MysqlSslMode::VerifyCa);
     }
 
+    /// 旧档案在 TLS 关闭时也是 `verify=true`（旧版默认值）：打开后不能回填成
+    /// `verify_ca`，否则校验报「强制 TLS 模式需先启用 TLS」且模式下拉被隐藏。
+    #[test]
+    fn mysql_legacy_verify_flag_with_tls_disabled_stays_savable() {
+        use fluxdb_core::{
+            ConnectionConfig, ConnectionId, DatabaseKind, Endpoint, MysqlConnectionProfile,
+            MysqlSslMode, MysqlTlsOptions,
+        };
+
+        let mut profile = MysqlConnectionProfile::default();
+        profile.basic.host = "127.0.0.1".into();
+        profile.tls = MysqlTlsOptions {
+            enabled: false,
+            ssl_mode: MysqlSslMode::Preferred,
+            verify: true,
+            ..MysqlTlsOptions::default()
+        };
+        let config = ConnectionConfig {
+            id: ConnectionId(9),
+            name: "mysql-legacy-no-tls".into(),
+            kind: DatabaseKind::MySql,
+            endpoint: Endpoint::Tcp {
+                host: "127.0.0.1".into(),
+                port: 3306,
+                database: None,
+            },
+            options: Default::default(),
+            redis_profile: None,
+            mysql_profile: Some(profile),
+            postgres_profile: None,
+            dameng_profile: None,
+            sqlserver_profile: None,
+            mongo_profile: None,
+            oracle_profile: None,
+        };
+
+        let form = crate::NewConnectionForm::from_config(&config);
+        assert_eq!(form.mysql_tls_ssl_mode, "preferred");
+        let rebuilt = form.build_mysql_profile();
+        assert_eq!(rebuilt.validate(), None);
+        assert!(!rebuilt.tls.verify);
+    }
+
     /// 达梦高级项编辑回填：超时、应用名与隐藏的 encoding 都必须原样保留。
     #[test]
     fn dameng_advanced_profile_survives_edit_roundtrip() {
