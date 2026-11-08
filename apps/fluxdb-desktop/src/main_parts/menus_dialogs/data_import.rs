@@ -44,6 +44,10 @@ struct TableDataImportForm {
     started_at: Option<Instant>,
     finished_at: Option<Instant>,
     imported_rows: u64,
+    /// 运行中用于跨线程中止；结束后清空。此前传的是临时 AtomicBool，界面无法真正停止导入。
+    cancel: Option<Arc<AtomicBool>>,
+    /// 任务中心记录 id；弹窗关闭后任务中心仍能查看进度与日志。
+    task_center_id: Option<u64>,
 }
 
 impl TableDataImportForm {
@@ -64,6 +68,8 @@ impl TableDataImportForm {
             started_at: None,
             finished_at: None,
             imported_rows: 0,
+            cancel: None,
+            task_center_id: None,
         }
     }
 
@@ -298,6 +304,24 @@ impl NavicatMain {
     }
 
     fn cancel_table_import_wizard(&mut self, cx: &mut Context<Self>) {
+        // 运行中关闭只会让任务失去进度显示，因此改为请求停止并保留弹窗到任务收尾。
+        if let Some(form) = self.pending_data_import.as_mut()
+            && form.running
+        {
+            if let Some(cancel) = &form.cancel {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            if let Some(id) = form.task_center_id {
+                self.task_center.mark_cancel_requested(id);
+            }
+            self.show_message(
+                tr("app.task_center.cancel_requested"),
+                AppMessageKind::Warning,
+                cx,
+            );
+            cx.notify();
+            return;
+        }
         self.pending_data_import = None;
         self._data_import_task = None;
         cx.notify();
@@ -438,6 +462,13 @@ impl NavicatMain {
             cx.notify();
             return;
         }
+        let cancel = Arc::new(AtomicBool::new(false));
+        let task_center_id = self.task_center.begin(
+            TaskCenterKind::TableImport,
+            tr("app.task_center.title.table_import").replace("%{table}", &form.object.name),
+            source.display().to_string(),
+            Some(cancel.clone()),
+        );
         if let Some(current) = self.pending_data_import.as_mut() {
             current.running = true;
             current.error = None;
@@ -445,6 +476,9 @@ impl NavicatMain {
             current.started_at = Some(Instant::now());
             current.finished_at = None;
             current.imported_rows = 0;
+            // 持久化取消标记：此前每次执行都新建 AtomicBool，界面无法停止正在写入的任务。
+            current.cancel = Some(cancel.clone());
+            current.task_center_id = Some(task_center_id);
             // 开始时切到日志页，让用户直接看到写入进度。
             current.tab = ImportDialogTab::Log;
             current.logs.push(ImportDialogLogEntry {
@@ -458,117 +492,184 @@ impl NavicatMain {
         let object = form.object.clone();
         let options = form.options.clone();
         let mappings = form.mappings.clone();
+        let cancel_for_status = cancel.clone();
         let task = cx.spawn(async move |view, cx| {
-            // 进度在后台线程产生，先收进通道，回到 UI 线程后再并入日志。
-            let (progress_tx, progress_rx) =
-                std::sync::mpsc::channel::<(String, String)>();
-            let (event, progress_lines) = cx
+            // 进度在后台线程产生，经通道逐条回到 UI 线程；导入期间界面保持可中止。
+            let (progress_tx, progress_rx) = mpsc::channel::<(String, String)>();
+            let result = cx
                 .background_spawn(async move {
-                    let event = controller.dispatch_database_task(
+                    controller.dispatch_database_task(
                         AppCommand::ImportTableData {
                             object: object.clone(),
                             source,
                             options,
                             column_mapping: mappings,
                         },
-                        &std::sync::atomic::AtomicBool::new(false),
+                        cancel.as_ref(),
                         &mut |progress| {
-                            // 结构化传值，避免用分隔符拼接用户可见文本。
                             let _ = progress_tx.send((progress.stage, progress.message));
                         },
-                    );
-                    drop(progress_tx);
-                    let lines = progress_rx.into_iter().collect::<Vec<_>>();
-                    (event, lines)
+                    )
                 })
-                .await;
-            cx.update(|cx| {
-                let Some(view) = view.upgrade() else {
-                    return;
-                };
-                view.update(cx, |this, cx| {
-                    this._data_import_task = None;
-                    if let Some(current) = this.pending_data_import.as_mut() {
-                        let started_at = current.started_at.unwrap_or_else(Instant::now);
-                        for (stage, message) in progress_lines {
-                            current.logs.push(ImportDialogLogEntry {
-                                stage,
-                                message,
-                                success: true,
-                                elapsed_ms: started_at.elapsed().as_millis() as u64,
-                            });
-                        }
-                    }
-                    match event {
-                        AppEvent::TableDataImported { object, report } => {
+                .fuse();
+            futures::pin_mut!(result);
+            loop {
+                while let Ok((stage, message)) = progress_rx.try_recv() {
+                    cx.update(|cx| {
+                        let Some(view) = view.upgrade() else {
+                            return;
+                        };
+                        view.update(cx, |this, cx| {
                             if let Some(current) = this.pending_data_import.as_mut() {
-                                current.running = false;
-                                current.finished_at = Some(Instant::now());
-                                current.imported_rows = report.imported_rows;
-                                current.tab = ImportDialogTab::Log;
+                                let started_at = current.started_at.unwrap_or_else(Instant::now);
                                 current.logs.push(ImportDialogLogEntry {
-                                    stage: tr("app.data.data_import.stage_done").to_string(),
-                                    message: tr("app.table.import.succeeded")
-                                        .replace("%{rows}", &report.imported_rows.to_string()),
+                                    stage: stage.clone(),
+                                    message: message.clone(),
                                     success: true,
-                                    elapsed_ms: current
-                                        .started_at
-                                        .map(|start| start.elapsed().as_millis() as u64)
-                                        .unwrap_or(0),
+                                    elapsed_ms: started_at.elapsed().as_millis() as u64,
                                 });
-                                for warning in &report.warnings {
+                            }
+                            this.task_center.update_progress(
+                                task_center_id,
+                                None,
+                                Some(stage.clone()),
+                                Some(format!("{stage}：{message}")),
+                            );
+                            cx.notify();
+                        });
+                    });
+                }
+                if let Some(event) = result.as_mut().now_or_never() {
+                    cx.update(|cx| {
+                        let Some(view) = view.upgrade() else {
+                            return;
+                        };
+                        view.update(cx, |this, cx| {
+                            this._data_import_task = None;
+                            // 通道收尾：完成前最后一批进度仍需落日志。
+                            while let Ok((stage, message)) = progress_rx.try_recv() {
+                                if let Some(current) = this.pending_data_import.as_mut() {
+                                    let started_at =
+                                        current.started_at.unwrap_or_else(Instant::now);
                                     current.logs.push(ImportDialogLogEntry {
-                                        stage: tr("app.data.data_import.stage_warning").to_string(),
-                                        message: crate::localize_backend_error_text(warning),
-                                        success: false,
-                                        elapsed_ms: current
-                                            .started_at
-                                            .map(|start| start.elapsed().as_millis() as u64)
-                                            .unwrap_or(0),
+                                        stage: stage.clone(),
+                                        message: message.clone(),
+                                        success: true,
+                                        elapsed_ms: started_at.elapsed().as_millis() as u64,
                                     });
                                 }
-                            }
-                            let mut message = tr("app.table.import.succeeded")
-                                .replace("%{rows}", &report.imported_rows.to_string());
-                            if !report.warnings.is_empty() {
-                                message.push_str(": ");
-                                message.push_str(
-                                    &report
-                                        .warnings
-                                        .iter()
-                                        .map(|warning| crate::localize_backend_error_text(warning))
-                                        .collect::<Vec<_>>()
-                                        .join("; "),
+                                this.task_center.update_progress(
+                                    task_center_id,
+                                    None,
+                                    Some(stage.clone()),
+                                    Some(format!("{stage}：{message}")),
                                 );
                             }
-                            this.show_message(message, AppMessageKind::Success, cx);
-                            this.request_data_editor_refresh_for_object(&object, cx);
-                        }
-                        event => {
-                            let message = match event {
-                                AppEvent::Failed(error) => error.message,
-                                _ => tr("app.table.import.no_result").to_string(),
-                            };
-                            if let Some(current) = this.pending_data_import.as_mut() {
-                                current.running = false;
-                                current.finished_at = Some(Instant::now());
-                                current.tab = ImportDialogTab::Log;
-                                current.error = Some(message.clone());
-                                current.logs.push(ImportDialogLogEntry {
-                                    stage: tr("app.data.data_import.stage_failed").to_string(),
-                                    message,
-                                    success: false,
-                                    elapsed_ms: current
-                                        .started_at
-                                        .map(|start| start.elapsed().as_millis() as u64)
-                                        .unwrap_or(0),
-                                });
+                            match event {
+                                AppEvent::TableDataImported { object, report } => {
+                                    let message = tr("app.table.import.succeeded")
+                                        .replace("%{rows}", &report.imported_rows.to_string());
+                                    if let Some(current) = this.pending_data_import.as_mut() {
+                                        current.running = false;
+                                        current.finished_at = Some(Instant::now());
+                                        current.imported_rows = report.imported_rows;
+                                        current.cancel = None;
+                                        current.tab = ImportDialogTab::Log;
+                                        current.logs.push(ImportDialogLogEntry {
+                                            stage: tr("app.data.data_import.stage_done").to_string(),
+                                            message: message.clone(),
+                                            success: true,
+                                            elapsed_ms: current
+                                                .started_at
+                                                .map(|start| start.elapsed().as_millis() as u64)
+                                                .unwrap_or(0),
+                                        });
+                                        for warning in &report.warnings {
+                                            current.logs.push(ImportDialogLogEntry {
+                                                stage: tr("app.data.data_import.stage_warning")
+                                                    .to_string(),
+                                                message: crate::localize_backend_error_text(warning),
+                                                success: false,
+                                                elapsed_ms: current
+                                                    .started_at
+                                                    .map(|start| start.elapsed().as_millis() as u64)
+                                                    .unwrap_or(0),
+                                            });
+                                        }
+                                    }
+                                    this.finish_task_center_record(
+                                        task_center_id,
+                                        TaskCenterStatus::Success,
+                                        tr("app.task_center.status.success").to_string(),
+                                        None,
+                                    );
+                                    let mut message = message;
+                                    if !report.warnings.is_empty() {
+                                        message.push_str(": ");
+                                        message.push_str(
+                                            &report
+                                                .warnings
+                                                .iter()
+                                                .map(|warning| {
+                                                    crate::localize_backend_error_text(warning)
+                                                })
+                                                .collect::<Vec<_>>()
+                                                .join("; "),
+                                        );
+                                    }
+                                    this.show_message(message, AppMessageKind::Success, cx);
+                                    this.request_data_editor_refresh_for_object(&object, cx);
+                                }
+                                event => {
+                                    let message = match event {
+                                        AppEvent::Failed(error) => error.message,
+                                        _ => tr("app.table.import.no_result").to_string(),
+                                    };
+                                    let canceled = cancel_for_status.load(Ordering::Relaxed);
+                                    let status = if canceled {
+                                        TaskCenterStatus::Canceled
+                                    } else {
+                                        TaskCenterStatus::Failed
+                                    };
+                                    if let Some(current) = this.pending_data_import.as_mut() {
+                                        current.running = false;
+                                        current.finished_at = Some(Instant::now());
+                                        current.cancel = None;
+                                        current.tab = ImportDialogTab::Log;
+                                        current.error =
+                                            (!canceled).then_some(message.clone());
+                                        current.logs.push(ImportDialogLogEntry {
+                                            stage: if canceled {
+                                                tr("app.data.data_import.stage_canceled")
+                                                    .to_string()
+                                            } else {
+                                                tr("app.data.data_import.stage_failed").to_string()
+                                            },
+                                            message: message.clone(),
+                                            success: false,
+                                            elapsed_ms: current
+                                                .started_at
+                                                .map(|start| start.elapsed().as_millis() as u64)
+                                                .unwrap_or(0),
+                                        });
+                                    }
+                                    this.finish_task_center_record(
+                                        task_center_id,
+                                        status,
+                                        status
+                                            .label(false)
+                                            .to_string(),
+                                        if canceled { None } else { Some(message) },
+                                    );
+                                }
                             }
-                        }
-                    }
-                    cx.notify();
-                });
-            });
+                            cx.notify();
+                        });
+                    });
+                    break;
+                }
+                smol::Timer::after(Duration::from_millis(100)).await;
+            }
         });
         self._data_import_task = Some(task);
     }

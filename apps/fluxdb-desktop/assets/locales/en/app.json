@@ -180,7 +180,9 @@
     "mongo_performance": "View performance metrics",
     "new_collection": "Create collection",
     "mongo_cli": "Command line",
-    "mongo_workbench": "Command workbench"
+    "mongo_workbench": "Command workbench",
+    "compare_structure": "Structure compare & sync",
+    "transfer_data": "Cross-connection data transfer"
   },
   "confirm": {
     "apply_changes_summary": "About to submit %{changes} changes and run %{statements} SQL statements.",
@@ -2420,6 +2422,7 @@
       "stage_done": "Done",
       "stage_warning": "Warning",
       "stage_failed": "Failed",
+      "stage_canceled": "Canceled",
       "target_table": "Target table",
       "summary_file": "File",
       "summary_mapped": "Mapped",
@@ -2766,14 +2769,6 @@
       "path_canceled": "Save location selection canceled",
       "completed": "Exported %{rows} rows as %{format}: %{path}"
     },
-    "statusbar": {
-      "running_count": "%{count} export tasks running",
-      "stopping": "Stopping export at %{rows} rows",
-      "exporting": "Exporting %{rows} rows",
-      "canceled": "Export canceled at %{rows} rows",
-      "failed": "%{table} export failed",
-      "completed": "%{table} export completed"
-    },
     "choose_location_rows": "Choose a save location to export %{count} rows",
     "error": {
       "choose_location": "Could not choose a save location: %{error}",
@@ -3022,14 +3017,6 @@
       "completed_with_errors": "%{file} completed with %{errors} failures",
       "completed": "%{file} completed"
     },
-    "statusbar": {
-      "running_count": "%{count} tasks running",
-      "stopping": "Stopping %{processed}/%{total}",
-      "running": "Running %{processed}/%{total}",
-      "canceled": "Canceled %{processed}/%{total}",
-      "failed": "%{file} failed (%{errors})",
-      "completed": "%{file} completed"
-    },
     "toast": {
       "completed": "SQL file execution completed",
       "psql_completed": "psql script completed",
@@ -3205,6 +3192,7 @@
   },
   "database_backup": {
     "title": "Database backup",
+    "cancel_task": "Cancel task",
     "tab": {
       "general": "General",
       "objects": "Objects",
@@ -3245,7 +3233,6 @@
     "log_hidden": "%{count} earlier log entries hidden",
     "skipped": "Skipped",
     "stopping": "Stopping...",
-    "cancel_task": "Cancel task",
     "again": "Back up again",
     "clear_task": "Clear task",
     "start": "Start backup",
@@ -3266,18 +3253,11 @@
       "canceled": "Backup canceled: %{database}",
       "failed": "Backup failed: %{database}: %{error}",
       "completed": "Backup completed: %{database} → %{path}"
-    },
-    "statusbar": {
-      "running_count": "%{count} backup tasks running",
-      "stopping": "%{database} stopping · %{stage}",
-      "running": "%{database} backing up · %{stage}",
-      "canceled": "%{database} canceled",
-      "failed": "%{database} backup failed",
-      "completed": "%{database} backup completed"
     }
   },
   "database_restore": {
     "title": "Restore database",
+    "cancel_task": "Cancel task",
     "unsupported": "This database does not support restore yet",
     "tab": {
       "general": "General",
@@ -3418,7 +3398,6 @@
     "processing": "Processing...",
     "pending_objects": "%{count} objects still need a restore strategy",
     "draft_status": "Editing draft · run Preflight to generate a plan",
-    "cancel_task": "Cancel task",
     "change_target": "Change target",
     "preflight": "Preflight",
     "confirm_restore": "Confirm restore",
@@ -4198,6 +4177,126 @@
       "schema_missing": "Schema `%{name}` does not exist",
       "column_missing": "Column `%{name}` does not exist in this query"
     }
+  },
+  "compare_transfer": {
+    "title": "Compare & Transfer",
+    "source": "Source",
+    "target": "Target",
+    "target_connection": "Target connection",
+    "target_connection_placeholder": "Choose target connection",
+    "database": "Database",
+    "schema": "Schema",
+    "database_placeholder": "Database name",
+    "schema_placeholder": "Schema (optional)",
+    "table_placeholder": "Source table",
+    "target_table_placeholder": "Target table (blank = same name)",
+    "tab_structure": "Structure Compare & Sync",
+    "tab_data": "Cross-connection Transfer",
+    "compare": "Compare",
+    "comparing": "Comparing…",
+    "sync": "Sync selected",
+    "syncing": "Syncing…",
+    "toggle_all": "Select / clear all",
+    "result_count": "%{count} differing tables",
+    "column_table": "Table",
+    "column_status": "Status",
+    "empty_title": "Nothing compared yet",
+    "status_added": "Missing in target",
+    "status_removed": "Extra in target",
+    "status_modified": "Different",
+    "status_same": "Same",
+    "source_ddl": "Source DDL",
+    "target_ddl": "Target DDL",
+    "sync_added": "Create missing tables",
+    "recreate_modified": "Recreate differing tables",
+    "drop_removed": "Drop extra tables",
+    "sync_task": "Structure sync",
+    "sync_done": "Structure sync finished",
+    "sync_partial": "Structure sync finished with errors",
+    "sync_failed": "Structure sync failed",
+    "sync_created": "Created: %{count}",
+    "sync_dropped": "Dropped: %{count}",
+    "sync_recreated": "Recreated: %{count}",
+    "sync_skipped": "Skipped: %{count}",
+    "source_table": "Source table",
+    "target_table": "Target table",
+    "write_mode": "Write mode",
+    "mode_append": "Append",
+    "mode_overwrite": "Truncate then write",
+    "create_target": "Create target table if missing",
+    "start_transfer": "Start transfer",
+    "transferring": "Transferring…",
+    "log_title": "Activity log",
+    "transfer_task": "Data transfer",
+    "transfer_done": "Data transfer finished",
+    "transfer_failed": "Data transfer failed",
+    "transfer_rows": "Wrote %{count} rows",
+    "choose_target": "Choose a target connection",
+    "choose_tables": "Select tables to sync",
+    "database_required": "Database name is required",
+    "source_table_required": "Source table name is required",
+    "connection_missing": "Connection no longer exists; refresh and retry",
+    "canceled": "Canceled",
+    "background_hint": "Running in background; see Task Center",
+    "cancel_task": "Cancel task",
+    "close": "Close"
+  },
+  "task_center": {
+    "heading": "Task Center",
+    "subtitle": "%{total} tasks · %{running} running",
+    "empty": "No tasks",
+    "cancel_requested": "Cancellation requested",
+    "statusbar": {
+      "idle": "Task Center",
+      "running": "Task Center · %{count} running"
+    },
+    "filter": {
+      "all": "All",
+      "running": "Running",
+      "failed": "Failed"
+    },
+    "status": {
+      "running": "Running",
+      "stopping": "Stopping",
+      "success": "Completed",
+      "failed": "Failed",
+      "canceled": "Canceled"
+    },
+    "kind": {
+      "backup": "Backup",
+      "restore": "Restore",
+      "sql_file": "SQL file",
+      "table_export": "Table export",
+      "table_import": "Table import",
+      "mongo_export": "Mongo export",
+      "mongo_import": "Mongo import",
+      "structure_sync": "Structure sync",
+      "data_transfer": "Data transfer"
+    },
+    "title": {
+      "backup": "Backup %{database}",
+      "restore": "Restore database",
+      "sql_file": "Run SQL file %{file}",
+      "table_export": "Export table %{table}",
+      "table_import": "Import table %{table}",
+      "mongo_export": "Export collection %{collection}",
+      "mongo_import": "Import collection %{collection}"
+    },
+    "stage": {
+      "rows": "%{rows} rows exported"
+    },
+    "detail": {
+      "target": "Target",
+      "stage": "Stage",
+      "elapsed": "Elapsed",
+      "logs": "Logs",
+      "no_logs": "No logs"
+    },
+    "action": {
+      "cancel": "Stop task",
+      "delete": "Delete record"
+    },
+    "cannot_delete_running": "Running tasks cannot be deleted. Stop the task first."
   },
   "statusbar": {
     "objects": "%{count} objects",

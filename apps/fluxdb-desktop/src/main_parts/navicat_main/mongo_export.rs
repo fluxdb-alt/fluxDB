@@ -26,6 +26,7 @@ impl NavicatMain {
             logs: Vec::new(),
             error: None,
             finished: false,
+            task_center_id: None,
         });
         cx.notify();
     }
@@ -91,6 +92,9 @@ impl NavicatMain {
             return;
         }
         form.cancel.store(true, Ordering::Relaxed);
+        if let Some(id) = form.task_center_id {
+            self.task_center.mark_cancel_requested(id);
+        }
         self.show_message(
             tr("app.data_export.cancel_requested"),
             AppMessageKind::Warning,
@@ -120,11 +124,19 @@ impl NavicatMain {
         let receiver = cx.prompt_for_new_path(&default_data_export_directory(), Some(&suggested));
         let cancel = form.cancel.clone();
         cancel.store(false, Ordering::Relaxed);
+        let task_center_id = self.task_center.begin(
+            TaskCenterKind::MongoExport,
+            tr("app.task_center.title.mongo_export")
+                .replace("%{collection}", &form.object.name),
+            mongo_export_object_label(&form.object),
+            Some(cancel.clone()),
+        );
         if let Some(pending) = self.pending_mongo_export.as_mut() {
             pending.running = true;
             pending.finished = false;
             pending.error = None;
             pending.exported_documents = 0;
+            pending.task_center_id = Some(task_center_id);
             pending.active_tab = MongoExportTab::Log;
             pending.logs = vec![ImportDialogLogEntry {
                 stage: tr("app.mongo.export.stage.prepare").to_string(),
@@ -441,13 +453,25 @@ fn mongo_export_log_on_ui(
             return;
         };
         view.update(cx, |this, cx| {
+            let task_center_id = this
+                .pending_mongo_export
+                .as_ref()
+                .and_then(|form| form.task_center_id);
             if let Some(form) = this.pending_mongo_export.as_mut() {
                 form.logs.push(ImportDialogLogEntry {
                     stage: tr("app.mongo.export.stage.write").to_string(),
-                    message,
+                    message: message.clone(),
                     success,
                     elapsed_ms: 0,
                 });
+            }
+            if let Some(id) = task_center_id {
+                this.task_center.update_progress(
+                    id,
+                    None,
+                    Some(tr("app.mongo.export.stage.write").to_string()),
+                    Some(message),
+                );
             }
             cx.notify();
         });
@@ -464,14 +488,26 @@ fn mongo_export_progress_on_ui(
             return;
         };
         view.update(cx, |this, cx| {
+            let task_center_id = this
+                .pending_mongo_export
+                .as_ref()
+                .and_then(|form| form.task_center_id);
             if let Some(form) = this.pending_mongo_export.as_mut() {
                 form.exported_documents = progress.documents;
                 form.logs.push(ImportDialogLogEntry {
                     stage: tr("app.mongo.export.stage.page").to_string(),
-                    message: progress.message,
+                    message: progress.message.clone(),
                     success: true,
                     elapsed_ms: progress.elapsed_ms,
                 });
+            }
+            if let Some(id) = task_center_id {
+                this.task_center.update_progress(
+                    id,
+                    None,
+                    Some(tr("app.mongo.export.stage.page").to_string()),
+                    Some(progress.message),
+                );
             }
             cx.notify();
         });
@@ -486,9 +522,22 @@ fn mongo_export_reset_on_ui(view: &WeakEntity<NavicatMain>, cx: &mut gpui::Async
         };
         view.update(cx, |this, cx| {
             this._mongo_export_task = None;
+            let task_center_id = this
+                .pending_mongo_export
+                .as_ref()
+                .and_then(|form| form.task_center_id);
             if let Some(form) = this.pending_mongo_export.as_mut() {
                 form.running = false;
                 form.finished |= finished;
+                form.task_center_id = None;
+            }
+            if let Some(id) = task_center_id {
+                this.finish_task_center_record(
+                    id,
+                    TaskCenterStatus::Canceled,
+                    tr("app.task_center.status.canceled").to_string(),
+                    None,
+                );
             }
             cx.notify();
         });
@@ -509,6 +558,7 @@ fn mongo_export_finish_on_ui(
             let Some(form) = this.pending_mongo_export.as_mut() else {
                 return;
             };
+            let task_center_id = form.task_center_id.take();
             form.running = false;
             form.finished = true;
             match result {
@@ -532,6 +582,18 @@ fn mongo_export_finish_on_ui(
                         success: true,
                         elapsed_ms: 0,
                     });
+                    if let Some(id) = task_center_id {
+                        this.finish_task_center_record(
+                            id,
+                            if export.canceled {
+                                TaskCenterStatus::Canceled
+                            } else {
+                                TaskCenterStatus::Success
+                            },
+                            tr("app.mongo.export.stage.done").to_string(),
+                            None,
+                        );
+                    }
                     this.show_message(message, kind, cx);
                 }
                 Err(error) => {
@@ -543,6 +605,14 @@ fn mongo_export_finish_on_ui(
                         success: false,
                         elapsed_ms: 0,
                     });
+                    if let Some(id) = task_center_id {
+                        this.finish_task_center_record(
+                            id,
+                            TaskCenterStatus::Failed,
+                            tr("app.task_center.status.failed").to_string(),
+                            Some(message.clone()),
+                        );
+                    }
                     this.show_message(message, AppMessageKind::Error, cx);
                 }
             }

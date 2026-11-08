@@ -23,16 +23,17 @@ use fluxdb_app::{
     CreateTableForeignKey, CreateTableForeignKeyField, CreateTableIndex,
     CreateTableIndexColumnField, CreateTableIndexField, CreateTableMode, CreateTableOptionField,
     CreateTablePartitionField, CreateTableState, CreateTableTab, CreateTableTrigger,
-    CreateTableTriggerEvent, CreateTableTriggerField, DataEditorState, ErDiagramState,
-    ErLayoutResult, ForeignKeyCheckMode, LoadState, MongoCollectionState, MongoDisplayMode,
-    MongoQueryDraft, MongoSection, MongoWorkbenchExecution, MongoWorkbenchState, ObjectListState,
-    OracleGrantKind, OracleUserAdminState, OracleUserAdminTab, PgDraftAttrField, PgGrantEditOp,
-    PgGrantObjectKind, PgRoleDraftUiExt, PgRoleSaveStatus, PgUserAdminTab, QueryEditorState,
-    QueryHistoryEntry, QueryHistoryKind, QueryHistoryTransactionState, QueryOrigin,
-    RedisAddKeyKind, RedisAddKeyRequest, RedisConnectionOverview, RedisListDirection,
+    CreateTableTriggerEvent, CreateTableTriggerField, DataEditorState, DataTransferMode,
+    ErDiagramState, ErLayoutResult, ForeignKeyCheckMode, LoadState, MongoCollectionState,
+    MongoDisplayMode, MongoQueryDraft, MongoSection, MongoWorkbenchExecution, MongoWorkbenchState,
+    ObjectListState, OracleGrantKind, OracleUserAdminState, OracleUserAdminTab, PgDraftAttrField,
+    PgGrantEditOp, PgGrantObjectKind, PgRoleDraftUiExt, PgRoleSaveStatus, PgUserAdminTab,
+    QueryEditorState, QueryHistoryEntry, QueryHistoryKind, QueryHistoryTransactionState,
+    QueryOrigin, RedisAddKeyKind, RedisAddKeyRequest, RedisConnectionOverview, RedisListDirection,
     RedisWorkbenchState, SqlServerSecurityFormField, SqlServerSecurityFormFlag,
     SqlServerSecurityFormKind, SqlServerSecurityListFilter, SqlServerSecuritySaveStatus,
-    SqlServerSecurityState, SqlServerUserAdminTab, TabId, TabKind, TabState, TabWorkspace,
+    SqlServerSecurityState, SqlServerUserAdminTab, StructureCompareResult, StructureDiffStatus,
+    StructureEndpoint, StructureSyncOptions, TabId, TabKind, TabState, TabWorkspace,
     TableInfoState, TableInfoTab, UserAdminDetailTab, UserAdminMySqlTab, UserAdminState,
     compress_sql_text, copy_table_requires_source_ddl, copy_table_sql_preview_with_source_ddl,
     create_table_common_type_options, create_table_provider, create_table_special_type_options,
@@ -58,7 +59,7 @@ use fluxdb_core::{
 };
 use fluxdb_storage::{
     FileStorage, QueryHistoryRecord, RedisKeySearchHistoryRecord, RedisWorkbenchHistoryRecord,
-    Storage,
+    Storage, TaskHistoryRecord,
 };
 use futures::FutureExt as _;
 use gpui::prelude::*;
@@ -122,6 +123,7 @@ include!("main_parts/backend_errors_connectors.rs");
 include!("main_parts/backend_errors_storage.rs");
 include!("main_parts/backend_errors_templates.rs");
 include!("main_parts/foundation.rs");
+include!("main_parts/task_center.rs");
 include!("main_parts/selectable_styled_text.rs");
 include!("main_parts/theme_registry.rs");
 include!("main_parts/shortcuts.rs");

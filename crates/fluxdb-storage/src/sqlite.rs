@@ -26,6 +26,7 @@ const DB_FILE: &str = "fluxdb.sqlite";
 pub const KEY_SIDEBAR_LAYOUT: &str = "sidebar_layout";
 pub const KEY_SAVED_QUERIES: &str = "saved_queries";
 pub const KEY_BACKUP_RECORDS: &str = "backup_records";
+pub const KEY_TASK_HISTORY: &str = "task_history";
 pub const KEY_ER_VIEWS: &str = "er_views";
 
 /// 将 rusqlite/serde_json 错误映射为 fluxdb 内部错误，对齐 lib.rs `storage_error`。

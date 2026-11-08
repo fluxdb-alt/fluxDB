@@ -10,6 +10,8 @@ struct RestoreRuntime {
     cancel: Arc<AtomicBool>,
     /// 从备份列表打开时带入的备份记录 id；执行完成后写入恢复记录做关联。
     backup_id: Option<String>,
+    /// 任务中心记录 id；弹窗关闭后仍可查看本次恢复的进度与结果。
+    task_center_id: Option<u64>,
 }
 
 /// 恢复弹框挂载状态：UI 实体 + 打开时的配置快照（渲染期间不读 controller）。
@@ -365,6 +367,7 @@ impl NavicatMain {
                 logs: vec![tr("app.database_restore.initial_log").to_string()],
                 cancel: Arc::new(AtomicBool::new(false)),
                 backup_id: backup_record_id,
+                task_center_id: None,
             })),
         });
         // 打开即拉取默认目标连接的库列表。
@@ -729,16 +732,24 @@ impl NavicatMain {
         let Some((request, plan)) = state.borrow().prepared.clone() else {
             return;
         };
+        let cancel = state.borrow().cancel.clone();
+        cancel.store(false, Ordering::Relaxed);
+        let task_center_id = self.task_center.begin(
+            TaskCenterKind::Restore,
+            tr("app.task_center.title.restore").to_string(),
+            request.target.clone(),
+            Some(cancel.clone()),
+        );
         {
             let mut data = state.borrow_mut();
             data.running = true;
-            data.cancel.store(false, Ordering::Relaxed);
+            data.task_center_id = Some(task_center_id);
             data.logs
                 .push(tr("app.database_restore.started_log").to_string());
         }
         let controller = self.controller.clone();
         let storage = self.storage.clone();
-        let cancel = state.borrow().cancel.clone();
+        let cancel_for_status = cancel.clone();
         let backup_id = state.borrow().backup_id.clone();
         cx.spawn(async move |view, cx| {
             let (sender, receiver) = mpsc::channel();
@@ -783,12 +794,23 @@ impl NavicatMain {
             futures::pin_mut!(result);
             loop {
                 while let Ok(event) = receiver.try_recv() {
-                    let mut data = state.borrow_mut();
-                    data.logs
-                        .push(format!("{}：{}", event.stage, event.message));
-                    if data.logs.len() > 300 {
-                        data.logs.remove(0);
+                    let line = format!("{}：{}", event.stage, event.message);
+                    {
+                        let mut data = state.borrow_mut();
+                        data.logs.push(line.clone());
+                        if data.logs.len() > 300 {
+                            data.logs.remove(0);
+                        }
                     }
+                    // 任务中心同步最新阶段；恢复没有总对象数，进度用不确定动画表示。
+                    let _ = view.update(cx, |this, _| {
+                        this.task_center.update_progress(
+                            task_center_id,
+                            None,
+                            Some(event.stage.clone()),
+                            Some(line),
+                        );
+                    });
                 }
                 if let Some((result, persisted)) = result.as_mut().now_or_never() {
                     let _ = view.update(cx, |this, cx| {
@@ -845,6 +867,25 @@ impl NavicatMain {
                                     .replace("%{error}", &e.to_string()),
                             );
                         }
+                        let canceled = cancel_for_status.load(Ordering::Relaxed);
+                        this.finish_task_center_record(
+                            task_center_id,
+                            if success {
+                                TaskCenterStatus::Success
+                            } else if canceled {
+                                TaskCenterStatus::Canceled
+                            } else {
+                                TaskCenterStatus::Failed
+                            },
+                            if success {
+                                tr("app.task_center.status.success").to_string()
+                            } else if canceled {
+                                tr("app.task_center.status.canceled").to_string()
+                            } else {
+                                tr("app.task_center.status.failed").to_string()
+                            },
+                            if success { None } else { Some(message.clone()) },
+                        );
                         this.show_message(
                             message,
                             if success {

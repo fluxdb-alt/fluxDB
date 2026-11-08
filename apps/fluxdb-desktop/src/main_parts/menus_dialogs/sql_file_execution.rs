@@ -217,24 +217,6 @@ impl NavicatMain {
         }));
     }
 
-    /// 状态栏任务芯片点击：打开 Dialog 并直接展示该任务的「消息日志」。
-    fn show_sql_file_task_log(
-        &mut self,
-        task_id: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        {
-            let mut data = self.sql_file_modal.borrow_mut();
-            if !data.tasks.iter().any(|task| task.id == task_id) {
-                return;
-            }
-            data.form = None;
-            data.log_task = Some(task_id);
-        }
-        self.open_sql_file_dialog(window, cx);
-    }
-
     fn confirm_sql_file_execution(&mut self, cx: &mut Context<Self>) {
         // 先释放借用：后续 create_sql_file_task 会 borrow_mut 同一 RefCell
         let form = { self.sql_file_modal.borrow().form.clone() };
@@ -688,20 +670,23 @@ impl NavicatMain {
         result: std::result::Result<fluxdb_core::QueryExecutionResult, fluxdb_core::UserFacingError>,
         canceled: bool,
     ) {
-        let mut data = self.sql_file_modal.borrow_mut();
-        let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) else {
-            return;
-        };
-        task.finished_at = Some(Instant::now());
-        task.canceled = canceled;
-        match result {
-            Ok(_) => {}
-            Err(error) => {
-                if task.error.is_none() {
-                    task.error = Some(error.message);
+        {
+            let mut data = self.sql_file_modal.borrow_mut();
+            let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) else {
+                return;
+            };
+            task.finished_at = Some(Instant::now());
+            task.canceled = canceled;
+            match result {
+                Ok(_) => {}
+                Err(error) => {
+                    if task.error.is_none() {
+                        task.error = Some(error.message);
+                    }
                 }
             }
         }
+        self.archive_task_center_live_task(TaskCenterKind::SqlFile, task_id);
     }
 
     fn record_sql_file_statement_summary(
@@ -1410,89 +1395,6 @@ fn sql_file_dialog_footer(
                     }),
             )
         })
-}
-
-fn sql_file_statusbar_area(
-    tasks: &[SqlFileExecutionTaskState],
-    colors: UiColors,
-    cx: &mut Context<NavicatMain>,
-) -> Div {
-    let Some(task) = tasks.iter().rev().find(|task| task.running()).or_else(|| tasks.last()) else {
-        return div().w(px(180.));
-    };
-    let running_count = tasks.iter().filter(|task| task.running()).count();
-    let label = if running_count > 1 {
-        tr("app.sql_file.statusbar.running_count")
-            .replace("%{count}", &running_count.to_string())
-    } else if task.cancel_requested {
-        tr("app.sql_file.statusbar.stopping")
-            .replace("%{processed}", &task.processed.to_string())
-            .replace("%{total}", &task.total.to_string())
-    } else if task.running() {
-        tr("app.sql_file.statusbar.running")
-            .replace("%{processed}", &task.processed.to_string())
-            .replace("%{total}", &task.total.to_string())
-    } else if task.canceled {
-        tr("app.sql_file.statusbar.canceled")
-            .replace("%{processed}", &task.processed.to_string())
-            .replace("%{total}", &task.total.to_string())
-    } else if task.errors > 0 || task.error.is_some() {
-        tr("app.sql_file.statusbar.failed")
-            .replace("%{file}", &task.file_name)
-            .replace("%{errors}", &task.errors.max(1).to_string())
-    } else {
-        tr("app.sql_file.statusbar.completed").replace("%{file}", &task.file_name)
-    };
-    let task_id = task.id;
-    div()
-        .w(px(260.))
-        .h_full()
-        .flex()
-        .items_center()
-        .justify_end()
-        .pr_2()
-        .child(
-            div()
-                .max_w(px(248.))
-                .h(px(20.))
-                .px_2()
-                .rounded(colors.radius)
-                .border_1()
-                .border_color(colors.border)
-                .bg(colors.input_bg)
-                .flex()
-                .items_center()
-                .gap_2()
-                .cursor_pointer()
-                .hover(move |style| style.bg(colors.hover))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _, window, cx| {
-                        this.show_sql_file_task_log(task_id, window, cx);
-                        cx.stop_propagation();
-                    }),
-                )
-                .child(app_icon(
-                    if task.running() { AppIcon::Play } else { AppIcon::FileSql },
-                    13.,
-                    if task.errors > 0 || task.error.is_some() {
-                        rgb(0xd64545)
-                    } else {
-                        rgb(0x1687ff)
-                    },
-                ))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .overflow_hidden()
-                        .truncate()
-                        .whitespace_nowrap()
-                        .text_size(px(12.))
-                        .text_color(colors.text)
-                        .child(label),
-                ),
-        )
 }
 
 fn sql_file_connection_items(state: &AppState) -> Vec<SqlFileConnectionItem> {

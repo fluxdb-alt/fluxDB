@@ -147,6 +147,7 @@ fn mongo_collection_menu_and_export_dialog_render_in_production_view(cx: &mut Te
         logs: Vec::new(),
         error: None,
         finished: false,
+        task_center_id: None,
     };
     for tab in [MongoExportTab::General, MongoExportTab::Log] {
         form.active_tab = tab;

@@ -180,7 +180,9 @@
     "mongo_performance": "查看性能指标",
     "new_collection": "创建集合",
     "mongo_cli": "命令行终端",
-    "mongo_workbench": "命令工作台"
+    "mongo_workbench": "命令工作台",
+    "compare_structure": "结构对比与同步",
+    "transfer_data": "跨连接数据传输"
   },
   "confirm": {
     "apply_changes_summary": "即将提交 %{changes} 处修改，执行 %{statements} 条 SQL。",
@@ -2420,6 +2422,7 @@
       "stage_done": "完成",
       "stage_warning": "警告",
       "stage_failed": "失败",
+      "stage_canceled": "已取消",
       "target_table": "目标表",
       "summary_file": "文件",
       "summary_mapped": "已映射",
@@ -2766,14 +2769,6 @@
       "path_canceled": "已取消选择保存位置",
       "completed": "已导出 %{rows} 行为 %{format}：%{path}"
     },
-    "statusbar": {
-      "running_count": "%{count} 个导出任务运行中",
-      "stopping": "导出停止中 %{rows} 行",
-      "exporting": "导出中 %{rows} 行",
-      "canceled": "导出已取消 %{rows} 行",
-      "failed": "%{table} 导出失败",
-      "completed": "%{table} 导出完成"
-    },
     "choose_location_rows": "选择保存位置后导出 %{count} 行",
     "error": {
       "choose_location": "选择保存位置失败：%{error}",
@@ -3022,14 +3017,6 @@
       "completed_with_errors": "%{file} 执行完成，%{errors} 条失败",
       "completed": "%{file} 执行完成"
     },
-    "statusbar": {
-      "running_count": "%{count} 个任务运行中",
-      "stopping": "正在停止 %{processed}/%{total}",
-      "running": "执行中 %{processed}/%{total}",
-      "canceled": "已取消 %{processed}/%{total}",
-      "failed": "%{file} %{errors} 失败",
-      "completed": "%{file} 执行完成"
-    },
     "toast": {
       "completed": "SQL 文件执行完成",
       "psql_completed": "psql 原生脚本执行完成",
@@ -3205,6 +3192,7 @@
   },
   "database_backup": {
     "title": "数据库备份",
+    "cancel_task": "取消任务",
     "tab": {
       "general": "常规",
       "objects": "对象选择",
@@ -3245,7 +3233,6 @@
     "log_hidden": "以上 %{count} 条日志已隐藏",
     "skipped": "跳过",
     "stopping": "停止中",
-    "cancel_task": "取消任务",
     "again": "再次备份",
     "clear_task": "清除任务",
     "start": "开始备份",
@@ -3266,18 +3253,11 @@
       "canceled": "备份已取消：%{database}",
       "failed": "备份失败：%{database}：%{error}",
       "completed": "备份完成：%{database} → %{path}"
-    },
-    "statusbar": {
-      "running_count": "%{count} 个备份任务运行中",
-      "stopping": "%{database} 正在停止 · %{stage}",
-      "running": "%{database} 备份中 · %{stage}",
-      "canceled": "%{database} 已取消",
-      "failed": "%{database} 备份失败",
-      "completed": "%{database} 备份完成"
     }
   },
   "database_restore": {
     "title": "恢复数据库",
+    "cancel_task": "取消任务",
     "unsupported": "此数据库尚不支持恢复",
     "tab": {
       "general": "常规",
@@ -3418,7 +3398,6 @@
     "processing": "正在处理…",
     "pending_objects": "已有 %{count} 个对象待选择还原策略",
     "draft_status": "编辑草稿 · 先「预检查」生成计划",
-    "cancel_task": "取消任务",
     "change_target": "修改目标",
     "preflight": "预检查",
     "confirm_restore": "确认恢复",
@@ -4198,6 +4177,126 @@
       "schema_missing": "schema `%{name}` 不存在",
       "column_missing": "列 `%{name}` 不存在于当前查询"
     }
+  },
+  "compare_transfer": {
+    "title": "结构对比与数据传输",
+    "source": "源端",
+    "target": "目标端",
+    "target_connection": "目标连接",
+    "target_connection_placeholder": "选择目标连接",
+    "database": "数据库",
+    "schema": "Schema",
+    "database_placeholder": "数据库名",
+    "schema_placeholder": "Schema（可选）",
+    "table_placeholder": "源表名",
+    "target_table_placeholder": "目标表名（留空则同名）",
+    "tab_structure": "结构对比与同步",
+    "tab_data": "跨连接数据传输",
+    "compare": "开始对比",
+    "comparing": "对比中…",
+    "sync": "同步选中项",
+    "syncing": "同步中…",
+    "toggle_all": "全选/取消",
+    "result_count": "差异表 %{count} 个",
+    "column_table": "表",
+    "column_status": "状态",
+    "empty_title": "尚未对比",
+    "status_added": "目标缺失",
+    "status_removed": "目标多出",
+    "status_modified": "结构不同",
+    "status_same": "一致",
+    "source_ddl": "源端 DDL",
+    "target_ddl": "目标端 DDL",
+    "sync_added": "新建缺失表",
+    "recreate_modified": "重建结构不同表",
+    "drop_removed": "删除目标多出表",
+    "sync_task": "结构同步",
+    "sync_done": "结构同步完成",
+    "sync_partial": "结构同步部分失败",
+    "sync_failed": "结构同步失败",
+    "sync_created": "新建：%{count}",
+    "sync_dropped": "删除：%{count}",
+    "sync_recreated": "重建：%{count}",
+    "sync_skipped": "跳过：%{count}",
+    "source_table": "源表",
+    "target_table": "目标表",
+    "write_mode": "写入方式",
+    "mode_append": "追加写入",
+    "mode_overwrite": "清空后写入",
+    "create_target": "目标表不存在时自动建表",
+    "start_transfer": "开始传输",
+    "transferring": "传输中…",
+    "log_title": "运行日志",
+    "transfer_task": "数据传输",
+    "transfer_done": "数据传输完成",
+    "transfer_failed": "数据传输失败",
+    "transfer_rows": "已写入 %{count} 行",
+    "choose_target": "请选择目标连接",
+    "choose_tables": "请选择要同步的表",
+    "database_required": "请填写数据库名",
+    "source_table_required": "请填写源表名",
+    "connection_missing": "连接不存在，请刷新后重试",
+    "canceled": "已取消",
+    "background_hint": "任务在后台执行，可在任务中心查看",
+    "cancel_task": "取消任务",
+    "close": "关闭"
+  },
+  "task_center": {
+    "heading": "任务中心",
+    "subtitle": "%{total} 个任务 · %{running} 个运行中",
+    "empty": "暂无任务",
+    "cancel_requested": "已请求停止任务",
+    "statusbar": {
+      "idle": "任务中心",
+      "running": "任务中心 · %{count} 个运行中"
+    },
+    "filter": {
+      "all": "全部",
+      "running": "运行中",
+      "failed": "失败"
+    },
+    "status": {
+      "running": "运行中",
+      "stopping": "正在停止",
+      "success": "已完成",
+      "failed": "失败",
+      "canceled": "已取消"
+    },
+    "kind": {
+      "backup": "备份",
+      "restore": "恢复",
+      "sql_file": "SQL 文件",
+      "table_export": "表导出",
+      "table_import": "表导入",
+      "mongo_export": "Mongo 导出",
+      "mongo_import": "Mongo 导入",
+      "structure_sync": "结构同步",
+      "data_transfer": "数据传输"
+    },
+    "title": {
+      "backup": "备份 %{database}",
+      "restore": "恢复数据库",
+      "sql_file": "执行 SQL 文件 %{file}",
+      "table_export": "导出表 %{table}",
+      "table_import": "导入表 %{table}",
+      "mongo_export": "导出集合 %{collection}",
+      "mongo_import": "导入集合 %{collection}"
+    },
+    "stage": {
+      "rows": "已导出 %{rows} 行"
+    },
+    "detail": {
+      "target": "目标",
+      "stage": "阶段",
+      "elapsed": "耗时",
+      "logs": "消息日志",
+      "no_logs": "暂无日志"
+    },
+    "action": {
+      "cancel": "停止任务",
+      "delete": "删除记录"
+    },
+    "cannot_delete_running": "运行中的任务不能删除，请先停止任务"
   },
   "statusbar": {
     "objects": "%{count} 个对象",

@@ -60,6 +60,8 @@ gpui-fps = "=0.7.1"
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.8", features = ["test-support"] }
 tempfile = "3"
+# UI E2E 需要先写入 SQLite 测试表，再驱动真实视图。
+fluxdb-connectors = { path = "../../crates/fluxdb-connectors" }
 
 # Linux 首版不启用系统托盘（见 docs/2026-09-14-windows-linux-support-plan.md §3.2/§4.3）。
 # tray-icon 在 Linux 目标上会无条件链接 GTK（libappindicator → gtk），即使 default-features=false 且不调用托盘函数也一样，

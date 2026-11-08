@@ -216,6 +216,7 @@ fn statusbar(
     sql_file_tasks: &[SqlFileExecutionTaskState],
     data_export_tasks: &[TableDataExportTaskState],
     backup_tasks: &[BackupTaskState],
+    task_center: &TaskCenterState,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
@@ -240,9 +241,15 @@ fn statusbar(
                 .items_center()
                 .child(statusbar_center(state, colors)),
         )
-        .child(table_data_export_statusbar_area(data_export_tasks, colors, cx))
-        .child(sql_file_statusbar_area(sql_file_tasks, colors, cx))
-        .child(backup_statusbar_area(backup_tasks, colors, cx))
+        // 统一任务中心入口：运行中任务计数，点击打开任务列表与详情抽屉。
+        .child(task_center_statusbar_area(
+            task_center,
+            backup_tasks,
+            data_export_tasks,
+            sql_file_tasks,
+            colors,
+            cx,
+        ))
 }
 
 fn statusbar_summary(state: &AppState) -> String {

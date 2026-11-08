@@ -567,6 +567,21 @@ impl FileStorage {
         let conn = self.open_sqlite()?;
         sqlite::put_json(&conn, sqlite::KEY_BACKUP_RECORDS, &records.to_vec())
     }
+
+    /// 加载任务中心历史记录（已结束任务）。不存在时返回空列表。
+    pub fn load_task_history(&self) -> Result<Vec<TaskHistoryRecord>> {
+        let conn = self.open_sqlite()?;
+        Ok(
+            sqlite::get_json::<Vec<TaskHistoryRecord>>(&conn, sqlite::KEY_TASK_HISTORY)?
+                .unwrap_or_default(),
+        )
+    }
+
+    /// 全量保存任务中心历史记录。
+    pub fn save_task_history(&self, records: &[TaskHistoryRecord]) -> Result<()> {
+        let conn = self.open_sqlite()?;
+        sqlite::put_json(&conn, sqlite::KEY_TASK_HISTORY, &records.to_vec())
+    }
 }
 
 impl Storage for FileStorage {
@@ -851,6 +866,7 @@ impl FileStorage {
 }
 
 include!("parts/backup_restore.rs");
+include!("parts/task_history.rs");
 
 fn storage_error(error: impl ToString) -> Error {
     Error::new(ErrorKind::Internal, error.to_string())

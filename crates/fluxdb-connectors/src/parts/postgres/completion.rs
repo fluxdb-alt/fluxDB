@@ -125,7 +125,8 @@ async fn pg_list_completion_tables_async(
     limit: u64,
 ) -> fluxdb_core::Result<Vec<CompletionTable>> {
     let pattern = completion_fuzzy_like_pattern(filter);
-    // ORDER BY array_position：search_path 靠前的 schema 先出，符合 PG 可见性优先级。
+    // ORDER BY schema 在 search_path 中的位置：靠前的先出，符合 PG 可见性优先级。
+    // 不用 array_position(text[], name)：Kingbase 没有该重载，会报 SQLSTATE 42883。
     let sql = format!(
         "SELECT c.relname, c.relkind::text, n.nspname, \
                 COALESCE(pg_catalog.obj_description(c.oid, 'pg_class'), '') \
@@ -133,7 +134,7 @@ async fn pg_list_completion_tables_async(
          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
          WHERE n.nspname = ANY($1::text[]) AND c.relkind IN ({PG_COMPLETION_RELKINDS}) \
            AND c.relname ILIKE $2 ESCAPE '\\' \
-         ORDER BY array_position($1::text[], n.nspname), c.relname \
+         ORDER BY NULLIF(strpos(',' || array_to_string($1::text[], ',') || ',', ',' || n.nspname::text || ','), 0) NULLS LAST, c.relname \
          LIMIT $3"
     );
     let schema_slice: Vec<&str> = schemas.iter().map(String::as_str).collect();
@@ -238,7 +239,7 @@ async fn pg_list_completion_columns_async(
          JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid \
          WHERE n.nspname = ANY($1::text[]) AND c.relname = ANY($2::text[]) \
            AND a.attnum > 0 AND NOT a.attisdropped \
-         ORDER BY c.relname, array_position($1::text[], n.nspname), a.attnum"
+         ORDER BY c.relname, NULLIF(strpos(',' || array_to_string($1::text[], ',') || ',', ',' || n.nspname::text || ','), 0) NULLS LAST, a.attnum"
     );
     let schema_slice: Vec<&str> = schemas.iter().map(String::as_str).collect();
     let table_slice: Vec<&str> = tables.to_vec();
@@ -300,7 +301,7 @@ async fn pg_list_completion_routines_async(
          FROM pg_catalog.pg_proc p \
          JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace \
          WHERE n.nspname = ANY($1::text[]) AND p.proname ILIKE $2 ESCAPE '\\' \
-         ORDER BY array_position($1::text[], n.nspname), p.proname, \
+         ORDER BY NULLIF(strpos(',' || array_to_string($1::text[], ',') || ',', ',' || n.nspname::text || ','), 0) NULLS LAST, p.proname, \
                   pg_catalog.pg_get_function_identity_arguments(p.oid) \
          LIMIT $3"
     );
@@ -345,7 +346,7 @@ async fn pg_list_completion_triggers_async(
          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
          WHERE n.nspname = ANY($1::text[]) AND NOT t.tgisinternal \
            AND t.tgname ILIKE $2 ESCAPE '\\' \
-         ORDER BY array_position($1::text[], n.nspname), t.tgname \
+         ORDER BY NULLIF(strpos(',' || array_to_string($1::text[], ',') || ',', ',' || n.nspname::text || ','), 0) NULLS LAST, t.tgname \
          LIMIT $3"
     );
     let schema_slice: Vec<&str> = schemas.iter().map(String::as_str).collect();

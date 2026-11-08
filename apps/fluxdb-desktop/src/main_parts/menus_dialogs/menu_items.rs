@@ -145,6 +145,8 @@ fn menu_icon(icon: &'static str, destructive: bool, colors: UiColors) -> gpui::A
         "info" => Some(AppIcon::Info),
         "activity" => Some(AppIcon::Activity),
         "collection" => Some(AppIcon::List),
+        "schema" => Some(AppIcon::Schema),
+        "up-down" => Some(AppIcon::ArrowUpDown),
         _ => None,
     };
 
