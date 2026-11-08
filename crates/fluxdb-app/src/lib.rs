@@ -77,6 +77,7 @@ include!("parts/cell_content_store.rs");
 include!("parts/cell_content_view.rs");
 include!("parts/read_only_guard.rs");
 include!("parts/mock_data.rs");
+include!("parts/structure_tools.rs");
 include!("parts/sql_format.rs");
 include!("parts/table_info.rs");
 include!("parts/user_admin.rs");

@@ -243,6 +243,10 @@ fn navicat_main_new(
     theme_mode: ThemeMode,
 ) -> NavicatMain {
     let auto_check_updates = controller.state().settings.auto_check_updates;
+    let task_history = storage.load_task_history().unwrap_or_else(|error| {
+        tracing::warn!(error = %error, "任务中心历史读取失败，按空历史启动");
+        Vec::new()
+    });
     let rename_group_input =
         cx.new(|cx| InputState::new(window, cx).placeholder(tr("app.placeholder.group_name")));
     let ai_session_filter_input =
@@ -3333,10 +3337,16 @@ fn navicat_main_new(
         config_proposal_busy: false,
         config_delete_confirmed: false,
         sql_file_modal: Rc::new(std::cell::RefCell::new(SqlFileModalData::default())),
+        task_center: TaskCenterState::from_history(task_history),
         restore_modal: None,
         pending_data_export: None,
         pending_data_import: None,
         _data_import_task: None,
+        compare_transfer: None,
+        compare_transfer_inputs: new_compare_transfer_inputs(window, cx),
+        _compare_transfer_task: None,
+        _compare_transfer_source_options_task: None,
+        _compare_transfer_target_options_task: None,
         data_export_custom_conditions_open: false,
         data_export_preview: None,
         data_export_preview_seq: 0,

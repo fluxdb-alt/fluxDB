@@ -104,6 +104,10 @@ enum ConnectionMenuAction {
     NewQuery,
     UserAdmin,
     ExecuteSqlFile,
+    /// 打开结构对比与同步弹框。
+    CompareStructure,
+    /// 打开跨连接数据传输弹框。
+    TransferData,
     NewDatabase,
     Edit,
     Copy,

@@ -18,6 +18,8 @@ include!("menus_dialogs/query_scope.rs");
 include!("menus_dialogs/sql_file_execution.rs");
 include!("menus_dialogs/data_import.rs");
 include!("menus_dialogs/data_export.rs");
+include!("menus_dialogs/compare_transfer.rs");
+include!("menus_dialogs/compare_transfer/ui.rs");
 include!("menus_dialogs/database_backup.rs");
 include!("menus_dialogs/database_backup/ui.rs");
 include!("menus_dialogs/menu_items.rs");

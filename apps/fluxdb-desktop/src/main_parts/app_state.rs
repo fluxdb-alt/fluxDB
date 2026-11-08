@@ -1206,6 +1206,8 @@ struct MongoExportForm {
     logs: Vec<ImportDialogLogEntry>,
     error: Option<String>,
     finished: bool,
+    /// 任务中心记录 id；弹窗关闭后仍可查看本次导出结果。
+    task_center_id: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

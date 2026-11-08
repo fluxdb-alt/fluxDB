@@ -2526,6 +2526,7 @@ dependencies = [
  "encoding_rs",
  "fluxdb-app",
  "fluxdb-completion",
+ "fluxdb-connectors",
  "fluxdb-core",
  "fluxdb-editor-core",
  "fluxdb-i18n",

@@ -887,11 +887,19 @@ struct NavicatMain {
     // 此时主视图处于 lease 状态，builder 内不能 view.read(cx)，实时数据统一放 Rc<RefCell<..>>
     // （先例：redis_hash_full_value_viewer）。
     sql_file_modal: Rc<std::cell::RefCell<SqlFileModalData>>,
+    /// 任务中心：跨功能的统一任务视图与跨弹窗保留的任务记录。
+    task_center: TaskCenterState,
     // 恢复弹框挂载状态:UI 实体 + 配置快照,运行时数据在 RestoreModal::runtime(Rc 共享)。
     restore_modal: Option<RestoreModal>,
     pending_data_export: Option<TableDataExportForm>,
     pending_data_import: Option<TableDataImportForm>,
     _data_import_task: Option<Task<()>>,
+    /// 结构对比 / 数据传输弹框；`None` 表示未打开。
+    compare_transfer: Option<CompareTransferState>,
+    compare_transfer_inputs: CompareTransferInputs,
+    _compare_transfer_task: Option<Task<()>>,
+    _compare_transfer_source_options_task: Option<Task<()>>,
+    _compare_transfer_target_options_task: Option<Task<()>>,
     data_export_custom_conditions_open: bool,
     data_export_preview: Option<TableDataExportPreviewState>,
     data_export_preview_seq: u64,

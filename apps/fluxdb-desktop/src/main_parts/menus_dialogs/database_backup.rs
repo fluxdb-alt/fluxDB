@@ -492,6 +492,7 @@ impl NavicatMain {
                 task.stage = tr("app.database_backup.status.completed").to_string();
             }
         }
+        self.archive_task_center_live_task(TaskCenterKind::Backup, task_id);
         // 成功则写旁挂元数据 {文件}.sql.meta.json；失败/取消丢弃，避免残留误导。
         let meta_ok = error.is_none() && !canceled;
         // 失败时保留现场，不删除可能在预检查前已存在的同名文件。
@@ -615,97 +616,4 @@ fn backup_progress_on_ui(
             cx.notify();
         });
     });
-}
-
-/// 底栏右侧「备份任务」状态徽标：与 SQL 文件执行一致，展示最新/运行中的备份任务，
-/// 点击打开备份日志弹框。空任务占位保持宽度，避免底栏跳动。
-fn backup_statusbar_area(
-    tasks: &[BackupTaskState],
-    colors: UiColors,
-    cx: &mut Context<NavicatMain>,
-) -> Div {
-    let Some(task) = tasks
-        .iter()
-        .rev()
-        .find(|task| task.running())
-        .or_else(|| tasks.last())
-    else {
-        return div().w(px(200.));
-    };
-    let running_count = tasks.iter().filter(|task| task.running()).count();
-    let db = task.database.clone().unwrap_or_default();
-    let label = if running_count > 1 {
-        tr("app.database_backup.statusbar.running_count")
-            .replace("%{count}", &running_count.to_string())
-    } else if task.cancel_requested {
-        tr("app.database_backup.statusbar.stopping")
-            .replace("%{database}", &db)
-            .replace("%{stage}", &task.stage)
-    } else if task.running() {
-        tr("app.database_backup.statusbar.running")
-            .replace("%{database}", &db)
-            .replace("%{stage}", &task.stage)
-    } else if task.canceled {
-        tr("app.database_backup.statusbar.canceled").replace("%{database}", &db)
-    } else if task.error.is_some() {
-        tr("app.database_backup.statusbar.failed").replace("%{database}", &db)
-    } else {
-        tr("app.database_backup.statusbar.completed").replace("%{database}", &db)
-    };
-    let has_error = task.error.is_some();
-    let task_id = task.id;
-    div()
-        .w(px(240.))
-        .h_full()
-        .flex()
-        .items_center()
-        .justify_end()
-        .pr_2()
-        .child(
-            div()
-                .max_w(px(228.))
-                .h(px(20.))
-                .px_2()
-                .rounded(colors.radius)
-                .border_1()
-                .border_color(colors.border)
-                .bg(colors.input_bg)
-                .flex()
-                .items_center()
-                .gap_2()
-                .cursor_pointer()
-                .hover(move |style| style.bg(colors.hover))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _, _, cx| {
-                        this.backup_log_task = Some(task_id);
-                        cx.notify();
-                        cx.stop_propagation();
-                    }),
-                )
-                .child(app_icon(
-                    if task.running() {
-                        AppIcon::Play
-                    } else {
-                        AppIcon::Database
-                    },
-                    13.,
-                    if has_error {
-                        rgb(0xd64545)
-                    } else {
-                        rgb(0x1687ff)
-                    },
-                ))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .overflow_hidden()
-                        .truncate()
-                        .whitespace_nowrap()
-                        .text_size(px(12.))
-                        .text_color(colors.text)
-                        .child(label),
-                ),
-        )
 }

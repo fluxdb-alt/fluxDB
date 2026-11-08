@@ -107,6 +107,17 @@ impl Render for NavicatMain {
         let app_state = self.controller.state();
         let state = render_state_snapshot(app_state);
         let colors = ui_colors_from_theme(self.theme_mode, cx);
+        // 任务中心关闭时不构建快照，避免每帧复制各任务日志。
+        let task_center_rows = if self.task_center.open {
+            self.task_center_rows()
+        } else {
+            Vec::new()
+        };
+        let task_center_selected = if self.task_center.open {
+            self.selected_task_center_row()
+        } else {
+            None
+        };
         let settings_for_config_proposal = self.controller.state().settings.clone();
         // 恢复弹框「现有库」目标下拉：目标连接切换时重载该连接下的库（渲染期消费，靠 target_db_loaded_for 防抖）。
         let restore_db_reload = self.restore_modal.as_ref().and_then(|modal| {
@@ -197,6 +208,16 @@ impl Render for NavicatMain {
             (Rc::new(Vec::new()), Rc::new(Vec::new()))
         };
 
+        let compare_transfer_overlay = self.compare_transfer.clone().map(|state| {
+            let connections = self.controller.connection_configs();
+            compare_transfer_modal(
+                &state,
+                &self.compare_transfer_inputs,
+                &connections,
+                colors,
+                cx,
+            )
+        });
         div()
             .debug_selector(|| "fluxdb-main".into())
             .size_full()
@@ -368,6 +389,7 @@ impl Render for NavicatMain {
                     &self.sql_file_modal.borrow().tasks,
                     &self.data_export_tasks,
                     &self.backup_tasks,
+                    &self.task_center,
                     colors,
                     cx,
                 ))
@@ -630,6 +652,10 @@ impl Render for NavicatMain {
             // 恢复数据库弹框：与备份弹框同款自绘模态。
             .when_some(self.restore_modal.clone(), |this, modal| {
                 this.child(database_restore_modal(&modal, colors, cx))
+            })
+            // 结构对比/同步与跨连接数据传输弹框。
+            .when_some(compare_transfer_overlay, |this, modal| {
+                this.child(modal)
             })
             // 备份 tab：「备份表」查看弹框。
             .when_some(self.backup_tables_modal.clone(), |this, modal| {
@@ -959,6 +985,16 @@ impl Render for NavicatMain {
             // `WindowState` 注册为 `Root` 插件，sheet / dialog / notification 层由 `Root`
             // 在应用内容之上统一挂载，重复手动渲染会导致弹框叠加两份。
             // Redis hash 大字段完整值已改为 Hash Data 表格区域内嵌面板，不再走弹框。
+            // 任务中心覆盖在全部弹框之上：从状态栏打开后可直接查看/停止后台任务。
+            .when(self.task_center.open, |this| {
+                this.child(task_center_overlay(
+                    &self.task_center,
+                    &task_center_rows,
+                    task_center_selected.as_ref(),
+                    colors,
+                    cx,
+                ))
+            })
             // 性能诊断 HUD：设置开启时在窗口右上角悬浮显示 FPS / 帧耗时 / CPU / GPU / 内存。
             // 挂在根容器（`relative`）最上层，fps_monitor 首次调用会懒建每窗口单例并复用。
             .when(state.settings.performance_diagnostics, |this| {

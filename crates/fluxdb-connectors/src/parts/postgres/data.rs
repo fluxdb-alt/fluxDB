@@ -857,56 +857,77 @@ pub fn pg_export_pages(
         .database
         .as_deref()
         .ok_or_else(|| Error::new(ErrorKind::Query, "缺少数据库名称"))?;
-    pg_runtime().block_on(async {
-        let session = pg_connect(config, database).await?;
-        let client = session.client.as_ref();
-        // 单一 REPEATABLE READ 快照：整个导出看到一致视图；导出结束/取消时连接释放即回滚。
-        client
-            .batch_execute("BEGIN ISOLATION LEVEL REPEATABLE READ")
-            .await
-            .map_err(pg_error)?;
-        let result: fluxdb_core::Result<()> = async {
-            let columns = pg_columns(client, database, path.schema.as_deref(), &path.name).await?;
-            let (select_list, positions) = pg_select_list_and_positions(&columns);
-            let table = pg_qualified_table(database, path.schema.as_deref(), &path.name);
-            let (where_sql, params) = pg_where_params(filters, &columns)?;
-            let order = pg_order_by_clause(sort, &columns);
-            // 有排序键时逐页 OFFSET；无用户排序时靠主键 tie-breaker 保持稳定序（见 pg_order_by_clause）。
-            let mut offset: u64 = 0;
-            let batch: u64 = 4096;
-            loop {
-                if cancel() {
-                    return Ok(());
+    // 回调（例如跨连接传输的写目标表）可能再次进入 PostgreSQL runtime 并 block_on；
+    // 若在 runtime 线程里直接回调，会触发「Cannot start a runtime from within a runtime」。
+    // 因此由独立线程跑异步读取，通过有界通道把页交回调用线程执行回调。
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<DataPage>(1);
+    std::thread::scope(|scope| {
+        let producer = scope.spawn(move || {
+            pg_runtime().block_on(async {
+                let session = pg_connect(config, database).await?;
+                let client = session.client.as_ref();
+                // 单一 REPEATABLE READ 快照：整个导出看到一致视图；导出结束/取消时连接释放即回滚。
+                client
+                    .batch_execute("BEGIN ISOLATION LEVEL REPEATABLE READ")
+                    .await
+                    .map_err(pg_error)?;
+                let result: fluxdb_core::Result<()> = async {
+                    let columns =
+                        pg_columns(client, database, path.schema.as_deref(), &path.name).await?;
+                    let (select_list, positions) = pg_select_list_and_positions(&columns);
+                    let table = pg_qualified_table(database, path.schema.as_deref(), &path.name);
+                    let (where_sql, params) = pg_where_params(filters, &columns)?;
+                    let order = pg_order_by_clause(sort, &columns);
+                    // 有排序键时逐页 OFFSET；无用户排序时靠主键 tie-breaker 保持稳定序（见 pg_order_by_clause）。
+                    let mut offset: u64 = 0;
+                    let batch: u64 = 4096;
+                    loop {
+                        // 用 offset 游标；每页取多一行探测 has_more。
+                        let sql = format!(
+                            "SELECT {select_list}\nFROM {table} AS {}{where_sql}{order} LIMIT {} OFFSET {}",
+                            fluxdb_core::PostgresDialect.quote_identifier(PG_DATA_SOURCE_ALIAS),
+                            batch + 1,
+                            offset
+                        );
+                        let rows = client
+                            .query(&sql, &pg_params_refs(&params))
+                            .await
+                            .map_err(pg_error)?;
+                        let has_more = rows.len() > batch as usize;
+                        let count = rows.len().min(batch as usize);
+                        let truncated = rows.into_iter().take(count).collect::<Vec<_>>();
+                        let page = pg_data_rows_to_page(
+                            columns.clone(),
+                            truncated,
+                            positions.clone(),
+                            Pagination::new(offset, count as u64),
+                        );
+                        // 调用方已停止接收（取消或回调返回 false）时直接结束。
+                        if sender.send(page).is_err() {
+                            return Ok(());
+                        }
+                        offset += count as u64;
+                        if !has_more || count == 0 {
+                            return Ok(());
+                        }
+                    }
                 }
-                // 用 offset 游标；每页取多一行探测 has_more。
-                let sql = format!(
-                    "SELECT {select_list}\nFROM {table} AS {}{where_sql}{order} LIMIT {} OFFSET {}",
-                    fluxdb_core::PostgresDialect.quote_identifier(PG_DATA_SOURCE_ALIAS),
-                    batch + 1,
-                    offset
-                );
-                let rows = client.query(&sql, &pg_params_refs(&params)).await.map_err(pg_error)?;
-                let has_more = rows.len() > batch as usize;
-                let count = rows.len().min(batch as usize);
-                let truncated = rows.into_iter().take(count).collect::<Vec<_>>();
-                let page = pg_data_rows_to_page(
-                    columns.clone(),
-                    truncated,
-                    positions.clone(),
-                    Pagination::new(offset, count as u64),
-                );
-                if !on_page(page) {
-                    return Ok(());
-                }
-                offset += count as u64;
-                if !has_more || count == 0 {
-                    return Ok(());
-                }
+                .await;
+                let _ = client.batch_execute("ROLLBACK").await;
+                result
+            })
+        });
+        while let Ok(page) = receiver.recv() {
+            if cancel() || !on_page(page) {
+                break;
             }
         }
-        .await;
-        let _ = client.batch_execute("ROLLBACK").await;
-        result
+        // 先断开接收端，让生产者在下一页发送时立即退出，再等待线程收尾。
+        drop(receiver);
+        match producer.join() {
+            Ok(result) => result,
+            Err(_) => Err(Error::new(ErrorKind::Internal, "PostgreSQL 导出线程异常退出")),
+        }
     })
 }
 

@@ -30,6 +30,8 @@ struct MongoImportForm {
     logs: Vec<ImportDialogLogEntry>,
     started_at: Option<Instant>,
     finished_at: Option<Instant>,
+    /// 任务中心记录 id；弹窗关闭后仍可查看本次导入结果。
+    task_center_id: Option<u64>,
 }
 
 impl MongoImportForm {
@@ -50,6 +52,7 @@ impl MongoImportForm {
             logs: Vec::new(),
             started_at: None,
             finished_at: None,
+            task_center_id: None,
         }
     }
 
@@ -311,12 +314,19 @@ impl NavicatMain {
         }
 
         let cancel = Arc::new(AtomicBool::new(false));
+        let task_center_id = self.task_center.begin(
+            TaskCenterKind::MongoImport,
+            tr("app.task_center.title.mongo_import").replace("%{collection}", &form.object.name),
+            source.display().to_string(),
+            Some(cancel.clone()),
+        );
         if let Some(current) = self.pending_mongo_import.as_mut() {
             current.running = true;
             current.error = None;
             current.report = None;
             current.progress = Some(tr("app.mongo.import.stage_prepare").to_string());
             current.cancel = Some(cancel.clone());
+            current.task_center_id = Some(task_center_id);
             current.logs.clear();
             current.started_at = Some(Instant::now());
             current.finished_at = None;
@@ -363,8 +373,18 @@ impl NavicatMain {
                                 current.progress =
                                     Some(format!("{} · {}", progress.stage, progress.message));
                                 // 批次进度同时进日志页；底部那行只留最新一条。
-                                current.push_log(progress.stage, progress.message, true);
+                                current.push_log(
+                                    progress.stage.clone(),
+                                    progress.message.clone(),
+                                    true,
+                                );
                             }
+                            this.task_center.update_progress(
+                                task_center_id,
+                                None,
+                                Some(progress.stage.clone()),
+                                Some(format!("{}：{}", progress.stage, progress.message)),
+                            );
                             cx.notify();
                         });
                     });
@@ -380,8 +400,18 @@ impl NavicatMain {
                                 if let Some(current) = this.pending_mongo_import.as_mut() {
                                     current.progress =
                                         Some(format!("{} · {}", progress.stage, progress.message));
-                                    current.push_log(progress.stage, progress.message, true);
+                                    current.push_log(
+                                        progress.stage.clone(),
+                                        progress.message.clone(),
+                                        true,
+                                    );
                                 }
+                                this.task_center.update_progress(
+                                    task_center_id,
+                                    None,
+                                    Some(progress.stage.clone()),
+                                    Some(format!("{}：{}", progress.stage, progress.message)),
+                                );
                             });
                         });
                     }
@@ -412,6 +442,10 @@ impl NavicatMain {
 
     /// 任务收尾：成功则提示 + 刷新结果；失败保留弹窗让用户看到原因。
     fn finish_mongo_import(&mut self, event: AppEvent, tab_id: TabId, cx: &mut Context<Self>) {
+        let task_center_id = self
+            .pending_mongo_import
+            .as_ref()
+            .and_then(|form| form.task_center_id);
         match event {
             AppEvent::MongoDocumentsImported { report, .. } => {
                 let template = if report.cancelled {
@@ -428,6 +462,7 @@ impl NavicatMain {
                     current.progress = None;
                     current.report = Some(report.clone());
                     current.finished_at = Some(Instant::now());
+                    current.task_center_id = None;
                     current.tab = ImportDialogTab::Log;
                     current.push_log(
                         tr("app.data.data_import.stage_done").to_string(),
@@ -450,6 +485,26 @@ impl NavicatMain {
                     AppMessageKind::Warning
                 };
                 self.show_message(message, kind, cx);
+                if let Some(id) = task_center_id {
+                    self.finish_task_center_record(
+                        id,
+                        if report.cancelled {
+                            TaskCenterStatus::Canceled
+                        } else if report.failed == 0 {
+                            TaskCenterStatus::Success
+                        } else {
+                            TaskCenterStatus::Failed
+                        },
+                        if report.cancelled {
+                            tr("app.task_center.status.canceled").to_string()
+                        } else {
+                            tr("app.task_center.status.success").to_string()
+                        },
+                        (report.failed > 0).then(|| {
+                            tr("app.task_center.status.failed").to_string()
+                        }),
+                    );
+                }
                 // 已写入的文档要立刻出现在结果里；标签页可能已被关闭，内部会自行忽略。
                 self.run_mongo_query(tab_id, cx);
             }
@@ -463,13 +518,22 @@ impl NavicatMain {
                     current.cancel = None;
                     current.progress = None;
                     current.finished_at = Some(Instant::now());
+                    current.task_center_id = None;
                     current.tab = ImportDialogTab::Log;
                     current.push_log(
                         tr("app.data.data_import.stage_failed").to_string(),
                         message.clone(),
                         false,
                     );
-                    current.error = Some(message);
+                    current.error = Some(message.clone());
+                }
+                if let Some(id) = task_center_id {
+                    self.finish_task_center_record(
+                        id,
+                        TaskCenterStatus::Failed,
+                        tr("app.task_center.status.failed").to_string(),
+                        Some(message),
+                    );
                 }
             }
         }
@@ -478,11 +542,16 @@ impl NavicatMain {
 
     /// 中止：已写入的批次保留，当前批之后的文档不再写入。
     fn cancel_mongo_import_run(&mut self, cx: &mut Context<Self>) {
+        let mut task_center_id = None;
         if let Some(form) = self.pending_mongo_import.as_mut()
             && let Some(flag) = &form.cancel
         {
             flag.store(true, Ordering::Relaxed);
             form.progress = Some(tr("app.mongo.import.stopping").to_string());
+            task_center_id = form.task_center_id;
+        }
+        if let Some(id) = task_center_id {
+            self.task_center.mark_cancel_requested(id);
         }
         cx.notify();
     }

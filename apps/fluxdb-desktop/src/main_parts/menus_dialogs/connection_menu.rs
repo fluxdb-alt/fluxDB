@@ -110,6 +110,28 @@ fn connection_context_menu(
                 cx,
             ))
         })
+        .when(!is_redis && !is_mongo, |this| {
+            this.child(connection_menu_item(
+                tr("app.connection_menu.compare_structure").to_string(),
+                "schema",
+                None,
+                false,
+                Some(ConnectionMenuAction::CompareStructure),
+                menu.connection_id,
+                colors,
+                cx,
+            ))
+            .child(connection_menu_item(
+                tr("app.connection_menu.transfer_data").to_string(),
+                "up-down",
+                None,
+                false,
+                Some(ConnectionMenuAction::TransferData),
+                menu.connection_id,
+                colors,
+                cx,
+            ))
+        })
         .when(!is_redis, |this| {
             this.child(connection_menu_item(
                 tr("app.connection_menu.new_database").to_string(),

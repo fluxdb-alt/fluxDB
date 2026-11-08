@@ -38,6 +38,9 @@ mod i18n_e2e_tests {
     include!("i18n_tests/table_danger_layout.rs");
     include!("i18n_tests/table_context_menu_layout.rs");
     include!("i18n_tests/mongo_collection_menu.rs");
+    // 任务中心：状态栏入口、任务列表与右侧详情抽屉。
+    include!("i18n_tests/task_center.rs");
+    include!("i18n_tests/compare_transfer.rs");
     include!("i18n_tests/mongo_query_panel.rs");
     include!("i18n_tests/mongo_aggregation_cards.rs");
     include!("i18n_tests/mongo_workbench_cards.rs");

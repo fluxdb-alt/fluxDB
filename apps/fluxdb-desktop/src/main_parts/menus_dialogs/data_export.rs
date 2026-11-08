@@ -842,7 +842,9 @@ fn table_data_export_finish_on_ui(
         view.update(cx, |this, cx| {
             this._data_export_tasks.remove(&task_id);
             this._data_export_cancel_flags.remove(&task_id);
-            if let Some(task) = this.data_export_tasks.iter_mut().find(|task| task.id == task_id) {
+            let outcome = if let Some(task) =
+                this.data_export_tasks.iter_mut().find(|task| task.id == task_id)
+            {
                 task.finished_at = Some(Instant::now());
                 task.canceled = canceled;
                 if let Err(error) = result {
@@ -868,7 +870,6 @@ fn table_data_export_finish_on_ui(
                         message: tr("app.data_export.toast.completed").replace("%{count}", &task.exported_rows.to_string()),
                     });
                 }
-                let message = table_data_export_task_message(task);
                 let kind = if task.error.is_some() {
                     AppMessageKind::Error
                 } else if task.canceled {
@@ -876,6 +877,12 @@ fn table_data_export_finish_on_ui(
                 } else {
                     AppMessageKind::Success
                 };
+                Some((table_data_export_task_message(task), kind))
+            } else {
+                None
+            };
+            this.archive_task_center_live_task(TaskCenterKind::TableExport, task_id);
+            if let Some((message, kind)) = outcome {
                 this.show_message(message, kind, cx);
             }
             cx.notify();
@@ -2361,82 +2368,4 @@ fn table_data_export_log_text(task: &TableDataExportTaskState) -> String {
         ));
     }
     lines.join("\n")
-}
-
-fn table_data_export_statusbar_area(
-    tasks: &[TableDataExportTaskState],
-    colors: UiColors,
-    cx: &mut Context<NavicatMain>,
-) -> Div {
-    let Some(task) = tasks.iter().rev().find(|task| task.running()).or_else(|| tasks.last()) else {
-        return div().w(px(180.));
-    };
-    let running_count = tasks.iter().filter(|task| task.running()).count();
-    let label = if running_count > 1 {
-        tr("app.data_export.statusbar.running_count")
-            .replace("%{count}", &running_count.to_string())
-    } else if task.cancel_requested {
-        tr("app.data_export.statusbar.stopping")
-            .replace("%{rows}", &task.exported_rows.to_string())
-    } else if task.running() {
-        tr("app.data_export.statusbar.exporting")
-            .replace("%{rows}", &task.exported_rows.to_string())
-    } else if task.canceled {
-        tr("app.data_export.statusbar.canceled")
-            .replace("%{rows}", &task.exported_rows.to_string())
-    } else if task.error.is_some() {
-        tr("app.data_export.statusbar.failed").replace("%{table}", &task.table_name)
-    } else {
-        tr("app.data_export.statusbar.completed").replace("%{table}", &task.table_name)
-    };
-    let task_id = task.id;
-    div()
-        .w(px(240.))
-        .h_full()
-        .flex()
-        .items_center()
-        .justify_end()
-        .pr_2()
-        .child(
-            div()
-                .max_w(px(228.))
-                .h(px(20.))
-                .px_2()
-                .rounded(colors.radius)
-                .border_1()
-                .border_color(colors.border)
-                .bg(colors.input_bg)
-                .flex()
-                .items_center()
-                .gap_2()
-                .cursor_pointer()
-                .hover(move |style| style.bg(colors.hover))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _, _, cx| {
-                        this.show_table_data_export_task_log(task_id, cx);
-                        cx.stop_propagation();
-                    }),
-                )
-                .child(app_icon(
-                    if task.running() { AppIcon::Play } else { AppIcon::Save },
-                    13.,
-                    if task.error.is_some() {
-                        rgb(0xd64545)
-                    } else {
-                        rgb(0x1687ff)
-                    },
-                ))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .overflow_hidden()
-                        .truncate()
-                        .whitespace_nowrap()
-                        .text_size(px(12.))
-                        .text_color(colors.text)
-                        .child(label),
-                ),
-        )
 }
