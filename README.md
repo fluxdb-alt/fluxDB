@@ -212,12 +212,6 @@ macOS 可使用仓库脚本生成包含动态库的 `.app` 和 `.dmg`：
 
 路线图不代表当前版本已经支持。
 
-## 交流讨论
-
-欢迎扫码加入 FluxDB 微信交流群，交流使用体验、反馈问题和提出建议。需要跟踪的 Bug 和功能需求，请同时提交到 [Issues](https://github.com/fluxdb-alt/fluxDB/issues)。
-
-<img src="docs/screenshots/weichatgroup.png" alt="FluxDB 微信交流群二维码" width="200">
-
 ## 支持与赞助
 
 如果 FluxDB 对你有帮助，欢迎给项目一个 Star，向朋友推荐，或通过反馈问题、完善文档和贡献代码参与维护。

@@ -214,12 +214,6 @@ Current priorities are real-world coverage for existing databases, stability and
 
 The roadmap does not imply current support.
 
-## Community
-
-Scan the QR code to join the FluxDB WeChat group, share your experience, report problems and suggest improvements. Please also submit bugs and feature requests to [Issues](https://github.com/fluxdb-alt/fluxDB/issues) so they can be tracked.
-
-<img src="docs/screenshots/weichatgroup.png" alt="FluxDB WeChat group QR code" width="200">
-
 ## Support and sponsorship
 
 If FluxDB is useful to you, consider starring the repository, sharing it with others, or contributing through issues, documentation and code.
