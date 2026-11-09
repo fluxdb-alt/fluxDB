@@ -380,6 +380,7 @@
     "value_count": "%{count} 个值",
     "toast": {
       "field_changed": "已切换字段，旧筛选值已清空",
+      "field_changed_partial": "已切换字段，%{count} 个值与新字段类型不兼容，已移除",
       "values_added": "已添加 %{added} 个新值，重复跳过 %{duplicated} 个%{ignored}",
       "ignored_empty": "，忽略空行 %{count} 个"
     },

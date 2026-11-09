@@ -220,6 +220,20 @@ impl NavicatMain {
         });
     }
 
+    /// 当前字段在数据页列定义中的类型名；页面未加载或缺列时返回 None（按文本处理）。
+    fn data_filter_column_type_name(&self, tab_id: TabId, field: &str) -> Option<String> {
+        self.controller
+            .state()
+            .tabs
+            .iter()
+            .find_map(|tab| match &tab.kind {
+                TabKind::DataEditor(editor) if tab.id == tab_id => editor.page.as_ref(),
+                _ => None,
+            })
+            .and_then(|page| page.columns.iter().find(|column| column.name == field))
+            .and_then(|column| column.type_name.clone())
+    }
+
     fn select_data_filter_field(
         &mut self,
         tab_id: TabId,
@@ -227,24 +241,28 @@ impl NavicatMain {
         field: String,
         cx: &mut Context<Self>,
     ) {
+        // 先取新字段类型：旧值能否保留取决于目标列类型。
+        let new_type_name = self.data_filter_column_type_name(tab_id, &field);
+        let mut message = None;
         if let Some(rule) = self
             .data_filter_draft_rules
             .get_mut(&tab_id)
             .and_then(|rules| rules.get_mut(rule_index))
         {
-            // 切换字段是明确的条件变更：旧字段的值列表不再对本新字段有意义，
-            // 立即清空，避免旧值混入新字段的 IN/NOT IN 等条件（根因修复）。
-            let old_rule = rule.clone();
-            let (new_rule, had_values) =
-                data_filter_rule_after_field_switch(field, old_rule);
+            let (new_rule, kept, dropped) =
+                data_filter_rule_after_field_switch(field, rule.clone(), new_type_name.as_deref());
             *rule = new_rule;
-            if had_values {
-                self.show_message(
-                    tr("app.filter.toast.field_changed").to_string(),
-                    AppMessageKind::Info,
-                    cx,
-                );
+            if dropped > 0 {
+                message = Some(if kept > 0 {
+                    tr("app.filter.toast.field_changed_partial")
+                        .replace("%{count}", &dropped.to_string())
+                } else {
+                    tr("app.filter.toast.field_changed").to_string()
+                });
             }
+        }
+        if let Some(message) = message {
+            self.show_message(message, AppMessageKind::Info, cx);
         }
         // 同时丢弃值草稿；再次打开值编辑器时（toggle_data_filter_popover）会
         // 重新清空输入与搜索状态，新字段只能显示和选择自己的建议值。
