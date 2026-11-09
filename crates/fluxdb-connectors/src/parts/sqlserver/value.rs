@@ -105,7 +105,7 @@ fn sqlserver_cell_value(
             CellValue::Bytes(value.into_owned())
         }),
         ColumnData::Numeric(value) => value.map_or(CellValue::Null, |value| {
-            CellValue::Text(value.to_string())
+            CellValue::Text(sqlserver_numeric_text(value))
         }),
         ColumnData::Xml(value) => value.map_or(CellValue::Null, |value| {
             CellValue::Text(value.to_string())
@@ -130,6 +130,28 @@ fn sqlserver_cell_value(
         }),
     }
     .with_unsupported_type(column)
+}
+
+/// 精确渲染 TDS DECIMAL/NUMERIC。
+///
+/// tiberius 自带 `Display` 对负小数会输出 `-1.-2500`（整数部分和小数部分
+/// 各带一次负号），因此必须从原始 i128 与 scale 重建文本，避免负数精度丢失。
+fn sqlserver_numeric_text(value: tiberius::numeric::Numeric) -> String {
+    let scale = usize::from(value.scale());
+    let raw = value.value();
+    let digits = raw.unsigned_abs().to_string();
+    let mut text = if scale == 0 {
+        digits
+    } else if digits.len() <= scale {
+        format!("0.{}{}", "0".repeat(scale - digits.len()), digits)
+    } else {
+        let split = digits.len() - scale;
+        format!("{}.{}", &digits[..split], &digits[split..])
+    };
+    if raw < 0 {
+        text.insert(0, '-');
+    }
+    text
 }
 
 fn sqlserver_is_variant_column(column: Option<&tiberius::Column>) -> bool {
@@ -252,4 +274,38 @@ fn sqlserver_bound_query<'a>(
         sqlserver_bind_cell(&mut query, value)?;
     }
     Ok(query)
+}
+
+#[cfg(test)]
+mod sqlserver_numeric_tests {
+    use super::sqlserver_numeric_text;
+    use tiberius::numeric::Numeric;
+
+    #[test]
+    fn negative_decimal_keeps_scale_and_single_sign() {
+        assert_eq!(
+            sqlserver_numeric_text(Numeric::new_with_scale(-12_500, 4)),
+            "-1.2500"
+        );
+    }
+
+    #[test]
+    fn decimal_smaller_than_one_is_zero_padded() {
+        assert_eq!(
+            sqlserver_numeric_text(Numeric::new_with_scale(5, 2)),
+            "0.05"
+        );
+        assert_eq!(
+            sqlserver_numeric_text(Numeric::new_with_scale(0, 4)),
+            "0.0000"
+        );
+    }
+
+    #[test]
+    fn scale_zero_stays_integer() {
+        assert_eq!(
+            sqlserver_numeric_text(Numeric::new_with_scale(-42, 0)),
+            "-42"
+        );
+    }
 }

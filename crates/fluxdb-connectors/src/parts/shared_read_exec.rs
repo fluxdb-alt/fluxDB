@@ -345,8 +345,18 @@ fn mysql_execute_query_with_progress(
 
         // 只读入口：连接为本次调用新建（不复用），故会话级只读是安全的；默认事务因此只读，
         // 未在 denylist 里的 UDF/DML 由服务端拒绝，作为客户端 AST 策略之外的纵深。
-        if request.options.read_only {
+        //
+        // TiDB 的 `SET SESSION TRANSACTION READ ONLY` 目前是 no-op，不能作为安全边界。
+        // 对它改为显式事务 + 拒绝非结果集语句，并在批次结束无条件回滚。
+        let tidb_read_only = request.options.read_only && config.kind == DatabaseKind::TiDb;
+        if request.options.read_only && !tidb_read_only {
             sqlx::raw_sql("SET SESSION TRANSACTION READ ONLY")
+                .execute(&mut connection)
+                .await
+                .map_err(mysql_error)?;
+        }
+        if tidb_read_only {
+            sqlx::raw_sql("START TRANSACTION")
                 .execute(&mut connection)
                 .await
                 .map_err(mysql_error)?;
@@ -377,6 +387,22 @@ fn mysql_execute_query_with_progress(
         // true 无关，避免取消标志被调用方复位后又继续往下跑）。
         let mut stopped = false;
         for statement in statements {
+            if tidb_read_only && !statement_returns_rows(&statement) {
+                push_query_summary(
+                    &mut execution,
+                    failed_query_summary(
+                        statement,
+                        QueryStatementKind::Command,
+                        "TiDB 不支持事务只读，已拒绝执行非查询语句".into(),
+                        0,
+                    ),
+                    on_summary,
+                );
+                if !request.options.continue_on_error {
+                    break;
+                }
+                continue;
+            }
             if stopped || should_cancel() {
                 // 不再向服务端发送语句，逐条标注「未执行」保持与语句列表对齐。
                 let kind = if statement_returns_rows(&statement) {
@@ -474,6 +500,12 @@ fn mysql_execute_query_with_progress(
             }
         }
 
+        if tidb_read_only {
+            sqlx::raw_sql("ROLLBACK")
+                .execute(&mut connection)
+                .await
+                .map_err(mysql_error)?;
+        }
         connection.close().await.map_err(mysql_error)?;
         Ok(execution)
     })
