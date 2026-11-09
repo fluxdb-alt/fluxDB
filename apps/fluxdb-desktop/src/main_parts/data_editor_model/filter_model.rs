@@ -126,17 +126,72 @@ fn filter_batch_values_to_add(
     (added, duplicated, ignored_empty)
 }
 
-/// 切换字段后清空旧字段值：旧字段的值对本新字段不再有意义（状态残留根因修复）。
-/// 返回 (新规则, 是否曾有过旧值)。
+/// 切换字段后按新字段类型收敛旧值：文本/未知类型原样保留，数字/布尔列只保留
+/// 能按该类型解析的值。直接保留 `abc` 到整数列会在 MySQL 静默按 0 比较、
+/// 在 Postgres 直接报错，必须在这里拦住。
+///
+/// 区间（介于/不介于）任一上下限不兼容就整体清空，避免留下无法成立的单边区间；
+/// 单值/列表逐个过滤。`typed_values` 一律丢弃，由查询期按新列类型重新定型，
+/// 防止旧列的整数类型覆盖文本列的 `"007"` 语义。
+///
+/// 返回 (新规则, 保留值个数, 丢弃值个数)。
 fn data_filter_rule_after_field_switch(
     field: String,
     mut rule: DataFilterRule,
-) -> (DataFilterRule, bool) {
+    new_type_name: Option<&str>,
+) -> (DataFilterRule, usize, usize) {
     rule.field = Some(field);
-    let had_values = !rule.values.is_empty();
-    rule.values.clear();
+    let previous_len = rule.values.len();
+    let operator = rule.operator;
+    let compatible = |value: &String| {
+        data_filter_value_matches_column(value, new_type_name, operator)
+    };
+    let values = match operator.value_arity() {
+        // 区间缺一个边界就不能成立；宁可整体清空，也不生成半个 BETWEEN。
+        DataFilterValueArity::Range if !rule.values.iter().all(compatible) => Vec::new(),
+        _ => rule
+            .values
+            .iter()
+            .filter(|value| compatible(value))
+            .cloned()
+            .collect(),
+    };
+    let values = data_filter_values_for_arity(&values, operator);
+    let kept = values.len();
+    rule.values = values;
     rule.typed_values = None;
-    (rule, had_values)
+    (rule, kept, previous_len - kept)
+}
+
+/// 值能否直接用于目标列类型：解析规则与查询期 `data_filter_value_for_column` 一致，
+/// 避免“编辑器允许保留、执行时又转换失败”的不一致。
+/// LIKE 系列把值当模式文本，任何列类型都不做数字/布尔校验。
+fn data_filter_value_matches_column(
+    value: &str,
+    type_name: Option<&str>,
+    operator: DataFilterOperator,
+) -> bool {
+    if matches!(
+        operator,
+        DataFilterOperator::Contains
+            | DataFilterOperator::NotContains
+            | DataFilterOperator::StartsWith
+            | DataFilterOperator::NotStartsWith
+            | DataFilterOperator::EndsWith
+            | DataFilterOperator::NotEndsWith
+    ) {
+        return true;
+    }
+    let text = value.trim();
+    match data_filter_column_scalar_type(type_name) {
+        DataFilterColumnScalarType::Integer => text.parse::<i64>().is_ok(),
+        DataFilterColumnScalarType::Float => text.parse::<f64>().is_ok(),
+        DataFilterColumnScalarType::Boolean => matches!(
+            text.to_ascii_lowercase().as_str(),
+            "true" | "1" | "false" | "0"
+        ),
+        DataFilterColumnScalarType::Other => true,
+    }
 }
 
 /// 按目标运算符的值形态收敛已有值：列表保留全部，单值/区间只保留前 1/2 个，
@@ -1705,5 +1760,110 @@ mod data_filter_expression_tests {
                 .expect("round-trip SQL");
             assert_eq!(rendered, parsed.text, "{kind:?}");
         }
+    }
+
+    fn filter_rule_with(operator: DataFilterOperator, values: &[&str]) -> DataFilterRule {
+        DataFilterRule {
+            operator,
+            values: values.iter().map(|value| value.to_string()).collect(),
+            ..rule("old_field", "", fluxdb_core::FilterCombinator::And)
+        }
+    }
+
+    #[test]
+    fn field_switch_keeps_values_compatible_with_new_column_type() {
+        // 先填值后选字段：新字段是文本列，值原样保留（前导零不能丢）。
+        let (switched, kept, dropped) = data_filter_rule_after_field_switch(
+            "biz_id".into(),
+            DataFilterRule {
+                field: None,
+                ..filter_rule_with(DataFilterOperator::Eq, &["007"])
+            },
+            Some("varchar(64)"),
+        );
+        assert_eq!(switched.field.as_deref(), Some("biz_id"));
+        assert_eq!(switched.values, vec!["007"]);
+        assert_eq!((kept, dropped), (1, 0));
+
+        // 数字列接受可解析值；旧列解析出的 typed_values 必须丢弃，按新列重新定型。
+        let (switched, kept, dropped) = data_filter_rule_after_field_switch(
+            "id".into(),
+            DataFilterRule {
+                typed_values: Some(vec![fluxdb_core::FilterValue::Text("1".into())]),
+                ..filter_rule_with(DataFilterOperator::Eq, &["1"])
+            },
+            Some("bigint"),
+        );
+        assert_eq!(switched.values, vec!["1"]);
+        assert!(switched.typed_values.is_none());
+        assert_eq!((kept, dropped), (1, 0));
+
+        // 类型未知（页面未加载/自定义类型）按文本处理，不丢用户输入。
+        let (switched, _, dropped) = data_filter_rule_after_field_switch(
+            "custom".into(),
+            filter_rule_with(DataFilterOperator::Eq, &["abc"]),
+            None,
+        );
+        assert_eq!(switched.values, vec!["abc"]);
+        assert_eq!(dropped, 0);
+
+        // LIKE 系列把值当模式文本，数字列也不做数字校验。
+        let (switched, kept, dropped) = data_filter_rule_after_field_switch(
+            "id".into(),
+            filter_rule_with(DataFilterOperator::Contains, &["001"]),
+            Some("integer"),
+        );
+        assert_eq!(switched.values, vec!["001"]);
+        assert_eq!((kept, dropped), (1, 0));
+    }
+
+    #[test]
+    fn field_switch_drops_values_incompatible_with_new_column_type() {
+        // 文本 -> 整数：只保留能解析的值。
+        let (switched, kept, dropped) = data_filter_rule_after_field_switch(
+            "id".into(),
+            filter_rule_with(DataFilterOperator::InList, &["123", "abc", "7.5"]),
+            Some("bigint"),
+        );
+        assert_eq!(switched.values, vec!["123"]);
+        assert_eq!((kept, dropped), (1, 2));
+
+        // 文本 -> 布尔：只认 true/1/false/0（忽略大小写），空值同样丢弃。
+        let (switched, kept, dropped) = data_filter_rule_after_field_switch(
+            "enabled".into(),
+            filter_rule_with(DataFilterOperator::InList, &["TRUE", "0", "yes", ""]),
+            Some("boolean"),
+        );
+        assert_eq!(switched.values, vec!["TRUE", "0"]);
+        assert_eq!((kept, dropped), (2, 2));
+
+        // 单值全部不兼容：清空并提示（由调用方按 dropped 决定文案）。
+        let (switched, kept, dropped) = data_filter_rule_after_field_switch(
+            "amount".into(),
+            filter_rule_with(DataFilterOperator::Eq, &["abc"]),
+            Some("numeric(12,4)"),
+        );
+        assert!(switched.values.is_empty());
+        assert_eq!((kept, dropped), (0, 1));
+    }
+
+    #[test]
+    fn field_switch_clears_between_when_any_bound_is_incompatible() {
+        // 区间缺一个可用的边界就不成立：整体清空，而不是留下单边时刻。
+        let (switched, kept, dropped) = data_filter_rule_after_field_switch(
+            "amount".into(),
+            filter_rule_with(DataFilterOperator::Between, &["1", "abc"]),
+            Some("numeric(12,4)"),
+        );
+        assert!(switched.values.is_empty());
+        assert_eq!((kept, dropped), (0, 2));
+
+        let (switched, kept, dropped) = data_filter_rule_after_field_switch(
+            "amount".into(),
+            filter_rule_with(DataFilterOperator::Between, &["1", "9.5"]),
+            Some("numeric(12,4)"),
+        );
+        assert_eq!(switched.values, vec!["1", "9.5"]);
+        assert_eq!((kept, dropped), (2, 0));
     }
 }

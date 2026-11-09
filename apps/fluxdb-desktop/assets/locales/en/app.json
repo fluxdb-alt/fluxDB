@@ -380,6 +380,7 @@
     "value_count": "%{count} values",
     "toast": {
       "field_changed": "Field changed; previous filter values were cleared",
+      "field_changed_partial": "Field changed; removed %{count} values incompatible with the new field type",
       "values_added": "Added %{added} new values, skipped %{duplicated} duplicates%{ignored}",
       "ignored_empty": " (ignored %{count} empty lines)"
     },
