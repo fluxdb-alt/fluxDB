@@ -52,6 +52,10 @@ type ByteRange = std::ops::Range<usize>;
 /// Oracle 只认 `EXPLAIN PLAN FOR`（会写 PLAN_TABLE，有副作用），SQL Server 要 SHOWPLAN
 /// 专用会话，两条路径都无法靠拼前缀得到计划。对它们返回 `None`，让 Explain 按钮禁用，
 /// 而不是发出必然失败的 SQL。
+///
+/// 自动包装优先取结构化输出，供可视化计划解析：
+/// MySQL 家族 `EXPLAIN FORMAT=JSON`、PostgreSQL 家族 `EXPLAIN (FORMAT JSON)`、
+/// SQLite `EXPLAIN QUERY PLAN`。用户手写的 `EXPLAIN` 原样执行，不二次包装。
 pub(crate) fn explain_sql_text(statement: &str, kind: DatabaseKind) -> Option<String> {
     if fluxdb_app::policy_for(kind)?.explain_mode() != fluxdb_app::ExplainMode::Prefix {
         return None;
@@ -60,9 +64,33 @@ pub(crate) fn explain_sql_text(statement: &str, kind: DatabaseKind) -> Option<St
     let keyword = first_sql_keyword(text)?;
     match keyword.as_str() {
         "explain" => Some(text.to_string()),
-        "select" | "with" => Some(format!("EXPLAIN {text}")),
+        "select" | "with" => Some(match kind {
+            kind if kind.is_mysql_family() => format!("EXPLAIN FORMAT=JSON {text}"),
+            kind if kind.is_postgres_family() => format!("EXPLAIN (FORMAT JSON) {text}"),
+            DatabaseKind::Sqlite => format!("EXPLAIN QUERY PLAN {text}"),
+            _ => format!("EXPLAIN {text}"),
+        }),
         _ => None,
     }
+}
+
+/// 语句是否要求 `EXPLAIN ANALYZE`（会真正执行 SQL，不是只看计划）。
+///
+/// 工具栏「解释」按钮用它避免把实际执行当成预估计划；编辑器 Run 仍尊重用户手写意图。
+pub(crate) fn explain_analyze_requested(statement: &str) -> bool {
+    let lower = statement.trim_start().to_ascii_lowercase();
+    let Some(rest) = lower.strip_prefix("explain") else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    // 只看 EXPLAIN 后的选项区：`EXPLAIN SELECT 'analyze'` 不应被误判。
+    let head = if let Some(options) = rest.strip_prefix('(') {
+        options.split(')').next().unwrap_or("")
+    } else {
+        rest.split_whitespace().next().unwrap_or("")
+    };
+    head.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .any(|token| token == "analyze")
 }
 
 /// 取语句的首个 ASCII 小写关键字（如 select / with / explain），无字母前缀时返回 `None`。
@@ -346,11 +374,15 @@ mod statement_multibyte_safety_tests {
         }
         assert_eq!(
             explain_sql_text("SELECT 1", DatabaseKind::MySql).as_deref(),
-            Some("EXPLAIN SELECT 1")
+            Some("EXPLAIN FORMAT=JSON SELECT 1")
         );
         assert_eq!(
             explain_sql_text("SELECT 1", DatabaseKind::Postgres).as_deref(),
-            Some("EXPLAIN SELECT 1")
+            Some("EXPLAIN (FORMAT JSON) SELECT 1")
+        );
+        assert_eq!(
+            explain_sql_text("SELECT 1", DatabaseKind::Sqlite).as_deref(),
+            Some("EXPLAIN QUERY PLAN SELECT 1")
         );
         // 已手写 EXPLAIN 的语句原样执行，不做二次包装。
         assert_eq!(
@@ -358,6 +390,19 @@ mod statement_multibyte_safety_tests {
             Some("EXPLAIN SELECT 1")
         );
         assert_eq!(explain_sql_text("INSERT INTO t VALUES (1)", DatabaseKind::MySql), None);
+    }
+
+    #[test]
+    fn explain_analyze_is_detected_but_not_rewritten() {
+        assert!(explain_analyze_requested("EXPLAIN ANALYZE SELECT 1"));
+        assert!(explain_analyze_requested("  explain (analyze, format json) select 1"));
+        assert!(!explain_analyze_requested("EXPLAIN SELECT 1"));
+        assert!(!explain_analyze_requested("EXPLAIN SELECT 'analyze'"));
+        assert!(!explain_analyze_requested("SELECT 1"));
+        assert_eq!(
+            explain_sql_text("EXPLAIN ANALYZE SELECT 1", DatabaseKind::MySql).as_deref(),
+            Some("EXPLAIN ANALYZE SELECT 1")
+        );
     }
 }
 

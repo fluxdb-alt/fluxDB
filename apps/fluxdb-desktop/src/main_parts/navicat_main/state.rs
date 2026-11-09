@@ -1014,6 +1014,10 @@ struct NavicatMain {
     // 新增「按连接 + DB 分组」的会话历史与持久化入口，不复用 SQL 历史。
     workbench_panel_resize_start: Option<WorkbenchPanelResizeStart>,
     query_output_tabs: BTreeMap<TabId, QueryOutputTab>,
+    /// 执行计划页签当前选中的节点下标（按标签页记住）。
+    query_plan_selected_nodes: BTreeMap<TabId, usize>,
+    /// 执行计划的展示模式：图形树 / 原始结果表格。
+    query_plan_view_modes: BTreeMap<TabId, QueryPlanViewMode>,
     collapsed_query_outputs: BTreeSet<TabId>,
     results_placement: ResultsPlacement,
     query_result_display_pages: BTreeMap<QueryResultDisplayKey, SortedQueryResultPage>,

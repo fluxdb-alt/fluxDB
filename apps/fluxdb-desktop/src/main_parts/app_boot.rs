@@ -3436,6 +3436,8 @@ fn navicat_main_new(
         _pubsub_pump: None,
         workbench_panel_resize_start: None,
         query_output_tabs: BTreeMap::new(),
+        query_plan_selected_nodes: BTreeMap::new(),
+        query_plan_view_modes: BTreeMap::new(),
         collapsed_query_outputs: BTreeSet::new(),
         // 启动时的结果区布局取自持久化设置（「查询结果默认布局」）；
         // 工具栏上的切换按钮只改这个运行时值，不回写设置。

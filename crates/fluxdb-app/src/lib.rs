@@ -99,6 +99,7 @@ pub use mysql_client_tools::*;
 include!("parts/query_history.rs");
 include!("parts/workbench_history.rs");
 include!("parts/query_result_edit.rs");
+include!("parts/query_plan.rs");
 include!("parts/er_service.rs");
 include!("parts/er_catalog.rs");
 include!("parts/er_layout.rs");

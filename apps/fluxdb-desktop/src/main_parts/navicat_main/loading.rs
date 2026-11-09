@@ -66,10 +66,13 @@ impl NavicatMain {
     fn selected_complete_statement(&self, tab_id: TabId, cx: &Context<Self>) -> Option<SqlStatementRun> {
         let text = self.query_editor_text(tab_id, cx);
         let range = self.query_selection_range(tab_id, cx);
-        let trimmed = trim_range(&text, range);
+        let selected = trim_range(&text, range)?;
+        // 普通 SQL 的语句区间不含结尾分号，但用户全选一整行时通常会把 `;` 一起选进来。
+        // 比较前去掉选区的结尾分号，避免“完整语句却按钮不可用”。
+        let selected_text = &text[selected.clone()];
         sql_editor_adapter::build_statement_runs(&text, self.query_editor_database_kind(tab_id))
             .into_iter()
-            .find(|statement| trim_range(&text, statement.range.clone()).as_ref() == trimmed.as_ref())
+            .find(|statement| selection_matches_statement(selected_text, &statement.text))
     }
 
     /// 光标所在语句。
@@ -88,11 +91,14 @@ impl NavicatMain {
 
     /// 当前选中语句的 EXPLAIN 版本（仅 `EXPLAIN` 前缀方言的 EXPLAIN / SELECT / WITH）。
     fn selected_explain_sql_text(&self, tab_id: TabId, cx: &Context<Self>) -> Option<String> {
-        let statement = self.selected_complete_statement(tab_id, cx)?;
-        sql_editor_adapter::explain_sql_text(
-            &statement.text,
-            self.query_editor_database_kind(tab_id),
-        )
+        // 与 Run 的取数顺序一致：完整语句选区 → 选区原文 → 光标所在语句。
+        // 用户选了什么就解释什么，不会偷偷换成全文或另一条语句。
+        let source = self
+            .selected_complete_statement(tab_id, cx)
+            .map(|statement| statement.text)
+            .or_else(|| self.selected_sql_text(tab_id, cx))
+            .or_else(|| self.current_statement(tab_id, cx).map(|statement| statement.text))?;
+        sql_editor_adapter::explain_sql_text(&source, self.query_editor_database_kind(tab_id))
     }
 
     /// 编辑器触发 Execute 事件时的统一入口：按区间还原语句执行，否则按文本执行。
@@ -130,11 +136,24 @@ impl NavicatMain {
                     .read(cx)
                     .text_in_range(fluxdb_editor_core::Range::new(range.start, range.end)),
             };
+            // 手写的 EXPLAIN ANALYZE 会真正执行 SQL；解释入口不替用户做实际执行，
+            // 与工具栏按钮保持同一条安全规则，用户仍可直接 Run。
+            if sql_editor_adapter::explain_analyze_requested(&source) {
+                self.show_message(
+                    tr("app.query.plan.analyze_blocked").as_ref(),
+                    AppMessageKind::Warning,
+                    cx,
+                );
+                return;
+            }
             match sql_editor_adapter::explain_sql_text(
                 &source,
                 self.query_editor_database_kind(tab_id),
             ) {
                 Some(explain) => {
+                    // 手写 EXPLAIN 已由 explain_sql_text 原样返回；这里只接管页签，
+                    // 不改变用户语句，避免重复包装或误判实际执行。
+                    self.query_output_tabs.insert(tab_id, QueryOutputTab::Plan);
                     self.start_query_text_execution(tab_id, explain, window, cx);
                 }
                 None => {
@@ -157,6 +176,16 @@ impl NavicatMain {
 }
 
 /// 把选区/语句字节区间 trim 到首尾非空白（与旧实现语义一致）。
+/// 选区是否覆盖同一条完整语句；允许用户把结尾 `;` 一起选中。
+fn selection_matches_statement(selected: &str, statement: &str) -> bool {
+    let selected = selected.trim_end();
+    let selected = selected
+        .strip_suffix(';')
+        .map(str::trim_end)
+        .unwrap_or(selected);
+    statement.trim_end() == selected
+}
+
 fn trim_range(text: &str, range: std::ops::Range<usize>) -> Option<std::ops::Range<usize>> {
     let mut start = range.start.min(text.len());
     let mut end = range.end.min(text.len());
@@ -482,7 +511,18 @@ impl NavicatMain {
         let Some(text) = self.selected_explain_sql_text(tab_id, cx) else {
             return false;
         };
+        // `EXPLAIN ANALYZE` 会真正执行 SQL；工具栏的“解释”按钮只做预估计划，
+        // 不能把实际执行当成计划预览。以警告拦住，用户仍可在编辑器主动运行。
+        if sql_editor_adapter::explain_analyze_requested(&text) {
+            self.show_message(
+                tr("app.query.plan.analyze_blocked").as_ref(),
+                AppMessageKind::Warning,
+                cx,
+            );
+            return false;
+        }
 
+        self.query_output_tabs.insert(tab_id, QueryOutputTab::Plan);
         self.start_query_text_execution(tab_id, text, _window, cx);
         true
     }
@@ -1051,3 +1091,17 @@ fn is_dangerous_sql_statement(
     false
 }
 
+
+#[cfg(test)]
+mod loading_statement_match_tests {
+    use super::selection_matches_statement;
+
+    #[test]
+    fn trailing_semicolon_does_not_break_complete_statement_match() {
+        let sql = "SELECT * FROM `3d_countries` WHERE `id` = 'TEST_C'";
+        assert!(selection_matches_statement(sql, sql));
+        assert!(selection_matches_statement(&format!("{sql};"), sql));
+        assert!(selection_matches_statement(&format!("{sql};  \n"), sql));
+        assert!(!selection_matches_statement("SELECT * FROM t", sql));
+    }
+}
