@@ -48,6 +48,7 @@
 | Rust 函数、接口、命名与错误处理 | [Rust 风格与单测](docs/testing/rust-style-and-unit-tests.md) 第 2 节 |
 | 编写/整理单测 | [Rust 风格与单测](docs/testing/rust-style-and-unit-tests.md) 第 3–6 节 |
 | 验证范围、E2E、Podman、截图 | 本文件“测试与验收”；Rust 测试命令见上述指南第 5 节 |
+| 新增数据库连接器或跨库一致性测试 | [SQL 引擎一致性测试](docs/testing/sql-conformance.md) |
 | Release、版本号、更新清单或签名 | 本文件“Release 发布”；[应用内更新](docs/updates.md) |
 | UI 组件、交互、页面上下文或 GPUI 依赖 | [UI 规范](docs/ui-style.md) |
 | 语言包、locale 或界面文案迁移 | [界面国际化](docs/i18n.md) |
