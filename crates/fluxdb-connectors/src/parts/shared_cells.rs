@@ -126,7 +126,9 @@ fn sqlite_select_expr(column: &Column) -> String {
         );
     }
 
-    format!("CAST({name} AS TEXT) AS {name}")
+    // 不统一 CAST 成 TEXT：SQLite 的值类型按行存储，表浏览需要保留
+    // INTEGER/REAL/NULL 的真实类型，才能与查询编辑器及写回身份保持一致。
+    format!("{name} AS {name}")
 }
 
 /// SQL Server 的二进制列投影：与 MySQL/SQLite 同一口径，正文永不进结果页。
@@ -443,6 +445,16 @@ fn sqlite_cell_value(row: &SqliteRow, column: &Column) -> CellValue {
         return sqlite_binary_summary(row, column);
     }
 
+    // SQLite 的列类型只是 affinity，真实存储类型按行决定。表浏览必须与
+    // 查询编辑器一样先读取实际值类型，不能把所有非二进制值都转成文本：
+    // 否则 INTEGER 主键在编辑器里是 I64、在表格里却是 Text，排序、编辑身份
+    // 和 AI 结果投影会看到两套语义。
+    if let Ok(value) = row.try_get::<Option<i64>, _>(column.name.as_str()) {
+        return value.map(CellValue::I64).unwrap_or(CellValue::Null);
+    }
+    if let Ok(value) = row.try_get::<Option<f64>, _>(column.name.as_str()) {
+        return value.map(CellValue::F64).unwrap_or(CellValue::Null);
+    }
     row.try_get::<Option<String>, _>(column.name.as_str())
         .map(|value| value.map(CellValue::Text).unwrap_or(CellValue::Null))
         .unwrap_or_else(|_| {
