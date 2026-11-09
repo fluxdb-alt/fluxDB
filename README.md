@@ -17,6 +17,16 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 
 ## 最近更新
 
+### v0.1.17
+
+- **结构对比与数据传输**：连接右键菜单新增「结构对比与同步」「跨连接数据传输」；对比按 `schema.name` 配对基础表，展示缺失 / 多出 / 结构不同 / 一致与两端 DDL，可按勾选新建、删除或重建；传输支持追加与清空后写入，目标表不存在时自动建表，分页读写、可取消。
+- **任务中心**：汇总备份、恢复、SQL 文件、表与 Mongo 导入导出、结构同步、数据传输等后台任务，统一展示状态、进度与日志，支持取消并持久化历史记录。
+- **可视化执行计划**：工具栏「解释」解析 MySQL / MariaDB / TiDB、PostgreSQL / KingbaseES 与 SQLite 的计划输出，生成节点树与检查器，标记全表扫描、文件排序与无索引；无法解析时回退原始结果。
+- **新建连接优化**：高频字段留在「连接信息」，MySQL 系字符集 / 排序规则 / URL 参数移入「高级」，SQLite 隐藏空的网络页签；MySQL / MariaDB / TiDB 新增 SOCKS5 与 HTTP CONNECT 代理，可与 TLS 组合，PostgreSQL 复用共享代理拨号。
+- **修复**：修正 MySQL 旧档案 TLS 模式迁移误判；筛选切换字段时按新列类型保留兼容值；补齐备份 / 恢复取消任务文案；修复 Kingbase 补全兼容性与导出分页嵌套 `block_on`。
+
+[完整更新说明](./release-notes/v0.1.17/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.16
 
 - **新增人大金仓 KingbaseES**：复用 PostgreSQL 连接链路（PG 兼容模式），支持连接测试、库 / Schema 与对象浏览、SQL 查询与补全、数据查看与编辑、表结构查看与设计，以及用户与权限入口；默认端口 54321，支持 TLS、SSH、代理与连接串导入。
@@ -24,18 +34,6 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 - **修复**：修复 Kingbase 打开表属性 DDL 时的 panic（`pg_sequence` 数值列声明为 `int2`，改为显式 `::bigint`）；连接类型栏底部计数更新为 11 种。
 
 [完整更新说明](./release-notes/v0.1.16/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
-
-### v0.1.15
-
-- **新增 MariaDB 数据源**：复用 MySQL 协议链路，支持对象浏览、SQL 查询与补全、表结构管理与设计、数据编辑、导入导出、备份恢复、用户与权限，并接入 MariaDB 专用只读与 AI SQL 策略。
-- **连接级只读模式**：高级设置新增“只读连接”；SQL、Redis、MongoDB 的写入入口统一拦截，Redis CLI 通过本机代理限制写命令，SQLite 以驱动只读方式打开文件；侧边栏标记只读连接。
-- **AI 内置文档检索**：新增 `docs.search` / `docs.read`，只读随应用编译的操作手册；AI 先检索小节，再按需分页读取正文，避免凭记忆编造菜单路径。
-- **操作手册与快速打开**：新增完整中文操作手册，覆盖连接、SQL、数据编辑、结构管理、导入导出、备份、权限、Redis、MongoDB 与设置；新增 `⌘P` / `Ctrl+P` 模糊搜索已加载表与视图并直接打开。
-- **MongoDB 写入能力**：命令行终端与命令工作台支持 insert / update / delete / 索引 / 集合等写方法，聚合仍拒绝 `$out` / `$merge` 写回；修复补全复用后出现 `db.db` 前缀。
-- **SQL 补全与交互修复**：补齐 MySQL、PostgreSQL、Oracle、SQL Server 多类补全；修复主键编辑后的脏格标记、Redis Workbench 失败结果展示、函数签名浮层残留、取消更新下载后弹框未关闭等问题。
-- **设置与退出**：设置页补齐 10 种内置连接器支持列表；退出时存在未保存修改或运行中查询会先确认。
-
-[完整更新说明](./release-notes/v0.1.15/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
 
 ## 为什么选择 FluxDB
 
