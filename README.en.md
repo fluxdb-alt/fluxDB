@@ -19,6 +19,16 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 
 ## Latest changes
 
+### v0.1.17
+
+- **Structure compare and data transfer**: new connection context-menu entries for structure compare/sync and cross-connection data transfer. Tables are paired by `schema.name` and reported as missing, extra, modified or identical with side-by-side DDL, then the selected tables can be created, dropped or recreated. Transfer supports append and truncate-then-write, creates a missing target table, and reads/writes in pages with cancellation.
+- **Task center**: collects backup, restore, SQL file execution, table and MongoDB import/export, structure sync and data transfer, with unified status, progress and logs, cancellation, and persisted history.
+- **Visual query plans**: the toolbar "Explain" action parses MySQL / MariaDB / TiDB, PostgreSQL / KingbaseES and SQLite plan output into a node tree and inspector, flagging full table scans, filesorts and missing indexes, and falls back to the raw result when parsing fails.
+- **Connection form improvements**: high-frequency fields stay under "Connection info", MySQL-family charset/collation/URL parameters move to "Advanced", and SQLite hides the empty network tab. MySQL / MariaDB / TiDB gain SOCKS5 and HTTP CONNECT proxies combinable with TLS, and PostgreSQL reuses the shared proxy dialer.
+- **Fixes**: corrected legacy MySQL TLS-mode migration, kept compatible filter values when switching fields, added missing backup/restore cancel strings, and fixed KingbaseES completion compatibility and a nested `block_on` in export pagination.
+
+[Full release notes](./release-notes/v0.1.17/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.16
 
 - **KingbaseES support**: reuses the PostgreSQL connection path in PG compatibility mode for connection tests, database/schema and object browsing, SQL queries and completion, data viewing and editing, table structure viewing and design, and the users and privileges entry. The default port is 54321, with TLS, SSH, proxy and connection-string import.
@@ -26,18 +36,6 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 - **Fixes**: fixed a panic when opening table DDL on Kingbase (`pg_sequence` numeric columns are declared `int2`; the query now casts to `::bigint`), and the connection-kind rail now reports 11 built-in drivers.
 
 [Full release notes](./release-notes/v0.1.16/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
-
-### v0.1.15
-
-- **MariaDB support**: reuses the MySQL protocol path for object browsing, SQL queries and completion, table design, data editing, import/export, backup and restore, and users/privileges, with MariaDB-specific read-only and AI SQL policies.
-- **Connection-level read-only mode**: the advanced connection settings add a read-only switch. Write paths across SQL, Redis and MongoDB are blocked, the Redis CLI goes through a local proxy that rejects writes, SQLite files open read-only at the driver level, and the sidebar marks read-only connections.
-- **Built-in AI documentation tools**: `docs.search` and `docs.read` search and page through the product manual bundled into the app, so the AI can quote real sections instead of inventing menu paths.
-- **User guide and quick open**: a complete Chinese user guide now covers connections, SQL, data editing, schema management, import/export, backup, permissions, Redis, MongoDB and settings; `⌘P` / `Ctrl+P` fuzzy-searches loaded tables and views and opens them directly.
-- **MongoDB writes**: the command-line terminal and command workbench support insert / update / delete / index / collection write methods, while aggregation still rejects `$out` / `$merge`; completion reuse no longer produces a duplicated `db.db` prefix.
-- **SQL completion and interaction fixes**: filled completion gaps for MySQL, PostgreSQL, Oracle and SQL Server, and fixed dirty-cell marking after primary-key edits, missing Redis Workbench failures, stale function-signature popovers and the update dialog not closing after download cancellation.
-- **Settings and quit**: the settings database list now covers all ten built-in connectors, and quitting with unsaved changes or running queries asks for confirmation first.
-
-[Full release notes](./release-notes/v0.1.15/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
 
 ## Why FluxDB
 
