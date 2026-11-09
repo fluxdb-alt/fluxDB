@@ -3208,11 +3208,12 @@ fn query_output_panel(
         return collapsed_query_output_button(tab_id, placement, colors, cx);
     }
 
+    let database_kind = this.query_editor_database_kind(tab_id);
     let selected = this
         .query_output_tabs
         .get(&tab_id)
         .copied()
-        .filter(|tab| query_output_tab_exists(*tab, editor))
+        .filter(|tab| query_output_tab_exists(*tab, editor, database_kind))
         .unwrap_or_else(|| {
             if query_result_entry_count(editor) > 0 {
                 QueryOutputTab::Result(0)
@@ -3252,6 +3253,9 @@ fn query_output_panel(
                 query_execution_summary_view(tab_id, &editor.summaries, colors, cx)
                     .into_any_element()
             }
+            QueryOutputTab::Plan => {
+                query_plan_view(tab_id, editor, this, colors, cx).into_any_element()
+            }
         }
     };
 
@@ -3261,7 +3265,14 @@ fn query_output_panel(
         .min_h(px(0.))
         .flex()
         .flex_col()
-        .child(query_output_tabs(tab_id, editor, selected, colors, cx))
+        .child(query_output_tabs(
+            tab_id,
+            editor,
+            database_kind,
+            selected,
+            colors,
+            cx,
+        ))
         .child(
             div()
                 .relative()
@@ -3464,10 +3475,19 @@ fn collapsed_query_output_button(
     }
 }
 
-fn query_output_tab_exists(tab: QueryOutputTab, editor: &QueryEditorState) -> bool {
+fn query_output_tab_exists(
+    tab: QueryOutputTab,
+    editor: &QueryEditorState,
+    database_kind: DatabaseKind,
+) -> bool {
     match tab {
         QueryOutputTab::Result(index) => index < query_result_entry_count(editor),
         QueryOutputTab::Summary => !editor.summaries.is_empty() || editor.error.is_some(),
+        // 只有当前结果能解析成计划时才出现；否则宁可回退到原始结果表格。
+        QueryOutputTab::Plan => editor
+            .results
+            .last()
+            .is_some_and(|page| fluxdb_app::query_plan_from_page(database_kind, page).is_some()),
     }
 }
 
@@ -3482,6 +3502,7 @@ fn data_cell_edit_should_commit_before_query_output_tab_change(
 fn query_output_tabs(
     tab_id: TabId,
     editor: &QueryEditorState,
+    database_kind: DatabaseKind,
     selected: QueryOutputTab,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
@@ -3538,6 +3559,21 @@ fn query_output_tabs(
         )
         .flex_none(),
     );
+
+    if query_output_tab_exists(QueryOutputTab::Plan, editor, database_kind) {
+        tab_strip = tab_strip.child(
+            query_output_tab_button(
+                tab_id,
+                QueryOutputTab::Plan,
+                tr("app.query.plan.tab").to_string(),
+                Some(AppIcon::FileSearch),
+                selected == QueryOutputTab::Plan,
+                colors,
+                cx,
+            )
+            .flex_none(),
+        );
+    }
 
     let refresh = query_output_toolbar_button(
         tab_id,
@@ -3604,7 +3640,13 @@ fn query_output_tab_button(
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
+    let debug_name = match tab {
+        QueryOutputTab::Result(index) => format!("query-output-tab:result:{index}"),
+        QueryOutputTab::Summary => "query-output-tab:summary".to_string(),
+        QueryOutputTab::Plan => "query-output-tab:plan".to_string(),
+    };
     div()
+        .debug_selector(move || debug_name.clone())
         .h(px(26.))
         .px_2()
         .rounded(colors.radius_lg)

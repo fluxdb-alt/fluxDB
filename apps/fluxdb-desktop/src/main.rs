@@ -160,6 +160,7 @@ include!("main_parts/user_admin/postgres/privileges.rs");
 include!("main_parts/user_admin/postgres/sql_preview.rs");
 include!("main_parts/create_table.rs");
 include!("main_parts/content_views.rs");
+include!("main_parts/query_plan_view.rs");
 include!("main_parts/mongo_collection.rs");
 include!("main_parts/mongo_query_completion.rs");
 include!("main_parts/mongo_shell_editor_adapter.rs");

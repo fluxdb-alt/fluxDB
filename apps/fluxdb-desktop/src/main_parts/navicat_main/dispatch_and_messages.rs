@@ -810,9 +810,22 @@ impl NavicatMain {
                     self.refresh_data_table_state(*tab_id, page, cx);
                 }
                 self.collapsed_query_outputs.remove(tab_id);
+                // 解释请求可能在结果返回前就把页签切到计划；结果一到就改回「结果 1」
+                // 会让用户点了解释却看不到计划。只有能解析出计划时才保留该页签。
+                let keep_plan = self.query_output_tabs.get(tab_id)
+                    == Some(&QueryOutputTab::Plan)
+                    && execution.results.last().is_some_and(|page| {
+                        fluxdb_app::query_plan_from_page(
+                            self.query_editor_database_kind(*tab_id),
+                            page,
+                        )
+                        .is_some()
+                    });
                 self.query_output_tabs.insert(
                     *tab_id,
-                    if query_execution_result_entry_count(
+                    if keep_plan {
+                        QueryOutputTab::Plan
+                    } else if query_execution_result_entry_count(
                         execution.results.len(),
                         &execution.summaries,
                     ) > 0
@@ -921,6 +934,8 @@ impl NavicatMain {
                 self._query_completion_tasks
                     .retain(|(task_tab_id, _), _| task_tab_id != tab_id);
                 self.query_output_tabs.remove(tab_id);
+                self.query_plan_selected_nodes.remove(tab_id);
+                self.query_plan_view_modes.remove(tab_id);
                 self.collapsed_query_outputs.remove(tab_id);
                 self.query_output_heights.remove(tab_id);
                 self.query_output_widths.remove(tab_id);

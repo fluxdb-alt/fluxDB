@@ -1773,15 +1773,24 @@ enum DataTableSelectionAnchor {
 enum QueryOutputTab {
     Result(usize),
     Summary,
+    /// 当前结果页解析出的查询计划；解析失败时页签不出现，保留原始结果表格。
+    Plan,
 }
 
 impl QueryOutputTab {
     fn result_index(self) -> Option<usize> {
         match self {
             QueryOutputTab::Result(index) => Some(index),
-            QueryOutputTab::Summary => None,
+            QueryOutputTab::Summary | QueryOutputTab::Plan => None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum QueryPlanViewMode {
+    #[default]
+    Graph,
+    Table,
 }
 
 fn active_query_result_editor_state(editor: &QueryEditorState) -> Option<&DataEditorState> {

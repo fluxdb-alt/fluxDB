@@ -69,11 +69,12 @@ impl NavicatMain {
                 page.kind = PageContextKind::SqlEditor;
                 page.snapshot =
                     fluxdb_app::capture_editor_snapshot(tab.id.0, target, &text, selection);
+                let database_kind = self.query_editor_database_kind(tab.id);
                 let output = self
                     .query_output_tabs
                     .get(&tab.id)
                     .copied()
-                    .filter(|output| query_output_tab_exists(*output, query))
+                    .filter(|output| query_output_tab_exists(*output, query, database_kind))
                     .unwrap_or_else(|| {
                         if query_result_entry_count(query) > 0 {
                             QueryOutputTab::Result(0)

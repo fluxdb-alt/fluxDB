@@ -54,6 +54,7 @@ mod i18n_e2e_tests {
     include!("i18n_tests/oracle_security.rs");
     include!("i18n_tests/oracle_completion.rs");
     include!("i18n_tests/query_summary_layout.rs");
+    include!("i18n_tests/query_plan_scroll.rs");
     include!("i18n_tests/query_incomplete_footer.rs");
     include!("i18n_tests/sql_completion_mysql_e2e.rs");
     include!("i18n_tests/editor_signature_dismiss.rs");
