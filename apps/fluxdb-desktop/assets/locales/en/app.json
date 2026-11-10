@@ -177,10 +177,10 @@
     "ungroup": "Remove from group",
     "user_admin": "Users & privileges",
     "mongo_info": "Show connection info",
-    "mongo_performance": "View performance metrics",
     "new_collection": "Create collection",
     "mongo_cli": "Command line",
     "mongo_workbench": "Command workbench",
+    "server_panel": "Server",
     "compare_structure": "Structure compare & sync",
     "transfer_data": "Cross-connection data transfer"
   },
@@ -4452,7 +4452,10 @@
     "redis_pubsub": "Redis Pub/Sub - DB %{database}",
     "global": "Global",
     "mongo_cli": "MongoDB Shell - %{database}",
-    "mongo_workbench": "MongoDB Workbench - %{database}"
+    "mongo_workbench": "MongoDB Workbench - %{database}",
+    "server_panel": "Server · %{name}",
+    "redis_server_panel": "Server · %{name}",
+    "mongo_server_panel": "Server · %{name}"
   },
   "backend_error": {
     "sqlserver_connection_task_failed": "SQL Server connection task terminated unexpectedly",
@@ -6292,6 +6295,317 @@
       "fill": "Fill missing values",
       "documents": "Constant document source",
       "set_window_fields": "Window functions"
+    }
+  },
+  "server_panel": {
+    "title": "Server",
+    "error_title": "Failed to read server status",
+    "error_unknown": "Unknown error",
+    "action_failed": "Action failed",
+    "read_only": "Read-only",
+    "read_only_hint": "Read-only connections cannot terminate sessions or run maintenance.",
+    "self_hint": "Cannot terminate the session used by this panel.",
+    "no_database": "No database selected",
+    "unknown": "Unknown",
+    "loading": "Reading server status…",
+    "retry": "Retry",
+    "refresh": "Refresh",
+    "auto_refresh": "Auto refresh",
+    "only_mine": "Only my sessions",
+    "count": {
+      "sessions": "%{count} sessions",
+      "locks": "%{count} lock waits"
+    },
+    "tab": {
+      "sessions": "Sessions",
+      "locks": "Lock waits",
+      "status": "Status"
+    },
+    "empty_sessions": "No visible sessions",
+    "empty_locks": "No lock waits",
+    "locks_error": "Failed to read lock waits: %{message}",
+    "status_error": "Failed to read status metrics: %{message}",
+    "col": {
+      "status": "Status",
+      "session": "Session",
+      "user": "User",
+      "host": "Host",
+      "database": "Database",
+      "command": "Command",
+      "elapsed": "Elapsed",
+      "wait_event": "Wait event",
+      "sql": "SQL",
+      "waiting": "Waiting",
+      "blocking": "Blocking",
+      "object": "Object",
+      "lock_type": "Lock type",
+      "wait": "Wait",
+      "state": "State",
+      "metric": "Metric",
+      "value": "Value"
+    },
+    "status": {
+      "running": "Running",
+      "waiting": "Waiting",
+      "idle": "Idle",
+      "unknown": "Unknown",
+      "version": "Version",
+      "current_user": "Current user",
+      "uptime": "Uptime"
+    },
+    "lock_type": {
+      "row": "Row lock",
+      "page": "Page lock",
+      "metadata": "Metadata lock",
+      "table": "Table lock",
+      "transaction": "Transaction lock",
+      "advisory": "Advisory lock",
+      "object": "Object lock"
+    },
+    "detail": {
+      "title": "Session details",
+      "elapsed": "Elapsed",
+      "blocker": "Related lock wait",
+      "sql": "SQL"
+    },
+    "action": {
+      "copy_sql": "Copy SQL",
+      "copy_sql_done": "SQL copied",
+      "open_editor": "Open in query",
+      "cancel_query": "Cancel query",
+      "kill_session": "Terminate session",
+      "maintenance_done": "Maintenance completed",
+      "cancel_query_done": "Query cancelled",
+      "kill_session_done": "Session terminated"
+    },
+    "kill": {
+      "query_title": "Cancel query",
+      "query_message": "Cancel the running query in session %{id}?",
+      "session_title": "Terminate session",
+      "session_message": "Terminate session %{id}? Uncommitted transactions will roll back.",
+      "ack_query": "I understand this cancels the query",
+      "ack_session": "I understand this terminates the session",
+      "cancel": "Cancel",
+      "confirm": "Terminate"
+    },
+    "maintenance": {
+      "title": "Run maintenance",
+      "message": "Run %{action} on database %{database}. This may take a while and load the instance.",
+      "confirm": "Run",
+      "vacuum": "VACUUM",
+      "analyze": "ANALYZE",
+      "optimize": "OPTIMIZE TABLE",
+      "reindex": "REINDEX",
+      "read_only_hint": "Read-only connections cannot run maintenance."
+    },
+    "metric": {
+      "threads_connected": "Connected threads",
+      "threads_running": "Running threads",
+      "innodb_row_lock_waits": "InnoDB row lock waits",
+      "slow_queries": "Slow queries",
+      "queries": "Total queries",
+      "max_used_connections": "Peak connections",
+      "max_connections": "Max connections",
+      "numbackends": "Backend connections",
+      "xact_commit": "Committed transactions",
+      "blks_hit": "Cache hits",
+      "blks_read": "Disk reads",
+      "deadlocks": "Deadlocks",
+      "temp_bytes": "Temp file writes",
+      "tup_returned": "Tuples returned",
+      "tup_fetched": "Tuples fetched",
+      "active_queries": "Active queries",
+      "lock_waits": "Lock waits",
+      "sessions": "Sessions",
+      "active_requests": "Active requests",
+      "active_sessions": "Active sessions",
+      "cpu_count": "CPU cores",
+      "physical_memory_kb": "Physical memory",
+      "session_logical_reads": "Logical reads",
+      "physical_reads": "Physical reads",
+      "execute_count": "Executions"
+    }
+  },
+  "redis_server_panel": {
+    "title": "Redis server",
+    "error_title": "Failed to read Redis server status",
+    "error_unknown": "Unknown error",
+    "action_failed": "Action failed",
+    "read_only": "Read-only",
+    "loading": "Reading Redis server status…",
+    "retry": "Retry",
+    "refresh": "Refresh",
+    "auto_refresh": "Auto refresh",
+    "count": {
+      "clients": "%{count} clients",
+      "slowlog": "%{count} slow log entries"
+    },
+    "tab": {
+      "overview": "Overview",
+      "clients": "Clients",
+      "slowlog": "Slow log"
+    },
+    "col": {
+      "id": "ID",
+      "addr": "Address",
+      "name": "Name",
+      "user": "User",
+      "db": "DB",
+      "command": "Last command",
+      "age": "Age",
+      "idle": "Idle",
+      "flags": "Flags",
+      "metric": "Metric",
+      "value": "Value",
+      "time": "Time",
+      "duration": "Duration",
+      "client": "Client"
+    },
+    "status": {
+      "version": "Version",
+      "mode": "Mode",
+      "role": "Role",
+      "uptime": "Uptime",
+      "clients": "Clients",
+      "memory": "Memory"
+    },
+    "clients_error": "Failed to read clients: %{message}",
+    "slowlog_error": "Failed to read slow log: %{message}",
+    "empty_clients": "No clients connected",
+    "empty_slowlog": "No slow log entries",
+    "action": {
+      "kill_client": "Kill connection",
+      "kill_client_done": "Client terminated",
+      "clear_slowlog": "Clear slow log",
+      "clear_slowlog_done": "Slow log cleared"
+    },
+    "cancel": "Cancel",
+    "kill": {
+      "title": "Kill client",
+      "message": "Kill client %{id}? Its connection will be closed immediately.",
+      "ack": "I understand this closes the client connection",
+      "confirm": "Kill"
+    },
+    "slowlog": {
+      "len": "Entries",
+      "threshold": "Threshold",
+      "max_len": "Max entries",
+      "clear_title": "Clear slow log",
+      "clear_message": "Clear all slow log entries for this instance? This cannot be undone.",
+      "clear_confirm": "Clear"
+    },
+    "metric": {
+      "redis_version": "Redis version",
+      "redis_mode": "Mode",
+      "role": "Role",
+      "uptime_in_seconds": "Uptime (seconds)",
+      "connected_clients": "Connected clients",
+      "blocked_clients": "Blocked clients",
+      "used_memory": "Used memory",
+      "used_memory_human": "Used memory (human)",
+      "used_memory_peak_human": "Peak memory",
+      "maxmemory_human": "Max memory",
+      "maxmemory_policy": "Eviction policy",
+      "mem_fragmentation_ratio": "Memory fragmentation ratio",
+      "instantaneous_ops_per_sec": "Ops per second",
+      "total_connections_received": "Total connections",
+      "total_commands_processed": "Total commands",
+      "keyspace_hits": "Keyspace hits",
+      "keyspace_misses": "Keyspace misses",
+      "expired_keys": "Expired keys",
+      "evicted_keys": "Evicted keys",
+      "rejected_connections": "Rejected connections",
+      "rdb_last_bgsave_status": "RDB last save status",
+      "aof_last_write_status": "AOF last write status"
+    }
+  },
+  "mongo_server_panel": {
+    "title": "MongoDB server",
+    "error_title": "Failed to read MongoDB server status",
+    "error_unknown": "Unknown error",
+    "action_failed": "Action failed",
+    "read_only": "Read-only",
+    "loading": "Reading MongoDB server status…",
+    "retry": "Retry",
+    "refresh": "Refresh",
+    "auto_refresh": "Auto refresh",
+    "only_slow": "Slow operations only",
+    "count": {
+      "operations": "%{count} operations",
+      "slow": "%{count} slow operations"
+    },
+    "tab": {
+      "overview": "Overview",
+      "operations": "Operations",
+      "performance": "Performance"
+    },
+    "col": {
+      "metric": "Metric",
+      "value": "Value",
+      "opid": "Op ID",
+      "client": "Client",
+      "op": "Type",
+      "namespace": "Namespace",
+      "secs": "Running",
+      "description": "Description",
+      "plan": "Plan"
+    },
+    "status": {
+      "version": "Version",
+      "edition": "Edition",
+      "topology": "Topology",
+      "replica_set": "Replica set",
+      "uptime": "Uptime",
+      "connections": "Connections / available",
+      "operations": "Operations",
+      "slow_operations": "Slow operations"
+    },
+    "topology": {
+      "standalone": "Standalone",
+      "replica_set": "Replica set",
+      "sharded": "Sharded cluster",
+      "unknown": "Unknown"
+    },
+    "operations_error": "Failed to read current operations: %{message}",
+    "empty_operations": "No active operations",
+    "waiting_for_lock": "waiting for lock",
+    "action": {
+      "kill_operation": "Kill",
+      "kill_operation_done": "Operation killed"
+    },
+    "cancel": "Cancel",
+    "kill": {
+      "title": "Kill operation",
+      "message": "Kill operation %{id}? The running statement will be interrupted.",
+      "confirm": "Kill operation"
+    },
+    "metric": {
+      "opcounters_insert": "Inserts",
+      "opcounters_query": "Queries",
+      "opcounters_update": "Updates",
+      "opcounters_delete": "Deletes",
+      "opcounters_getmore": "GetMores",
+      "opcounters_command": "Commands",
+      "connections_current": "Current connections",
+      "connections_available": "Available connections",
+      "connections_total_created": "Total connections created",
+      "connections_active": "Active connections",
+      "mem_resident": "Resident memory (MB)",
+      "mem_virtual": "Virtual memory (MB)",
+      "network_bytes_in": "Network bytes in",
+      "network_bytes_out": "Network bytes out",
+      "global_lock_active_clients": "Active clients holding locks",
+      "global_lock_current_queue": "Current lock wait queue",
+      "asserts_warning": "Warning asserts",
+      "asserts_msg": "Message asserts",
+      "asserts_user": "User asserts"
+    },
+    "performance": {
+      "ops_per_sec": "Operations per second",
+      "connections": "Connections",
+      "slow_operations": "Slow operations",
+      "empty": "Not enough samples yet…",
+      "note": "In-session sampling, up to %{count} points (~5 min)"
     }
   }
 }

@@ -189,6 +189,37 @@ fn content(
             };
             user_admin_content(state, tab.id, admin, this, window, colors, cx)
         }
+        Some(tab) if matches!(tab.kind, TabKind::ServerPanel(_)) => {
+            let TabKind::ServerPanel(panel) = &tab.kind else {
+                unreachable!();
+            };
+            div()
+                .size_full()
+                .min_h(px(0.))
+                .child(server_panel_content(state, tab.id, panel, this, colors, cx))
+        }
+        Some(tab) if matches!(tab.kind, TabKind::RedisServerPanel(_)) => {
+            let TabKind::RedisServerPanel(panel) = &tab.kind else {
+                unreachable!();
+            };
+            div()
+                .size_full()
+                .min_h(px(0.))
+                .child(redis_server_panel_content(
+                    state, tab.id, panel, this, colors, cx,
+                ))
+        }
+        Some(tab) if matches!(tab.kind, TabKind::MongoServerPanel(_)) => {
+            let TabKind::MongoServerPanel(panel) = &tab.kind else {
+                unreachable!();
+            };
+            div()
+                .size_full()
+                .min_h(px(0.))
+                .child(mongo_server_panel_content(
+                    state, tab.id, panel, this, colors, cx,
+                ))
+        }
         Some(tab) if matches!(tab.kind, TabKind::Settings(_)) => {
             settings_content(
                 state,

@@ -247,6 +247,87 @@ pub trait Connector {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持删除数据库"))
     }
 
+    /// 读取连接级服务器活动：会话、锁等待与实例指标。
+    ///
+    /// 默认不支持；MySQL/PostgreSQL 已实现。读取失败应尽量分区报错
+    /// （见 [`ServerActivity::locks_error`]），不要把整个面板判失败。
+    fn server_activity(&self, _: ConnectionId) -> Result<ServerActivity> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "暂不支持读取服务器会话与锁",
+        ))
+    }
+
+    /// 终止会话当前正在执行的查询，保留连接。
+    fn cancel_server_query(&self, _: ConnectionId, _: &str) -> Result<()> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "暂不支持终止查询",
+        ))
+    }
+
+    /// 终止会话（连接断开，未提交事务回滚）。
+    fn kill_server_session(&self, _: ConnectionId, _: &str) -> Result<()> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "暂不支持终止会话",
+        ))
+    }
+
+    /// 执行一次数据库级维护并返回结果摘要。
+    fn run_server_maintenance(&self, _: &ServerMaintenanceRequest) -> Result<String> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "暂不支持数据库维护",
+        ))
+    }
+
+    /// 读取 Redis 连接级服务器概览、客户端列表与慢日志。
+    ///
+    /// 默认不支持；ACL 限制导致单个分区失败时应填对应的 `*_error`，
+    /// 不要把整个面板判失败。
+    fn redis_server_activity(&self, _: ConnectionId) -> Result<RedisServerActivity> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "暂不支持读取 Redis 服务器状态",
+        ))
+    }
+
+    /// 断开一个 Redis 客户端连接（`CLIENT KILL ID`）。
+    fn redis_kill_client(&self, _: ConnectionId, _: &str) -> Result<()> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "暂不支持终止 Redis 客户端",
+        ))
+    }
+
+    /// 清空 Redis 慢日志（`SLOWLOG RESET`）。
+    fn redis_clear_slowlog(&self, _: ConnectionId) -> Result<()> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "暂不支持清空 Redis 慢日志",
+        ))
+    }
+
+    /// 读取 MongoDB 实例状态与当前操作（`serverStatus` / `$currentOp`）。
+    ///
+    /// 默认不支持；`$currentOp` 因权限失败时填 `operations_error`，
+    /// 概览仍应返回。
+    fn mongo_server_activity(&self, _: ConnectionId) -> Result<MongoServerActivity> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "暂不支持读取 MongoDB 服务器状态",
+        ))
+    }
+
+    /// 终止一条 MongoDB 操作（`killOp`）。
+    fn mongo_kill_operation(&self, _: ConnectionId, _: &str) -> Result<()> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "暂不支持终止 MongoDB 操作",
+        ))
+    }
+
     fn load_data(
         &self,
         path: &ObjectPath,

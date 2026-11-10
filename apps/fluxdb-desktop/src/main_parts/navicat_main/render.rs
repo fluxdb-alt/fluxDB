@@ -1221,6 +1221,28 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
             pg_member_options_supported: admin.pg_member_options_supported,
             pg_loaded_target: admin.pg_loaded_target.clone(),
         }),
+        // 服务器面板快照不携带会话 SQL / 锁等待明细，避免进入 AI 上下文或外部导出。
+        TabKind::ServerPanel(panel) => {
+            let mut snapshot = panel.clone();
+            snapshot.activity = None;
+            snapshot.error = None;
+            TabKind::ServerPanel(snapshot)
+        }
+        // Redis 服务器快照不携带客户端地址与慢日志命令，避免进入 AI 上下文或外部导出。
+        TabKind::RedisServerPanel(panel) => {
+            let mut snapshot = panel.clone();
+            snapshot.activity = None;
+            snapshot.error = None;
+            TabKind::RedisServerPanel(snapshot)
+        }
+        // MongoDB 服务器快照不携带客户端地址与操作明细，避免进入 AI 上下文或外部导出。
+        TabKind::MongoServerPanel(panel) => {
+            let mut snapshot = panel.clone();
+            snapshot.activity = None;
+            snapshot.error = None;
+            snapshot.samples.clear();
+            TabKind::MongoServerPanel(snapshot)
+        }
         TabKind::Settings(settings) => TabKind::Settings(settings.clone()),
     }
 }

@@ -8,3 +8,4 @@ include!("mysql/completion.rs");
 include!("mysql/data.rs");
 include!("mysql/apply_changes.rs");
 include!("mysql/metadata.rs");
+include!("mysql/activity.rs");

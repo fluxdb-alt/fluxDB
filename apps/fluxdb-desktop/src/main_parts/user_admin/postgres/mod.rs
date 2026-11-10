@@ -362,7 +362,7 @@ fn pg_user_admin_role_list(
 
     let mut list = div().flex_1().min_h(px(0.)).overflow_y_scrollbar();
     if admin.loading_users {
-        list = list.child(user_admin_empty_row(tr("app.pg_role.loading_roles"), colors));
+        list = list.child(inline_loading_row(tr("app.pg_role.loading_roles"), colors));
     } else if let Some(error) = &admin.pg_roles_error {
         list = list.child(user_admin_error_row(&error.message, colors)).child(
             user_admin_button(

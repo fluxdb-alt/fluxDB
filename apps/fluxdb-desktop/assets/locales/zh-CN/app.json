@@ -177,10 +177,10 @@
     "ungroup": "取消分组",
     "user_admin": "用户与权限",
     "mongo_info": "显示连接信息",
-    "mongo_performance": "查看性能指标",
     "new_collection": "创建集合",
     "mongo_cli": "命令行终端",
     "mongo_workbench": "命令工作台",
+    "server_panel": "服务器",
     "compare_structure": "结构对比与同步",
     "transfer_data": "跨连接数据传输"
   },
@@ -4452,7 +4452,10 @@
     "redis_pubsub": "Redis Pub/Sub - DB %{database}",
     "global": "全局",
     "mongo_cli": "MongoDB 命令行 - %{database}",
-    "mongo_workbench": "MongoDB 命令工作台 - %{database}"
+    "mongo_workbench": "MongoDB 命令工作台 - %{database}",
+    "server_panel": "服务器 · %{name}",
+    "redis_server_panel": "服务器 · %{name}",
+    "mongo_server_panel": "服务器 · %{name}"
   },
   "backend_error": {
     "sqlserver_connection_task_failed": "SQL Server 连接任务异常结束",
@@ -6292,6 +6295,317 @@
       "fill": "填充缺失值",
       "documents": "常量文档源",
       "set_window_fields": "窗口函数"
+    }
+  },
+  "server_panel": {
+    "title": "服务器",
+    "error_title": "读取服务器状态失败",
+    "error_unknown": "未知错误",
+    "action_failed": "操作失败",
+    "read_only": "只读",
+    "read_only_hint": "只读连接禁止终止会话或执行维护操作。",
+    "self_hint": "不能终止当前面板自身使用的会话。",
+    "no_database": "未选择数据库",
+    "unknown": "未知",
+    "loading": "正在读取服务器状态…",
+    "retry": "重试",
+    "refresh": "刷新",
+    "auto_refresh": "自动刷新",
+    "only_mine": "只看我的会话",
+    "count": {
+      "sessions": "%{count} 个会话",
+      "locks": "%{count} 个锁等待"
+    },
+    "tab": {
+      "sessions": "会话",
+      "locks": "锁等待",
+      "status": "状态"
+    },
+    "empty_sessions": "当前没有可见会话",
+    "empty_locks": "当前没有锁等待",
+    "locks_error": "锁等待读取失败：%{message}",
+    "status_error": "状态指标读取失败：%{message}",
+    "col": {
+      "status": "状态",
+      "session": "会话",
+      "user": "用户",
+      "host": "来源",
+      "database": "数据库",
+      "command": "命令",
+      "elapsed": "耗时",
+      "wait_event": "等待事件",
+      "sql": "SQL",
+      "waiting": "等待会话",
+      "blocking": "阻塞会话",
+      "object": "对象",
+      "lock_type": "锁类型",
+      "wait": "等待",
+      "state": "状态",
+      "metric": "指标",
+      "value": "值"
+    },
+    "status": {
+      "running": "运行中",
+      "waiting": "等待中",
+      "idle": "空闲",
+      "unknown": "未知",
+      "version": "版本",
+      "current_user": "当前用户",
+      "uptime": "运行时长"
+    },
+    "lock_type": {
+      "row": "行锁",
+      "page": "页锁",
+      "metadata": "元数据锁",
+      "table": "表锁",
+      "transaction": "事务锁",
+      "advisory": "咨询锁",
+      "object": "对象锁"
+    },
+    "detail": {
+      "title": "会话详情",
+      "elapsed": "已持续",
+      "blocker": "关联锁等待",
+      "sql": "SQL"
+    },
+    "action": {
+      "copy_sql": "复制 SQL",
+      "copy_sql_done": "SQL 已复制",
+      "open_editor": "在查询中打开",
+      "cancel_query": "终止查询",
+      "kill_session": "终止会话",
+      "maintenance_done": "维护已完成",
+      "cancel_query_done": "查询已终止",
+      "kill_session_done": "会话已终止"
+    },
+    "kill": {
+      "query_title": "终止查询",
+      "query_message": "确定终止会话 %{id} 中正在执行的查询？",
+      "session_title": "终止会话",
+      "session_message": "确定终止会话 %{id}？未提交的事务会回滚。",
+      "ack_query": "我确认终止该查询",
+      "ack_session": "我确认终止该会话",
+      "cancel": "取消",
+      "confirm": "确认终止"
+    },
+    "maintenance": {
+      "title": "执行维护",
+      "message": "将在数据库 %{database} 上执行 %{action}。该操作可能耗时并占用实例资源。",
+      "confirm": "确认执行",
+      "vacuum": "VACUUM",
+      "analyze": "ANALYZE",
+      "optimize": "OPTIMIZE TABLE",
+      "reindex": "REINDEX",
+      "read_only_hint": "只读连接禁止执行维护操作。"
+    },
+    "metric": {
+      "threads_connected": "当前连接数",
+      "threads_running": "运行中线程",
+      "innodb_row_lock_waits": "InnoDB 行锁等待次数",
+      "slow_queries": "慢查询次数",
+      "queries": "累计查询次数",
+      "max_used_connections": "历史最大连接数",
+      "max_connections": "最大连接数",
+      "numbackends": "当前后端连接数",
+      "xact_commit": "已提交事务",
+      "blks_hit": "缓存命中块数",
+      "blks_read": "磁盘读取块数",
+      "deadlocks": "死锁次数",
+      "temp_bytes": "临时文件写入量",
+      "tup_returned": "返回元组数",
+      "tup_fetched": "获取元组数",
+      "active_queries": "活跃查询数",
+      "lock_waits": "锁等待数",
+      "sessions": "会话总数",
+      "active_requests": "活动请求",
+      "active_sessions": "活动会话",
+      "cpu_count": "CPU 核数",
+      "physical_memory_kb": "物理内存",
+      "session_logical_reads": "逻辑读次数",
+      "physical_reads": "物理读次数",
+      "execute_count": "执行次数"
+    }
+  },
+  "redis_server_panel": {
+    "title": "Redis 服务器",
+    "error_title": "读取 Redis 服务器状态失败",
+    "error_unknown": "未知错误",
+    "action_failed": "操作失败",
+    "read_only": "只读",
+    "loading": "正在读取 Redis 服务器状态…",
+    "retry": "重试",
+    "refresh": "刷新",
+    "auto_refresh": "自动刷新",
+    "count": {
+      "clients": "%{count} 个客户端",
+      "slowlog": "%{count} 条慢日志"
+    },
+    "tab": {
+      "overview": "概览",
+      "clients": "客户端",
+      "slowlog": "慢日志"
+    },
+    "col": {
+      "id": "ID",
+      "addr": "地址",
+      "name": "名称",
+      "user": "用户",
+      "db": "DB",
+      "command": "最近命令",
+      "age": "连接时长",
+      "idle": "空闲",
+      "flags": "标志",
+      "metric": "指标",
+      "value": "值",
+      "time": "时间",
+      "duration": "耗时",
+      "client": "来源客户端"
+    },
+    "status": {
+      "version": "版本",
+      "mode": "模式",
+      "role": "角色",
+      "uptime": "运行时长",
+      "clients": "连接数",
+      "memory": "内存"
+    },
+    "clients_error": "客户端列表读取失败：%{message}",
+    "slowlog_error": "慢日志读取失败：%{message}",
+    "empty_clients": "当前没有客户端连接",
+    "empty_slowlog": "当前没有慢日志",
+    "action": {
+      "kill_client": "终止连接",
+      "kill_client_done": "客户端已终止",
+      "clear_slowlog": "清空慢日志",
+      "clear_slowlog_done": "慢日志已清空"
+    },
+    "cancel": "取消",
+    "kill": {
+      "title": "终止客户端",
+      "message": "确定终止客户端 %{id}？该连接会立即断开。",
+      "ack": "我确认终止该客户端连接",
+      "confirm": "确认终止"
+    },
+    "slowlog": {
+      "len": "慢日志条数",
+      "threshold": "慢日志阈值",
+      "max_len": "慢日志上限",
+      "clear_title": "清空慢日志",
+      "clear_message": "确定清空当前实例的全部慢日志？该操作不可恢复。",
+      "clear_confirm": "确认清空"
+    },
+    "metric": {
+      "redis_version": "Redis 版本",
+      "redis_mode": "运行模式",
+      "role": "角色",
+      "uptime_in_seconds": "运行时长（秒）",
+      "connected_clients": "当前连接数",
+      "blocked_clients": "阻塞客户端",
+      "used_memory": "已用内存",
+      "used_memory_human": "已用内存（可读）",
+      "used_memory_peak_human": "内存峰值",
+      "maxmemory_human": "最大内存",
+      "maxmemory_policy": "内存淘汰策略",
+      "mem_fragmentation_ratio": "内存碎片率",
+      "instantaneous_ops_per_sec": "每秒操作数",
+      "total_connections_received": "累计连接数",
+      "total_commands_processed": "累计命令数",
+      "keyspace_hits": "键命中次数",
+      "keyspace_misses": "键未命中次数",
+      "expired_keys": "过期键数",
+      "evicted_keys": "淘汰键数",
+      "rejected_connections": "拒绝连接数",
+      "rdb_last_bgsave_status": "RDB 最近保存状态",
+      "aof_last_write_status": "AOF 最近写入状态"
+    }
+  },
+  "mongo_server_panel": {
+    "title": "MongoDB 服务器",
+    "error_title": "读取 MongoDB 服务器状态失败",
+    "error_unknown": "未知错误",
+    "action_failed": "操作失败",
+    "read_only": "只读",
+    "loading": "正在读取 MongoDB 服务器状态…",
+    "retry": "重试",
+    "refresh": "刷新",
+    "auto_refresh": "自动刷新",
+    "only_slow": "只看慢操作",
+    "count": {
+      "operations": "%{count} 个操作",
+      "slow": "%{count} 个慢操作"
+    },
+    "tab": {
+      "overview": "概览",
+      "operations": "当前操作",
+      "performance": "性能"
+    },
+    "col": {
+      "metric": "指标",
+      "value": "值",
+      "opid": "操作 ID",
+      "client": "客户端",
+      "op": "类型",
+      "namespace": "命名空间",
+      "secs": "运行时长",
+      "description": "描述",
+      "plan": "执行计划"
+    },
+    "status": {
+      "version": "版本",
+      "edition": "发行版",
+      "topology": "拓扑",
+      "replica_set": "副本集",
+      "uptime": "运行时长",
+      "connections": "连接数 / 可用",
+      "operations": "当前操作",
+      "slow_operations": "慢操作"
+    },
+    "topology": {
+      "standalone": "单机",
+      "replica_set": "副本集",
+      "sharded": "分片集群",
+      "unknown": "未知"
+    },
+    "operations_error": "当前操作读取失败：%{message}",
+    "empty_operations": "当前没有活跃操作",
+    "waiting_for_lock": "等待锁",
+    "action": {
+      "kill_operation": "终止",
+      "kill_operation_done": "操作已终止"
+    },
+    "cancel": "取消",
+    "kill": {
+      "title": "终止操作",
+      "message": "确定终止操作 %{id}？正在执行的语句会被中断。",
+      "confirm": "确认终止"
+    },
+    "metric": {
+      "opcounters_insert": "插入操作数",
+      "opcounters_query": "查询操作数",
+      "opcounters_update": "更新操作数",
+      "opcounters_delete": "删除操作数",
+      "opcounters_getmore": "GetMore 操作数",
+      "opcounters_command": "命令操作数",
+      "connections_current": "当前连接数",
+      "connections_available": "可用连接数",
+      "connections_total_created": "累计创建连接数",
+      "connections_active": "活跃连接数",
+      "mem_resident": "常驻内存（MB）",
+      "mem_virtual": "虚拟内存（MB）",
+      "network_bytes_in": "网络入流量（字节）",
+      "network_bytes_out": "网络出流量（字节）",
+      "global_lock_active_clients": "持锁活跃客户端",
+      "global_lock_current_queue": "当前锁等待队列",
+      "asserts_warning": "警告断言",
+      "asserts_msg": "消息断言",
+      "asserts_user": "用户断言"
+    },
+    "performance": {
+      "ops_per_sec": "每秒操作数",
+      "connections": "连接数",
+      "slow_operations": "慢操作",
+      "empty": "采样不足，等待自动刷新…",
+      "note": "会话内采样，最多 %{count} 个点（约 5 分钟）"
     }
   }
 }

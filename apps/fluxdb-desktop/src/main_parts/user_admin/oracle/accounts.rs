@@ -18,7 +18,7 @@ fn oracle_user_list(
         .unwrap_or_default();
     let mut list = div().flex_1().min_h(px(0.)).overflow_y_scrollbar();
     if state.loading {
-        list = list.child(user_admin_empty_row(tr("app.oracle_security.loading"), colors));
+        list = list.child(inline_loading_row(tr("app.oracle_security.loading"), colors));
     } else if let Some(error) = &state.error {
         list = list.child(user_admin_error_row(&error.message, colors));
     } else if let Some(snapshot) = state.snapshot.as_ref() {
@@ -58,7 +58,7 @@ fn oracle_user_list(
             ));
         }
     } else {
-        list = list.child(user_admin_empty_row(tr("app.oracle_security.loading"), colors));
+        list = list.child(inline_loading_row(tr("app.oracle_security.loading"), colors));
     }
 
     div()

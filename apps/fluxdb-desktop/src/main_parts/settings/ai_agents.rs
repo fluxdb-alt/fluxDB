@@ -694,7 +694,7 @@ fn settings_ai_sessions_panel(
         .collect();
 
     let rows: Vec<gpui::AnyElement> = if panel.settings_loading {
-        vec![ai_empty_state(&tr("app.ai.sessions.loading"), colors)]
+        vec![inline_loading_row(tr("app.ai.sessions.loading"), colors).into_any_element()]
     } else if let Some(message) = panel.settings_error.as_ref() {
         vec![ai_settings_error_block(message, colors, cx)]
     } else if state.ai_sessions.is_empty() {

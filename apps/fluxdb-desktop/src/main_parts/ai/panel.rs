@@ -268,12 +268,7 @@ fn ai_chat_panel(
     let stream_message_id = this.ai_chat.stream.message_id().map(str::to_owned);
     let stream_view = this.ai_chat.stream_view.clone();
     if loading {
-        timeline = timeline.child(
-            div()
-                .text_color(colors.muted)
-                .text_size(px(12.))
-                .child(tr("app.ai.chat.loading")),
-        );
+        timeline = timeline.child(inline_loading_row(tr("app.ai.chat.loading"), colors));
     } else if history {
         let agent_name = |agent_id: &str| -> String {
             this.controller

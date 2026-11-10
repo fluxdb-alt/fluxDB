@@ -14,6 +14,7 @@
 - 弹框接关闭按钮、`Esc` 和遮罩关闭；弹框、浮层、下拉菜单支持外部点击关闭，内部点击阻止穿透。
 - 按钮及按钮式控件提供 `cursor_pointer()`、hover，组件支持时提供 active；具体圆角、输入框与菜单样式见后续章节。
 - 数据请求、数据库和文件操作等耗时任务显示 loading/disabled，不阻塞 UI；数据区域刷新也要明确 loading。
+- Loading 统一为「转圈 + 文案」：整区加载用 `center_loading_message(...)`，列表内联加载行用 `inline_loading_row(...)`；不要只放一行灰色文字或只放转圈，避免和空态文案混淆。
 - 轻量反馈统一使用主窗口 `show_message(...)`，单槽替换并重新计时，不散落 `push_notification` 或自绘提示。
 - `apply_component_theme_colors` 只做主题字段的投影，不写死品牌色：`primary` / `accent` 及其前景色必须成对取自主题文件。组件按 `tokens.accent` 画悬停底色、按 `accent_foreground` 画悬停文字，只改一半会让 ghost 按钮（如 MongoDB 查询面板的「添加条件」「条件构建」）悬停时文字与底色同色。回归用例见 `main_parts/theme_tests.rs`。
 

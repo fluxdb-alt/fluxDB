@@ -25,17 +25,19 @@ use fluxdb_app::{
     CreateTablePartitionField, CreateTableState, CreateTableTab, CreateTableTrigger,
     CreateTableTriggerEvent, CreateTableTriggerField, DataEditorState, DataTransferMode,
     ErDiagramState, ErLayoutResult, ForeignKeyCheckMode, LoadState, MongoCollectionState,
-    MongoDisplayMode, MongoQueryDraft, MongoSection, MongoWorkbenchExecution, MongoWorkbenchState,
-    ObjectListState, OracleGrantKind, OracleUserAdminState, OracleUserAdminTab, PgDraftAttrField,
-    PgGrantEditOp, PgGrantObjectKind, PgRoleDraftUiExt, PgRoleSaveStatus, PgUserAdminTab,
-    QueryEditorState, QueryHistoryEntry, QueryHistoryKind, QueryHistoryTransactionState,
-    QueryOrigin, RedisAddKeyKind, RedisAddKeyRequest, RedisConnectionOverview, RedisListDirection,
-    RedisWorkbenchState, SqlServerSecurityFormField, SqlServerSecurityFormFlag,
-    SqlServerSecurityFormKind, SqlServerSecurityListFilter, SqlServerSecuritySaveStatus,
-    SqlServerSecurityState, SqlServerUserAdminTab, StructureCompareResult, StructureDiffStatus,
-    StructureEndpoint, StructureSyncOptions, TabId, TabKind, TabState, TabWorkspace,
-    TableInfoState, TableInfoTab, UserAdminDetailTab, UserAdminMySqlTab, UserAdminState,
-    compress_sql_text, copy_table_requires_source_ddl, copy_table_sql_preview_with_source_ddl,
+    MongoDisplayMode, MongoQueryDraft, MongoSection, MongoServerPanelState, MongoServerTab,
+    MongoWorkbenchExecution, MongoWorkbenchState, ObjectListState, OracleGrantKind,
+    OracleUserAdminState, OracleUserAdminTab, PgDraftAttrField, PgGrantEditOp, PgGrantObjectKind,
+    PgRoleDraftUiExt, PgRoleSaveStatus, PgUserAdminTab, QueryEditorState, QueryHistoryEntry,
+    QueryHistoryKind, QueryHistoryTransactionState, QueryOrigin, RedisAddKeyKind,
+    RedisAddKeyRequest, RedisConnectionOverview, RedisListDirection, RedisServerPanelState,
+    RedisServerTab, RedisWorkbenchState, ServerPanelState, ServerPanelTab,
+    SqlServerSecurityFormField, SqlServerSecurityFormFlag, SqlServerSecurityFormKind,
+    SqlServerSecurityListFilter, SqlServerSecuritySaveStatus, SqlServerSecurityState,
+    SqlServerUserAdminTab, StructureCompareResult, StructureDiffStatus, StructureEndpoint,
+    StructureSyncOptions, TabId, TabKind, TabState, TabWorkspace, TableInfoState, TableInfoTab,
+    UserAdminDetailTab, UserAdminMySqlTab, UserAdminState, compress_sql_text,
+    copy_table_requires_source_ddl, copy_table_sql_preview_with_source_ddl,
     create_table_common_type_options, create_table_provider, create_table_special_type_options,
     drop_table_sql_preview, er_neighborhood_included_tables, er_place_avoiding_overlaps,
     er_relation_layout, format_sql_text_for_dialect, mongo_query_limit, rename_table_sql_preview,
@@ -47,11 +49,13 @@ use fluxdb_core::{
     ConnectionDraft, ConnectionGroupId, ConnectionId, CreateDatabaseRequest, CreatePrincipalInput,
     DATA_TABLE_PAGE_SIZE_CHOICES, DataChangeSet, DataExportPreview, DataPage, DatabaseKind,
     DatabaseUserIdentity, Endpoint, ErGraphData, ErLoadStatus, FilterOp, FilterSpec,
-    ForeignKeyInfo, IndexInfo, LogLevel, ObjectKind, ObjectPath, ObjectSummary, PgGrantTargetLists,
-    PgObjectGrantScope, PgPasswordOp, PgRelationKind, PgRole, PgRoleChange, PgRoleDraft,
-    PgRoleMembership, PgValidUntilOp, PostgresSslMode, QueryExecutionOptions,
-    QueryExecutionSummary, RedisHashFieldTtl, RedisServerVersion, ResultsPlacement, Row,
-    RowIdentity, SavedQuery, ScrollbarMode, Settings, SidebarOrderEntry, SortDirection, SortSpec,
+    ForeignKeyInfo, IndexInfo, LogLevel, MongoOperation, MongoServerActivity, MongoTopology,
+    ObjectKind, ObjectPath, ObjectSummary, PgGrantTargetLists, PgObjectGrantScope, PgPasswordOp,
+    PgRelationKind, PgRole, PgRoleChange, PgRoleDraft, PgRoleMembership, PgValidUntilOp,
+    PostgresSslMode, QueryExecutionOptions, QueryExecutionSummary, RedisClient, RedisHashFieldTtl,
+    RedisServerActivity, RedisServerVersion, RedisSlowLogEntry, ResultsPlacement, Row, RowIdentity,
+    SavedQuery, ScrollbarMode, ServerActivity, ServerLockWait, ServerMaintenanceAction,
+    ServerMetric, ServerSession, Settings, SidebarOrderEntry, SortDirection, SortSpec,
     SqlDialect as _, SqlServerPrincipalKind, Theme as AppTheme, TriggerInfo, UiDensity,
     UserResourceLimits, WorkbenchHistoryItem, WorkbenchHistoryScope, WorkbenchHistoryStore,
     data_table_page_size_max, database_user_admin_provider, role_memberships_from_grants,
@@ -159,6 +163,12 @@ include!("main_parts/user_admin/postgres/membership.rs");
 include!("main_parts/user_admin/postgres/privileges.rs");
 include!("main_parts/user_admin/postgres/sql_preview.rs");
 include!("main_parts/create_table.rs");
+include!("main_parts/server_panel.rs");
+include!("main_parts/server_panel_views.rs");
+include!("main_parts/server_panel_modals.rs");
+include!("main_parts/server_panel_widgets.rs");
+include!("main_parts/redis_server_panel.rs");
+include!("main_parts/mongo_server_panel.rs");
 include!("main_parts/content_views.rs");
 include!("main_parts/query_plan_view.rs");
 include!("main_parts/mongo_collection.rs");

@@ -9,12 +9,15 @@ use fluxdb_core::{
     MongoCollectionKind, MongoDatabaseStat, MongoDocument, MongoDocumentsPage, MongoFindRequest,
     MongoImportField, MongoImportFormat, MongoImportOptions, MongoImportPreview,
     MongoImportPreviewRequest, MongoImportProgress, MongoImportReport, MongoImportRequest,
-    MongoIndexField, MongoIndexInfo, MongoServerInfo, MongoTopology, ObjectKind, ObjectPath,
-    ObjectSummary, Pagination, QueryExecutionResult, QueryExecutionSummary, QueryRequest,
-    QuerySessionId, QueryStatementKind, RedisHashFieldTtl, RedisServerVersion, Row, RowIdentity,
-    RowUpdate, SortDirection, SortSpec, SqlDialect as _, TableStructure, TriggerInfo, TriggerMeta,
-    UniqueKeyMeta, WriteValue, completion_fuzzy_like_pattern, is_binary_type_name,
-    matches_completion_fuzzy, sqlite_attached_databases,
+    MongoIndexField, MongoIndexInfo, MongoOperation, MongoServerActivity, MongoServerInfo,
+    MongoTopology, ObjectKind, ObjectPath, ObjectSummary, Pagination, QueryExecutionResult,
+    QueryExecutionSummary, QueryRequest, QuerySessionId, QueryStatementKind, RedisClient,
+    RedisHashFieldTtl, RedisServerActivity, RedisServerVersion, RedisSlowLogEntry, Row,
+    RowIdentity, RowUpdate, ServerActivity, ServerLockWait, ServerMaintenanceAction,
+    ServerMaintenanceRequest, ServerMetric, ServerSession, ServerStatus, SortDirection, SortSpec,
+    SqlDialect as _, TableStructure, TriggerInfo, TriggerMeta, UniqueKeyMeta, WriteValue,
+    completion_fuzzy_like_pattern, is_binary_type_name, matches_completion_fuzzy,
+    sqlite_attached_databases,
 };
 // MongoDB 驱动类型（crate-root include 作用域共用，避免每文件重复 use）。
 use mongodb::Client as MongoClient;

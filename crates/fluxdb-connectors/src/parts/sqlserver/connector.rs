@@ -311,4 +311,44 @@ impl Connector for SqlServerConnector {
             plan,
         )
     }
+    fn server_activity(&self, _: ConnectionId) -> fluxdb_core::Result<ServerActivity> {
+        sqlserver_server_activity(
+            self.config("SQL Server 服务器状态需要连接配置上下文")?,
+        )
+    }
+
+    fn cancel_server_query(
+        &self,
+        _: ConnectionId,
+        session_id: &str,
+    ) -> fluxdb_core::Result<()> {
+        sqlserver_kill(
+            self.config("SQL Server 终止查询需要连接配置上下文")?,
+            session_id,
+            true,
+        )
+    }
+
+    fn kill_server_session(
+        &self,
+        _: ConnectionId,
+        session_id: &str,
+    ) -> fluxdb_core::Result<()> {
+        sqlserver_kill(
+            self.config("SQL Server 终止会话需要连接配置上下文")?,
+            session_id,
+            false,
+        )
+    }
+
+    fn run_server_maintenance(
+        &self,
+        request: &ServerMaintenanceRequest,
+    ) -> fluxdb_core::Result<String> {
+        sqlserver_server_maintenance(
+            self.config("SQL Server 维护需要连接配置上下文")?,
+            request,
+        )
+    }
+
 }

@@ -806,6 +806,16 @@ impl NavicatMain {
     }
 
     fn cancel_dialog(&mut self, _: &CancelDialog, window: &mut Window, cx: &mut Context<Self>) {
+        // 服务器面板的终止/维护确认框优先级最高。
+        if self.server_kill_confirm.take().is_some()
+            || self.server_maintenance_confirm.take().is_some()
+            || self.redis_server_kill_confirm.take().is_some()
+            || self.redis_server_clear_confirm.take().is_some()
+            || self.mongo_server_kill_confirm.take().is_some()
+        {
+            cx.notify();
+            return;
+        }
         // 备份 tab 的弹框（表清单/恢复记录/备注/删除确认）优先响应 Esc。
         if self.backup_tables_modal.take().is_some() {
             cx.notify();

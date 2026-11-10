@@ -64,7 +64,7 @@ fn pg_privileges_panel(
 
     // ===== 权限表 =====
     if admin.loading_pg_grants || should_load {
-        body = body.child(user_admin_empty_row(tr("app.pg_role.privileges.loading"), colors));
+        body = body.child(inline_loading_row(tr("app.pg_role.privileges.loading"), colors));
     } else if let Some(error) = &admin.pg_grants_error {
         body = body
             .child(user_admin_error_row(&error.message, colors))

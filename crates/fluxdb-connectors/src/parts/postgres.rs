@@ -15,5 +15,6 @@ include!("postgres/apply_changes.rs");
 include!("postgres/completion.rs");
 include!("postgres/user_admin.rs");
 include!("postgres/native_tools.rs");
+include!("postgres/activity.rs");
 include!("postgres/connector.rs");
 

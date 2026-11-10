@@ -46,7 +46,7 @@ fn oracle_roles_panel(
     }
     let Some(snapshot) = state.snapshot.as_ref() else {
         return oracle_panel_shell(
-            body.child(user_admin_empty_row(tr("app.oracle_security.loading"), colors)),
+            body.child(inline_loading_row(tr("app.oracle_security.loading"), colors)),
             colors,
         );
     };
@@ -111,7 +111,7 @@ fn oracle_system_privileges_panel(
     }
     let Some(snapshot) = state.snapshot.as_ref() else {
         return oracle_panel_shell(
-            body.child(user_admin_empty_row(tr("app.oracle_security.loading"), colors)),
+            body.child(inline_loading_row(tr("app.oracle_security.loading"), colors)),
             colors,
         );
     };
@@ -177,7 +177,7 @@ fn oracle_object_privileges_panel(
     }
     let Some(snapshot) = state.snapshot.as_ref() else {
         return oracle_panel_shell(
-            body.child(user_admin_empty_row(tr("app.oracle_security.loading"), colors)),
+            body.child(inline_loading_row(tr("app.oracle_security.loading"), colors)),
             colors,
         );
     };

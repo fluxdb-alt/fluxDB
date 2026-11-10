@@ -340,4 +340,35 @@ impl Connector for DamengConnector {
             plan,
         )
     }
+
+    fn server_activity(&self, _: ConnectionId) -> fluxdb_core::Result<ServerActivity> {
+        dm_server_activity(
+            self.config("达梦服务器状态需要连接配置上下文")?,
+        )
+    }
+
+    fn cancel_server_query(
+        &self,
+        _: ConnectionId,
+        session_id: &str,
+    ) -> fluxdb_core::Result<()> {
+        dm_kill(
+            self.config("达梦终止查询需要连接配置上下文")?,
+            session_id,
+            true,
+        )
+    }
+
+    fn kill_server_session(
+        &self,
+        _: ConnectionId,
+        session_id: &str,
+    ) -> fluxdb_core::Result<()> {
+        dm_kill(
+            self.config("达梦终止会话需要连接配置上下文")?,
+            session_id,
+            false,
+        )
+    }
+
 }

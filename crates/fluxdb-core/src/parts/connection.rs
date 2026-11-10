@@ -39,6 +39,24 @@ impl DatabaseKind {
         matches!(self, DatabaseKind::Postgres | DatabaseKind::Kingbase)
     }
 
+    /// 是否支持连接级「服务器状态」面板。
+    ///
+    /// 这些数据库都实现了会话/锁等待/状态的只读读取与终止入口；
+    /// SQLite/Redis/MongoDB 没有同一套实例会话模型，不在此列。
+    pub fn supports_server_panel(self) -> bool {
+        matches!(
+            self,
+            DatabaseKind::MySql
+                | DatabaseKind::TiDb
+                | DatabaseKind::MariaDb
+                | DatabaseKind::Postgres
+                | DatabaseKind::Kingbase
+                | DatabaseKind::SqlServer
+                | DatabaseKind::Oracle
+                | DatabaseKind::Dameng
+        )
+    }
+
     /// 是否支持「按块追加写入」大字段（上传替换的流式路径）。
     ///
     /// 只有实现了逐块追加的连接器才返回 true。Oracle/达梦暂时为 false；

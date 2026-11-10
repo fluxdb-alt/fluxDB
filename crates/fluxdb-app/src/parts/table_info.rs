@@ -193,7 +193,11 @@ fn tab_belongs_to_database(tab: &TabState, connection_id: ConnectionId, database
             collection.object.connection_id == connection_id
                 && path_database_name(&collection.object) == database
         }
-        TabKind::UserAdmin(_) => false,
+        // 服务器面板是连接级视图，不随某个库的删除而关闭。
+        TabKind::UserAdmin(_)
+        | TabKind::ServerPanel(_)
+        | TabKind::RedisServerPanel(_)
+        | TabKind::MongoServerPanel(_) => false,
     }
 }
 
@@ -224,6 +228,9 @@ fn tab_belongs_to_connection(tab: &TabState, connection_id: ConnectionId) -> boo
         TabKind::BackupList(list) => list.connection_id == connection_id,
         TabKind::ErDiagram(er) => er.connection_id == connection_id,
         TabKind::MongoCollection(collection) => collection.object.connection_id == connection_id,
+        TabKind::ServerPanel(panel) => panel.connection_id == connection_id,
+        TabKind::RedisServerPanel(panel) => panel.connection_id == connection_id,
+        TabKind::MongoServerPanel(panel) => panel.connection_id == connection_id,
         TabKind::Settings(_) => false,
         TabKind::AiChat { workspace } => workspace
             .as_ref()

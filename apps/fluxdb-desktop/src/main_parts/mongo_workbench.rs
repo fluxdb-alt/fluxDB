@@ -205,7 +205,7 @@ fn mongo_workbench_results(
 ) -> Div {
     let body: gpui::AnyElement = if workbench.executions.is_empty() {
         if workbench.running {
-            mongo_workbench_placeholder(tr("app.mongo.loading"), colors).into_any_element()
+            center_loading_message(tr("app.mongo.loading"), colors).into_any_element()
         } else if let Some(error) = workbench.error.as_ref() {
             mongo_workbench_placeholder(error.message.clone().into(), colors).into_any_element()
         } else {

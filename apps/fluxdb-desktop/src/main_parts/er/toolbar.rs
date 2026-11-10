@@ -1421,14 +1421,7 @@ fn er_depth_selector(
 
 /// 加载中状态。
 fn er_loading_state(colors: UiColors) -> Div {
-    div()
-        .flex_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(colors.muted)
-        .text_size(px(13.))
-        .child(tr("app.er.loading_tables"))
+    center_loading_message(tr("app.er.loading_tables"), colors)
 }
 
 /// 空库/无关系等明确空状态：给可理解文案 + 刷新入口，不伪装成空白画布（§3.5）。

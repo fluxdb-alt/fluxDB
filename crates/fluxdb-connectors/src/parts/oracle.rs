@@ -11,4 +11,5 @@ include!("oracle/data.rs");
 include!("oracle/apply_changes.rs");
 include!("oracle/executor.rs");
 include!("oracle/user_admin.rs");
+include!("oracle/activity.rs");
 include!("oracle/connector.rs");

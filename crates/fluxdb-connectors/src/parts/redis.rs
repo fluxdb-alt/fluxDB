@@ -4,6 +4,7 @@ include!("redis/connector.rs");
 include!("redis/wire.rs");
 include!("redis/read_budget.rs");
 include!("redis/overview.rs");
+include!("redis/server.rs");
 include!("redis/data.rs");
 include!("redis/key_ops.rs");
 include!("redis/set.rs");

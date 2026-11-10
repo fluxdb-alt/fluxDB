@@ -13,4 +13,5 @@ include!("sqlserver/database.rs");
 include!("sqlserver/user_admin.rs");
 include!("sqlserver/apply_changes.rs");
 include!("sqlserver/executor.rs");
+include!("sqlserver/activity.rs");
 include!("sqlserver/connector.rs");

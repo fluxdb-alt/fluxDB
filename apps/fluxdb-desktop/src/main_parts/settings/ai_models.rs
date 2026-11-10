@@ -341,7 +341,7 @@ fn settings_ai_models_panel(
         .collect();
 
     let rows: Vec<gpui::AnyElement> = if panel.settings_loading {
-        vec![ai_empty_state(&tr("app.ai.models.loading"), colors)]
+        vec![inline_loading_row(tr("app.ai.models.loading"), colors).into_any_element()]
     } else if let Some(message) = panel.settings_error.as_ref() {
         // 错误态必须与「空库」区分：显示原因 + 重试，而不是伪装成空列表（设计 §39.5）。
         vec![ai_settings_error_block(message, colors, cx)]

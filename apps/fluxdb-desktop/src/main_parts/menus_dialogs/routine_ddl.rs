@@ -120,7 +120,7 @@ fn routine_ddl_modal(
                                 .items_center()
                                 .gap_2()
                                 .text_color(colors.muted)
-                                .child(app_icon(AppIcon::Loader, 14., colors.info))
+                                .child(loading_spinner_with_color(14., colors.muted))
                                 .child(tr("app.table_info.loading"))
                                 .into_any_element()
                         } else {
