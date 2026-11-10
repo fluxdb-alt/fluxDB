@@ -1,163 +1,164 @@
 # FluxDB
 
-**原生跨平台数据库客户端与 SQL 编辑器，面向高性能、低开销的桌面体验设计：在一个窗口中完成查询、数据编辑、结构管理和 Redis 调试。**
+**A native, cross-platform database client and SQL editor designed for high performance and low overhead: query, edit data, manage schemas and debug Redis in one window.**
 
-FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL、MariaDB、PostgreSQL、人大金仓 KingbaseES、SQL Server、Oracle、SQLite、TiDB、达梦 DM8、MongoDB 和 Redis 放进同一套桌面工作流，并提供有明确权限边界的 AI Agent。
+FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MySQL, MariaDB, PostgreSQL, KingbaseES, SQL Server, SQLite, TiDB, Dameng DM8, MongoDB and Redis into one desktop workflow, with a permission-aware AI Agent.
 
-**简体中文 | [English](./README.en.md)**
+**English | [简体中文](./README.zh-CN.md)**
 
 [![Release](https://img.shields.io/github/v/release/fluxdb-alt/fluxDB)](https://github.com/fluxdb-alt/fluxDB/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/fluxdb-alt/fluxDB/ci.yml)](https://github.com/fluxdb-alt/fluxDB/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue)](./LICENSE)
-![Platforms](https://img.shields.io/badge/平台-macOS%20%7C%20Windows%20%7C%20Linux-blue)
+![Platforms](https://img.shields.io/badge/Platforms-macOS%20%7C%20Windows%20%7C%20Linux-blue)
 
-[下载最新版本](https://github.com/fluxdb-alt/fluxDB/releases/latest) · [最近更新](#最近更新) · [功能一览](#核心能力) · [数据库支持](#数据库支持) · [操作手册](./docs/user-guide.md) · [反馈问题](https://github.com/fluxdb-alt/fluxDB/issues)
+[Download the latest release](https://github.com/fluxdb-alt/fluxDB/releases/latest) · [Latest changes](#latest-changes) · [Features](#core-capabilities) · [Database support](#database-support) · [User guide](./docs/user-guide.md) · [Report an issue](https://github.com/fluxdb-alt/fluxDB/issues)
 
-![FluxDB SQL 编辑器、表结构提示与补全](docs/screenshots/sql_editor_adapter.png)
+![FluxDB SQL editor with schema completion](docs/screenshots/sql_editor_adapter.png)
 
-## 最近更新
+
+
+## Latest changes
 
 ### v0.1.17
 
-- **结构对比与数据传输**：连接右键菜单新增「结构对比与同步」「跨连接数据传输」；对比按 `schema.name` 配对基础表，展示缺失 / 多出 / 结构不同 / 一致与两端 DDL，可按勾选新建、删除或重建；传输支持追加与清空后写入，目标表不存在时自动建表，分页读写、可取消。
-- **任务中心**：汇总备份、恢复、SQL 文件、表与 Mongo 导入导出、结构同步、数据传输等后台任务，统一展示状态、进度与日志，支持取消并持久化历史记录。
-- **可视化执行计划**：工具栏「解释」解析 MySQL / MariaDB / TiDB、PostgreSQL / KingbaseES 与 SQLite 的计划输出，生成节点树与检查器，标记全表扫描、文件排序与无索引；无法解析时回退原始结果。
-- **新建连接优化**：高频字段留在「连接信息」，MySQL 系字符集 / 排序规则 / URL 参数移入「高级」，SQLite 隐藏空的网络页签；MySQL / MariaDB / TiDB 新增 SOCKS5 与 HTTP CONNECT 代理，可与 TLS 组合，PostgreSQL 复用共享代理拨号。
-- **修复**：修正 MySQL 旧档案 TLS 模式迁移误判；筛选切换字段时按新列类型保留兼容值；补齐备份 / 恢复取消任务文案；修复 Kingbase 补全兼容性与导出分页嵌套 `block_on`。
+- **Structure compare and data transfer**: new connection context-menu entries for structure compare/sync and cross-connection data transfer. Tables are paired by `schema.name` and reported as missing, extra, modified or identical with side-by-side DDL, then the selected tables can be created, dropped or recreated. Transfer supports append and truncate-then-write, creates a missing target table, and reads/writes in pages with cancellation.
+- **Task center**: collects backup, restore, SQL file execution, table and MongoDB import/export, structure sync and data transfer, with unified status, progress and logs, cancellation, and persisted history.
+- **Visual query plans**: the toolbar "Explain" action parses MySQL / MariaDB / TiDB, PostgreSQL / KingbaseES and SQLite plan output into a node tree and inspector, flagging full table scans, filesorts and missing indexes, and falls back to the raw result when parsing fails.
+- **Connection form improvements**: high-frequency fields stay under "Connection info", MySQL-family charset/collation/URL parameters move to "Advanced", and SQLite hides the empty network tab. MySQL / MariaDB / TiDB gain SOCKS5 and HTTP CONNECT proxies combinable with TLS, and PostgreSQL reuses the shared proxy dialer.
+- **Fixes**: corrected legacy MySQL TLS-mode migration, kept compatible filter values when switching fields, added missing backup/restore cancel strings, and fixed KingbaseES completion compatibility and a nested `block_on` in export pagination.
 
-[完整更新说明](./release-notes/v0.1.17/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
+[Full release notes](./release-notes/v0.1.17/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
 
 ### v0.1.16
 
-- **新增人大金仓 KingbaseES**：复用 PostgreSQL 连接链路（PG 兼容模式），支持连接测试、库 / Schema 与对象浏览、SQL 查询与补全、数据查看与编辑、表结构查看与设计，以及用户与权限入口；默认端口 54321，支持 TLS、SSH、代理与连接串导入。
-- **首版边界**：仅支持 PG 兼容模式；原生备份 / 恢复与 `psql` / `ksql` 等外部工具入口暂不支持；用户与权限页沿用 PostgreSQL 实现，尚未单独回归。
-- **修复**：修复 Kingbase 打开表属性 DDL 时的 panic（`pg_sequence` 数值列声明为 `int2`，改为显式 `::bigint`）；连接类型栏底部计数更新为 11 种。
+- **KingbaseES support**: reuses the PostgreSQL connection path in PG compatibility mode for connection tests, database/schema and object browsing, SQL queries and completion, data viewing and editing, table structure viewing and design, and the users and privileges entry. The default port is 54321, with TLS, SSH, proxy and connection-string import.
+- **First-release limits**: PG compatibility mode only; native backup/restore and external `psql` / `ksql` entries are not supported yet; the users and privileges page reuses the PostgreSQL implementation and has not been separately regression-tested.
+- **Fixes**: fixed a panic when opening table DDL on Kingbase (`pg_sequence` numeric columns are declared `int2`; the query now casts to `::bigint`), and the connection-kind rail now reports 11 built-in drivers.
 
-[完整更新说明](./release-notes/v0.1.16/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
+[Full release notes](./release-notes/v0.1.16/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
 
-## 为什么选择 FluxDB
+## Why FluxDB
 
-- **一个工作台，多种数据源**：在同一个窗口中管理关系型数据库、MongoDB 和 Redis，减少工具切换。
-- **从查询到写入的完整路径**：SQL 编辑、结果编辑回写、表结构设计、数据导入导出、备份恢复和 ER 图互相衔接。
-- **原生架构，性能优先**：基于 Rust + GPUI，不依赖 Electron 或 WebView，以低开销与交互响应为设计目标。
-- **AI 有明确安全边界**：AI 只能读取有界数据、修改授权编辑器或执行受控操作；写入类工具需要审批。
+- **One workspace for multiple data sources**: manage relational databases, MongoDB and Redis side by side.
+- **From query to write**: SQL editing, editable result sets, table design, import/export, backup/restore and ER diagrams.
+- **Native architecture, performance first**: built with Rust + GPUI, without Electron or a WebView, with low overhead and responsive interaction as design goals.
+- **AI with explicit boundaries**: bounded reads, authorized editor edits and approval for write or high-risk tools.
 
-## 核心能力
+## Core capabilities
 
-### SQL 与数据编辑
+### SQL and data
 
-- SQL 编辑器：语法高亮、代码折叠、关键字 / 表 / 列 / 函数补全、SQL 格式化和查询历史。
-- 数据浏览：分页、筛选、排序、行详情和单元格详情。
-- 数据写入：编辑结果集并回写数据库，保留危险操作提示。
-- 数据导入：支持 TXT、CSV、JSON、XML。
-- 数据导出：支持 SQL、TXT、CSV、JSON、XML。
-- SQL 文件执行：可执行已有 `.sql` 文件。
+- Syntax highlighting, code folding, keyword/table/column/function completion, SQL formatting and query history.
+- Paginated browsing, filters, sorting, row details and cell details.
+- Editable result sets with writes back to the database and safeguards for dangerous actions.
+- Import TXT, CSV, JSON and XML.
+- Export SQL, TXT, CSV, JSON and XML.
+- Execute existing `.sql` files.
 
-### 表结构与 ER 图
+### Schema and ER diagrams
 
-- 查看列、索引、外键、触发器和 DDL。
-- 可视化创建和修改表结构，并生成对应数据库方言的 DDL。
-- ER 图基于真实外键自动布局，也支持手工记录本地逻辑关系。
-- 逻辑关系只保存在本地图谱中，不会创建或修改数据库外键。
-- ER 图可导出 JSON、DBML、Mermaid 和 SVG。
+- Inspect columns, indexes, foreign keys, triggers and DDL.
+- Create and modify tables visually, with DDL generated for the target database dialect.
+- Layout ER diagrams from real foreign keys, with optional local logical relationships.
+- Local logical relationships never create or modify database foreign keys.
+- Export ER diagrams as JSON, DBML, Mermaid or SVG.
 
-### MongoDB 工作台
+### MongoDB workbench
 
-- 连接串导入与 SRV 拓扑发现，按库 / 集合 / 视图浏览，查看连接信息与拓扑。
-- 文档页支持筛选、投影、排序、排序规则、分页与索引提示，结果可在卡片、表格和 JSON 之间切换。
-- 条件构建器与查询补全覆盖 Filter、投影、排序和聚合管道；聚合、索引与集合信息各有独立页签。
-- 文档新增、编辑、复制与删除；导入 JSON / JSONL / CSV，导出 JSON / JSONL / CSV。
-- 集合右键支持置顶、复制名称、刷新、导出、重命名、导入与删除，库级可创建集合与删除数据库。
+- Connection-string import with SRV discovery, browsing by database / collection / view, and connection info with topology.
+- The documents tab supports filter, projection, sort, collation, paging and index hint, with card, table and JSON display modes.
+- The condition builder and completion cover filter, projection, sort and aggregation pipelines; aggregation, indexes and collection info each have their own tab.
+- Create, edit, duplicate and delete documents; import JSON / JSONL / CSV and export JSON / JSONL / CSV.
+- Collection context menu covers pin, copy name, refresh, export, rename, import and drop; databases can create collections and be dropped.
 
-### Redis 工作台
+### Redis workbench
 
-- 浏览 Redis 键空间，查看和编辑常用数据类型、TTL 与键详情。
-- Workbench 支持命令执行和命令历史。
-- 内嵌 Redis CLI 终端。
-- 支持 Pub/Sub 订阅，可观察频道消息。
-- 连接配置支持 TLS、SSH 隧道、Sentinel、Cluster 以及 URI / Cloud 配置。
+- Browse the keyspace and inspect or edit common value types, TTL and key details.
+- Run commands with command history in the Workbench.
+- Use the embedded Redis CLI terminal.
+- Observe channel messages with Pub/Sub subscriptions.
+- Connect with TLS, SSH tunnels, Sentinel, Cluster, URI or Cloud configuration.
 
-### 运维、安全与更新
+### Operations, security and updates
 
-- 连接密码和模型 API Key 走受控存储，不进入普通配置导出、日志、事件快照或 AI 上下文。
-- 应用内更新会校验签名清单与安装包摘要。
-- 发布包附带 SHA-256 校验文件。
-- 界面内置简体中文和 English，并支持运行时切换。
+- Connection passwords and model API keys use controlled storage and stay out of ordinary exports, logs, event snapshots and AI context.
+- In-app updates verify the signed manifest and package checksum.
+- Release packages include SHA-256 checksums.
+- The UI supports English and Simplified Chinese with runtime switching.
 
-## 演示
+## Demo
 
-**完整演示视频**
+**Full demo** · 2 min 46 sec · MP4, about 8.6 MB
 
 https://github.com/user-attachments/assets/f6075999-a87f-4644-9d14-dbda49a7981d
 
-## 数据库支持
+## Database support
 
-各数据库的能力范围不同，具体操作见[操作手册](./docs/user-guide.md)。
+Capabilities vary by database. See the [user guide](./docs/user-guide.md) for details.
 
-| 数据库 | 当前能力 | 备份 / 恢复 | 连接与限制 | 尚未支持 |
+| Database | Current capabilities | Backup / restore | Connections and limits | Not yet supported |
 | --- | --- | --- | --- | --- |
-| MySQL | SQL 查询、对象浏览、表结构管理、数据编辑、导入导出、原生客户端工具入口 | `mysqldump` 逻辑备份，SQL 恢复 | TLS / SSL、SSH 隧道、代理、超时、字符集 | - |
-| TiDB | 复用 MySQL 协议链路，适配 SQL 方言、补全与表结构管理 | 复用 MySQL 逻辑备份能力 | 连接能力与 MySQL 一致 | - |
-| MariaDB | 复用 MySQL 协议链路，支持对象浏览、SQL 查询、表结构管理、数据编辑、导入导出、用户与权限；识别 MariaDB 服务端版本 | 复用 `mysqldump` / `mariadb-dump` 逻辑备份与 SQL 恢复 | 连接能力与 MySQL 一致；默认端口 3306 | - |
-| PostgreSQL | SQL 查询、Schema / 对象浏览、表结构管理、数据编辑、用户与角色管理、psql 工具入口 | `pg_dump` plain SQL 备份，`psql` 恢复 | TLS、SSH、代理、Schema 作用域、超时 | - |
-| 人大金仓 KingbaseES | 复用 PostgreSQL 连接器（PG 兼容模式）：连接、库 / Schema 与对象浏览、SQL 查询、数据查看与编辑、表结构查看与设计；用户与权限页沿用 PostgreSQL 实现，尚未单独回归 | 暂不支持原生备份 / 恢复；需要时请在命令行使用 `sys_dump` / `ksql` | 仅支持 PG 兼容模式；默认端口 54321，用户名通常为 `system`、默认库 `test`；表单、TLS / SSH / 代理等入口与 PostgreSQL 一致 | Oracle 兼容模式、原生备份 / 恢复、`psql` / `ksql` 等外部工具入口 |
-| SQL Server | T-SQL 查询、数据库 / Schema / 对象浏览、表结构管理与数据编辑、表数据导入导出、登录名 / 数据库用户 / 角色成员 / 显式权限管理、对象级逻辑备份恢复、AI 页面上下文与受控执行 | 对象级逻辑 SQL 备份与恢复 | SQL Server 认证、TLS、显式端口；命名实例需填写实际端口 | Windows 集成认证、Azure AD、包含数据库用户、列级权限编辑、用户自定义服务器角色、SQL Browser / 命名实例自动解析、数据库级物理备份（`BACKUP DATABASE`）。对象级逻辑备份恢复不能替代数据库级灾难恢复。 |
-| SQLite | 本地文件连接、SQL 查询、对象浏览、表结构管理、数据编辑 | `VACUUM INTO` 完整一致快照；恢复到新文件并检查完整性与外键 | 本地文件路径 | - |
-| 达梦 DM8 | Schema / 对象浏览、SQL 查询、表结构管理与设计、数据编辑、表数据导入 | 逻辑备份与 SQL 恢复；当前恢复面向单 Schema | 实例与 Schema 连接配置 | - |
-| Oracle | SQL 查询、Schema / 对象浏览、表结构管理与设计、数据编辑、筛选与排序、SQL 补全、用户与权限（只读当前账号授权明细）、逻辑导出、AI 页面上下文与受控执行 | 本机逻辑导出（DDL + 逐页数据），恢复按 SQL 重放 | Service Name 或 SID、CDB / PDB 目标；未加引号的标识符按大写折叠 | 服务器端 Data Pump 备份、非当前账号的授权明细（`DBA_*` / `ALL_SYS_PRIVS` 需要额外权限）、跨页一致快照导出。逐页导出不是一致快照，也不是服务器端原生备份。 |
-| MongoDB | 连接串导入（`mongodb://` / `mongodb+srv://`）、库 / 集合 / 视图浏览、集合工作台（文档筛选投影排序、条件构建、聚合、索引、集合信息）、文档新增 / 编辑 / 复制 / 删除、JSON / JSONL / CSV 导入导出、集合重命名与删除、命令行终端、SQL 风格查询补全、AI 页面上下文与受控执行 | 不提供数据库级备份恢复；导出是文档级逻辑导出（JSON / JSONL / CSV） | `mongodb+srv://` 拓扑发现、SCRAM-SHA-1 / SCRAM-SHA-256 / MONGODB-X509、TLS 参数经连接串导入；单次查询最多返回 500 篇文档 | 无 `mongodump` / `mongorestore` 备份恢复、「查看性能指标」面板、SSH 隧道、批量删除（无撤销）、跨库移动集合、视图重命名 / 删除、时间序列与 capped 集合创建入口、表格行内编辑、事务与变更流；CSV 导入仅支持标量字段且必须是 UTF-8；新增文档的 `_id` 固定为 ObjectId。 |
-| Redis | 键空间浏览、键值编辑、TTL、Workbench、CLI、Pub/Sub | 不提供数据库级备份恢复 | TLS、SSH、Sentinel、Cluster、URI / Cloud；Cluster 仅支持 DB 0 | - |
+| MySQL | SQL queries, object browsing, table management, data editing, import/export, native client tool entry | `mysqldump` logical backup; SQL restore | TLS/SSL, SSH tunnel, proxy, timeouts, charset | - |
+| TiDB | Reuses the MySQL protocol path with TiDB SQL dialect, completion and schema management | Reuses MySQL logical backup | Same connection features as MySQL | - |
+| MariaDB | Reuses the MySQL protocol path for object browsing, SQL queries, table structure management, data editing, import/export, and users/privileges; detects MariaDB server versions | Reuses `mysqldump` / `mariadb-dump` logical backup and SQL restore | Same connection features as MySQL; default port 3306 | - |
+| PostgreSQL | SQL queries, schema/object browsing, table management, data editing, users and roles, psql tool entry | `pg_dump` plain SQL; `psql` restore | TLS, SSH, proxy, schema scope, timeouts | - |
+| KingbaseES | Reuses the PostgreSQL connector in PG compatibility mode: connection, database/schema and object browsing, SQL queries, data viewing/editing, table structure viewing/design; the users and privileges page reuses the PostgreSQL implementation and has not been separately regression-tested | Native backup/restore not supported; use `sys_dump` / `ksql` from the command line | PG compatibility mode only; default port 54321, username usually `system`, default database `test`; the same form, TLS/SSH/proxy entry points as PostgreSQL | Oracle compatibility mode, native backup/restore, external `psql` / `ksql` tool entries |
+| SQL Server | T-SQL queries, database/schema/object browsing, table design and data editing, table import/export, logins, database users, role membership and explicit permissions, object-level logical backup/restore, AI page context and controlled execution | Object-level logical SQL backup and restore | SQL Server authentication, TLS, explicit ports; named instances require the actual port | Windows integrated authentication, Azure AD, contained database users, column-level permission editing, user-defined server roles, SQL Browser/named-instance auto-discovery, and database-level physical `BACKUP DATABASE`. Object-level logical backup and restore is not a substitute for database-level disaster recovery. |
+| SQLite | Local file connections, SQL queries, object browsing, table management, data editing | Consistent `VACUUM INTO` snapshot; restore to a new file with integrity and foreign-key checks | Local file path | - |
+| Dameng DM8 | Schema/object browsing, SQL queries, table design and management, data editing, table import | Logical backup and SQL restore; restore currently targets a single schema | Instance and schema connection settings | - |
+| MongoDB | Connection-string import (`mongodb://` / `mongodb+srv://`), database/collection/view browsing, collection workspace (document filter/projection/sort, condition builder, aggregation, indexes, collection info), document create/edit/duplicate/delete, JSON / JSONL / CSV import and export, collection rename and drop, command-line terminal, SQL-style query completion, AI page context and controlled execution | No database-level backup/restore; export is document-level logical export (JSON / JSONL / CSV) | `mongodb+srv://` discovery, SCRAM-SHA-1 / SCRAM-SHA-256 / MONGODB-X509, TLS options via connection-string import; at most 500 documents per query | No `mongodump` / `mongorestore` backup and restore, no performance-metrics panel, no SSH tunnel, no bulk delete (and no undo), no cross-database collection moves, no view rename/drop, no time-series or capped collection creation, no in-table row editing, no transactions or change streams; CSV import supports scalar fields only and must be UTF-8; new documents always get an ObjectId `_id`. |
+| Redis | Keyspace browsing, value editing, TTL, Workbench, CLI, Pub/Sub | No database-level backup/restore | TLS, SSH, Sentinel, Cluster, URI/Cloud; Cluster uses DB 0 only | - |
 
 ## AI Agent
 
-FluxDB 内置可选 AI Agent，用于理解结构、编写 SQL、排查数据和生成报表。它不是无边界的桌面助手。
+FluxDB includes an optional AI Agent for understanding schemas, writing SQL, investigating data and generating reports. It is not an unrestricted desktop assistant.
 
-- **结构发现**：搜索连接、库、Schema、表、视图和列，不默认读取全表数据。
-- **有界数据读取**：只按工具契约读取有限行数或有限内容，避免把业务数据无限加入上下文。
-- **授权编辑器操作**：只能修改明确授权的 SQL 编辑器范围，不会静默执行编辑器中的 SQL。
-- **受控 SQL 与 Redis 执行**：`db.run`、`redis.execute` 等写入或高风险工具需要审批。
-- **文件与页面上下文**：只能读取用户授权的附件、页面引用或编辑器快照。
-- **BI 与报表**：可生成报告草稿、图表、表格和说明，并输出可保存的报表产物。
-- **MCP 与插件**：支持 MCP Client / Server、模型绑定、插件启停、工具权限分级和用量诊断。
-- **模型由用户提供**：需要自行配置模型服务和 API Key；密钥走受控存储，不进入普通日志、导出或 AI 上下文。
+- **Schema discovery**: search connections, databases, schemas, tables, views and columns without reading whole tables by default.
+- **Bounded reads**: read only the rows or content allowed by each tool contract.
+- **Authorized editor actions**: edit only an explicitly authorized SQL range and never execute it implicitly.
+- **Controlled SQL and Redis execution**: write or high-risk tools such as `db.run` and `redis.execute` require approval.
+- **Scoped context**: read only authorized attachments, page references or editor snapshots.
+- **BI and reports**: generate report drafts, charts, tables and explanations as saveable artifacts.
+- **MCP and plugins**: configure MCP Client/Server, model bindings, plugins, tool permissions and usage diagnostics.
+- **User-provided models**: configure your own model service and API key. Secrets use controlled storage and do not enter ordinary logs, exports or AI context.
 
-## 下载安装
+## Download and install
 
-前往[最新版本下载页](https://github.com/fluxdb-alt/fluxDB/releases/latest)，根据系统选择安装包。
+Open the [latest release](https://github.com/fluxdb-alt/fluxDB/releases/latest) and choose the package for your platform.
 
-| 平台 | 架构 | 安装包 |
+| Platform | Architecture | Package |
 | --- | --- | --- |
-| macOS | Apple Silicon（ARM64） | `FluxDB-<版本>-macos-arm64.dmg` |
-| macOS | Intel（x64） | `FluxDB-<版本>-macos-x64.dmg` |
-| Windows | x64 | `FluxDB-<版本>-windows-x64-setup.exe` |
-| Linux | x64 | `fluxdb_<版本>_amd64.deb` |
+| macOS | Apple Silicon (ARM64) | `FluxDB-<version>-macos-arm64.dmg` |
+| macOS | Intel (x64) | `FluxDB-<version>-macos-x64.dmg` |
+| Windows | x64 | `FluxDB-<version>-windows-x64-setup.exe` |
+| Linux | x64 | `fluxdb_<version>_amd64.deb` |
 
-- **macOS**：打开 DMG，将应用拖入「应用程序」。当前应用采用 ad-hoc 签名，尚未公证；首次打开若被系统拦截，确认下载来源后，可在「系统设置 → 隐私与安全性」中允许打开。
-- **Windows**：运行安装器，按提示完成安装，可选择创建桌面快捷方式。
-- **Linux**：面向 Ubuntu 22.04/24.04 等 Debian 系发行版，支持 X11 / Wayland 图形桌面。下载后在所在目录执行 `sudo apt install ./fluxdb_<版本>_amd64.deb`，将 `<版本>` 替换为实际版本号。
+- **macOS**: open the DMG and drag FluxDB into Applications. The app is currently ad-hoc signed and not notarized. If macOS blocks the first launch, verify the download source and allow it in System Settings → Privacy & Security.
+- **Windows**: run the installer and optionally create a desktop shortcut.
+- **Linux**: targets Debian-based distributions such as Ubuntu 22.04/24.04 with X11 or Wayland. Run `sudo apt install ./fluxdb_<version>_amd64.deb`.
 
-发布包附带 `.sha256` 校验文件。Windows ARM64、Linux ARM64、AppImage、Flatpak 和 Snap 暂未提供；更多发行版与硬件环境的兼容性仍需持续验证。
+Release packages include `.sha256` checksums. Windows ARM64, Linux ARM64, AppImage, Flatpak and Snap are not currently available.
 
-MySQL / MariaDB / PostgreSQL 的备份恢复依赖本机 `mysqldump` / `mariadb-dump`、`mysql` / `mariadb`、`pg_dump` / `psql` 客户端；基础查询和编辑不需要这些工具。
+MySQL, MariaDB and PostgreSQL backup/restore depend on the local `mysqldump`/`mariadb-dump`, `mysql`/`mariadb` and `pg_dump`/`psql` clients. Basic queries and editing do not require them.
 
-安装后，点击「添加连接」，选择数据库类型，填写连接信息并测试连接，即可开始使用。详细步骤见[操作手册](./docs/user-guide.md)（当前以 macOS 界面和快捷键为例）。
+After installation, choose “Add connection”, select a database type, enter the connection details and test the connection. See the [user guide](./docs/user-guide.md); it currently uses Chinese screenshots and macOS shortcuts.
 
-## 从源码运行
+## Run from source
 
 <details>
-<summary>构建依赖、运行与打包步骤</summary>
+<summary>Build dependencies, running and packaging</summary>
 
-### 环境要求
+### Prerequisites
 
-安装最新稳定版 [Rust 工具链](https://rustup.rs)（项目使用 Rust edition 2024），并准备对应平台的原生构建工具：
+Install the latest stable [Rust toolchain](https://rustup.rs) (the project uses Rust edition 2024) and the native build tools for your platform:
 
-| 平台 | 构建依赖 |
+| Platform | Build dependencies |
 | --- | --- |
-| macOS | Xcode Command Line Tools，可通过 `xcode-select --install` 安装 |
-| Windows | Visual Studio Build Tools 的 C++ 桌面开发工具与 Windows SDK，使用 MSVC 工具链；release 构建需要 SDK 中的 `fxc.exe` |
-| Linux | C/C++ 编译器、pkg-config、CMake、Clang，以及 OpenSSL、字体、X11 / Wayland 等开发库，完整清单见 [CI 配置](./.github/workflows/ci.yml) |
+| macOS | Xcode Command Line Tools, available through `xcode-select --install` |
+| Windows | Visual Studio Build Tools with Desktop development with C++ and the Windows SDK, using the MSVC toolchain; release builds require the SDK's `fxc.exe` |
+| Linux | C/C++ compiler, pkg-config, CMake, Clang, OpenSSL, font and X11/Wayland development libraries; see the [CI configuration](./.github/workflows/ci.yml) for the complete list |
 
-### 启动应用
+### Run
 
 ```bash
 git clone https://github.com/fluxdb-alt/fluxDB.git
@@ -165,72 +166,71 @@ cd fluxDB
 cargo run --locked -p fluxdb-desktop
 ```
 
-首次编译需要下载并构建依赖，耗时较长。
+The first build downloads and compiles dependencies and may take a while.
 
-### 构建与打包
+### Build and package
 
 ```bash
 cargo build --locked --release -p fluxdb-desktop
 ```
 
-macOS 可使用仓库脚本生成包含动态库的 `.app` 和 `.dmg`：
+On macOS, generate an `.app` and `.dmg` containing the required dynamic libraries:
 
 ```bash
 ./scripts/package-macos.sh
 ```
 
-脚本支持 `PROFILE=debug`、`CREATE_DMG=0` 等选项，详见[打包脚本](./scripts/package-macos.sh)。Windows 安装器与 Linux DEB 的构建步骤见[发布工作流](./.github/workflows/release.yml)。
+The script supports options such as `PROFILE=debug` and `CREATE_DMG=0`; see the [packaging script](./scripts/package-macos.sh). Windows installer and Linux DEB steps are defined in the [release workflow](./.github/workflows/release.yml).
 
 </details>
 
-## 参与贡献
+## Contributing
 
-欢迎报告问题、提出建议、改进文档和提交代码。
+Issues, feature proposals, documentation improvements and code contributions are welcome.
 
-- **报告 Bug**：先搜索[已有 Issues](https://github.com/fluxdb-alt/fluxDB/issues)，提交时注明应用版本、操作系统与架构、数据库类型与版本、复现步骤、预期和实际结果；可附脱敏后的日志或截图。
-- **提出建议**：在 [Issues](https://github.com/fluxdb-alt/fluxDB/issues) 中描述使用场景和希望解决的问题。较大改动建议先讨论方案。
-- **提交代码**：Fork 仓库并创建分支，保持修改聚焦，在 Pull Request 中说明改动原因与验证结果。开发约定见 [AGENTS.md](./AGENTS.md)，界面改动另请参阅 [UI 样式规范](./docs/ui-style.md)。
+- **Report a bug**: search [existing issues](https://github.com/fluxdb-alt/fluxDB/issues) first, then include the app version, operating system and architecture, database type and version, reproduction steps, expected and actual results, and sanitized logs or screenshots where useful.
+- **Suggest a feature**: describe the use case and the problem it solves. Discuss larger changes before implementation.
+- **Contribute code**: fork the repository, create a focused branch and explain the reason and validation results in the pull request. See [AGENTS.md](./AGENTS.md) for development conventions and the [UI style guide](./docs/ui-style.md) for interface changes (both in Chinese).
 
-提交前建议运行本地门禁：
+Run the local quality gate before submitting:
 
 ```bash
 ./scripts/check.sh
 ```
 
-跨平台构建差异仍需在发布前通过 CI 验证。
+Cross-platform build differences still require CI verification before release.
 
-本项目开发流程深度使用 AI 辅助，人工负责需求定义、方案审阅、测试验收和发布把关。
+AI is used extensively in the development workflow. Humans own requirements, review, validation and release approval.
 
-## 路线图
+## Roadmap
 
-当前优先完善既有数据库的真实场景覆盖、稳定性和跨平台发布体验。后续候选方向包括：
+Current priorities are real-world coverage for existing databases, stability and the cross-platform release experience. Candidate directions include:
 
-- **MongoDB 后续**：数据库级备份恢复、性能指标面板、批量删除与批量写入、表格行内编辑、事务与变更流。
-- **更多数据库**：按社区需求评估 ClickHouse、DuckDB、Elasticsearch / OpenSearch 等方向。
+- **SQL Server follow-up**: Windows integrated authentication and Azure AD, contained database users, column-level permissions, user-defined server roles, named-instance auto-discovery, and database-level physical backup/restore.
+- **MongoDB follow-up**: database-level backup/restore, performance metrics, bulk delete and bulk writes, in-table row editing, transactions and change streams.
+- **More databases**: evaluate ClickHouse, DuckDB, Elasticsearch/OpenSearch and others based on community demand.
 
-路线图不代表当前版本已经支持。
+The roadmap does not imply current support.
 
-## 支持与赞助
+## Support and sponsorship
 
-如果 FluxDB 对你有帮助，欢迎给项目一个 Star，向朋友推荐，或通过反馈问题、完善文档和贡献代码参与维护。
+If FluxDB is useful to you, consider starring the repository, sharing it with others, or contributing through issues, documentation and code.
 
-也欢迎通过以下方式赞助，支持持续开发和 AI 工具费用。感谢每一份支持！
+You can also sponsor ongoing development and AI tooling costs.
 
-| 支付宝 | 微信 |
+| Alipay | WeChat |
 | :---: | :---: |
-| <img src="docs/sponsor/alipay.png" alt="支付宝赞助二维码" width="160"> | <img src="docs/sponsor/wechat.png" alt="微信赞助二维码" width="160"> |
+| <img src="docs/sponsor/alipay.png" alt="Alipay sponsorship QR code" width="160"> | <img src="docs/sponsor/wechat.png" alt="WeChat sponsorship QR code" width="160"> |
 
-## 致谢
+## Acknowledgements
 
-感谢以下开源项目提供的基础能力与设计参考：
+- [Zed](https://github.com/zed-industries/zed): GPUI ecosystem, editor and native desktop architecture.
+- [GPUI Component / gpui-kit](https://github.com/longbridge/gpui-kit): reusable UI components.
+- [dbx](https://github.com/t8y2/dbx): multi-database abstraction and connection-management design reference.
+- [RedisInsight](https://github.com/RedisInsight/RedisInsight): Redis visualization and interaction design reference.
 
-- [Zed](https://github.com/zed-industries/zed)：GPUI 生态、编辑器与原生桌面应用架构。
-- [GPUI Component / gpui-kit](https://github.com/longbridge/gpui-kit)：输入框、弹窗等基础 UI 组件。
-- [dbx](https://github.com/t8y2/dbx)：多数据库抽象与连接管理设计参考。
-- [RedisInsight](https://github.com/RedisInsight/RedisInsight)：Redis 可视化交互设计参考。
+## License
 
-## 许可证
+FluxDB is licensed under the [GNU GPL v3.0 or later](./LICENSE).
 
-FluxDB 采用 [GNU GPL v3.0 或更新版本](./LICENSE) 开源许可证。
-
-项目版权与授权声明见 [NOTICE](./NOTICE)。
+See [NOTICE](./NOTICE) for copyright and attribution details.
