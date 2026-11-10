@@ -2732,7 +2732,10 @@
       "wrap_off": "No wrap",
       "wrap_auto": "Wrap",
       "results_bottom": "Results at bottom",
-      "results_right": "Results at right"
+      "results_right": "Results at right",
+      "choose_database": "Choose database",
+      "choose_schema": "Choose schema",
+      "default_schema": "Default"
     },
     "failed_sql": "Failed SQL"
   },

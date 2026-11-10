@@ -374,4 +374,138 @@ mod controller_dispatch_tests {
             assert_ne!(flags & 2048, 0, "{mode}: client must request TLS");
         }
     }
+
+    #[test]
+    fn query_database_switch_clears_results_and_resets_postgres_schema() {
+        let mut controller = AppController::new();
+        let mut draft = sqlite_draft("postgres-scope");
+        draft.kind = DatabaseKind::Postgres;
+        controller.dispatch(AppCommand::ReplaceConnections(vec![
+            draft.into_config(ConnectionId(1)),
+        ]));
+        let AppEvent::TabOpened(tab_id) = controller.dispatch(
+            AppCommand::OpenQueryEditorInDatabase {
+                connection_id: ConnectionId(1),
+                database: Some("app".into()),
+                schema: Some("testA".into()),
+            },
+        ) else {
+            panic!("query tab");
+        };
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id,
+            text: "SELECT 1".into(),
+        });
+        // 直接塞入结果，避免依赖真实 PG 连接；这里只验证作用域切换的状态迁移。
+        if let Some(tab) = controller.find_tab_mut(tab_id)
+            && let TabKind::QueryEditor(editor) = &mut tab.kind
+        {
+            editor.results.push(fluxdb_core::DataPage {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                offset: 0,
+                limit: 0,
+                has_more: false,
+                incomplete: None,
+            });
+            editor.summaries.push(QueryExecutionSummary {
+                sql: "SELECT 1".into(),
+                kind: fluxdb_core::QueryStatementKind::ResultSet,
+                success: true,
+                message: String::new(),
+                returned_rows: 1,
+                affected_rows: 0,
+                elapsed_ms: 0,
+            });
+        }
+
+        let event = controller.dispatch(AppCommand::SetQueryDatabase {
+            tab_id,
+            database: Some("other".into()),
+        });
+        assert_eq!(event, AppEvent::TabActivated(tab_id));
+        let Some(tab) = controller.find_tab(tab_id) else {
+            panic!("query tab");
+        };
+        let TabKind::QueryEditor(editor) = &tab.kind else {
+            panic!("query editor");
+        };
+        assert_eq!(editor.database.as_deref(), Some("other"));
+        // PostgreSQL schema 只在旧库内有效，必须回到连接默认（None）。
+        assert_eq!(editor.schema, None);
+        assert!(editor.results.is_empty());
+        assert!(editor.summaries.is_empty());
+        assert_eq!(editor.text, "SELECT 1");
+    }
+
+    #[test]
+    fn query_schema_switch_clears_results_and_keeps_database() {
+        let mut controller = AppController::new();
+        let mut draft = sqlite_draft("schema-scope");
+        draft.kind = DatabaseKind::Postgres;
+        controller.dispatch(AppCommand::ReplaceConnections(vec![
+            draft.into_config(ConnectionId(1)),
+        ]));
+        let AppEvent::TabOpened(tab_id) = controller.dispatch(
+            AppCommand::OpenQueryEditorInDatabase {
+                connection_id: ConnectionId(1),
+                database: Some("app".into()),
+                schema: Some("testA".into()),
+            },
+        ) else {
+            panic!("query tab");
+        };
+        if let Some(tab) = controller.find_tab_mut(tab_id)
+            && let TabKind::QueryEditor(editor) = &mut tab.kind
+        {
+            editor.results.push(fluxdb_core::DataPage {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                offset: 0,
+                limit: 0,
+                has_more: false,
+                incomplete: None,
+            });
+        }
+        let event = controller.dispatch(AppCommand::SetQuerySchema {
+            tab_id,
+            schema: None,
+        });
+        assert_eq!(event, AppEvent::TabActivated(tab_id));
+        let Some(tab) = controller.find_tab(tab_id) else {
+            panic!("query tab");
+        };
+        let TabKind::QueryEditor(editor) = &tab.kind else {
+            panic!("query editor");
+        };
+        assert_eq!(editor.database.as_deref(), Some("app"));
+        assert_eq!(editor.schema, None);
+        assert!(editor.results.is_empty());
+    }
+
+    #[test]
+    fn query_scope_switch_is_rejected_while_running() {
+        let mut controller = AppController::new();
+        controller.dispatch(AppCommand::ReplaceConnections(vec![
+            sqlite_draft("running-scope").into_config(ConnectionId(1)),
+        ]));
+        let AppEvent::TabOpened(tab_id) =
+            controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)))
+        else {
+            panic!("query tab");
+        };
+        controller.dispatch(AppCommand::StartQueryExecution(tab_id));
+        let event = controller.dispatch(AppCommand::SetQueryDatabase {
+            tab_id,
+            database: Some("other".into()),
+        });
+        assert!(matches!(event, AppEvent::Failed(_)));
+        let Some(tab) = controller.find_tab(tab_id) else {
+            panic!("query tab");
+        };
+        let TabKind::QueryEditor(editor) = &tab.kind else {
+            panic!("query editor");
+        };
+        assert!(editor.database.is_none());
+    }
 }

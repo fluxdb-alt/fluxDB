@@ -413,27 +413,72 @@ async fn pg_session_acquire(
 /// 复用到的会话若 schema 作用域与本次请求不一致，则在**同一连接**上补发 SET search_path。
 ///
 /// 这样切换 schema 不会重建连接（保住事务/临时表），也不会让新请求继续用旧 search_path。
-/// 请求未指定 schema（None）时保持会话既有作用域，不擅自改回服务器默认。
+/// 请求未指定 schema（None）时回到连接默认作用域：档案配置了默认 schema 就补发 SET，
+/// 否则发 `RESET search_path` 把会话恢复成服务器默认值。不处理这种情况会让用户从
+/// `testA` 切回「默认」后继续在 `testA` 下执行，实际作用域与工具栏显示不一致。
 async fn pg_ensure_search_path(
     session: &PgSession,
     schema: Option<&str>,
+    default_schema: &str,
 ) -> fluxdb_core::Result<()> {
-    let Some(schema) = schema else {
-        return Ok(());
-    };
-    let already = session
+    let applied = session
         .applied_schema
         .lock()
-        .map(|applied| applied.as_deref() == Some(schema))
-        .unwrap_or(false);
-    if already {
-        return Ok(());
+        .map(|applied| applied.clone())
+        .unwrap_or_default();
+    match pg_search_path_action(schema, default_schema, applied.as_deref()) {
+        PgSearchPathAction::Keep => Ok(()),
+        PgSearchPathAction::Reset => {
+            session
+                .client
+                .batch_execute("RESET search_path")
+                .await
+                .map_err(pg_error)?;
+            if let Ok(mut slot) = session.applied_schema.lock() {
+                *slot = None;
+            }
+            Ok(())
+        }
+        PgSearchPathAction::Apply(target) => {
+            let applied = pg_apply_search_path(&session.client, target).await?;
+            if let Ok(mut slot) = session.applied_schema.lock() {
+                *slot = applied;
+            }
+            Ok(())
+        }
     }
-    let applied = pg_apply_search_path(&session.client, schema).await?;
-    if let Ok(mut slot) = session.applied_schema.lock() {
-        *slot = applied;
+}
+
+/// 会话 search_path 的下一步动作。
+///
+/// 请求 schema 优先；请求为空时回到连接档案默认 schema；两者都为空才 `RESET`。
+/// 只有「已应用的 schema 与目标不同」才重发 SET，避免每次执行都多一次往返。
+#[derive(Debug, Eq, PartialEq)]
+enum PgSearchPathAction<'a> {
+    Keep,
+    Reset,
+    Apply(&'a str),
+}
+
+fn pg_search_path_action<'a>(
+    schema: Option<&'a str>,
+    default_schema: &'a str,
+    applied: Option<&str>,
+) -> PgSearchPathAction<'a> {
+    let target = schema
+        .map(str::trim)
+        .filter(|schema| !schema.is_empty())
+        .or_else(|| {
+            let default_schema = default_schema.trim();
+            (!default_schema.is_empty()).then_some(default_schema)
+        });
+    match target {
+        Some(target) if applied != Some(target) => PgSearchPathAction::Apply(target),
+        Some(_) => PgSearchPathAction::Keep,
+        // 目标为空且会话曾被显式设置过：RESET 回服务器默认，避免继续用旧 schema。
+        None if applied.is_some() => PgSearchPathAction::Reset,
+        None => PgSearchPathAction::Keep,
     }
-    Ok(())
 }
 
 fn pg_lock_error(
@@ -488,5 +533,51 @@ fn pg_commit_error(error: tokio_postgres::Error) -> Error {
         mapped.mark_outcome_unknown("提交 PostgreSQL 事务")
     } else {
         mapped
+    }
+}
+
+#[cfg(test)]
+mod pg_search_path_action_tests {
+    use super::{PgSearchPathAction, pg_search_path_action};
+
+    #[test]
+    fn request_schema_wins_and_is_applied_once() {
+        assert_eq!(
+            pg_search_path_action(Some("testA"), "public", None),
+            PgSearchPathAction::Apply("testA")
+        );
+        assert_eq!(
+            pg_search_path_action(Some("testA"), "public", Some("testA")),
+            PgSearchPathAction::Keep
+        );
+        assert_eq!(
+            pg_search_path_action(Some(" testA "), "public", Some("testA")),
+            PgSearchPathAction::Keep
+        );
+    }
+
+    #[test]
+    fn empty_request_falls_back_to_profile_default() {
+        assert_eq!(
+            pg_search_path_action(None, "public", Some("testA")),
+            PgSearchPathAction::Apply("public")
+        );
+        assert_eq!(
+            pg_search_path_action(Some("  "), "public", Some("testA")),
+            PgSearchPathAction::Apply("public")
+        );
+    }
+
+    #[test]
+    fn no_default_resets_stale_session_scope() {
+        // 方案 A：切回「默认」且连接没有默认 schema 时，必须 RESET 掉旧的 testA。
+        assert_eq!(
+            pg_search_path_action(None, "", Some("testA")),
+            PgSearchPathAction::Reset
+        );
+        assert_eq!(
+            pg_search_path_action(None, "", None),
+            PgSearchPathAction::Keep
+        );
     }
 }

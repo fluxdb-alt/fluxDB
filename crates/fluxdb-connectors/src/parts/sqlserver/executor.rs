@@ -1,3 +1,18 @@
+/// 把持久查询会话切回指定数据库。
+///
+/// `USE` 在显式事务内也允许执行，且不会改变事务边界；Azure SQL 只允许在
+/// 当前库上重复 `USE`，跨库切换本就不支持，这里的值始终等于会话键里的库。
+async fn sqlserver_use_database(
+    client: &mut SqlServerClient,
+    database: &str,
+) -> fluxdb_core::Result<()> {
+    let sql = format!(
+        "USE {}",
+        fluxdb_core::SqlServerDialect.quote_identifier(database)
+    );
+    sqlserver_exec_transaction(client, &sql).await
+}
+
 fn sqlserver_execute_query(
     config: &ConnectionConfig,
     request: &QueryRequest,
@@ -26,6 +41,9 @@ fn sqlserver_execute_query_with_progress(
         let mut guard = client
             .lock()
             .map_err(|_| Error::new(ErrorKind::Internal, "SQL Server 查询会话锁失效"))?;
+        // 会话按标签复用，用户可能在上一轮执行过 `USE [other]`。每次执行前把上下文
+        // 切回编辑器选中的库，保证未限定对象名与工具栏显示一致；同一库内 USE 无副作用。
+        sqlserver_block_on(sqlserver_use_database(&mut guard, &database))?;
         let (execution, connection_broken) = sqlserver_block_on(
             sqlserver_execute_on_client(
                 &mut guard,

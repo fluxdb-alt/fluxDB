@@ -482,7 +482,20 @@ PostgreSQL、KingbaseES、SQL Server、DM8 和 Oracle 的 Schema 节点还有独
 2. 在右侧选择数据库。PostgreSQL 默认 `postgres`，KingbaseES 默认 `test`，SQLite 默认 `main`，DM8 默认 `DAMENG`，Redis 默认 `db0`。
 3. 点击数据库条目进入编辑器。
 
-编辑器顶部显示当前连接和数据库，作用域在创建后固定；需要换库时新建查询，或在 SQL 中显式限定库名。执行前请核对顶部作用域，避免把语句发到错误环境。
+编辑器顶部显示当前连接和数据库；连接名只读，数据库和 Schema 可直接在工具栏切换。切换作用域会清空当前结果区，但保留已编写的 SQL，便于对同一段语句换库执行。执行期间下拉不可用，需先等待完成或点击“停止”。
+
+| 连接类型 | 数据库 | Schema | 说明 |
+| --- | --- | --- | --- |
+| MySQL / MariaDB / TiDB | 可切换 | 不显示 | 每次执行前对目标库执行 `USE`，下一个标签互不影响。 |
+| PostgreSQL / KingbaseES | 可切换 | 可切换 | 切库会新建查询会话；切 Schema 通过 `search_path`，保留当前会话的事务和临时表。 |
+| SQL Server | 可切换 | 不显示 | 切库会新建会话；若曾在会话中手工执行 `USE`，下一次执行会切回工具栏显示的库。 |
+| Oracle | 只读显示 | 可切换 | 一个实例只有一个库；Schema 通过 `ALTER SESSION SET CURRENT_SCHEMA` 生效。 |
+| SQLite | 只读显示 | 不显示 | 没有“当前库”概念；附加库需在 SQL 中用 `库名.表名` 限定，或改用对应文件新建连接。 |
+| DM8 | 只读显示 | 不显示 | 一个实例一个库，且当前驱动不支持切换 Schema；请在 SQL 中显式限定 Schema。 |
+
+PostgreSQL / KingbaseES 的 Schema 下拉首项为“默认”：连接档案配置了默认 Schema 时回到该 Schema；没有配置时发送 `RESET search_path`，恢复服务器默认作用域（通常是 `"$user", public`）。这样从 `testA` 切回“默认”后，未限定名的对象不会继续解析到 `testA`。
+
+执行前请核对顶部作用域，避免把语句发到错误环境。切换数据库会关闭旧库会话，其中未提交的事务会回滚，相关执行记录会标记为已回滚。
 
 ### 4.3 编写和补全 SQL
 

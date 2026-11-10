@@ -4,10 +4,10 @@ fn query_toolbar(
     editor: &QueryEditorState,
     sql_editor: Entity<editor_component::Editor>,
     connection: String,
-    database: String,
     accent: gpui::Rgba,
     output_placement: ResultsPlacement,
     colors: UiColors,
+    window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let has_text = !editor.text.trim().is_empty();
@@ -22,7 +22,16 @@ fn query_toolbar(
         .gap_2()
         .px_3()
         .bg(colors.panel_alt)
-        .child(query_context_group(connection, database, accent, colors))
+        .child(query_scope_context_group(
+            this,
+            window,
+            cx,
+            tab_id,
+            editor,
+            connection,
+            accent,
+            colors,
+        ))
         .child(
             query_toolbar_icon_button(
                 if editor.running {
@@ -318,6 +327,157 @@ fn query_toolbar_icon_button(
         })
 }
 
+/// 查询工具栏作用域项：`value = None` 表示「连接默认」（schema 下拉专用）。
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct QueryScopeItem {
+    label: SharedString,
+    value: Option<String>,
+}
+
+impl SelectItem for QueryScopeItem {
+    type Value = Option<String>;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+}
+
+impl NavicatMain {
+    /// 当前活动标签若是 SQL 查询编辑器则返回其 id，供作用域下拉回写命令。
+    fn active_query_tab_id(&self) -> Option<TabId> {
+        let tab = self.controller.state().active_tab()?;
+        matches!(tab.kind, TabKind::QueryEditor(_)).then_some(tab.id)
+    }
+
+    /// 同步作用域下拉的候选项；仅在内容变化时重建，避免每帧重置弹出层状态。
+    fn sync_query_scope_items(
+        &mut self,
+        database_items: Vec<QueryScopeItem>,
+        schema_items: Vec<QueryScopeItem>,
+        expected_database: Option<&str>,
+        expected_schema: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<NavicatMain>,
+    ) {
+        if self.query_database_items != database_items {
+            self.query_database_items = database_items.clone();
+            self.query_database_select.update(cx, |select, cx| {
+                select.set_items(SearchableVec::new(database_items), window, cx);
+            });
+        }
+        if self.query_schema_items != schema_items {
+            self.query_schema_items = schema_items.clone();
+            self.query_schema_select.update(cx, |select, cx| {
+                select.set_items(SearchableVec::new(schema_items), window, cx);
+            });
+            // 新列表默认选中「默认」项，避免触发器停在占位符上。
+            if expected_schema.is_none()
+                && !self.query_schema_items.is_empty()
+                && self.query_schema_select.read(cx).selected_index(cx).is_none()
+            {
+                self.query_schema_select.update(cx, |select, cx| {
+                    select.set_selected_index(Some(IndexPath::new(0)), window, cx);
+                });
+            }
+        }
+        sync_query_scope_value(
+            &self.query_database_select,
+            expected_database.map(str::to_string),
+            window,
+            cx,
+        );
+        sync_query_scope_value(
+            &self.query_schema_select,
+            expected_schema.map(str::to_string),
+            window,
+            cx,
+        );
+    }
+}
+
+/// 把下拉选中值对齐到编辑器作用域；值相同就不动，避免打断正在展开的菜单。
+fn sync_query_scope_value(
+    select: &Entity<SelectState<SearchableVec<QueryScopeItem>>>,
+    expected: Option<String>,
+    window: &mut Window,
+    cx: &mut Context<NavicatMain>,
+) {
+    if select.read(cx).selected_value().cloned() == Some(expected.clone()) {
+        return;
+    }
+    let Some(expected) = expected else {
+        // 「未选择」不需要反复写值：每次 set_selected_value 都会清空选择器里的搜索框，
+        // 用户正在筛选数据库时会被下一帧打断。只有确实残留了选择才清一次。
+        if select.read(cx).selected_index(cx).is_some() {
+            select.update(cx, |select, cx| select.set_selected_index(None, window, cx));
+        }
+        return;
+    };
+    select.update(cx, |select, cx| {
+        select.set_selected_value(&Some(expected), window, cx);
+    });
+}
+
+/// 组装下拉候选项：加载到的对象列表 + 当前值（对象树尚未加载时也要能显示当前作用域）。
+fn query_database_items(
+    connection: Option<&ConnectionState>,
+    current: Option<&str>,
+) -> Vec<QueryScopeItem> {
+    let mut names = connection
+        .map(|connection| {
+            connection_databases_unfiltered(connection)
+                .into_iter()
+                .map(|database| database_display_name(&database))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(current) = current
+        && !names.iter().any(|name| name == current)
+    {
+        names.push(current.to_string());
+    }
+    names.sort();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|name| QueryScopeItem {
+            label: name.clone().into(),
+            value: Some(name),
+        })
+        .collect()
+}
+
+fn query_schema_items(
+    connection: Option<&ConnectionState>,
+    database: Option<&str>,
+    current: Option<&str>,
+) -> Vec<QueryScopeItem> {
+    let mut schemas = connection
+        .map(|connection| database_schemas(connection, database.unwrap_or("main")))
+        .unwrap_or_default();
+    if let Some(current) = current
+        && !schemas.iter().any(|schema| schema == current)
+    {
+        schemas.push(current.to_string());
+    }
+    schemas.sort();
+    schemas.dedup();
+    let mut items = vec![QueryScopeItem {
+        label: tr("app.query.toolbar.default_schema"),
+        value: None,
+    }];
+    items.extend(schemas.into_iter().map(|schema| QueryScopeItem {
+        label: schema.clone().into(),
+        value: Some(schema),
+    }));
+    items
+}
+
+/// 只读作用域胶囊（Redis / MongoDB 等没有可切换库上下文的工具栏复用）。
 fn query_context_group(
     connection: String,
     database: String,
@@ -338,6 +498,128 @@ fn query_context_group(
         .child(query_context_item(connection, Some(accent), colors))
         .child(div().w(px(1.)).h(px(14.)).flex_none().bg(colors.border_soft))
         .child(query_context_item(database, None, colors))
+}
+
+/// 作用域下拉：数据库/ schema 都只在能力允许的库型上出现。
+///
+/// 连接名保持只读；SQLite / 达梦没有可切换的库上下文，继续显示静态文本。
+fn query_scope_context_group(
+    this: &mut NavicatMain,
+    window: &mut Window,
+    cx: &mut Context<NavicatMain>,
+    _tab_id: TabId,
+    editor: &QueryEditorState,
+    connection: String,
+    accent: gpui::Rgba,
+    colors: UiColors,
+) -> Div {
+    let connection_state = this
+        .controller
+        .state()
+        .connections
+        .iter()
+        .find(|connection| connection.config.id == editor.connection_id);
+    let kind = connection_state.map(|connection| connection.config.kind);
+    let can_switch_database = kind.is_some_and(|kind| {
+        kind.is_mysql_family()
+            || kind.is_postgres_family()
+            || kind == DatabaseKind::SqlServer
+    });
+    let can_switch_schema =
+        kind.is_some_and(|kind| kind.is_postgres_family() || kind == DatabaseKind::Oracle);
+    let database_items = query_database_items(connection_state, editor.database.as_deref());
+    let schema_items = query_schema_items(
+        connection_state,
+        editor.database.as_deref(),
+        editor.schema.as_deref(),
+    );
+    // 该连接不需要某个下拉时传空列表，避免残留其它连接的同名项被误选。
+    this.sync_query_scope_items(
+        if can_switch_database {
+            database_items
+        } else {
+            Vec::new()
+        },
+        if can_switch_schema {
+            schema_items
+        } else {
+            Vec::new()
+        },
+        editor.database.as_deref(),
+        editor.schema.as_deref(),
+        window,
+        cx,
+    );
+
+    let database_label = editor
+        .database
+        .clone()
+        .unwrap_or_else(|| tr("app.history.default_database").to_string());
+    let mut group = div()
+        .h(px(30.))
+        .min_w(px(0.))
+        .max_w(px(460.))
+        .rounded(colors.radius)
+        .border_1()
+        .border_color(colors.border_soft)
+        .bg(colors.panel_bg)
+        .flex()
+        .items_center()
+        .overflow_hidden()
+        .child(query_context_item(connection, Some(accent), colors))
+        .child(div().w(px(1.)).h(px(14.)).flex_none().bg(colors.border_soft));
+    group = group.child(if can_switch_database {
+        query_scope_select(
+            &this.query_database_select,
+            AppIcon::Database,
+            tr("app.query.toolbar.choose_database"),
+            "query-database-select",
+            colors,
+        )
+    } else {
+        query_context_item(database_label, None, colors)
+    });
+    if can_switch_schema {
+        group = group
+            .child(div().w(px(1.)).h(px(14.)).flex_none().bg(colors.border_soft))
+            .child(query_scope_select(
+                &this.query_schema_select,
+                AppIcon::Schema,
+                tr("app.query.toolbar.choose_schema"),
+                "query-schema-select",
+                colors,
+            ));
+    }
+    group
+}
+
+fn query_scope_select(
+    select: &Entity<SelectState<SearchableVec<QueryScopeItem>>>,
+    icon: AppIcon,
+    placeholder: SharedString,
+    selector: &'static str,
+    colors: UiColors,
+) -> Div {
+    // Select 自带边框/底色，嵌进作用域胶囊时关掉外观，只保留文字与下拉箭头。
+    div()
+        .h_full()
+        .min_w(px(0.))
+        .max_w(px(160.))
+        .px_2()
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .debug_selector(move || selector.to_string())
+        .child(app_icon(icon, 13., colors.muted))
+        .child(
+            Select::new(select)
+                .appearance(false)
+                .placeholder(placeholder)
+                .menu_width(px(240.))
+                .text_color(colors.text)
+                .h(px(28.))
+                .flex_1(),
+        )
 }
 
 fn query_context_item(

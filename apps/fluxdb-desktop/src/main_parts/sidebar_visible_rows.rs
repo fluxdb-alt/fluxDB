@@ -254,8 +254,15 @@ fn push_connection_visible_rows(
     let mut databases = databases;
     databases.sort_by_key(|database| {
         let name = database_display_name(database);
+        // Redis 库名是纯数字（0..N），按数值排序，避免字典序把 10 排到 2 前面。
+        let numeric_rank = if database.path.kind == ObjectKind::RedisDb {
+            name.parse::<u64>().unwrap_or(u64::MAX)
+        } else {
+            u64::MAX
+        };
         (
             !pinned_databases.contains(&database_tree_key(connection_id, &name)),
+            numeric_rank,
             name,
         )
     });

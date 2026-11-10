@@ -2732,7 +2732,10 @@
       "wrap_off": "不换行",
       "wrap_auto": "自动换行",
       "results_bottom": "结果在下方",
-      "results_right": "结果在右侧"
+      "results_right": "结果在右侧",
+      "choose_database": "选择数据库",
+      "choose_schema": "选择 Schema",
+      "default_schema": "默认"
     },
     "failed_sql": "失败的 SQL"
   },

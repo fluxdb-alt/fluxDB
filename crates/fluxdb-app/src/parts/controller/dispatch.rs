@@ -1282,6 +1282,12 @@ impl AppController {
                     self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"))
                 }
             }
+            AppCommand::SetQueryDatabase { tab_id, database } => {
+                self.set_query_database_command(tab_id, database)
+            }
+            AppCommand::SetQuerySchema { tab_id, schema } => {
+                self.set_query_schema_command(tab_id, schema)
+            }
             AppCommand::UpdateRedisWorkbenchText { tab_id, text } => {
                 if let Some(tab) = self.find_tab_mut(tab_id)
                     && let TabKind::RedisWorkbench(workbench) = &mut tab.kind
@@ -2150,8 +2156,7 @@ impl AppController {
     ///
     /// 标签的查询会话 id 就是 `tab_id`（见各 `QueryRequest` 构造点）；标签关闭后连接由
     /// 服务端回收，未提交事务随之回滚——不这样做，连接会一直挂到空闲 TTL 才消失。
-    fn release_tab_query_sessions(&mut self, tab_ids: &[TabId]) {
-        // 关标签先置位取消标志（标签关了就不该再让服务端跑下去），再从表里移除；
+    fn release_tab_query_sessions(&mut self, tab_ids: &[TabId]) {        // 关标签先置位取消标志（标签关了就不该再让服务端跑下去），再从表里移除；
         // 仍在收尾的执行线程持的是自己的 `Arc`，置位照常生效。
         if let Ok(mut flags) = self.query_cancel_flags.lock() {
             for tab_id in tab_ids {
@@ -2208,6 +2213,109 @@ impl AppController {
                     Some(fluxdb_core::QuerySessionId(tab.id.0)),
                 );
             }
+        }
+    }
+
+    /// 切换查询标签的目标数据库。
+    ///
+    /// 查询会话按「标签 + 数据库」持有事务/临时表：切库必须关闭旧会话，否则旧库的
+    /// 状态会串到新库；PostgreSQL 的 schema 属于旧库，一并重置为连接默认。
+    /// 已展示的结果也随作用域失效，必须清空，避免用户拿着旧库数据继续编辑。
+    fn set_query_database_command(
+        &mut self,
+        tab_id: TabId,
+        database: Option<String>,
+    ) -> AppEvent {
+        let Some(tab) = self.find_tab(tab_id) else {
+            return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
+        };
+        let TabKind::QueryEditor(editor) = &tab.kind else {
+            return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
+        };
+        if editor.running {
+            return self.fail(Error::new(
+                ErrorKind::Query,
+                "查询执行中，请等待完成或停止后再切换数据库",
+            ));
+        }
+        if editor.database == database {
+            return AppEvent::TabActivated(tab_id);
+        }
+        let connection_id = editor.connection_id;
+        let is_postgres = self
+            .connection_kind(connection_id)
+            .is_some_and(DatabaseKind::is_postgres_family);
+        self.release_query_results(connection_id, tab_id);
+        // 关闭旧库会话；未提交的会话在服务端会回滚，历史记录同步结算，不能留 Unknown。
+        fluxdb_connectors::pg_close_query_session(
+            connection_id,
+            fluxdb_core::QuerySessionId(tab_id.0),
+        );
+        fluxdb_connectors::sqlserver_close_query_session(
+            connection_id,
+            fluxdb_core::QuerySessionId(tab_id.0),
+        );
+        settle_closed_query_history(
+            &mut self.state.query_history,
+            connection_id,
+            Some(fluxdb_core::QuerySessionId(tab_id.0)),
+        );
+        let Some(tab) = self.find_tab_mut(tab_id) else {
+            return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
+        };
+        let TabKind::QueryEditor(editor) = &mut tab.kind else {
+            return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
+        };
+        editor.database = database;
+        // PostgreSQL 的 schema 只在当前库内有效；切库后回到连接默认作用域。
+        // MySQL/TiDB/SQL Server/SQLite 的 schema 恒为 None。
+        if is_postgres {
+            editor.schema = None;
+        }
+        clear_query_result_scope(editor);
+        AppEvent::TabActivated(tab_id)
+    }
+
+    /// 切换查询标签的 schema（PostgreSQL/Kingbase 用 search_path，Oracle 用会话 schema）。
+    ///
+    /// 会话本身保留：同一连接内切 schema 不应丢失事务/临时表。结果集属于旧作用域，
+    /// 仍需清空，避免用户把旧 schema 的数据当作新 schema 的结果。
+    fn set_query_schema_command(&mut self, tab_id: TabId, schema: Option<String>) -> AppEvent {
+        let Some(tab) = self.find_tab(tab_id) else {
+            return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
+        };
+        let TabKind::QueryEditor(editor) = &tab.kind else {
+            return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
+        };
+        if editor.running {
+            return self.fail(Error::new(
+                ErrorKind::Query,
+                "查询执行中，请等待完成或停止后再切换 schema",
+            ));
+        }
+        if editor.schema == schema {
+            return AppEvent::TabActivated(tab_id);
+        }
+        let connection_id = editor.connection_id;
+        self.release_query_results(connection_id, tab_id);
+        let Some(tab) = self.find_tab_mut(tab_id) else {
+            return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
+        };
+        let TabKind::QueryEditor(editor) = &mut tab.kind else {
+            return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
+        };
+        editor.schema = schema;
+        clear_query_result_scope(editor);
+        AppEvent::TabActivated(tab_id)
+    }
+
+    /// 释放该标签结果页外置的大字段内容；重新执行/切作用域后旧引用不再有效。
+    fn release_query_results(&self, connection_id: ConnectionId, tab_id: TabId) {
+        if let Some(store) = fluxdb_core::cell_content_store() {
+            store.release_owner(&fluxdb_core::result_content_owner(
+                Some(fluxdb_core::QuerySessionId(tab_id.0)),
+                connection_id,
+            ));
         }
     }
 
@@ -2438,6 +2546,17 @@ COMMIT;"
         }
         Ok(())
     }
+}
+
+/// 清空查询结果区：切库/切 schema 后旧结果不再属于当前作用域。
+///
+/// SQL 文本与脏标记保留，用户仍可对同一段 SQL 换库执行。
+fn clear_query_result_scope(editor: &mut QueryEditorState) {
+    editor.results.clear();
+    editor.result_editors.clear();
+    editor.active_result_editor = None;
+    editor.summaries.clear();
+    editor.error = None;
 }
 
 /// 查询取消判定：标志未登记（非编辑器执行/后台任务）视为不可取消，与旧行为一致。
