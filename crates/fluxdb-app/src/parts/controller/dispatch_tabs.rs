@@ -144,6 +144,13 @@ impl AppController {
                 self.open_query_editor(connection_id, None, None)
             }
             AppCommand::OpenUserAdmin(connection_id) => self.open_user_admin(connection_id),
+            AppCommand::OpenServerPanel(connection_id) => self.open_server_panel(connection_id),
+            AppCommand::OpenRedisServerPanel(connection_id) => {
+                self.open_redis_server_panel(connection_id)
+            }
+            AppCommand::OpenMongoServerPanel(connection_id) => {
+                self.open_mongo_server_panel(connection_id)
+            }
             AppCommand::OpenSettings => self.open_settings(),
             AppCommand::OpenAiChatTab => self.open_ai_chat_tab(),
             AppCommand::OpenQueryEditorInDatabase {

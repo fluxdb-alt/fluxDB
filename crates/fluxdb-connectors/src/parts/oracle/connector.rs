@@ -24,6 +24,7 @@ impl OracleConnector {
 impl Connector for OracleConnector {
     fn kind(&self) -> DatabaseKind {
         DatabaseKind::Oracle
+
     }
 
     fn test_connection(&self, config: &ConnectionConfig) -> fluxdb_core::Result<()> {
@@ -585,6 +586,46 @@ impl Connector for OracleConnector {
         let triggers = self.list_completion_triggers(database, schema, filter, limit)?;
         Ok(if should_cancel() { Vec::new() } else { triggers })
     }
+    fn server_activity(&self, _: ConnectionId) -> fluxdb_core::Result<ServerActivity> {
+        oracle_server_activity(
+            self.config("Oracle 服务器状态需要连接配置上下文")?,
+        )
+    }
+
+    fn cancel_server_query(
+        &self,
+        _: ConnectionId,
+        session_id: &str,
+    ) -> fluxdb_core::Result<()> {
+        oracle_kill(
+            self.config("Oracle 终止查询需要连接配置上下文")?,
+            session_id,
+            true,
+        )
+    }
+
+    fn kill_server_session(
+        &self,
+        _: ConnectionId,
+        session_id: &str,
+    ) -> fluxdb_core::Result<()> {
+        oracle_kill(
+            self.config("Oracle 终止会话需要连接配置上下文")?,
+            session_id,
+            false,
+        )
+    }
+
+    fn run_server_maintenance(
+        &self,
+        request: &ServerMaintenanceRequest,
+    ) -> fluxdb_core::Result<String> {
+        oracle_server_maintenance(
+            self.config("Oracle 维护需要连接配置上下文")?,
+            request,
+        )
+    }
+
 }
 
 fn oracle_completion_tables(
@@ -641,5 +682,4 @@ fn oracle_random_password() -> String {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     // 口令必须满足默认校验（大小写+数字），随机部分来自时间与进程号。
-    format!("Fx{:x}{:x}", nanos, std::process::id())
-}
+    format!("Fx{:x}{:x}", nanos, std::process::id())}

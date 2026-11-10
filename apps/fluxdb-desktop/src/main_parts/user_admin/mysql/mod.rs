@@ -1057,7 +1057,7 @@ fn user_admin_user_list(
                 .is_some_and(|plugin| plugin.to_lowercase().contains(&query)));
     let mut list = div().flex_1().min_h(px(0.)).overflow_y_scrollbar();
     if admin.loading_users {
-        list = list.child(user_admin_empty_row(tr("app.user_admin.loading_users"), colors));
+        list = list.child(inline_loading_row(tr("app.user_admin.loading_users"), colors));
     } else if let Some(error) = &admin.users_error {
         list = list.child(user_admin_error_row(&error.message, colors));
     } else if users.is_empty() && !draft_matches {
@@ -1641,10 +1641,7 @@ fn user_admin_member_relationships_panel(
         .bg(colors.panel_bg)
         .overflow_y_scrollbar();
     if admin.loading_grants {
-        member_of_body = member_of_body.child(user_admin_empty_row(
-            tr("app.user_admin.loading_member_of"),
-            colors,
-        ));
+        member_of_body = member_of_body.child(inline_loading_row(tr("app.user_admin.loading_member_of"), colors));
     } else if let Some(error) = &admin.grants_error {
         member_of_body = member_of_body.child(user_admin_error_row(&error.message, colors));
     } else if memberships.is_empty() {
@@ -1667,7 +1664,7 @@ fn user_admin_member_relationships_panel(
         .overflow_y_scrollbar();
     if admin.loading_member_grants {
         members_body =
-            members_body.child(user_admin_empty_row(tr("app.user_admin.loading_members"), colors));
+            members_body.child(inline_loading_row(tr("app.user_admin.loading_members"), colors));
     } else if let Some(error) = &admin.member_grants_error {
         members_body = members_body.child(user_admin_error_row(&error.message, colors));
     } else if members.is_empty() {
@@ -1760,7 +1757,7 @@ fn user_admin_members_panel(
         .bg(colors.panel_bg)
         .overflow_y_scrollbar();
     if admin.loading_member_grants {
-        body = body.child(user_admin_empty_row(tr("app.user_admin.loading_members"), colors));
+        body = body.child(inline_loading_row(tr("app.user_admin.loading_members"), colors));
     } else if let Some(error) = &admin.member_grants_error {
         body = body.child(user_admin_error_row(&error.message, colors));
     } else if members.is_empty() {

@@ -20,6 +20,15 @@ impl NavicatMain {
             ConnectionMenuAction::UserAdmin => {
                 self.open_user_admin_for_connection(connection_id, window, cx);
             }
+            ConnectionMenuAction::ServerPanel => {
+                self.open_server_panel_for_connection(connection_id, cx);
+            }
+            ConnectionMenuAction::RedisServerPanel => {
+                self.open_redis_server_panel_for_connection(connection_id, cx);
+            }
+            ConnectionMenuAction::MongoServerPanel => {
+                self.open_mongo_server_panel_for_connection(connection_id, cx);
+            }
             ConnectionMenuAction::ExecuteSqlFile => {
                 self.show_sql_file_execution_modal(Some(connection_id), None, window, cx);
             }

@@ -93,6 +93,52 @@ impl Connector for MySqlConnector {
         mysql_delete_database(config, connection_id, database)
     }
 
+    fn server_activity(
+        &self,
+        _: ConnectionId,
+    ) -> fluxdb_core::Result<fluxdb_core::ServerActivity> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "MySQL 服务器状态需要连接配置上下文",
+            ));
+        };
+        mysql_server_activity(config)
+    }
+
+    fn cancel_server_query(&self, _: ConnectionId, session_id: &str) -> fluxdb_core::Result<()> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "MySQL 终止查询需要连接配置上下文",
+            ));
+        };
+        mysql_kill(config, session_id, true)
+    }
+
+    fn kill_server_session(&self, _: ConnectionId, session_id: &str) -> fluxdb_core::Result<()> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "MySQL 终止会话需要连接配置上下文",
+            ));
+        };
+        mysql_kill(config, session_id, false)
+    }
+
+    fn run_server_maintenance(
+        &self,
+        request: &fluxdb_core::ServerMaintenanceRequest,
+    ) -> fluxdb_core::Result<String> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "MySQL 维护需要连接配置上下文",
+            ));
+        };
+        mysql_server_maintenance(config, request)
+    }
+
     fn load_data(
         &self,
         path: &ObjectPath,

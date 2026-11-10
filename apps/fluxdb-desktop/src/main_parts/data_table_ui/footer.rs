@@ -900,6 +900,19 @@ fn center_loading_message(text: impl Into<String>, colors: UiColors) -> Div {
         .child(text.into())
 }
 
+/// 列表内联加载行：小号转圈 + 次要文字，和列表空态文字区分开。
+fn inline_loading_row(text: impl Into<String>, colors: UiColors) -> Div {
+    div()
+        .p_4()
+        .flex()
+        .items_center()
+        .gap_2()
+        .text_size(px(12.))
+        .text_color(colors.muted)
+        .child(loading_spinner_with_color(14., colors.muted))
+        .child(text.into())
+}
+
 #[cfg(test)]
 mod data_page_advance_tests {
     use fluxdb_core::{CellValue, Column, DataPage, Row};

@@ -15,12 +15,16 @@ fn connection_context_menu(
     let user_admin_action = connection
         .filter(|connection| supports_database_user_admin(connection.config.kind))
         .map(|_| ConnectionMenuAction::UserAdmin);
+    // 服务器面板覆盖有实例会话模型的数据库；其余库仍显示入口但置灰。
+    let server_panel_action = connection
+        .filter(|connection| connection.config.kind.supports_server_panel())
+        .map(|_| ConnectionMenuAction::ServerPanel);
     // Redis 连接仅保留数据浏览/键管理类入口；执行 SQL 文件、新建数据库、用户与权限、
     // 选择显示数据库四项仅在非 Redis 连接下显示。
     let is_redis = connection
         .is_some_and(|connection| connection.config.kind == DatabaseKind::Redis);
     // MongoDB 没有 SQL 概念：不显示用户与权限 / 执行 SQL 文件 / 新建查询 / 选择显示数据库，
-    // 改为「显示连接信息」与「查看性能指标」（后者首版置灰）。
+    // 改为「显示连接信息」；性能指标并入连接级「服务器」面板。
     let is_mongo = connection
         .is_some_and(|connection| connection.config.kind == DatabaseKind::MongoDb);
 
@@ -93,6 +97,44 @@ fn connection_context_menu(
                 None,
                 false,
                 user_admin_action,
+                menu.connection_id,
+                colors,
+                cx,
+            ))
+        })
+        .when(!is_redis && !is_mongo, |this| {
+            this.child(connection_menu_item(
+                tr("app.connection_menu.server_panel").to_string(),
+                "activity",
+                None,
+                false,
+                server_panel_action,
+                menu.connection_id,
+                colors,
+                cx,
+            ))
+        })
+        // Redis 的服务器面板是 INFO / CLIENT / SLOWLOG 口径，独立于 SQL 的会话面板。
+        .when(is_redis, |this| {
+            this.child(connection_menu_item(
+                tr("app.connection_menu.server_panel").to_string(),
+                "activity",
+                None,
+                false,
+                Some(ConnectionMenuAction::RedisServerPanel),
+                menu.connection_id,
+                colors,
+                cx,
+            ))
+        })
+        // MongoDB 的服务器面板是 serverStatus / $currentOp 口径。
+        .when(is_mongo, |this| {
+            this.child(connection_menu_item(
+                tr("app.connection_menu.server_panel").to_string(),
+                "activity",
+                None,
+                false,
+                Some(ConnectionMenuAction::MongoServerPanel),
                 menu.connection_id,
                 colors,
                 cx,
@@ -182,17 +224,6 @@ fn connection_context_menu(
                 None,
                 false,
                 Some(ConnectionMenuAction::MongoInfo),
-                menu.connection_id,
-                colors,
-                cx,
-            ))
-            // 首版未采集指标：置灰占位，避免点了没有反馈。
-            .child(connection_menu_item(
-                tr("app.connection_menu.mongo_performance").to_string(),
-                "activity",
-                None,
-                false,
-                None,
                 menu.connection_id,
                 colors,
                 cx,

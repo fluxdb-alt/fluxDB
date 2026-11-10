@@ -34,6 +34,24 @@ impl RedisConnector {
         redis_load_overview(&mut connection)
     }
 
+    /// 读取连接级服务器状态：INFO / CLIENT LIST / SLOWLOG。
+    pub fn server_activity(&self) -> fluxdb_core::Result<RedisServerActivity> {
+        let config = redis_connector_config(self.config.as_ref())?;
+        redis_load_server_activity(config)
+    }
+
+    /// 终止指定客户端连接。
+    pub fn kill_client(&self, client_id: &str) -> fluxdb_core::Result<()> {
+        let config = redis_connector_config(self.config.as_ref())?;
+        redis_kill_client(config, client_id)
+    }
+
+    /// 清空慢日志。
+    pub fn clear_slowlog(&self) -> fluxdb_core::Result<()> {
+        let config = redis_connector_config(self.config.as_ref())?;
+        redis_clear_slowlog(config)
+    }
+
     /// 新建一个 Key（对齐 RedisInsight AddKey）。`object` 是目标库的 `RedisDatabase` 路径，
     /// 其 `database` 字段决定落到哪个库；建 Key 前会 EXISTS 防覆盖，集合类需带至少一个元素，
     /// 应用可选 TTL。错误信息为中文，直接面向 UI 展示。
@@ -556,5 +574,23 @@ impl Connector for RedisConnector {
 
     fn execute(&self, _: &QueryRequest) -> fluxdb_core::Result<QueryExecutionResult> {
         Err(Error::new(ErrorKind::Unsupported, "暂不支持 Redis 命令执行"))
+    }
+
+    fn redis_server_activity(
+        &self,
+        _: ConnectionId,
+    ) -> fluxdb_core::Result<RedisServerActivity> {
+        let config = redis_connector_config(self.config.as_ref())?;
+        redis_load_server_activity(config)
+    }
+
+    fn redis_kill_client(&self, _: ConnectionId, client_id: &str) -> fluxdb_core::Result<()> {
+        let config = redis_connector_config(self.config.as_ref())?;
+        redis_kill_client(config, client_id)
+    }
+
+    fn redis_clear_slowlog(&self, _: ConnectionId) -> fluxdb_core::Result<()> {
+        let config = redis_connector_config(self.config.as_ref())?;
+        redis_clear_slowlog(config)
     }
 }

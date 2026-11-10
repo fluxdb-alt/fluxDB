@@ -454,6 +454,9 @@ fn tab_width(tab: &TabState, compact: bool) -> f32 {
         TabKind::RedisPubSub(_) => 210.,
         TabKind::CreateTable(_) => 210.,
         TabKind::UserAdmin(_) => 180.,
+        TabKind::ServerPanel(_) => 210.,
+        TabKind::RedisServerPanel(_) => 210.,
+        TabKind::MongoServerPanel(_) => 210.,
         TabKind::Settings(_) => 160.,
         TabKind::AiChat { .. } => 180.,
         TabKind::BackupList(_) => 210.,
@@ -483,6 +486,12 @@ fn localized_tab_title(tab: &TabState) -> String {
         TabKind::Settings(_) => tr("app.tabs.settings").to_string(),
         TabKind::AiChat { .. } => tr("app.tabs.ai_chat").to_string(),
         TabKind::UserAdmin(_) => tr("app.tabs.user_admin").to_string(),
+        TabKind::ServerPanel(panel) => tr("app.tabs.server_panel")
+            .replace("%{name}", &panel.connection_name),
+        TabKind::RedisServerPanel(panel) => tr("app.tabs.redis_server_panel")
+            .replace("%{name}", &panel.connection_name),
+        TabKind::MongoServerPanel(panel) => tr("app.tabs.mongo_server_panel")
+            .replace("%{name}", &panel.connection_name),
         TabKind::QueryEditor(_) if tab.title == "无标题 - 查询" => {
             tr("app.tabs.untitled_query").to_string()
         }
@@ -544,6 +553,9 @@ fn tab_icon(
         TabKind::MongoCli(_) | TabKind::MongoWorkbench(_) => AppIcon::Query,
         TabKind::RedisPubSub(_) => AppIcon::Broadcast,
         TabKind::UserAdmin(_) => AppIcon::Users,
+        TabKind::ServerPanel(_)
+        | TabKind::RedisServerPanel(_)
+        | TabKind::MongoServerPanel(_) => AppIcon::Activity,
         TabKind::Settings(_) => AppIcon::Settings,
         TabKind::AiChat { .. } => AppIcon::Bot,
         TabKind::BackupList(_) => AppIcon::Save,

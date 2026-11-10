@@ -537,6 +537,99 @@ pub enum AppCommand {
     },
     OpenQueryEditor(ConnectionId),
     OpenUserAdmin(ConnectionId),
+    /// 打开连接级「服务器状态」页签（MySQL / PostgreSQL 家族）。
+    OpenServerPanel(ConnectionId),
+    /// 后台读取服务器活动；只读连接器，不改 AppState。
+    LoadServerPanel(TabId),
+    StartServerPanelLoad(TabId),
+    FinishServerPanelLoad {
+        tab_id: TabId,
+        result: std::result::Result<ServerActivity, UserFacingError>,
+    },
+    SetServerPanelTab {
+        tab_id: TabId,
+        tab: ServerPanelTab,
+    },
+    SelectServerPanelSession {
+        tab_id: TabId,
+        session_id: Option<String>,
+    },
+    SetServerPanelOnlyMine {
+        tab_id: TabId,
+        only_mine: bool,
+    },
+    SetServerPanelAutoRefresh {
+        tab_id: TabId,
+        enabled: bool,
+    },
+    /// 终止选中会话正在执行的查询（保留连接）。
+    CancelServerQuery {
+        tab_id: TabId,
+        session_id: String,
+    },
+    /// 终止选中会话（断开连接，回滚未提交事务）。
+    KillServerSession {
+        tab_id: TabId,
+        session_id: String,
+    },
+    /// 数据库级一键维护。
+    RunServerMaintenance {
+        tab_id: TabId,
+        action: ServerMaintenanceAction,
+    },
+    /// 打开连接级 Redis 服务器面板（概览 / 客户端 / 慢日志）。
+    OpenRedisServerPanel(ConnectionId),
+    /// 后台读取 Redis 服务器状态；只读连接器，不改 AppState。
+    LoadRedisServerPanel(TabId),
+    StartRedisServerPanelLoad(TabId),
+    FinishRedisServerPanelLoad {
+        tab_id: TabId,
+        result: std::result::Result<RedisServerActivity, UserFacingError>,
+    },
+    SetRedisServerPanelTab {
+        tab_id: TabId,
+        tab: RedisServerTab,
+    },
+    SetRedisServerPanelAutoRefresh {
+        tab_id: TabId,
+        enabled: bool,
+    },
+    /// 终止指定 Redis 客户端连接。
+    RedisKillClient {
+        tab_id: TabId,
+        client_id: String,
+    },
+    /// 清空 Redis 慢日志。
+    RedisClearSlowlog {
+        tab_id: TabId,
+    },
+    /// 打开连接级 MongoDB 服务器面板（概览 / 当前操作）。
+    OpenMongoServerPanel(ConnectionId),
+    /// 后台读取 MongoDB 服务器状态；只读连接器，不改 AppState。
+    LoadMongoServerPanel(TabId),
+    StartMongoServerPanelLoad(TabId),
+    FinishMongoServerPanelLoad {
+        tab_id: TabId,
+        result: std::result::Result<MongoServerActivity, UserFacingError>,
+    },
+    SetMongoServerPanelTab {
+        tab_id: TabId,
+        tab: MongoServerTab,
+    },
+    /// 切换「当前操作」的「只看慢操作」过滤。
+    SetMongoServerPanelOnlySlow {
+        tab_id: TabId,
+        only_slow: bool,
+    },
+    SetMongoServerPanelAutoRefresh {
+        tab_id: TabId,
+        enabled: bool,
+    },
+    /// 终止指定 MongoDB 操作（`killOp`）。
+    MongoKillOperation {
+        tab_id: TabId,
+        opid: String,
+    },
     OpenSettings,
     OpenAiChatTab,
     OpenQueryEditorInDatabase {

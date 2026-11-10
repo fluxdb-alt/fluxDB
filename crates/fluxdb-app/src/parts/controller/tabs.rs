@@ -262,6 +262,117 @@ impl AppController {
         AppEvent::TabOpened(tab_id)
     }
 
+    /// 打开连接级服务器面板。`supports_server_panel` 之外的数据库明确报不支持，
+    /// 不创建一个空白页签让用户猜。
+    fn open_server_panel(&mut self, connection_id: ConnectionId) -> AppEvent {
+        if let Some(tab) = self.state.tabs.iter().find(|tab| {
+            matches!(&tab.kind, TabKind::ServerPanel(panel) if panel.connection_id == connection_id)
+        }) {
+            self.state.active_tab = Some(tab.id);
+            return AppEvent::TabActivated(tab.id);
+        }
+        let Some(connection) = self
+            .state
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == connection_id)
+        else {
+            return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+        };
+        let kind = connection.config.kind;
+        if !kind.supports_server_panel() {
+            return self.fail(Error::new(
+                ErrorKind::Unsupported,
+                "当前数据库暂不支持服务器状态面板",
+            ));
+        }
+        let database = Self::connection_default_database(&connection.config);
+        let name = connection.config.name.clone();
+        let tab_id = self.next_tab_id();
+        self.push_tab(TabState {
+            id: tab_id,
+            title: format!("服务器 · {name}"),
+            kind: TabKind::ServerPanel(ServerPanelState::new(
+                connection_id,
+                name.clone(),
+                database,
+            )),
+            dirty: false,
+        });
+        AppEvent::TabOpened(tab_id)
+    }
+
+    /// 打开连接级 Redis 服务器面板。INFO/CLIENT/SLOWLOG 是实例级命令，
+    /// 逻辑库只用于标题上下文；同一连接只保留一个面板。
+    fn open_redis_server_panel(&mut self, connection_id: ConnectionId) -> AppEvent {
+        if let Some(tab) = self.state.tabs.iter().find(|tab| {
+            matches!(
+                &tab.kind,
+                TabKind::RedisServerPanel(panel) if panel.connection_id == connection_id
+            )
+        }) {
+            self.state.active_tab = Some(tab.id);
+            return AppEvent::TabActivated(tab.id);
+        }
+        let Some(connection) = self
+            .state
+            .connections
+            .iter()
+            .find(|connection| connection.config.id == connection_id)
+        else {
+            return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+        };
+        if connection.config.kind != DatabaseKind::Redis {
+            return self.fail(Error::new(
+                ErrorKind::Unsupported,
+                "当前数据库暂不支持 Redis 服务器面板",
+            ));
+        }
+        let database = connection
+            .config
+            .redis_profile
+            .as_ref()
+            .and_then(|profile| profile.basic.database.as_deref())
+            .or_else(|| connection.config.options.get("database").map(String::as_str))
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
+        let name = connection.config.name.clone();
+        let tab_id = self.next_tab_id();
+        self.push_tab(TabState {
+            id: tab_id,
+            title: format!("服务器 · {name}"),
+            kind: TabKind::RedisServerPanel(RedisServerPanelState::new(
+                connection_id,
+                name,
+                database,
+            )),
+            dirty: false,
+        });
+        AppEvent::TabOpened(tab_id)
+    }
+
+    /// 面板维护/展示用的默认库：优先结构化档案，其次扁平 options。
+    fn connection_default_database(config: &ConnectionConfig) -> String {
+        if let Some(profile) = config.postgres_profile.as_ref() {
+            return profile.maintenance_database().to_string();
+        }
+        if let Some(profile) = config.mysql_profile.as_ref() {
+            if !profile.basic.database.trim().is_empty() {
+                return profile.basic.database.clone();
+            }
+        }
+        config
+            .options
+            .get("database")
+            .cloned()
+            .filter(|database| !database.trim().is_empty())
+            .or_else(|| match &config.endpoint {
+                Endpoint::Tcp { database, .. } => database.clone(),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
     fn find_tab_mut(&mut self, tab_id: TabId) -> Option<&mut TabState> {
         self.state.tabs.iter_mut().find(|tab| tab.id == tab_id)
     }

@@ -40,6 +40,18 @@ impl MongoConnector {
         let config = self.config()?;
         mongo_run_command(config, database, command)
     }
+
+    /// 读取连接级服务器状态与当前操作（服务器面板）。
+    pub fn server_activity(&self) -> fluxdb_core::Result<MongoServerActivity> {
+        let config = self.config()?;
+        mongo_load_server_activity(config)
+    }
+
+    /// 终止一条操作（`killOp`）。
+    pub fn kill_operation(&self, opid: &str) -> fluxdb_core::Result<()> {
+        let config = self.config()?;
+        mongo_kill_operation(config, opid)
+    }
 }
 
 impl Connector for MongoConnector {
@@ -265,6 +277,14 @@ impl Connector for MongoConnector {
 
     fn mongo_server_info(&self, _: ConnectionId) -> fluxdb_core::Result<MongoServerInfo> {
         mongo_server_info(self.config()?)
+    }
+
+    fn mongo_server_activity(&self, _: ConnectionId) -> fluxdb_core::Result<MongoServerActivity> {
+        mongo_load_server_activity(self.config()?)
+    }
+
+    fn mongo_kill_operation(&self, _: ConnectionId, opid: &str) -> fluxdb_core::Result<()> {
+        mongo_kill_operation(self.config()?, opid)
     }
 
     fn mongo_preview_import(

@@ -103,6 +103,12 @@ enum ConnectionMenuAction {
     Disconnect,
     NewQuery,
     UserAdmin,
+    /// 连接级服务器状态：会话、锁等待、实例指标与维护。
+    ServerPanel,
+    /// 连接级 Redis 服务器：概览、客户端与慢日志。
+    RedisServerPanel,
+    /// 连接级 MongoDB 服务器：概览与当前操作。
+    MongoServerPanel,
     ExecuteSqlFile,
     /// 打开结构对比与同步弹框。
     CompareStructure,

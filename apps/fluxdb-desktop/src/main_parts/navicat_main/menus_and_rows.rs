@@ -14,7 +14,7 @@ impl NavicatMain {
         }
         // 连接菜单此前未做视口收敛，右键底部连接时菜单会超出窗口（与表菜单同类问题）。
         // 注意：项数需与 connection_menu.rs 的 connection_context_menu 渲染保持一致：
-        // Redis 8 项、MongoDB 9 项、SQL 11 项；已分组再多 1 项（取消分组）。
+        // Redis 8 项、MongoDB 9 项、SQL 12 项；已分组再多 1 项（取消分组）。
         let state = self.controller.state();
         let connection = state
             .connections
@@ -31,7 +31,7 @@ impl NavicatMain {
         } else if is_mongo {
             9.
         } else {
-            11.
+            12.
         } + i32::from(grouped) as f32;
         let clamped_position = clamp_context_menu_position(
             position,

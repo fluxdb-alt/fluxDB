@@ -761,6 +761,18 @@ impl TabState {
                 connection_id: workbench.connection_id,
                 database: workbench.database.clone(),
             }),
+            TabKind::ServerPanel(panel) => Some(TabWorkspace {
+                connection_id: panel.connection_id,
+                database: panel.database.clone(),
+            }),
+            TabKind::RedisServerPanel(panel) => Some(TabWorkspace {
+                connection_id: panel.connection_id,
+                database: panel.database.to_string(),
+            }),
+            TabKind::MongoServerPanel(panel) => Some(TabWorkspace {
+                connection_id: panel.connection_id,
+                database: panel.database.clone(),
+            }),
             TabKind::Settings(_) => None,
             TabKind::AiChat { workspace } => workspace.clone(),
         }
@@ -799,6 +811,239 @@ pub enum TabKind {
     MongoCollection(MongoCollectionState),
     /// MongoDB 命令工作台（库级、跨集合的 shell 语句执行台）。
     MongoWorkbench(MongoWorkbenchState),
+    /// 连接级「服务器状态」：会话、锁等待、实例指标与维护。
+    ServerPanel(ServerPanelState),
+    /// 连接级 Redis 服务器：概览、客户端与慢日志。
+    RedisServerPanel(RedisServerPanelState),
+    /// 连接级 MongoDB 服务器：概览与当前操作。
+    MongoServerPanel(MongoServerPanelState),
+}
+
+/// 服务器面板页签。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ServerPanelTab {
+    #[default]
+    Sessions,
+    Locks,
+    Status,
+}
+
+/// 连接级服务器面板状态。
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServerPanelState {
+    pub connection_id: ConnectionId,
+    /// 连接显示名，供标签标题本地化使用。
+    pub connection_name: String,
+    /// 面板展示/维护所用的默认库。
+    pub database: String,
+    pub active_tab: ServerPanelTab,
+    pub activity: Option<ServerActivity>,
+    pub loading: bool,
+    pub error: Option<UserFacingError>,
+    /// 当前选中的会话 ID（会话页与锁页共用）。
+    pub selected_session: Option<String>,
+    /// 只看当前连接账号的会话。
+    pub only_mine: bool,
+    /// 自动刷新开关；暂停后只保留手动刷新。
+    pub auto_refresh: bool,
+    pub last_loaded_unix_secs: Option<u64>,
+}
+
+impl ServerPanelState {
+    pub fn new(connection_id: ConnectionId, connection_name: String, database: String) -> Self {
+        Self {
+            connection_id,
+            connection_name,
+            database,
+            active_tab: ServerPanelTab::Sessions,
+            activity: None,
+            loading: false,
+            error: None,
+            selected_session: None,
+            only_mine: false,
+            auto_refresh: true,
+            last_loaded_unix_secs: None,
+        }
+    }
+
+    /// 按「只看我的会话」过滤后的会话：面板自身连接与当前账号的其他连接都算「我的」。
+    pub fn visible_sessions(&self) -> Vec<&ServerSession> {
+        let Some(activity) = self.activity.as_ref() else {
+            return Vec::new();
+        };
+        activity
+            .sessions
+            .iter()
+            .filter(|session| {
+                !self.only_mine
+                    || session.is_self
+                    || server_panel_user_matches(&activity.current_user, &session.user)
+            })
+            .collect()
+    }
+
+    pub fn selected_session_detail(&self) -> Option<&ServerSession> {
+        let selected = self.selected_session.as_deref()?;
+        self.activity
+            .as_ref()?
+            .sessions
+            .iter()
+            .find(|session| session.id == selected)
+    }
+}
+
+/// MySQL 的 `CURRENT_USER()` 形如 `user@host`，而进程列表的 `USER` 只有登录名；
+/// PostgreSQL 两者都是角色名。统一按 `@` 前缀比较，空值不视为匹配。
+fn server_panel_user_matches(current_user: &str, session_user: &str) -> bool {
+    if current_user.is_empty() || session_user.is_empty() {
+        return false;
+    }
+    let account = current_user.split('@').next().unwrap_or(current_user);
+    session_user == current_user || session_user == account
+}
+
+/// Redis 服务器面板页签。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RedisServerTab {
+    #[default]
+    Overview,
+    Clients,
+    SlowLog,
+}
+
+/// 连接级 Redis 服务器面板状态。
+#[derive(Clone, Debug, PartialEq)]
+pub struct RedisServerPanelState {
+    pub connection_id: ConnectionId,
+    /// 连接显示名，供标签标题本地化使用。
+    pub connection_name: String,
+    /// 打开面板时所在的逻辑库；INFO/CLIENT/SLOWLOG 不区分库，仅用于标题上下文。
+    pub database: u32,
+    pub active_tab: RedisServerTab,
+    pub activity: Option<RedisServerActivity>,
+    pub loading: bool,
+    pub error: Option<UserFacingError>,
+    /// 自动刷新开关；暂停后只保留手动刷新。
+    pub auto_refresh: bool,
+    pub last_loaded_unix_secs: Option<u64>,
+}
+
+impl RedisServerPanelState {
+    pub fn new(connection_id: ConnectionId, connection_name: String, database: u32) -> Self {
+        Self {
+            connection_id,
+            connection_name,
+            database,
+            active_tab: RedisServerTab::Overview,
+            activity: None,
+            loading: false,
+            error: None,
+            auto_refresh: true,
+            last_loaded_unix_secs: None,
+        }
+    }
+}
+
+/// MongoDB 服务器面板页签。
+///
+/// 慢操作不单独成页：它只是「当前操作」的一个过滤条件（`only_slow`），
+/// 同一批 `$currentOp` 数据切换过滤即可，避免两个子页各拉一次数据。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MongoServerTab {
+    #[default]
+    Overview,
+    Operations,
+    Performance,
+}
+
+/// 一次服务器面板采样，用于「性能」子页的趋势图。
+///
+/// 只保留会话内最近 `MONGO_SERVER_SAMPLE_LIMIT` 次，不落盘、不进 AI 上下文；
+/// 操作数存累计值，「每秒操作数」在渲染时按相邻采样求差。
+#[derive(Clone, Debug, PartialEq)]
+pub struct MongoServerSample {
+    pub at_unix_secs: u64,
+    /// `opcounters.*` 累计操作数之和。
+    pub ops_total: u64,
+    pub connections: u64,
+    pub slow_operations: u64,
+}
+
+/// 采样上限：5 秒刷新下约 5 分钟窗口，足够看出抖动又不占用内存。
+pub const MONGO_SERVER_SAMPLE_LIMIT: usize = 60;
+
+/// 连接级 MongoDB 服务器面板状态。
+#[derive(Clone, Debug, PartialEq)]
+pub struct MongoServerPanelState {
+    pub connection_id: ConnectionId,
+    /// 连接显示名，供标签标题本地化使用。
+    pub connection_name: String,
+    /// 打开面板时所在的库；观测命令都跑在 admin，仅用于标题上下文。
+    pub database: String,
+    pub active_tab: MongoServerTab,
+    pub activity: Option<MongoServerActivity>,
+    pub loading: bool,
+    pub error: Option<UserFacingError>,
+    /// 「当前操作」只看运行 ≥1 秒的慢操作。
+    pub only_slow: bool,
+    /// 自动刷新开关；暂停后只保留手动刷新。
+    pub auto_refresh: bool,
+    pub last_loaded_unix_secs: Option<u64>,
+    /// 「性能」子页的采样窗口（时间正序）。
+    pub samples: Vec<MongoServerSample>,
+}
+
+impl MongoServerPanelState {
+    pub fn new(connection_id: ConnectionId, connection_name: String, database: String) -> Self {
+        Self {
+            connection_id,
+            connection_name,
+            database,
+            active_tab: MongoServerTab::Overview,
+            activity: None,
+            loading: false,
+            error: None,
+            only_slow: false,
+            auto_refresh: true,
+            last_loaded_unix_secs: None,
+            samples: Vec::new(),
+        }
+    }
+
+    /// 记录一次采样：累计操作数、连接数、慢操作数，超出窗口丢最旧的。
+    pub fn record_sample(&mut self, at_unix_secs: u64, activity: &MongoServerActivity) {
+        let ops_total = activity
+            .metrics
+            .iter()
+            .filter(|metric| metric.key.starts_with("opcounters."))
+            .filter_map(|metric| metric.value.parse::<u64>().ok())
+            .sum();
+        self.samples.push(MongoServerSample {
+            at_unix_secs,
+            ops_total,
+            connections: activity.connections_current,
+            slow_operations: activity
+                .operations
+                .iter()
+                .filter(|operation| operation.is_slow())
+                .count() as u64,
+        });
+        if self.samples.len() > MONGO_SERVER_SAMPLE_LIMIT {
+            self.samples.remove(0);
+        }
+    }
+
+    /// 按「只看慢操作」过滤后的操作列表。
+    pub fn visible_operations(&self) -> Vec<&MongoOperation> {
+        let Some(activity) = self.activity.as_ref() else {
+            return Vec::new();
+        };
+        activity
+            .operations
+            .iter()
+            .filter(|operation| !self.only_slow || operation.is_slow())
+            .collect()
+    }
 }
 
 /// 备份列表 tab 的标识状态：仅记录连接 + 库；行数据由 UI 侧渲染时
@@ -2166,4 +2411,63 @@ pub struct AppController {
     /// 各持一份 `AppController` 副本，`Arc<Mutex>` 让两边共享同一缓存与并发协调。
     /// 见 parts/er_catalog.rs。
     er_catalog: Arc<Mutex<crate::ErCatalogCache>>,
+}
+
+#[cfg(test)]
+mod server_panel_state_tests {
+    use super::*;
+
+    fn session(id: &str, is_self: bool) -> ServerSession {
+        ServerSession {
+            id: id.to_string(),
+            user: "app".to_string(),
+            host: "127.0.0.1".to_string(),
+            database: "demo".to_string(),
+            command: "Query".to_string(),
+            elapsed_secs: 3,
+            wait_event: String::new(),
+            sql: "select 1".to_string(),
+            is_self,
+        }
+    }
+
+    fn panel_with(sessions: Vec<ServerSession>) -> ServerPanelState {
+        let mut panel = ServerPanelState::new(ConnectionId(7), "local".to_string(), "demo".to_string());
+        panel.activity = Some(ServerActivity {
+            version: "8.0".to_string(),
+            current_user: "app".to_string(),
+            sessions,
+            ..ServerActivity::default()
+        });
+        panel
+    }
+
+    #[test]
+    fn only_mine_keeps_self_and_same_account() {
+        let mut coworker = session("2", false);
+        coworker.user = "app".to_string();
+        let mut other = session("3", false);
+        other.user = "other".to_string();
+        let mut panel = panel_with(vec![session("1", true), coworker, other]);
+        assert_eq!(panel.visible_sessions().len(), 3);
+        panel.only_mine = true;
+        let visible = panel.visible_sessions();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(
+            visible.iter().map(|session| session.id.as_str()).collect::<Vec<_>>(),
+            vec!["1", "2"]
+        );
+    }
+
+    #[test]
+    fn selected_session_detail_requires_visible_activity() {
+        let mut panel = panel_with(vec![session("1", true)]);
+        panel.selected_session = Some("1".to_string());
+        assert_eq!(
+            panel.selected_session_detail().map(|session| session.id.as_str()),
+            Some("1")
+        );
+        panel.activity = None;
+        assert!(panel.selected_session_detail().is_none());
+    }
 }

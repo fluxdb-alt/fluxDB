@@ -1,3 +1,47 @@
+/// 服务器面板的终止动作：查询可保留连接，会话会断开并回滚未提交事务。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServerKillKind {
+    Query,
+    Session,
+}
+
+/// 终止前的二次确认弹框；`checked` 未勾选时确认按钮不可用。
+#[derive(Clone, Debug)]
+struct ServerKillConfirm {
+    tab_id: TabId,
+    session_id: String,
+    kind: ServerKillKind,
+    checked: bool,
+}
+
+/// 维护动作的确认弹框（VACUUM / ANALYZE / OPTIMIZE / REINDEX）。
+#[derive(Clone, Copy, Debug)]
+struct ServerMaintenanceConfirm {
+    tab_id: TabId,
+    action: fluxdb_core::ServerMaintenanceAction,
+}
+
+/// Redis 终止客户端前的二次确认；`checked` 未勾选时确认按钮不可用。
+#[derive(Clone, Debug)]
+struct RedisServerKillConfirm {
+    tab_id: TabId,
+    client_id: String,
+    checked: bool,
+}
+
+/// Redis 清空慢日志确认。
+#[derive(Clone, Copy, Debug)]
+struct RedisServerClearConfirm {
+    tab_id: TabId,
+}
+
+/// MongoDB 终止操作前的二次确认。
+#[derive(Clone, Debug)]
+struct MongoServerKillConfirm {
+    tab_id: TabId,
+    opid: String,
+}
+
 struct NavicatMain {
     ai_chat: AiChatUi,
     query_files: QueryFilesUi,
@@ -810,6 +854,12 @@ struct NavicatMain {
     _user_admin_member_grants_tasks: BTreeMap<TabId, Task<()>>,
     _user_admin_apply_tasks: BTreeMap<TabId, Task<()>>,
     _user_admin_preview_tasks: BTreeMap<TabId, Task<()>>,
+    /// 服务器面板读取任务；同一页签同时只允许一次读取。
+    _server_panel_load_tasks: BTreeMap<TabId, Task<()>>,
+    /// 服务器面板终止/维护任务；同一页签同时只允许一个动作。
+    _server_panel_action_tasks: BTreeMap<TabId, Task<()>>,
+    /// 服务器面板自动刷新定时任务，按页签隔离。
+    _server_panel_refresh_tasks: BTreeMap<TabId, Task<()>>,
     _create_table_apply_tasks: BTreeMap<TabId, Task<()>>,
     _create_table_reference_columns_tasks: BTreeMap<(TabId, u64), Task<()>>,
     _cell_binary_download_tasks: BTreeMap<(TabId, usize, usize), Task<()>>,
@@ -857,6 +907,16 @@ struct NavicatMain {
     pending_rename_group: Option<PendingRenameGroup>,
     pending_rename_table_folder: Option<PendingRenameTableFolder>,
     pending_delete_connection: Option<ConnectionId>,
+    /// 服务器面板终止查询/会话的二次确认。
+    server_kill_confirm: Option<ServerKillConfirm>,
+    /// 服务器面板维护动作确认。
+    server_maintenance_confirm: Option<ServerMaintenanceConfirm>,
+    /// Redis 服务器面板终止客户端确认。
+    redis_server_kill_confirm: Option<RedisServerKillConfirm>,
+    /// Redis 服务器面板清空慢日志确认。
+    redis_server_clear_confirm: Option<RedisServerClearConfirm>,
+    /// MongoDB 服务器面板终止操作确认。
+    mongo_server_kill_confirm: Option<MongoServerKillConfirm>,
     pending_delete_database: Option<PendingDeleteDatabase>,
     /// MongoDB「显示连接信息」弹框：None 表示关闭；Some 为已加载（或加载中 / 失败）的服务端信息。
     mongo_info_dialog: Option<MongoInfoDialog>,

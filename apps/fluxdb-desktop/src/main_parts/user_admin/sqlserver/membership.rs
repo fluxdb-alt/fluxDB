@@ -9,7 +9,7 @@ fn sqlserver_roles_panel(
             .into_any_element();
     };
     let Some(snapshot) = state.snapshot.as_ref() else {
-        return sqlserver_empty_panel(tr("app.sqlserver_security.loading"), colors)
+        return center_loading_message(tr("app.sqlserver_security.loading"), colors)
             .into_any_element();
     };
     let mut panel = div()

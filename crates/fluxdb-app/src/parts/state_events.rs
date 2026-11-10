@@ -381,6 +381,40 @@ pub enum AppEvent {
     TabCloseRequested(TabId),
     TabCloseCancelled(TabId),
     TabActivated(TabId),
+    /// 服务器面板后台读取完成；由 UI 发 Finish 命令落状态。
+    ServerPanelLoaded {
+        tab_id: TabId,
+        result: std::result::Result<ServerActivity, UserFacingError>,
+    },
+    /// 终止查询/会话或维护动作完成；成功消息可直接展示，失败沿用 `Failed` 之外的
+    /// 专用事件，避免把面板局部失败升级成全局错误。
+    ServerPanelActionFinished {
+        tab_id: TabId,
+        action: String,
+        result: std::result::Result<String, UserFacingError>,
+    },
+    /// Redis 服务器面板后台读取完成；由 UI 发 Finish 命令落状态。
+    RedisServerPanelLoaded {
+        tab_id: TabId,
+        result: std::result::Result<RedisServerActivity, UserFacingError>,
+    },
+    /// 终止客户端 / 清空慢日志完成。
+    RedisServerPanelActionFinished {
+        tab_id: TabId,
+        action: String,
+        result: std::result::Result<String, UserFacingError>,
+    },
+    /// MongoDB 服务器面板后台读取完成；由 UI 发 Finish 命令落状态。
+    MongoServerPanelLoaded {
+        tab_id: TabId,
+        result: std::result::Result<MongoServerActivity, UserFacingError>,
+    },
+    /// 终止 MongoDB 操作完成。
+    MongoServerPanelActionFinished {
+        tab_id: TabId,
+        action: String,
+        result: std::result::Result<String, UserFacingError>,
+    },
     UserAdminUsersLoaded(TabId, Vec<DatabaseUserIdentity>),
     UserAdminGrantsLoaded(TabId, Vec<String>),
     UserAdminMemberGrantsLoaded(TabId, Vec<UserRoleMember>),

@@ -235,14 +235,7 @@ fn er_relationship_panel(
     }
 
     if loading {
-        panel = panel.child(
-            div()
-                .px(px(14.))
-                .py(px(16.))
-                .text_size(px(12.))
-                .text_color(colors.muted)
-                .child(tr("app.er_relationship.loading")),
-        );
+        panel = panel.child(inline_loading_row(tr("app.er_relationship.loading"), colors));
     } else if let Some(error) = error {
         let retry_tab = tab_id;
         panel = panel.child(

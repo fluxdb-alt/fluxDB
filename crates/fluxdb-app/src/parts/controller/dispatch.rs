@@ -165,6 +165,9 @@ impl AppController {
             | AppCommand::OpenErDiagram(..)
             | AppCommand::OpenQueryEditor(..)
             | AppCommand::OpenUserAdmin(..)
+            | AppCommand::OpenServerPanel(..)
+            | AppCommand::OpenRedisServerPanel(..)
+            | AppCommand::OpenMongoServerPanel(..)
             | AppCommand::OpenSettings
             | AppCommand::OpenAiChatTab
             | AppCommand::OpenQueryEditorInDatabase { .. }
@@ -1949,6 +1952,36 @@ impl AppController {
                     set_active_query_result_editor(editor, page_index);
                 }
                 AppEvent::TabActivated(tab_id)
+            }
+            AppCommand::LoadServerPanel(..)
+            | AppCommand::StartServerPanelLoad(..)
+            | AppCommand::FinishServerPanelLoad { .. }
+            | AppCommand::SetServerPanelTab { .. }
+            | AppCommand::SelectServerPanelSession { .. }
+            | AppCommand::SetServerPanelOnlyMine { .. }
+            | AppCommand::SetServerPanelAutoRefresh { .. }
+            | AppCommand::CancelServerQuery { .. }
+            | AppCommand::KillServerSession { .. }
+            | AppCommand::RunServerMaintenance { .. } => {
+                self.dispatch_server_panel_command(command)
+            }
+            AppCommand::LoadRedisServerPanel(..)
+            | AppCommand::StartRedisServerPanelLoad(..)
+            | AppCommand::FinishRedisServerPanelLoad { .. }
+            | AppCommand::SetRedisServerPanelTab { .. }
+            | AppCommand::SetRedisServerPanelAutoRefresh { .. }
+            | AppCommand::RedisKillClient { .. }
+            | AppCommand::RedisClearSlowlog { .. } => {
+                self.dispatch_redis_server_panel_command(command)
+            }
+            AppCommand::LoadMongoServerPanel(..)
+            | AppCommand::StartMongoServerPanelLoad(..)
+            | AppCommand::FinishMongoServerPanelLoad { .. }
+            | AppCommand::SetMongoServerPanelTab { .. }
+            | AppCommand::SetMongoServerPanelOnlySlow { .. }
+            | AppCommand::SetMongoServerPanelAutoRefresh { .. }
+            | AppCommand::MongoKillOperation { .. } => {
+                self.dispatch_mongo_server_panel_command(command)
             }
             AppCommand::LoadUserAdminUsers(..)
             | AppCommand::StartUserAdminUsersLoad(..)

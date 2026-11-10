@@ -178,6 +178,7 @@ fn mongo_info_dialog_view(
             .py_6()
             .text_size(px(13.))
             .text_color(colors.muted)
+            .child(loading_spinner_with_color(14., colors.muted))
             .child(tr("app.mongo.info_dialog.loading")),
         LoadState::Failed(error) => div()
             .py_6()

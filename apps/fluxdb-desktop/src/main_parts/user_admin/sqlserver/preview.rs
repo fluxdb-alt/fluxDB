@@ -25,10 +25,7 @@ fn sqlserver_preview_panel(
     );
     if state.preview_loading {
         return panel
-            .child(user_admin_empty_row(
-                tr("app.sqlserver_security.preview_loading"),
-                colors,
-            ))
+            .child(inline_loading_row(tr("app.sqlserver_security.preview_loading"), colors))
             .into_any_element();
     }
     if let Some(error) = &state.preview_error {
