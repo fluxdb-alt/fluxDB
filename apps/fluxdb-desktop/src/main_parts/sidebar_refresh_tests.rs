@@ -137,6 +137,74 @@ mod sidebar_refresh_tests {
         assert!(has_table_group_and_row(&visible_rows(true, true)));
     }
 
+    /// Redis 库名是数字，侧边栏必须按数值升序（0,1,2,10），不能是字典序（0,1,10,2）。
+    #[test]
+    fn redis_databases_are_sorted_numerically() {
+        let config = ConnectionConfig {
+            id: ConnectionId(1),
+            name: "redis".into(),
+            kind: DatabaseKind::Redis,
+            endpoint: Endpoint::Tcp {
+                host: "redis.invalid".into(),
+                port: 6379,
+                database: None,
+            },
+            options: Default::default(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+            dameng_profile: None,
+            mongo_profile: None,
+            sqlserver_profile: None,
+            oracle_profile: None,
+        };
+        let objects = ["2", "10", "1", "0"]
+            .into_iter()
+            .map(|name| ObjectSummary {
+                path: ObjectPath {
+                    connection_id: ConnectionId(1),
+                    database: Some(name.into()),
+                    schema: None,
+                    name: name.into(),
+                    kind: ObjectKind::RedisDb,
+                },
+                rows: None,
+                modified_at: None,
+                comment: None,
+                stable: None,
+            })
+            .collect::<Vec<_>>();
+        let connection = ConnectionState {
+            config: config.clone(),
+            connected: true,
+            expanded: true,
+            objects,
+            redis_overview: Default::default(),
+        };
+        let layout = SidebarLayout::for_connections(std::slice::from_ref(&config));
+        let rows = flatten_sidebar_visible_rows(
+            &[connection],
+            &layout,
+            &[],
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            "",
+        );
+        let names = rows
+            .iter()
+            .filter(|row| row.kind == SidebarRowKind::Database)
+            .filter_map(|row| row.database_name.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["0", "1", "2", "10"]);
+    }
+
     /// SQL 型连接的库下不能出现「集合」分组（Mongo 专用）。
     #[test]
     fn sql_databases_do_not_show_mongo_collection_group() {
