@@ -189,7 +189,14 @@ async fn pg_run_statement(
     // 也只会在本只读包装内生效；真正的外部 BEGIN 已被只读入口的策略层拒绝。
     let wrap_read_only = request.options.read_only && !pg_is_transaction_recovery(statement);
     let run = async {
-        if !pg_is_transaction_recovery(statement) { pg_ensure_search_path(session, request.schema.as_deref()).await?; }
+        if !pg_is_transaction_recovery(statement) {
+            pg_ensure_search_path(
+                session,
+                request.schema.as_deref(),
+                &profile.scope.default_schema,
+            )
+            .await?;
+        }
         if wrap_read_only {
             session.client.batch_execute("BEGIN READ ONLY").await.map_err(pg_error)?;
             let result = pg_collect_statement(&session.client, statement, request).await;
@@ -547,7 +554,16 @@ pub(crate) fn pg_execute_parameterized(
         if session.driver.0.is_finished() || session.client.is_closed() {
             return Err(Error::new(ErrorKind::Connection, "查询会话已失效，执行结果请先核实；关闭标签后重新连接"));
         }
-        pg_ensure_search_path(&session, request.schema.as_deref()).await?;
+        let profile = config
+            .postgres_profile
+            .as_ref()
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "PostgreSQL 连接档案缺失"))?;
+        pg_ensure_search_path(
+            &session,
+            request.schema.as_deref(),
+            &profile.scope.default_schema,
+        )
+        .await?;
         // prepare 只描述参数类型，不执行用户语句。
         let prepared = session
             .client

@@ -1037,6 +1037,13 @@ struct NavicatMain {
         BTreeMap<DataExportObjectSelectKey, Entity<SelectState<SearchableVec<String>>>>,
     _data_export_object_select_subscriptions: BTreeMap<DataExportObjectSelectKey, Subscription>,
     query_editors: BTreeMap<TabId, Entity<editor_component::Editor>>,
+    /// 查询工具栏的数据库/ schema 下拉（同一时刻只显示一个查询标签，状态可共用）。
+    query_database_select: Entity<SelectState<SearchableVec<QueryScopeItem>>>,
+    _query_database_select_subscription: Subscription,
+    query_database_items: Vec<QueryScopeItem>,
+    query_schema_select: Entity<SelectState<SearchableVec<QueryScopeItem>>>,
+    _query_schema_select_subscription: Subscription,
+    query_schema_items: Vec<QueryScopeItem>,
     /// 查询页语句执行状态仓库（按 tab 缓存；与 SqlAdapter 共享，供装饰还原行背景）。
     query_statement_statuses: BTreeMap<TabId, sql_editor_adapter::SqlStatusStore>,
     /// 最近一次从编辑器发起的执行语句快照，与结果摘要同序。

@@ -1211,6 +1211,12 @@ fn navicat_main_new(
     let sqlserver_security_database_select = cx.new(|cx| {
         SelectState::new(SearchableVec::new(Vec::new()), None, window, cx).searchable(true)
     });
+    let query_database_select = cx.new(|cx| {
+        SelectState::new(SearchableVec::new(Vec::new()), None, window, cx).searchable(true)
+    });
+    let query_schema_select = cx.new(|cx| {
+        SelectState::new(SearchableVec::new(Vec::new()), None, window, cx).searchable(true)
+    });
     let sqlserver_security_name_input = cx.new(|cx| {
         InputState::new(window, cx).placeholder(tr("app.sqlserver_security.name_placeholder"))
     });
@@ -2140,6 +2146,51 @@ fn navicat_main_new(
             if let (Some(tab_id), Some(database)) = (this.active_user_admin_tab_id(), value) {
                 this.select_sqlserver_security_database(tab_id, database.clone(), cx);
             }
+        },
+    );
+    let query_database_select_subscription = cx.subscribe_in(
+        &query_database_select,
+        window,
+        |this: &mut NavicatMain,
+         _select,
+         event: &SelectEvent<SearchableVec<QueryScopeItem>>,
+         _window,
+         cx| {
+            let SelectEvent::Confirm(value) = event;
+            let Some(database) = value.clone().flatten() else {
+                return;
+            };
+            let Some(tab_id) = this.active_query_tab_id() else {
+                return;
+            };
+            this.dispatch(
+                AppCommand::SetQueryDatabase {
+                    tab_id,
+                    database: Some(database),
+                },
+                cx,
+            );
+        },
+    );
+    let query_schema_select_subscription = cx.subscribe_in(
+        &query_schema_select,
+        window,
+        |this: &mut NavicatMain,
+         _select,
+         event: &SelectEvent<SearchableVec<QueryScopeItem>>,
+         _window,
+         cx| {
+            let SelectEvent::Confirm(value) = event;
+            let Some(tab_id) = this.active_query_tab_id() else {
+                return;
+            };
+            this.dispatch(
+                AppCommand::SetQuerySchema {
+                    tab_id,
+                    schema: value.clone().flatten(),
+                },
+                cx,
+            );
         },
     );
     let sqlserver_security_name_subscription = cx.subscribe(
@@ -3105,6 +3156,12 @@ fn navicat_main_new(
         sqlserver_security_database_select,
         _sqlserver_security_database_subscription: sqlserver_security_database_subscription,
         sqlserver_security_database_items: Vec::new(),
+        query_database_select,
+        _query_database_select_subscription: query_database_select_subscription,
+        query_database_items: Vec::new(),
+        query_schema_select,
+        _query_schema_select_subscription: query_schema_select_subscription,
+        query_schema_items: Vec::new(),
         sqlserver_security_name_input,
         _sqlserver_security_name_subscription: sqlserver_security_name_subscription,
         sqlserver_security_password_input,

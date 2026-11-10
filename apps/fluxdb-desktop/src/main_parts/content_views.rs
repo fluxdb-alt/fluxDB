@@ -1280,10 +1280,6 @@ fn query_editor_content(
         });
     }
     let connection = connection_name(this.controller.state(), editor.connection_id);
-    let database = editor
-        .database
-        .clone()
-        .unwrap_or_else(|| tr("app.history.default_database").to_string());
     let accent = this
         .controller
         .state()
@@ -1358,10 +1354,10 @@ fn query_editor_content(
             editor,
             sql_editor.clone(),
             connection,
-            database,
             accent,
             output_placement,
             colors,
+            window,
             cx,
         ))
         .child(workspace)

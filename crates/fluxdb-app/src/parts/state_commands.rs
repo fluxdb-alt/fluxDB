@@ -959,6 +959,16 @@ pub enum AppCommand {
         tab_id: TabId,
         text: String,
     },
+    /// 切换查询标签的目标数据库。数据库真正切换时才重建查询会话并清空旧结果。
+    SetQueryDatabase {
+        tab_id: TabId,
+        database: Option<String>,
+    },
+    /// 切换查询标签的 schema 作用域（PostgreSQL/Kingbase、Oracle）。
+    SetQuerySchema {
+        tab_id: TabId,
+        schema: Option<String>,
+    },
     RequestQueryCompletions {
         tab_id: TabId,
         request_seq: u64,
