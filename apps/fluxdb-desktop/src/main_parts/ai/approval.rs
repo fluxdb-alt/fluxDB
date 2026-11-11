@@ -95,7 +95,7 @@ fn ai_approval_risk_badge(risk: &str, colors: UiColors) -> gpui::AnyElement {
         .text_color(tone)
         .child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .child(label),
         )
@@ -141,7 +141,7 @@ fn ai_approval_code_block(
                 .accessibility_label(tr("app.ai.chat.approval.copy_content"))
                 .cursor_pointer()
                 .child(app_icon(AppIcon::Copy, 10., colors.muted))
-                .child(div().text_size(px(10.)).child(tr("app.ai.chat.approval.copy_content")))
+                .child(div().text_size(ui_text_size(10.)).child(tr("app.ai.chat.approval.copy_content")))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_text.clone()));
                     this.show_message(
@@ -156,8 +156,8 @@ fn ai_approval_code_block(
             div()
                 .max_h(px(132.))
                 .overflow_y_scrollbar()
-                .text_size(px(11.))
-                .line_height(px(17.))
+                .text_size(ui_text_size(11.))
+                .line_height(ui_text_size(17.))
                 .font_family(PLATFORM_MONOSPACE_FONT)
                 .text_color(colors.text)
                 .child(text.clone()),
@@ -192,7 +192,7 @@ fn ai_approval_context_row(
             div()
                 .w(px(76.))
                 .flex_none()
-                .text_size(px(10.5))
+                .text_size(ui_text_size(10.5))
                 .text_color(colors.muted)
                 .child(label),
         )
@@ -207,7 +207,7 @@ fn ai_approval_context_row(
                 .child(
                     div()
                         .min_w(px(0.))
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.text)
                         .when(monospace, |row| row.font_family(PLATFORM_MONOSPACE_FONT))
                         .truncate()
@@ -217,7 +217,7 @@ fn ai_approval_context_row(
                     row.child(
                         div()
                             .min_w(px(0.))
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(colors.muted)
                             .child(note),
                     )
@@ -286,7 +286,7 @@ fn ai_approval_guardrails(guardrails: &[String], colors: UiColors) -> gpui::AnyE
         .gap_1()
         .child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(tr("app.ai.chat.approval.guardrails_title")),
         )
@@ -307,8 +307,8 @@ fn ai_approval_guardrails(guardrails: &[String], colors: UiColors) -> gpui::AnyE
                     div()
                         .min_w(px(0.))
                         .flex_1()
-                        .text_size(px(11.))
-                        .line_height(px(16.))
+                        .text_size(ui_text_size(11.))
+                        .line_height(ui_text_size(16.))
                         .text_color(colors.text)
                         .child(display),
                 )
@@ -385,8 +385,8 @@ fn ai_chat_approval_result(
                                 .items_start()
                                 .child(
                                     div()
-                                        .text_size(px(11.))
-                                        .line_height(px(16.))
+                                        .text_size(ui_text_size(11.))
+                                        .line_height(ui_text_size(16.))
                                         .text_color(tone)
                                         .child(label),
                                 )
@@ -394,8 +394,8 @@ fn ai_chat_approval_result(
                                     div()
                                         .max_w_full()
                                         .truncate()
-                                        .text_size(px(10.))
-                                        .line_height(px(14.))
+                                        .text_size(ui_text_size(10.))
+                                        .line_height(ui_text_size(14.))
                                         .text_color(colors.muted)
                                         .child(target),
                                 ),
@@ -443,7 +443,7 @@ fn ai_chat_approval_result(
                 .child(
                     div()
                         .mx_3()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.muted)
                         .child(tr("app.ai.chat.approval.original_execution")),
                 );
@@ -465,7 +465,7 @@ fn ai_chat_approval_result(
                     div()
                         .mx_3()
                         .mb_2()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.ai.chat.approval.original_missing")),
                 );
@@ -557,7 +557,7 @@ fn ai_chat_approval_card(
             div()
                 .min_w(px(0.))
                 .flex_1()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(tr("app.ai.chat.approval.confirm_title")),
@@ -620,7 +620,7 @@ fn ai_chat_approval_card(
         .when(context.busy, |row| {
             row.child(
                 div()
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.muted)
                     .child(tr("app.ai.chat.approval.submitting")),
             )
@@ -635,7 +635,7 @@ fn ai_chat_approval_card(
                 .secondary()
                 .rounded_md()
                 .h(px(28.))
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .accessibility_id(format!("ai-deny:{approval_id}"))
                 .label(tr("app.ai.chat.approval.reject"))
                 .disabled(context.busy)
@@ -654,7 +654,7 @@ fn ai_chat_approval_card(
                 .success()
                 .rounded_md()
                 .h(px(28.))
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .accessibility_id(format!("ai-approve:{approval_id}"))
                 .label(tr("app.ai.chat.approval.approve_once"))
                 .disabled(context.busy)
@@ -685,7 +685,7 @@ fn ai_chat_approval_card(
             div()
                 .mx_3()
                 .mb_1()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(tr("app.ai.chat.approval.plan_preview")),
         )
@@ -699,7 +699,7 @@ fn ai_chat_approval_card(
                 div()
                     .mx_3()
                     .mb_2()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(tr("app.ai.chat.approval.plan_preview_missing")),
             )

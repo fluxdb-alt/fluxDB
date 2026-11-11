@@ -138,7 +138,7 @@ fn ai_chat_composer(
                             Textarea::new(&input)
                                 .accessibility_id("ai-chat-prompt")
                                 .appearance(false)
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .min_h(px(0.))
                                 .aria_label(
                                     tr("app.ai.chat.composer.input_aria")
@@ -200,7 +200,7 @@ fn ai_chat_composer(
                                         |row| {
                                             row.child(
                                                 div()
-                                                    .text_size(px(10.))
+                                                    .text_size(ui_text_size(10.))
                                                     .text_color(colors.muted)
                                                     .child(
                                                         tr("app.ai.chat.composer.reference_count")

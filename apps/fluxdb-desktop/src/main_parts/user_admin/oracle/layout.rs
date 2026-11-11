@@ -144,7 +144,7 @@ fn oracle_security_toolbar(
         .child(app_icon_box(AppIcon::Users, 28., 16., rgb(0x2563eb)))
         .child(
             div()
-                .text_size(px(14.))
+                .text_size(ui_text_size(14.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(tr("app.oracle_security.title")),
         )
@@ -161,7 +161,7 @@ fn oracle_security_toolbar(
         .when(state.applying, |row| {
             row.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.warning)
                     .child(tr("app.oracle_security.applying")),
             )

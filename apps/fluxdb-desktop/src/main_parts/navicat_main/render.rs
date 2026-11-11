@@ -550,6 +550,10 @@ impl Render for NavicatMain {
                 ai_plugin_config_dialog(self.ai_plugin_config_dialog.clone(), colors, cx),
                 |this, dialog| this.child(dialog),
             )
+            .when_some(
+                theme_editor_dialog(self.theme_editor.clone(), colors, cx),
+                |this, dialog| this.child(dialog),
+            )
             .when_some(self.data_row_viewer.clone(), |this, viewer| {
                 this.child(data_row_viewer_modal(
                     viewer,

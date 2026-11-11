@@ -65,7 +65,7 @@ fn app_message_overlay(message: &AppMessage, window: &Window, cx: &App, colors: 
         .with_variant(variant)
         .icon(alert_icon(icon_name, cx, APP_MESSAGE_LINE_HEIGHT))
         .bg(alert_tint(accent, colors))
-        .line_height(px(APP_MESSAGE_LINE_HEIGHT));
+        .line_height(ui_text_size(APP_MESSAGE_LINE_HEIGHT));
 
     div()
         .id("app-message-overlay")
@@ -122,13 +122,13 @@ fn page_error_alert(
                 .icon(alert_icon(icon_name, cx, PAGE_ERROR_LINE_HEIGHT))
                 .title(title)
                 .bg(alert_tint(accent, colors))
-                .line_height(px(PAGE_ERROR_LINE_HEIGHT)),
+                .line_height(ui_text_size(PAGE_ERROR_LINE_HEIGHT)),
         );
 
     if let Some(detail) = detail.map(str::trim).filter(|detail| !detail.is_empty()) {
         column = column.child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(detail.to_string()),
         );
@@ -229,7 +229,7 @@ fn statusbar(
         .border_color(colors.border)
         .flex()
         .items_center()
-        .text_size(px(14.))
+        .text_size(ui_text_size(14.))
         .text_color(colors.text)
         .child(div().w(px(260.)))
         .child(
@@ -267,7 +267,7 @@ fn statusbar_center(state: &AppState, colors: UiColors) -> impl IntoElement {
         .flex()
         .items_center()
         .gap_3()
-        .text_size(px(14.))
+        .text_size(ui_text_size(14.))
         .child(statusbar_summary(state));
     if let Some(metrics) = statusbar_metrics_element(state, colors) {
         group = group.child(metrics);
@@ -338,7 +338,7 @@ fn statusbar_metric(
         .px_1()
         .flex()
         .items_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .hover(move |style| style.bg(colors.hover))
         .tooltip({

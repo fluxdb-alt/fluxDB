@@ -67,14 +67,14 @@ fn ai_mcp_datasource_row(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(datasource.connection_name.clone()),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.ai.mcp.current_policy").replace(
                             "%{resource}",

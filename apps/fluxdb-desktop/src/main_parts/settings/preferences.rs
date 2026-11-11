@@ -4,8 +4,6 @@ fn settings_editor_changed(saved: &Settings, draft: &Settings) -> bool {
         || saved.confirm_dangerous_sql != draft.confirm_dangerous_sql
         || saved.dangerous_sql_actions != draft.dangerous_sql_actions
         || saved.confirm_dangerous_redis != draft.confirm_dangerous_redis
-        || saved.editor_font_size != draft.editor_font_size
-        || saved.editor_line_height != draft.editor_line_height
         || saved.editor_tab_width != draft.editor_tab_width
         || saved.editor_word_wrap != draft.editor_word_wrap
 }
@@ -31,15 +29,13 @@ fn settings_section_changed(
                 || saved.locale != draft.locale
                 || saved.light_theme != draft.light_theme
                 || saved.dark_theme != draft.dark_theme
-                || saved.button_radius != draft.button_radius
-                || saved.large_radius != draft.large_radius
-                || saved.show_shadows != draft.show_shadows
-                || saved.focus_ring != draft.focus_ring
-                || saved.scrollbar_mode != draft.scrollbar_mode
-                || saved.ui_density != draft.ui_density
-                || saved.show_status_bar != draft.show_status_bar
-                || saved.reduce_motion != draft.reduce_motion
+                // 字体设置现在由外观页统一管理；形状/布局/动效已从 UI 移除，
+                // 不再参与脏检查，避免保存外观时覆盖历史配置。
                 || saved.global_font_family != draft.global_font_family
+                || saved.ui_font_size != draft.ui_font_size
+                || saved.editor_font_family != draft.editor_font_family
+                || saved.editor_font_size != draft.editor_font_size
+                || saved.editor_line_height != draft.editor_line_height
         }
         SettingsPanelSection::System => {
             saved.log_level != draft.log_level
@@ -68,15 +64,11 @@ fn settings_apply_appearance_fields(settings: &mut Settings, draft: &Settings) {
     settings.locale = draft.locale.clone();
     settings.light_theme = draft.light_theme.clone();
     settings.dark_theme = draft.dark_theme.clone();
-    settings.button_radius = draft.button_radius;
-    settings.large_radius = draft.large_radius;
-    settings.show_shadows = draft.show_shadows;
-    settings.focus_ring = draft.focus_ring;
-    settings.scrollbar_mode = draft.scrollbar_mode;
-    settings.ui_density = draft.ui_density;
-    settings.show_status_bar = draft.show_status_bar;
-    settings.reduce_motion = draft.reduce_motion;
     settings.global_font_family = draft.global_font_family.clone();
+    settings.ui_font_size = draft.ui_font_size;
+    settings.editor_font_family = draft.editor_font_family.clone();
+    settings.editor_font_size = draft.editor_font_size;
+    settings.editor_line_height = draft.editor_line_height;
 }
 
 fn settings_apply_system_fields(settings: &mut Settings, draft: &Settings) {
@@ -150,7 +142,6 @@ fn reset_settings_section(
             );
             cx.notify();
         }
-        SettingsPanelSection::Appearance => this.reset_appearance_settings(cx),
         SettingsPanelSection::About => {
             this.settings_editor_draft.auto_check_updates = Settings::default().auto_check_updates;
             this.show_message(
@@ -209,6 +200,11 @@ fn save_settings_section_from_ui(
     let _ = this.storage.save_settings(&this.controller.state().settings);
     let locale = fluxdb_i18n::effective_locale(&this.controller.state().settings.locale);
     apply_ui_locale(&locale, cx);
+    // 保存后按已落盘的草稿重新应用主题、界面字体与代码字体/字号/行高，
+    // 不依赖选择控件是否已触发预览。
+    if section == SettingsPanelSection::Appearance {
+        this.preview_settings(cx);
+    }
     this.sync_settings_tab_dirty();
     this.show_message(
         match section {
@@ -228,8 +224,6 @@ fn settings_apply_editor_fields(settings: &mut Settings, draft: &Settings) {
     settings.confirm_dangerous_sql = draft.confirm_dangerous_sql;
     settings.dangerous_sql_actions = draft.dangerous_sql_actions.clone();
     settings.confirm_dangerous_redis = draft.confirm_dangerous_redis;
-    settings.editor_font_size = draft.editor_font_size;
-    settings.editor_line_height = draft.editor_line_height;
     settings.editor_tab_width = draft.editor_tab_width;
     settings.editor_word_wrap = draft.editor_word_wrap;
 }
@@ -305,17 +299,9 @@ impl NavicatMain {
         let locale = fluxdb_i18n::effective_locale(&self.controller.state().settings.locale);
         apply_ui_locale(&locale, cx);
         let new_settings = self.controller.state().settings.clone();
-        let font_size = new_settings.editor_font_size.clamp(10, 24) as f32;
-        let line_height = new_settings.editor_line_height.clamp(13, 28) as f32;
-        let soft_wrap = new_settings.editor_word_wrap;
         for sql_editor in self.query_editors.values() {
-            sql_editor.update(cx, |editor, _cx| {
-                editor.apply_settings(
-                    font_size,
-                    line_height,
-                    soft_wrap,
-                    new_settings.editor_tab_width as usize,
-                );
+            sql_editor.update(cx, |editor, cx| {
+                apply_code_editor_settings(editor, &new_settings, cx);
             });
         }
         self.preview_settings(cx);
@@ -353,14 +339,14 @@ fn settings_preference_row(
                         .min_w(px(0.))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(title.clone()),
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(detail),
                         ),

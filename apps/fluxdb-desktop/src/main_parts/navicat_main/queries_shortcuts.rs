@@ -1148,7 +1148,7 @@ impl NavicatMain {
         self.preview_settings(cx);
     }
 
-    fn reset_appearance_settings(&mut self, cx: &mut Context<Self>) {
+    fn reset_appearance_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.table_hover_color = None;
         self.restore_table_hover_if_ready(cx);
 
@@ -1158,16 +1158,19 @@ impl NavicatMain {
         settings.locale = defaults.locale;
         settings.light_theme = defaults.light_theme;
         settings.dark_theme = defaults.dark_theme;
-        settings.button_radius = defaults.button_radius;
-        settings.large_radius = defaults.large_radius;
-        settings.show_shadows = defaults.show_shadows;
-        settings.focus_ring = defaults.focus_ring;
-        settings.scrollbar_mode = defaults.scrollbar_mode;
-        settings.ui_density = defaults.ui_density;
-        settings.show_status_bar = defaults.show_status_bar;
-        settings.reduce_motion = defaults.reduce_motion;
         settings.global_font_family = defaults.global_font_family;
+        settings.ui_font_size = defaults.ui_font_size;
+        settings.editor_font_family = defaults.editor_font_family;
+        settings.editor_font_size = defaults.editor_font_size;
+        settings.editor_line_height = defaults.editor_line_height;
         self.settings_editor_draft = settings;
+        // 恢复默认后下拉必须回到「跟随平台默认」，否则界面仍显示旧字体。
+        self.settings_ui_font_select.update(cx, |select, cx| {
+            select.set_selected_value(&String::new(), window, cx)
+        });
+        self.settings_code_font_select.update(cx, |select, cx| {
+            select.set_selected_value(&String::new(), window, cx)
+        });
         let locale = fluxdb_i18n::effective_locale(&self.settings_editor_draft.locale);
         apply_ui_locale(&locale, cx);
         self.preview_settings(cx);
@@ -1197,8 +1200,12 @@ impl NavicatMain {
         apply_registered_theme(&self.settings_editor_draft, self.theme_mode, cx);
         apply_component_theme_colors(self.theme_mode, cx);
         let editor_theme = self.editor_theme_for(cx);
+        let settings = self.settings_editor_draft.clone();
         for editor in self.query_editors.values() {
-            editor.update(cx, |editor, ecx| editor.set_theme(editor_theme, ecx));
+            editor.update(cx, |editor, ecx| {
+                apply_code_editor_settings(editor, &settings, ecx);
+                editor.set_theme(editor_theme, ecx);
+            });
         }
         cx.notify();
     }

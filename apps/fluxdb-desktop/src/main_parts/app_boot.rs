@@ -85,7 +85,12 @@ fn main() {
             let _ = controller.dispatch(AppCommand::SaveSettings(saved_settings));
             apply_registered_theme(&controller.state().settings, theme_mode, cx);
             apply_component_theme_colors(theme_mode, cx);
-            watch_bundled_themes(controller.state().settings.clone(), theme_mode, cx);
+            watch_themes(
+                controller.state().settings.clone(),
+                theme_mode,
+                storage.root_dir().join(USER_THEMES_DIR),
+                cx,
+            );
             if let Ok(connections) =
                 storage.import_connections_if_empty(&controller.connection_configs())
             {
@@ -243,6 +248,7 @@ fn navicat_main_new(
     theme_mode: ThemeMode,
 ) -> NavicatMain {
     let auto_check_updates = controller.state().settings.auto_check_updates;
+    let user_theme_names = custom_theme_names(&storage.root_dir().join(USER_THEMES_DIR));
     let task_history = storage.load_task_history().unwrap_or_else(|error| {
         tracing::warn!(error = %error, "任务中心历史读取失败，按空历史启动");
         Vec::new()
@@ -580,8 +586,6 @@ fn navicat_main_new(
     let settings_line_height_input = cx.new(|cx| {
         InputState::new(window, cx).placeholder(tr("app.placeholder.line_height_example"))
     });
-    let settings_radius_input =
-        cx.new(|cx| InputState::new(window, cx).placeholder(tr("app.placeholder.radius_example")));
     // 留空即使用内置官方源，占位符直接展示默认模板，便于用户改成内网镜像。
     let settings_pg_client_source_input =
         cx.new(|cx| InputState::new(window, cx).placeholder(fluxdb_app::PG_CLIENT_DEFAULT_SOURCE));
@@ -1387,26 +1391,6 @@ fn navicat_main_new(
             };
             this.settings_editor_draft.editor_line_height = value;
             cx.notify();
-        },
-    );
-    let settings_radius_subscription = cx.subscribe_in(
-        &settings_radius_input,
-        window,
-        |this: &mut NavicatMain, input, event: &InputEvent, _window, cx| {
-            if !matches!(event, InputEvent::Change | InputEvent::PressEnter { .. }) {
-                return;
-            }
-            let Ok(value) = input.read(cx).value().trim().parse::<u8>() else {
-                return;
-            };
-            let value = value.min(24);
-            this.settings_editor_draft.button_radius = value;
-            this.settings_editor_draft.large_radius = if value == 0 {
-                0
-            } else {
-                value.saturating_add(2).min(32)
-            };
-            this.preview_settings(cx);
         },
     );
     // 下载源是纯文本设置，随输入写入草稿，由「保存」统一落盘。
@@ -2693,9 +2677,55 @@ fn navicat_main_new(
         .table_folder_assignments
         .clone();
     let settings_editor_draft = controller.state().settings.clone();
-    settings_radius_input.update(cx, |input, cx| {
-        input.set_value(settings_editor_draft.button_radius.to_string(), window, cx)
+    // 字体列表只取一次：系统字体集合在应用运行期变化很少，设置页重绘时
+    // 重建几百项既浪费又会重置搜索/滚动位置。
+    let mut system_fonts = cx.text_system().all_font_names();
+    system_fonts.sort_by_key(|name| name.to_lowercase());
+    system_fonts.dedup();
+    let (ui_font_options, ui_font_selected) =
+        font_choice_options(&system_fonts, &settings_editor_draft.global_font_family);
+    let settings_ui_font_select = cx.new(|cx| {
+        SelectState::new(
+            SearchableVec::new(ui_font_options),
+            ui_font_selected,
+            window,
+            cx,
+        )
     });
+    let settings_ui_font_subscription = cx.subscribe(
+        &settings_ui_font_select,
+        |this: &mut NavicatMain,
+         _select,
+         event: &SelectEvent<SearchableVec<FontChoice>>,
+         cx| {
+            if let SelectEvent::Confirm(Some(family)) = event {
+                this.settings_editor_draft.global_font_family = family.clone();
+                this.preview_settings(cx);
+            }
+        },
+    );
+    let (code_font_options, code_font_selected) =
+        font_choice_options(&system_fonts, &settings_editor_draft.editor_font_family);
+    let settings_code_font_select = cx.new(|cx| {
+        SelectState::new(
+            SearchableVec::new(code_font_options),
+            code_font_selected,
+            window,
+            cx,
+        )
+    });
+    let settings_code_font_subscription = cx.subscribe(
+        &settings_code_font_select,
+        |this: &mut NavicatMain,
+         _select,
+         event: &SelectEvent<SearchableVec<FontChoice>>,
+         cx| {
+            if let SelectEvent::Confirm(Some(family)) = event {
+                this.settings_editor_draft.editor_font_family = family.clone();
+                this.preview_settings(cx);
+            }
+        },
+    );
     settings_pg_client_source_input.update(cx, |input, cx| {
         input.set_value(
             settings_editor_draft.pg_client_download_source.clone(),
@@ -2724,6 +2754,24 @@ fn navicat_main_new(
                 let font_size = value.end().round().clamp(10., 24.) as u32;
                 this.settings_editor_draft.editor_font_size = font_size;
                 cx.notify();
+            }
+        },
+    );
+    let settings_ui_font_size_slider = cx.new(|_| {
+        SliderState::new()
+            .min(12.)
+            .max(18.)
+            .step(1.)
+            .default_value(settings_editor_draft.effective_ui_font_size() as f32)
+    });
+    let settings_ui_font_size_slider_subscription = cx.subscribe(
+        &settings_ui_font_size_slider,
+        |this: &mut NavicatMain, _slider, event: &SliderEvent, cx| {
+            if let SliderEvent::Change(value) = event {
+                let font_size = value.end().round().clamp(12., 18.) as u32;
+                this.settings_editor_draft.ui_font_size = font_size;
+                // 立即套用，滑杆拖动时界面文字实时缩放。
+                this.preview_settings(cx);
             }
         },
     );
@@ -3562,10 +3610,16 @@ fn navicat_main_new(
         },
         settings_font_size_slider,
         _settings_font_size_slider_subscription: settings_font_size_slider_subscription,
+        theme_editor: None,
+        custom_theme_names: user_theme_names,
+        settings_ui_font_size_slider,
+        _settings_ui_font_size_slider_subscription: settings_ui_font_size_slider_subscription,
         settings_line_height_input,
         _settings_line_height_subscription: settings_line_height_subscription,
-        settings_radius_input,
-        _settings_radius_subscription: settings_radius_subscription,
+        settings_ui_font_select,
+        _settings_ui_font_subscription: settings_ui_font_subscription,
+        settings_code_font_select,
+        _settings_code_font_subscription: settings_code_font_subscription,
         pg_client: NativeClientState {
             source_input: settings_pg_client_source_input,
             _source_subscription: settings_pg_client_source_subscription,

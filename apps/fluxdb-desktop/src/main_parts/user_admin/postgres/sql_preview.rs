@@ -48,7 +48,7 @@ fn pg_sql_preview_panel(
             .flex_wrap()
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(colors.muted)
                     .child(tr("app.pg_role.preview.summary")
                         .replace(

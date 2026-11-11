@@ -51,7 +51,7 @@ impl NavicatMain {
                                 .focus_bordered(false)
                                 .w_full()
                                 .h_full()
-                                .text_size(px(13.)),
+                                .text_size(ui_text_size(13.)),
                         ),
                 )
                 .footer(

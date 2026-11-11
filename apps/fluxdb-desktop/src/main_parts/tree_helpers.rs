@@ -55,7 +55,7 @@ fn tree_with_highlight(
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .bg(row_bg)
         .hover(move |style| style.bg(hover_bg))
@@ -181,7 +181,7 @@ fn tree_icon(glyph: &'static str) -> gpui::AnyElement {
         img(path).size(px(16.)).into_any_element()
     } else {
         div()
-            .text_size(px(15.))
+            .text_size(ui_text_size(15.))
             .text_color(match glyph {
                 "▦" => rgb(0x12b826),
                 "#" => rgb(0xf59e0b),
@@ -586,7 +586,7 @@ fn table_folder_tree(
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .bg(row_bg)
         .hover(move |style| style.bg(hover_bg))
@@ -669,7 +669,7 @@ fn table_folder_tree(
                                     .w_full()
                                     .h_full()
                                     .px_1()
-                                    .text_size(px(13.)),
+                                    .text_size(ui_text_size(13.)),
                             ),
                     )
                 })
@@ -828,7 +828,7 @@ fn group_tree(
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .when(renaming, |this| {
             this.bg(if colors.is_dark {
@@ -922,7 +922,7 @@ fn group_tree(
                                     .w_full()
                                     .h_full()
                                     .px_1()
-                                    .text_size(px(13.))
+                                    .text_size(ui_text_size(13.))
                                     .font_weight(gpui::FontWeight::SEMIBOLD),
                             ),
                     )
@@ -1033,7 +1033,7 @@ fn connection_tree(
                 .flex_1()
                 .overflow_hidden()
                 .whitespace_nowrap()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(connection.config.name.clone()),
@@ -1045,7 +1045,7 @@ fn connection_tree(
                     .rounded(colors.radius)
                     .border_1()
                     .border_color(colors.border)
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.muted)
                     .child(tr("app.sidebar.read_only")),
             )
@@ -1488,7 +1488,7 @@ fn table_header(colors: UiColors) -> impl IntoElement {
         .bg(colors.panel_alt)
         .flex()
         .items_center()
-        .text_size(px(15.))
+        .text_size(ui_text_size(15.))
         .text_color(colors.muted)
         .child(cell(tr("app.tree.header.name").to_string(), 210., colors))
         .child(cell(tr("app.tree.header.rows").to_string(), 55., colors))
@@ -1608,7 +1608,7 @@ fn table_row(
         .text_color(fg)
         .flex()
         .items_center()
-        .text_size(px(16.))
+        .text_size(ui_text_size(16.))
         .child(cell_with_icon(name, 210., colors))
         .child(cell(rows, 55., colors))
         .child(cell(changed, 150., colors))

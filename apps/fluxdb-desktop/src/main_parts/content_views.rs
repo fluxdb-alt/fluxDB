@@ -252,9 +252,12 @@ fn content(
                 this.settings_panel_section,
                 colors,
                 this.settings_editor_draft.clone(),
+                &this.custom_theme_names,
                 this.settings_font_size_slider.clone(),
+                this.settings_ui_font_size_slider.clone(),
                 this.settings_line_height_input.clone(),
-                this.settings_radius_input.clone(),
+                this.settings_ui_font_select.clone(),
+                this.settings_code_font_select.clone(),
                 [this.pg_client.snapshot(NativeClientKind::Postgres), this.mysql_client.snapshot(NativeClientKind::MySql)],
                 this.settings_dangerous_actions_collapsed,
                 this.settings_data_groups_collapsed,
@@ -344,6 +347,9 @@ fn workbench_home(
 include!("settings/navigation.rs");
 include!("settings/editor.rs");
 include!("settings/appearance.rs");
+include!("settings/theme_editor.rs");
+include!("settings/zed_theme.rs");
+include!("settings/vscode_theme.rs");
 include!("settings/system.rs");
 include!("settings/native_client.rs");
 include!("settings/rows.rs");
@@ -370,7 +376,7 @@ fn home_stat_card(
         .justify_between()
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(label),
@@ -382,7 +388,7 @@ fn home_stat_card(
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(30.))
+                        .text_size(ui_text_size(30.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(value.to_string()),
@@ -390,7 +396,7 @@ fn home_stat_card(
                 .child(
                     div()
                         .pb_1()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(hint),
                 ),
@@ -414,7 +420,7 @@ fn recent_connections_panel(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(14.))
+                .text_size(ui_text_size(14.))
                 .text_color(colors.muted)
                 .child(tr("app.home.no_connections")),
         );
@@ -461,14 +467,14 @@ fn recent_connection_row(
                         .gap_1()
                         .child(
                             div()
-                                .text_size(px(15.))
+                                .text_size(ui_text_size(15.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(connection.config.name.clone()),
                         )
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .text_color(colors.muted)
                                 .child(connection_summary(&connection.config)),
                         ),
@@ -476,7 +482,7 @@ fn recent_connection_row(
         )
         .child(
             div()
-                .text_size(px(18.))
+                .text_size(ui_text_size(18.))
                 .text_color(if connection.connected {
                     rgb(0x16a34a)
                 } else {
@@ -542,7 +548,7 @@ fn common_actions_panel(
                     .bg(colors.panel_alt)
                     .px_3()
                     .py_3()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .text_color(colors.muted)
                     .child(tr("app.home.hint")),
             ),
@@ -566,7 +572,7 @@ fn home_panel(title: impl Into<SharedString>, body: Div, colors: UiColors) -> Di
                 .px_4()
                 .flex()
                 .items_center()
-                .text_size(px(15.))
+                .text_size(ui_text_size(15.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(title),
@@ -591,7 +597,7 @@ fn home_icon_action_row(
         .hover(move |style| style.bg(colors.hover))
         .child(
             div()
-                .text_size(px(14.))
+                .text_size(ui_text_size(14.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(label),
@@ -621,7 +627,7 @@ fn home_action_row(
         .flex()
         .items_center()
         .gap_3()
-        .text_size(px(14.))
+        .text_size(ui_text_size(14.))
         .text_color(colors.text)
         .hover(move |style| style.bg(colors.hover))
         .child(
@@ -633,7 +639,7 @@ fn home_action_row(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(glyph),
         )
@@ -1491,7 +1497,7 @@ fn redis_cli_content(
                 .flex()
                 .items_center()
                 .px_3()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(format!("{connection} · DB {} · redis-cli", cli.database)),
         )
@@ -1533,7 +1539,7 @@ fn mongo_cli_content(
                 .flex()
                 .items_center()
                 .px_3()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(format!("{connection} · {} · MongoDB Shell", cli.database)),
         )
@@ -1565,7 +1571,7 @@ fn redis_pubsub_content(
             .items_center()
             .justify_center()
             .text_color(colors.muted)
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .child(tr("app.content.pubsub_unavailable"));
     }
     this.ensure_pubsub_inputs(tab_id, window, cx);
@@ -1617,7 +1623,7 @@ fn redis_pubsub_content(
         ))
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(status_color)
                 .child(status_text),
         )
@@ -1683,7 +1689,7 @@ fn redis_pubsub_content(
         .child(
             div()
                 .flex_none()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(
                     tr("app.content.subscribed_count")
@@ -1724,13 +1730,13 @@ fn redis_pubsub_content(
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.text)
                         .child(ch.clone()),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child("×"),
                 ),
@@ -1748,7 +1754,7 @@ fn redis_pubsub_content(
         .border_b_1()
         .border_color(colors.border)
         .bg(colors.panel_alt)
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(pubsub_column_time(
@@ -1804,7 +1810,7 @@ fn redis_pubsub_content(
                     } else {
                         channel
                     })
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(accent),
                 )
@@ -1814,7 +1820,7 @@ fn redis_pubsub_content(
                     } else {
                         payload
                     })
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(colors.text),
                 ),
         );
@@ -1845,7 +1851,7 @@ fn redis_pubsub_content(
         .child(
             div()
                 .flex_none()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.content.publish")),
         )
@@ -1886,7 +1892,7 @@ fn redis_pubsub_content(
             .flex()
             .items_center()
             .px_3()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(rgb(0xff5c5c))
             .bg(rgb(0x2a1415))
             .child(
@@ -1921,7 +1927,7 @@ fn pubsub_column_time(label: String) -> Div {
         .pr_2()
         .overflow_hidden()
         .whitespace_nowrap()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .child(label)
 }
 
@@ -2035,7 +2041,7 @@ fn pubsub_pagination_bar(
         .bg(colors.panel_alt)
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.pagination.page_size")),
         )
@@ -2060,7 +2066,7 @@ fn pubsub_pagination_bar(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(if active { rgb(0xffffff) } else { colors.text })
                 .on_mouse_down(
                     MouseButton::Left,
@@ -2077,7 +2083,7 @@ fn pubsub_pagination_bar(
         }))
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.pagination.total").replace("%{count}", &total.to_string())),
         )
@@ -2088,7 +2094,7 @@ fn pubsub_pagination_bar(
         .child(
             div()
                 .min_w(px(58.))
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.text)
                 .child(page_indicator),
         )
@@ -2630,7 +2636,7 @@ fn redis_workbench_record_row(
                     div()
                         .min_w(px(0.))
                         .flex_shrink(1.)
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_family(crate::PLATFORM_MONOSPACE_FONT)
                         .text_color(colors.text)
                         .overflow_x_hidden()
@@ -2721,7 +2727,7 @@ fn redis_workbench_record_meta(
         .gap_1p5()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(status_color)
                 .child(status_label),
@@ -2729,7 +2735,7 @@ fn redis_workbench_record_meta(
         // 完整执行时间 + 毫秒耗时：如 `2026-01-01 14:03:22 · 16 msec`，整段为 ASCII（规避中英文混排 bug）。
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .whitespace_nowrap()
                 .child(format!("{time_label} · {elapsed_label}")),
@@ -2868,7 +2874,7 @@ fn redis_workbench_empty_state(colors: UiColors) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         // 空态提示：整句保持纯中文，避免与英文命令示例混排。
         // gpui 0.2.2 对「中文 + ASCII 命令」同一文本节点内的跨字体 run 切分存在
@@ -2887,7 +2893,7 @@ fn redis_workbench_loading_state(colors: UiColors) -> Div {
         .child(loading_spinner_with_color(18., colors.muted))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .child(tr("app.content.executing")),
         )
@@ -2944,7 +2950,7 @@ fn redis_workbench_command_row(
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(status_color)
                         .child(status_label),
@@ -2953,7 +2959,7 @@ fn redis_workbench_command_row(
                     div()
                         .flex_1()
                         .min_w(px(0.))
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_family(crate::PLATFORM_MONOSPACE_FONT)
                         .text_color(colors.text)
                         .overflow_x_hidden()
@@ -2963,7 +2969,7 @@ fn redis_workbench_command_row(
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(format!("{}ms", item.elapsed_ms)),
                 )
@@ -3013,7 +3019,7 @@ fn redis_workbench_json_view_dropdown(
     .gap_1()
     .child(
         div()
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .font_family(crate::PLATFORM_MONOSPACE_FONT)
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(if is_json_view { colors.text } else { colors.muted })
@@ -3061,7 +3067,7 @@ fn redis_workbench_json_view_dropdown(
             .child(
                 div()
                     .w_full()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .font_family(crate::PLATFORM_MONOSPACE_FONT)
                     .font_weight(if active {
                         gpui::FontWeight::SEMIBOLD
@@ -3132,7 +3138,7 @@ fn redis_workbench_reply_row(reply: &CommandReply, colors: UiColors) -> Div {
         .flex_1()
         .min_w(px(0.))
         .pl_5()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_family(crate::PLATFORM_MONOSPACE_FONT)
         .text_color(color)
         .whitespace_normal()
@@ -3349,7 +3355,7 @@ fn query_output_loading_overlay(colors: UiColors) -> Div {
         .items_center()
         .justify_center()
         .gap_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(loading_spinner_with_color(18., colors.muted))
@@ -3484,7 +3490,7 @@ fn collapsed_query_output_button(
         .child(app_icon(AppIcon::ChevronUp, 16., colors.text))
         .child(
             div()
-                .text_size(px(15.))
+                .text_size(ui_text_size(15.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(tr("app.query.show_results")),
         )
@@ -3648,7 +3654,7 @@ fn query_result_editable_badge(colors: UiColors) -> Div {
         .px_2()
         .flex()
         .items_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(if colors.is_dark {
             rgb(0x7ee787)
@@ -3697,7 +3703,7 @@ fn query_output_tab_button(
         })
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .whitespace_nowrap()
                 .child(label),
@@ -3787,7 +3793,7 @@ fn query_output_toolbar_button(
         .child(app_icon(icon, 14., colors.muted))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(label),
         )
@@ -3806,7 +3812,7 @@ fn query_output_empty_state(colors: UiColors) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(tr("app.content.empty_results_hint"))
 }
@@ -3847,7 +3853,7 @@ fn query_result_empty_columns_header(
         .border_b_1()
         .border_color(colors.border)
         .bg(colors.panel_alt)
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .children(columns.iter().enumerate().map(|(index, column)| {
             let name = if column.name.is_empty() {
@@ -4077,7 +4083,7 @@ fn query_result_view(
                             .flex()
                             .items_center()
                             .px_3()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .text_color(colors.muted)
                             .child(tr("app.content.no_rows")),
                     ),
@@ -4493,7 +4499,7 @@ fn query_result_error_state(
     .icon(alert_icon(icon_name, cx, PAGE_ERROR_LINE_HEIGHT))
     .title(tr("app.query.error_title"))
     .bg(alert_tint(accent, colors))
-    .line_height(px(PAGE_ERROR_LINE_HEIGHT));
+    .line_height(ui_text_size(PAGE_ERROR_LINE_HEIGHT));
 
     let sql_block = div()
         .w_full()
@@ -4512,7 +4518,7 @@ fn query_result_error_state(
                 .border_color(colors.border)
                 .flex()
                 .items_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(tr("app.query.failed_sql")),
@@ -4521,8 +4527,8 @@ fn query_result_error_state(
             div()
                 .p_3()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_size(px(12.))
-                .line_height(px(18.))
+                .text_size(ui_text_size(12.))
+                .line_height(ui_text_size(18.))
                 .text_color(colors.text)
                 .whitespace_normal()
                 .child(summary.sql.clone()),
@@ -4867,7 +4873,7 @@ fn query_result_cell_detail_value_header(
         .child(
             div()
                         .flex_none()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(tr("app.placeholder.value")),
@@ -5036,7 +5042,7 @@ fn query_execution_summary_view(
                 .flex()
                 .items_center()
                 .px_3()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .child(tr("app.query.no_summary")),
         );
@@ -5165,7 +5171,7 @@ fn query_summary_header_cell(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(text),
@@ -5233,7 +5239,7 @@ fn query_summary_sql_cell(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .tooltip(query_summary_full_text_tooltip(summary.sql.clone(), true))
                 .child(sql_text),
@@ -5290,7 +5296,7 @@ fn query_summary_full_text_tooltip(
             div()
                 .max_w(px(560.))
                 .whitespace_normal()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .when(monospace, |this| {
                     this.font_family(crate::PLATFORM_MONOSPACE_FONT)
                 })
@@ -5340,7 +5346,7 @@ fn query_summary_type_cell(
                 .bg(badge_bg)
                 .flex()
                 .items_center()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(badge_text)
                 .child(if summary.success {
@@ -5357,7 +5363,7 @@ fn query_summary_type_cell(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .tooltip(query_summary_full_text_tooltip(summary.message.clone(), false))
                 .child(localize_backend_error_text(&summary.message)),
@@ -5398,7 +5404,7 @@ fn query_summary_numeric_cell(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .child(text),
         )
@@ -5428,7 +5434,7 @@ fn object_toolbar(colors: UiColors) -> impl IntoElement {
                 .flex()
                 .items_center()
                 .gap_2()
-                .text_size(px(17.))
+                .text_size(ui_text_size(17.))
                 .text_color(rgb(0x1687ff))
                 .child(app_icon_box(AppIcon::Square, 22., 17., rgb(0x1687ff)))
                 .child(app_icon_box(AppIcon::Edit, 22., 17., rgb(0x1687ff)))
@@ -5457,7 +5463,7 @@ fn object_toolbar(colors: UiColors) -> impl IntoElement {
                         .items_center()
                         .gap_2()
                         .px_3()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(app_icon(AppIcon::Search, 13., colors.muted))
                         .child(tr("app.placeholder.search")),
@@ -5582,7 +5588,7 @@ fn redis_key_search_bar(
             this.child(
                 div()
                     .ml_4()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .text_color(colors.text)
                     .child(tr("app.content.last_search_now")),
             )
@@ -5654,7 +5660,7 @@ fn redis_search_input_frame(
                 .w_full()
                 .h_full()
                 .px_2()
-                .text_size(px(13.)),
+                .text_size(ui_text_size(13.)),
         )
         .when(has_text, |this| {
             this.child(redis_search_icon_button(
@@ -5715,7 +5721,7 @@ fn redis_refresh_key_list_button(refreshing: bool, colors: UiColors) -> Stateful
                     Tooltip::new(tr("app.common.refresh")).build(window, cx)
                 })
         })
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(if refreshing { colors.muted } else { colors.text })
         .child(if refreshing {
@@ -5741,7 +5747,7 @@ fn redis_add_key_button(colors: UiColors) -> Stateful<Div> {
         .gap_2()
         .cursor_pointer()
         .hover(move |style| style.bg(colors.hover))
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .tooltip(|window, cx| {
@@ -5823,7 +5829,7 @@ fn redis_key_search_history_dropdown(
             .px_3()
             .flex()
             .items_center()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .text_color(colors.muted)
             .child(tr("app.content.no_search_history"))
     } else {
@@ -5839,7 +5845,7 @@ fn redis_key_search_history_dropdown(
                     .gap_2()
                     .cursor_pointer()
                     .hover(move |style| style.bg(colors.hover))
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .text_color(colors.text)
                     .child(app_icon(AppIcon::Search, 14., colors.muted))
                     .child(
@@ -5892,7 +5898,7 @@ fn redis_key_search_history_dropdown(
                 .border_b_1()
                 .border_color(colors.border_soft)
                 .bg(colors.panel_alt)
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(tr("app.content.search_history")),
@@ -5911,7 +5917,7 @@ fn redis_key_search_history_dropdown(
                     .gap_2()
                     .cursor_pointer()
                     .hover(move |style| style.bg(colors.hover))
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .text_color(rgb(0xe5484d))
                     .child(app_icon(AppIcon::Trash, 14., rgb(0xe5484d)))
                     .child(tr("app.content.clear_history"))
@@ -6015,7 +6021,7 @@ fn data_editor_toolbar(
                         } else {
                             colors.panel_alt
                         })
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(if filter_open {
                             rgb(0x1677ff)
                         } else {
@@ -6103,7 +6109,7 @@ fn data_editor_toolbar(
                 .when_some(field_count, |this, (visible, total)| {
                     this.child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(colors.muted)
                             .child(if visible == total {
@@ -6165,7 +6171,7 @@ fn data_editor_action(label: impl Into<SharedString>, colors: UiColors) -> Div {
         .border_1()
         .border_color(colors.border)
         .bg(colors.panel_alt)
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .cursor_pointer()

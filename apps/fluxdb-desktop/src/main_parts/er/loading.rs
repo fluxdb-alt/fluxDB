@@ -15,7 +15,7 @@ fn er_relation_status_banner(status: ErLoadStatus, colors: UiColors) -> Div {
         .flex()
         .items_center()
         .px(px(12.))
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(tone)
         .child(text)
 }

@@ -84,7 +84,7 @@ fn config_proposal_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.ai.config_proposal.title")),
                         )
@@ -116,7 +116,7 @@ fn config_proposal_modal(
                         .flex()
                         .flex_col()
                         .gap_3()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .child(
                             div()
                                 .text_color(colors.muted)
@@ -124,7 +124,7 @@ fn config_proposal_modal(
                         )
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(colors.muted)
                                 .child(action),
                         )
@@ -611,6 +611,7 @@ fn config_field_label(field: &str) -> SharedString {
         "egress" => tr("app.ai.config_proposal.field_egress"),
         "editor_font_size" => tr("app.ai.config_proposal.field_editor_font_size"),
         "editor_line_height" => tr("app.ai.config_proposal.field_editor_line_height"),
+        "editor_font_family" => tr("app.ai.config_proposal.field_editor_font_family"),
         "editor_tab_width" => tr("app.ai.config_proposal.field_editor_tab_width"),
         "editor_word_wrap" => tr("app.ai.config_proposal.field_editor_word_wrap"),
         "page_size" => tr("app.ai.config_proposal.field_page_size"),

@@ -55,7 +55,7 @@ fn redis_key_detail_zset_panel(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(redis_set_search_box(
                             this.redis_zset_member_search_input.clone(),
@@ -104,7 +104,7 @@ fn redis_key_detail_zset_panel(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.muted)
                         .child(div().w(px(42.)).flex_none().child("#"))
@@ -142,7 +142,7 @@ fn redis_key_detail_zset_panel(
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(colors.muted)
                                         .child(loading_spinner_with_color(22., colors.muted))
                                 } else if rows.is_empty() {
@@ -151,7 +151,7 @@ fn redis_key_detail_zset_panel(
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(colors.muted)
                                         .child(tr("app.redis.zset.empty"))
                                 } else {
@@ -187,7 +187,7 @@ fn redis_key_detail_zset_panel(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.redis.zset.members_count").replace("%{shown}", &rows.len().to_string()).replace("%{total}", &total.to_string()))
                         .child(
@@ -355,7 +355,7 @@ fn redis_zset_member_row(
                 .flex()
                 .items_center()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(format!("{:02}", row_index + 1)),
         )
@@ -369,7 +369,7 @@ fn redis_zset_member_row(
                 .items_center()
                 .px_2()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .child(member.clone()),
         )
@@ -487,7 +487,7 @@ fn redis_zset_member_delete_confirm_popover(
                                     .child(
                                         div()
                                             .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                                            .text_size(px(14.))
+                                            .text_size(ui_text_size(14.))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(colors.text)
                                             .overflow_hidden()
@@ -496,7 +496,7 @@ fn redis_zset_member_delete_confirm_popover(
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(12.))
+                                            .text_size(ui_text_size(12.))
                                             .text_color(colors.muted)
                                             .child(message),
                                     ),
@@ -568,7 +568,7 @@ fn redis_zset_member_score_display(
                 .min_w(px(0.))
                 .truncate()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .child(score),
         )
@@ -654,7 +654,7 @@ fn redis_zset_member_score_editor(
                         .h_full()
                         .px_2()
                         .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                        .text_size(px(13.)),
+                        .text_size(ui_text_size(13.)),
                 ),
         )
         .child(
@@ -760,7 +760,7 @@ fn redis_zset_member_add_drawer(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(div().text_size(px(17.)).font_weight(gpui::FontWeight::SEMIBOLD).child(tr("app.redis.zset.add_member"))),
+                        .child(div().text_size(ui_text_size(17.)).font_weight(gpui::FontWeight::SEMIBOLD).child(tr("app.redis.zset.add_member"))),
                 )
                 .child(
                     div()

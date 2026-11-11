@@ -104,7 +104,7 @@ fn ai_mcp_datasources_panel(
             .gap_3()
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(tr("app.ai.mcp.datasource_help")),
             )
@@ -120,7 +120,7 @@ fn ai_mcp_datasources_panel(
             div()
                 .px_4()
                 .py_3()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.ai.mcp.no_datasource")),
         );
@@ -181,7 +181,7 @@ fn ai_mcp_datasource_add_button(
                         div()
                             .px_3()
                             .py_2()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .child(tr("app.ai.mcp.no_candidate"))
                     })
                     .disabled(true),

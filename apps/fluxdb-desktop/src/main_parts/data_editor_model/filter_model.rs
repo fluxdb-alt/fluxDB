@@ -270,7 +270,7 @@ fn data_sort_drag_preview(label: String, colors: UiColors) -> impl IntoElement {
         .child(app_icon(AppIcon::GripVertical, 12., colors.muted))
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(label),

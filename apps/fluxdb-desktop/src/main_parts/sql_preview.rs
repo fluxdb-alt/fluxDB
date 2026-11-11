@@ -65,7 +65,8 @@ fn sql_preview_editor(
                     soft_wrap: sql_preview_soft_wrap(soft_wrap),
                     ..Default::default()
                 },
-                font: editor_component::EDITOR_FONT.to_string(),
+                // 外观页的代码字体通过全局等宽字体注入，预览与查询编辑器保持一致。
+                font: ComponentTheme::global(cx).mono_font_family.to_string(),
                 font_size: SQL_PREVIEW_FONT_SIZE,
                 line_height: SQL_PREVIEW_LINE_HEIGHT,
                 gutter_line_numbers: false,
@@ -74,6 +75,8 @@ fn sql_preview_editor(
         }
     });
     editor.update(cx, |editor, cx| {
+        // 代码字体可能在设置页被改动：缓存编辑器必须同步，否则预览会停留在旧字体。
+        editor.set_font_name(ComponentTheme::global(cx).mono_font_family.to_string(), cx);
         // 外部模型变化才同步（长度不同立即判定变化），不会每帧重建 buffer。
         editor.sync_text_silent(text, cx);
         // 预览不跟踪多 Tab 宽度 settings，保持构造时的默认制表宽（4）。

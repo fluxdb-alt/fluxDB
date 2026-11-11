@@ -111,7 +111,7 @@ fn create_table_foreign_key_header_row(colors: UiColors) -> Div {
         .flex_none()
         .flex_shrink_0()
         .bg(colors.panel_alt)
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .flex()
@@ -341,7 +341,7 @@ fn create_table_foreign_key_fields_cell(
                                 .min_w(px(0.))
                                 .flex_1()
                                 .px_2()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .text_color(colors.text)
                                 .overflow_hidden()
                                 .whitespace_nowrap()
@@ -429,14 +429,14 @@ fn create_table_foreign_key_fields_popover(
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.create_table.foreign_key.select_fields")),
                 )
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(tr("app.create_table.foreign_key.selected_count").replace("%{count}", &draft.columns.len().to_string())),
                 ),
@@ -625,7 +625,7 @@ fn field_selection_header(colors: UiColors) -> Div {
         .border_color(colors.border_soft)
         .flex()
         .items_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(
@@ -669,7 +669,7 @@ fn create_table_foreign_key_field_option(
         .flex_none()
         .flex()
         .items_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(if selected { colors.text } else { colors.muted })
         .bg(if is_active { colors.hover } else { colors.panel_bg })
         .cursor_pointer()

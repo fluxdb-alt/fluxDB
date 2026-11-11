@@ -44,7 +44,7 @@ fn connection_info_label(name: String, colors: UiColors) -> Stateful<Div> {
         .overflow_hidden()
         .whitespace_nowrap()
         .text_ellipsis()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .id("topbar-connection-name")
         .tooltip(move |window, cx| Tooltip::new(tooltip_name.clone()).build(window, cx))
@@ -382,7 +382,7 @@ fn exit_confirm_modal(colors: UiColors, cx: &mut Context<NavicatMain>) -> Div {
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .key_context("ExitConfirmModal")
                 .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
@@ -555,7 +555,7 @@ fn connection_dialog_header(
         .border_color(colors.border)
         .child(
             div()
-                .text_size(px(19.))
+                .text_size(ui_text_size(19.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(title),
         )
@@ -566,7 +566,7 @@ fn connection_dialog_header(
                 .ghost()
                 .w(px(30.))
                 .h(px(30.))
-                .text_size(px(20.))
+                .text_size(ui_text_size(20.))
                 .on_click(move |_, _, cx| {
                     view.update(cx, |this, cx| this.cancel_new_connection(cx));
                     cx.stop_propagation();
@@ -660,7 +660,7 @@ fn kind_rail(
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .child(app_icon(AppIcon::Search, 13., colors.muted))
                     .child(
                         Input::new(&inputs.kind_search)
@@ -684,7 +684,7 @@ fn kind_rail(
                 .child(div().size(px(6.)).rounded_full().bg(rgb(0x16a34a)))
                 .child(
                     div()
-                        .text_size(px(11.5))
+                        .text_size(ui_text_size(11.5))
                         .text_color(colors.muted)
                         .child(tr("app.connection.rail.drivers").replace("%{count}", "11")),
                 ),
@@ -696,7 +696,7 @@ fn kind_rail_group(title: SharedString, colors: UiColors) -> Div {
         .pt_2()
         .pb_1()
         .px_2()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(colors.muted)
         .child(title)
@@ -726,7 +726,7 @@ fn kind_rail_row(
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .bg(if is_selected {
             colors.tree_selected
@@ -799,13 +799,13 @@ fn connection_hero(kind: DatabaseKind, form: &NewConnectionForm, colors: UiColor
                 .flex_col()
                 .child(
                     div()
-                        .text_size(px(17.))
+                        .text_size(ui_text_size(17.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(database_kind_label(kind)),
                 )
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .truncate()
                         .child(if name.is_empty() { tr("app.connection.new_title") } else { SharedString::from(name.to_string()) }),
@@ -822,7 +822,7 @@ fn connection_hero(kind: DatabaseKind, form: &NewConnectionForm, colors: UiColor
                 .flex()
                 .items_center()
                 .gap_1()
-                .text_size(px(11.5))
+                .text_size(ui_text_size(11.5))
                 .text_color(colors.muted)
                 .child(app_icon(AppIcon::Check, 12., rgb(0x16a34a)))
                 .child(tr("app.connection.builtin_driver")),
@@ -865,7 +865,7 @@ fn connection_name_row(
                         .flex()
                         .items_center()
                         .gap_1()
-                        .text_size(px(11.5))
+                        .text_size(ui_text_size(11.5))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.muted)
                         .child(tr("app.connection.field.name"))
@@ -887,7 +887,7 @@ fn connection_name_row(
                     div()
                         .h(px(18.))
                         .mb_1()
-                        .text_size(px(11.5))
+                        .text_size(ui_text_size(11.5))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.muted)
                         .child(tr("app.connection.field.color")),
@@ -938,7 +938,7 @@ fn connection_tab_strip(
                 .pb_2()
                 .flex()
                 .items_end()
-                .text_size(px(12.5))
+                .text_size(ui_text_size(12.5))
                 .font_weight(if selected {
                     gpui::FontWeight::SEMIBOLD
                 } else {
@@ -1001,7 +1001,7 @@ fn connection_footer(
                             .border_color(colors.border_soft)
                             .flex()
                             .items_center()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(colors.muted)
                             .child(tr("app.connection.status.untested")),
                     )
@@ -1229,7 +1229,7 @@ fn tab_empty_hint(colors: UiColors) -> Div {
         .items_center()
         .justify_center()
         .px_4()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(tr("app.connection.no_options"))
 }
@@ -2190,7 +2190,7 @@ fn advanced_form(
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(colors.muted)
                             .child(tr("app.connection.redis.sentinel_master_hint")),
                     ),
@@ -2205,7 +2205,7 @@ fn advanced_form(
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(colors.muted)
                             .child(tr("app.connection.redis.force_standalone_help")),
                     ),
@@ -2233,7 +2233,7 @@ fn advanced_form(
                 )
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(tr("app.connection.redis.ai_key_prefixes_help")),
                 ),
@@ -2312,7 +2312,7 @@ fn connection_uri_box(
                 .bg(colors.input_bg)
                 .flex()
                 .items_center()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .cursor_pointer()
@@ -2343,7 +2343,7 @@ fn redis_section_label(text: impl Into<SharedString>, colors: UiColors) -> Div {
     let text = text.into();
     div()
         .pt_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(text)
@@ -2352,7 +2352,7 @@ fn redis_section_label(text: impl Into<SharedString>, colors: UiColors) -> Div {
 /// 控件未启用时的一行灰色说明，替代「置灰但可编辑」的假禁用态。
 fn muted_hint(text: impl Into<SharedString>, colors: UiColors) -> Div {
     div()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(text.into())
 }
@@ -2414,7 +2414,7 @@ fn toggle_row_light(
             .child(toggle_switch(field_id, checked, cx))
             .child(
                 div()
-                    .text_size(px(12.5))
+                    .text_size(ui_text_size(12.5))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(colors.text)
                     .child(label.into()),
@@ -2908,7 +2908,7 @@ fn connection_form(
     if let Some(hint) = footer_hint {
         section = section.child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(hint),
         );
@@ -2954,7 +2954,7 @@ fn form_section_with_action(
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(colors.muted)
                         .child(title),

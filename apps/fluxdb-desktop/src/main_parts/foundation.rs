@@ -14,6 +14,101 @@ use sql_editor_adapter::{SqlStatementId, SqlStatementRun, SqlStatementStatus};
 /// 查询编辑器等复用的等宽字体名（原定义于旧 sql_editor/layout.rs）。
 const EDITOR_FONT: &str = crate::PLATFORM_MONOSPACE_FONT;
 
+/// 界面字号设计基准：设计稿中的 px 字号按 16px = 1rem 换算。
+const UI_FONT_BASE_SIZE: f32 = 16.0;
+
+/// 把界面文本的 px 字号换算成 rem。
+///
+/// 窗口 rem 基准由 `Theme.font_size` 驱动（gpui-component 的 Root 每次渲染同步），
+/// 因此界面里所有文字尺寸都必须走这里，才能跟随「界面字号」整体缩放。
+/// 代码编辑器/终端等有独立字号的区域不要用本函数。
+fn ui_text_size(size: f32) -> gpui::Rems {
+    gpui::rems(size / UI_FONT_BASE_SIZE)
+}
+
+/// 代码/编辑器实际使用的字体族：用户选择为空时回退平台等宽字体。
+fn code_font_family(settings: &Settings) -> String {
+    let family = settings.editor_font_family.trim();
+    if family.is_empty() {
+        EDITOR_FONT.to_string()
+    } else {
+        family.to_string()
+    }
+}
+
+/// 把代码字体、字号、行高与缩进设置同步到单个编辑器。
+fn apply_code_editor_settings(
+    editor: &mut editor_component::Editor,
+    settings: &Settings,
+    cx: &mut Context<editor_component::Editor>,
+) {
+    editor.set_font_name(code_font_family(settings), cx);
+    editor.apply_settings(
+        settings.editor_font_size.clamp(10, 24) as f32,
+        settings.editor_line_height.clamp(13, 28) as f32,
+        settings.editor_word_wrap,
+        settings.editor_tab_width as usize,
+    );
+}
+
+/// 字体选择项。`family` 为空表示跟随平台默认，避免把「系统默认」写进持久化值。
+#[derive(Clone)]
+struct FontChoice {
+    family: String,
+    label: SharedString,
+}
+
+impl FontChoice {
+    fn system() -> Self {
+        Self {
+            family: String::new(),
+            label: tr("app.settings.appearance.system_default"),
+        }
+    }
+
+    fn family(name: String) -> Self {
+        Self {
+            label: SharedString::from(name.clone()),
+            family: name,
+        }
+    }
+}
+
+impl SelectItem for FontChoice {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.family
+    }
+}
+
+/// 构造字体下拉项并定位当前值；当前字体未安装时仍保留为可选项，
+/// 避免历史配置在打开设置页时被静默清空。
+fn font_choice_options(
+    fonts: &[String],
+    current: &str,
+) -> (Vec<FontChoice>, Option<IndexPath>) {
+    let current = current.trim();
+    let mut options = Vec::with_capacity(fonts.len() + 2);
+    options.push(FontChoice::system());
+    let mut matched = current.is_empty().then(|| IndexPath::new(0));
+    for font in fonts {
+        if !current.is_empty() && font == current {
+            matched = Some(IndexPath::new(options.len()));
+        }
+        options.push(FontChoice::family(font.clone()));
+    }
+    if !current.is_empty() && matched.is_none() {
+        matched = Some(IndexPath::new(options.len()));
+        options.push(FontChoice::family(current.to_string()));
+    }
+    (options, matched)
+}
+
 /// 给 RGBA 颜色覆写 alpha 通道（原定义于旧 sql_editor/layout.rs，被菜单/弹窗等复用）。
 fn rgba_with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
     color.a = alpha;
@@ -206,11 +301,9 @@ fn apply_global_theme_settings(settings: &Settings, cx: &mut App) {
     } else {
         settings.global_font_family.trim().into()
     };
-    theme.font_size = px(match settings.ui_density {
-        UiDensity::Compact => 15.,
-        UiDensity::Standard => 16.,
-        UiDensity::Comfortable => 17.,
-    });
+    theme.font_size = px(settings.effective_ui_font_size() as f32);
+    // 供 gpui-component 内部的代码编辑器/等宽控件使用；自研编辑器另行注入。
+    theme.mono_font_family = code_font_family(settings).into();
     if settings.reduce_motion {
         theme.motion.duration_fast = Duration::ZERO;
         theme.motion.duration_normal = Duration::ZERO;

@@ -133,7 +133,7 @@ fn settings_collapsible_group(
         ))
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(group.title()),
         )
@@ -150,7 +150,7 @@ fn settings_collapsible_group(
             div().flex_1().child(
                 h_flex()
                     .ml_auto()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(hint.to_string()),
             ),
@@ -212,7 +212,7 @@ fn settings_path_row_with_placeholder(
                     div()
                         .min_w(px(0.))
                         .flex_1()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .truncate()
                         .child(if value.trim().is_empty() {
@@ -515,7 +515,7 @@ fn settings_panel_group(title: impl Into<SharedString>, _colors: UiColors) -> Gr
     let title = title.into();
     settings_panel_group_el(
         div()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .child(title),
     )

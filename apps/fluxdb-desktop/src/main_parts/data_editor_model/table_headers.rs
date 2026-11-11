@@ -40,7 +40,7 @@ fn data_table_header_tooltip_row(
         .flex()
         .items_start()
         .gap_3()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .child(
             div()
                 .w(px(34.))
@@ -257,9 +257,9 @@ fn data_table_header_text_button(
         .p_0()
         .child(
             div()
-                .text_size(px(16.))
+                .text_size(ui_text_size(16.))
                 .font_weight(gpui::FontWeight::BOLD)
-                .line_height(px(20.))
+                .line_height(ui_text_size(20.))
                 .text_color(icon_color)
                 .child(label),
         )
@@ -328,7 +328,7 @@ fn data_table_header_menu_item(
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(text)
         .bg(row_bg)
         .hover(move |style| style.bg(hover_bg))
@@ -361,7 +361,7 @@ fn data_table_header_menu_item_icon(
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(text)
         .bg(row_bg)
         .hover(move |style| style.bg(hover_bg))

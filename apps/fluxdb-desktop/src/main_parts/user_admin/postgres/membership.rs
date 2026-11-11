@@ -76,14 +76,14 @@ fn pg_membership_panel(
                     .gap_2()
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(0xff9f0a))
                             .child(text),
                     )
                     .child(
                         div()
                             .id(("pg-membership-edit-remove", index))
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(colors.muted)
                             .cursor_pointer()
                             .hover(move |style| style.text_color(rgb(0xff3b45)))
@@ -112,7 +112,7 @@ fn pg_membership_panel(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.pg_role.pending_membership_changes")),
@@ -152,14 +152,14 @@ fn pg_membership_section(
                 .flex_col()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(title),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(subtitle),
                 ),
@@ -181,7 +181,7 @@ fn pg_membership_header(supported: Option<bool>, colors: UiColors) -> Div {
         .border_b_1()
         .border_color(colors.border)
         .bg(colors.panel_alt)
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(div().flex_1().min_w(px(0.)).px_3().child(tr("app.pg_role.header.role")))
@@ -237,7 +237,7 @@ fn pg_membership_row(
         .border_b_1()
         .border_color(colors.border_soft)
         .hover(move |style| style.bg(colors.hover))
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.text)
         .child(
             div()
@@ -285,7 +285,7 @@ fn pg_membership_row(
                     .id(SharedString::from(format!(
                         "pg-membership-revoke-{revoke_role}-{revoke_member}"
                     )))
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(0xff3b45))
                     .cursor_pointer()
                     .hover(move |style| style.opacity(0.7))
@@ -325,7 +325,7 @@ fn pg_membership_add_row(
         .flex_wrap()
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .child(tr("app.pg_role.member_of.add")),
         )
@@ -336,14 +336,14 @@ fn pg_membership_add_row(
         )
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.pg_role.member_of.grant_hint")),
         );
     if member_options == Some(true) {
         row = row.child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.pg_role.member_of.defaults")),
         );
@@ -386,7 +386,7 @@ fn pg_membership_add_row(
     if supported == Some(false) {
         row = row.child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.pg_role.member_of.pg15_note")),
         );
@@ -404,7 +404,7 @@ fn pg_membership_placeholder(text: &str, colors: UiColors) -> Div {
         .justify_center()
         .px_6()
         .text_align(gpui::TextAlign::Center)
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(text.to_string())
 }

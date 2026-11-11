@@ -100,11 +100,11 @@ fn display_database_modal(
                                 .gap_2()
                                 .child(
                                     div()
-                                        .text_size(px(22.))
+                                        .text_size(ui_text_size(22.))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(tr("app.database.display.title")),
                                 )
-                                .child(div().text_size(px(14.)).text_color(colors.muted).child(
+                                .child(div().text_size(ui_text_size(14.)).text_color(colors.muted).child(
                                     tr("app.database.display.hint").replace("%{connection}", &connection_name),
                                 )),
                         )
@@ -114,7 +114,7 @@ fn display_database_modal(
                                 .ghost()
                                 .w(px(32.))
                                 .h(px(32.))
-                                .text_size(px(22.))
+                                .text_size(ui_text_size(22.))
                                 .on_click({
                                     let view = view.clone();
                                     move |_, _, cx| {
@@ -138,7 +138,7 @@ fn display_database_modal(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(15.))
+                        .text_size(ui_text_size(15.))
                         .text_color(colors.muted)
                         .child(app_icon(AppIcon::Search, 16., colors.muted))
                         .child(
@@ -147,7 +147,7 @@ fn display_database_modal(
                                 .focus_bordered(false)
                                 .w_full()
                                 .h_full()
-                                .text_size(px(15.)),
+                                .text_size(ui_text_size(15.)),
                         ),
                 )
                 .child(
@@ -157,7 +157,7 @@ fn display_database_modal(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .text_size(px(14.))
+                        .text_size(ui_text_size(14.))
                         .text_color(colors.muted)
                         .child(tr("app.database.display.selected").replace("%{selected}", &selected_count.to_string()).replace("%{total}", &shown_databases.len().to_string()))
                         .child(
@@ -297,7 +297,7 @@ fn display_database_checkbox(label: impl Into<String>, selected: bool, colors: U
         .flex()
         .items_center()
         .gap_3()
-        .text_size(px(14.))
+        .text_size(ui_text_size(14.))
         .text_color(colors.text)
         .hover(move |style| style.bg(colors.hover))
         .child(
@@ -314,7 +314,7 @@ fn display_database_checkbox(label: impl Into<String>, selected: bool, colors: U
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(14.))
+                .text_size(ui_text_size(14.))
                 .child(if selected { "✓" } else { "" }),
         )
         .child(

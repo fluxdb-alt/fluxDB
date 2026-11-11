@@ -42,7 +42,7 @@ fn er_toolbar(
     };
     base = base.child(
         div()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(colors.text)
             .child(title),
@@ -62,11 +62,11 @@ fn er_toolbar(
         })
         .unwrap_or_else(|| tr("app.er.reading_tables").to_string());
     base = base.child(
-        div().text_size(px(12.)).text_color(colors.muted).child(range),
+        div().text_size(ui_text_size(12.)).text_color(colors.muted).child(range),
     );
     if table_count > 0 {
         base = base.child(
-            div().text_size(px(11.)).text_color(if failed > 0 { rgb(0xef4444) } else { colors.muted })
+            div().text_size(ui_text_size(11.)).text_color(if failed > 0 { rgb(0xef4444) } else { colors.muted })
                 .child(
                     tr("app.er.field_relation")
                         .replace("%{loaded}", &loaded.to_string())
@@ -110,7 +110,7 @@ fn er_toolbar(
             ErLoadStatus::Failed => (tr("app.er.relations_incomplete"), rgb(0xef4444)),
             _ => unreachable!(),
         };
-        base = base.child(div().text_size(px(12.)).text_color(tone).child(label));
+        base = base.child(div().text_size(ui_text_size(12.)).text_color(tone).child(label));
         if relation_status == ErLoadStatus::Failed {
             // 关系加载失败：提供显式重试入口（作废 Failed 缓存后由 sync_er_relations 重新读取）。
             let retry_conn = er.connection_id;
@@ -150,7 +150,7 @@ fn er_toolbar(
         // 用户已操作且关系布局未应用：轻量提示 + 按钮可用（§6.2）。
         base = base.child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.er.relations_ready")),
         );
@@ -196,7 +196,7 @@ fn er_toolbar(
         div()
             .w(px(44.))
             .text_center()
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.muted)
             .child(format!("{:.0}%", zoom * 100.0)),
     );
@@ -335,7 +335,7 @@ fn er_toolbar(
     if let Some(upd) = this.er_last_updated.get(&tab_id) {
         base = base.child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.er.updated_at").replace("%{time}", &upd)),
         );
@@ -344,14 +344,14 @@ fn er_toolbar(
     if this.er_refreshing.contains(&tab_id) {
         base = base.child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.er.refreshing")),
         );
     }
     if this.er_view_save_failed.contains(&tab_id) {
         base = base.child(
-            div().text_size(px(11.)).text_color(rgb(0xef4444))
+            div().text_size(ui_text_size(11.)).text_color(rgb(0xef4444))
                 .child(tr("app.er.layout_save_failed")),
         );
     }
@@ -492,10 +492,10 @@ fn er_search_bar(
                         .focus_bordered(false)
                         .w_full()
                         .h_full()
-                        .text_size(px(13.)),
+                        .text_size(ui_text_size(13.)),
                 ),
         )
-        .child(div().text_size(px(11.)).text_color(colors.muted).child(count_text))
+        .child(div().text_size(ui_text_size(11.)).text_color(colors.muted).child(count_text))
 }
 
 /// 分组过滤的纯逻辑（§五.10-11）：None=返回全部；Some(schema)=仅保留该 schema 的表，
@@ -670,14 +670,14 @@ fn er_export_menu(
                         .justify_center()
                         .child(
                             div()
-                                .text_size(px(15.))
+                                .text_size(ui_text_size(15.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(tr("app.er.export_dialog_title")),
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .overflow_hidden()
                                 .truncate()
@@ -739,7 +739,7 @@ fn er_export_menu(
             .replace("%{unresolved}", &report.unresolved_edges.len().to_string());
         panel = panel.child(
             div().px_3().py(px(6.)).border_t_1().border_color(colors.border_soft)
-                .text_size(px(11.)).text_color(colors.muted).child(summary),
+                .text_size(ui_text_size(11.)).text_color(colors.muted).child(summary),
         );
         let apply_tab = tab_id;
         let apply_db = er.database.clone();
@@ -893,8 +893,8 @@ fn er_export_action_row(
                 cx.stop_propagation();
             }),
         )
-        .child(div().w(px(58.)).text_size(px(12.)).font_weight(gpui::FontWeight::MEDIUM).text_color(colors.text).child(name))
-        .child(div().flex_1().min_w(px(0.)).text_size(px(11.)).text_color(colors.muted).overflow_hidden().truncate().child(desc))
+        .child(div().w(px(58.)).text_size(ui_text_size(12.)).font_weight(gpui::FontWeight::MEDIUM).text_color(colors.text).child(name))
+        .child(div().flex_1().min_w(px(0.)).text_size(ui_text_size(11.)).text_color(colors.muted).overflow_hidden().truncate().child(desc))
         // 有损标记：SVG（表级连线简化）与 DBML（不表达确认状态/布局）。
         .when(lossy, |row| {
             row.child(
@@ -903,7 +903,7 @@ fn er_export_action_row(
                     .px_1()
                     .rounded(colors.radius)
                     .bg(colors.panel_alt)
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.muted)
                     .flex()
                     .items_center()
@@ -942,7 +942,7 @@ fn er_export_import_row(
         .child(
             div()
                 .w(px(62.))
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(colors.text)
                 .child(tr("app.er.import_json")),
@@ -950,7 +950,7 @@ fn er_export_import_row(
         .child(
             div()
                 .flex_1()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.er.import_desc")),
         )
@@ -1142,7 +1142,7 @@ fn er_group_bar(
         .gap_2()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.er.group_label")),
         );
@@ -1234,7 +1234,7 @@ fn er_group_chip(
         .border_1()
         .border_color(if active { colors.text } else { colors.border })
         .bg(if active { colors.panel_alt } else { colors.panel_bg })
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(if active { colors.text } else { colors.muted })
         .cursor_pointer()
         .hover(|s| s.bg(colors.hover))
@@ -1324,7 +1324,7 @@ fn er_search_dropdown(
                 .px_3()
                 .flex()
                 .items_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(if is_sel { colors.text } else { colors.muted })
                 .when(is_sel, |s| s.bg(colors.hover))
                 .cursor_pointer()
@@ -1372,7 +1372,7 @@ fn er_depth_selector(
         .gap(px(4.))
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.er.depth_label")),
         )
@@ -1390,7 +1390,7 @@ fn er_depth_selector(
                 .border_1()
                 .border_color(if active { colors.text } else { colors.border })
                 .bg(if active { colors.panel_alt } else { colors.panel_bg })
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(if active { colors.text } else { colors.muted })
                 .cursor_pointer()
@@ -1443,7 +1443,7 @@ fn er_empty_state(
         .justify_center()
         .gap(px(12.))
         .text_color(colors.muted)
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .child(div().child(msg))
         .child(
             Button::new(("er-empty-refresh", tab_id.0))
@@ -1490,7 +1490,7 @@ fn er_error_state(
                 .max_w(px(480.))
                 .text_center()
                 .text_color(colors.muted)
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .child(tr("app.er.load_failed").replace("%{error}", &message)),
         )
         .child(

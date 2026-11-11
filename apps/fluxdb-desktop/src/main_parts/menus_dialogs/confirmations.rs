@@ -66,7 +66,7 @@ fn delete_connection_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.confirm.delete_connection_title")),
                         )
@@ -93,7 +93,7 @@ fn delete_connection_modal(
                     div()
                         .px_5()
                         .pb_4()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(
                             tr("app.confirm.delete_connection_message")
@@ -197,7 +197,7 @@ fn delete_database_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.confirm.delete_database_title")),
                         )
@@ -224,7 +224,7 @@ fn delete_database_modal(
                     div()
                         .px_5()
                         .pb_4()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(
                             tr("app.confirm.delete_database_message")
@@ -349,7 +349,7 @@ fn disconnect_connection_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.confirm.close_connection_title")),
                         )
@@ -376,7 +376,7 @@ fn disconnect_connection_modal(
                     div()
                         .px_5()
                         .pb_4()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(message),
                 )
@@ -488,7 +488,7 @@ fn close_workspace_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.context.close_tab")),
                         )
@@ -515,7 +515,7 @@ fn close_workspace_modal(
                     div()
                         .px_5()
                         .pb_4()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(message),
                 )
@@ -606,7 +606,7 @@ fn delete_data_row_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.context.delete_record")),
                         )
@@ -633,7 +633,7 @@ fn delete_data_row_modal(
                     div()
                         .px_5()
                         .pb_4()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(message),
                 )
@@ -718,7 +718,7 @@ fn dirty_data_action_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.confirm.uncommitted_title")),
                         )
@@ -745,7 +745,7 @@ fn dirty_data_action_modal(
                     div()
                         .px_5()
                         .pb_4()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(tr("app.confirm.uncommitted_message")),
                 )
@@ -853,7 +853,7 @@ fn dirty_tab_close_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(if settings_tab {
                                 tr("app.confirm.close_unsaved_settings")
@@ -887,7 +887,7 @@ fn dirty_tab_close_modal(
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(if settings_tab {
                             tr("app.confirm.settings_unsaved_message").to_string()
@@ -946,8 +946,8 @@ fn apply_data_changes_modal(
         .flex_col()
         .gap_1()
         .font_family(crate::PLATFORM_MONOSPACE_FONT)
-        .text_size(px(12.))
-        .line_height(px(18.))
+        .text_size(ui_text_size(12.))
+        .line_height(ui_text_size(18.))
         .text_color(colors.text);
     for line in sql.lines() {
         sql_lines = sql_lines.child(div().child(line.to_string()));
@@ -1011,13 +1011,13 @@ fn apply_data_changes_modal(
                                 .gap_1()
                                 .child(
                                     div()
-                                        .text_size(px(17.))
+                                        .text_size(ui_text_size(17.))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(tr("app.confirm.apply_changes_title")),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(colors.muted)
                                         .child(
                                             tr("app.confirm.apply_changes_summary")

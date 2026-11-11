@@ -39,7 +39,7 @@ fn data_editor_footer(
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(
             div()
@@ -289,7 +289,7 @@ fn data_editor_page_input(
                 .w_full()
                 .h_full()
                 .px_0()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text),
         )
 }
@@ -331,7 +331,7 @@ fn data_editor_change_status(
         .gap_2()
         .overflow_hidden()
         .cursor_pointer()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if open { accent } else { colors.text })
         .hover(move |style| style.bg(colors.hover))
         .child(app_icon(
@@ -352,7 +352,7 @@ fn data_editor_change_status(
         .child(
             div()
                 .ml_auto()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(if open {
                     tr("app.data.sql.collapse")
@@ -381,8 +381,8 @@ fn data_change_sql_preview_drawer(
         .flex_col()
         .gap_1()
         .font_family(crate::PLATFORM_MONOSPACE_FONT)
-        .text_size(px(11.))
-        .line_height(px(17.))
+        .text_size(ui_text_size(11.))
+        .line_height(ui_text_size(17.))
         .text_color(colors.text);
     for line in sql.lines() {
         sql_lines = sql_lines.child(div().child(line.to_string()));
@@ -410,7 +410,7 @@ fn data_change_sql_preview_drawer(
                 .gap_2()
                 .border_b_1()
                 .border_color(colors.border_soft)
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .child(app_icon(AppIcon::List, 14., colors.muted))
                 .child(
@@ -477,7 +477,7 @@ fn data_search_bar(
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.text)
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
@@ -488,7 +488,7 @@ fn data_search_bar(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(15.))
+                .text_size(ui_text_size(15.))
                 .text_color(colors.muted)
                 .hover(move |style| style.bg(colors.hover))
                 .child(app_icon(AppIcon::Close, 14., colors.muted))
@@ -515,7 +515,7 @@ fn data_search_bar(
                 .child(app_icon(AppIcon::Search, 13., colors.muted))
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(tr("app.data.search.label")),
                 )
@@ -525,7 +525,7 @@ fn data_search_bar(
                         .focus_bordered(false)
                         .w_full()
                         .h_full()
-                        .text_size(px(12.)),
+                        .text_size(ui_text_size(12.)),
                 ),
         )
         .child(
@@ -582,7 +582,7 @@ fn data_search_button(
         } else {
             colors.panel_alt
         })
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if active && enabled {
             active_border
         } else if enabled {
@@ -637,7 +637,7 @@ fn data_editor_sql_input(
         .items_center()
         .gap_1()
         .overflow_hidden()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(
             data_editor_footer_button("⧉", tr("app.data.sql.copy"), true, colors).on_mouse_down(
@@ -657,7 +657,7 @@ fn data_editor_sql_input(
                 .focus_bordered(false)
                 .w_full()
                 .h_full()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_family(crate::PLATFORM_MONOSPACE_FONT),
         )
 }
@@ -693,7 +693,7 @@ fn data_editor_sql_strip(
         .items_center()
         .gap_1()
         .overflow_hidden()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(
             data_editor_footer_button("⧉", tr("app.data.sql.copy"), true, colors).on_mouse_down(
@@ -815,7 +815,7 @@ fn data_editor_footer_button(
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(15.))
+        .text_size(ui_text_size(15.))
         .font_weight(gpui::FontWeight::BOLD)
         .text_color(if enabled { colors.text } else { colors.muted })
         .hover(move |style| {
@@ -866,7 +866,7 @@ fn data_editor_page_button(label: &'static str, enabled: bool, colors: UiColors)
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::BOLD)
         .text_color(if enabled { colors.text } else { colors.muted })
         .when(enabled, |this| {
@@ -882,7 +882,7 @@ fn center_message(text: impl Into<String>, colors: UiColors) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(15.))
+        .text_size(ui_text_size(15.))
         .text_color(colors.muted)
         .child(text.into())
 }
@@ -894,7 +894,7 @@ fn center_loading_message(text: impl Into<String>, colors: UiColors) -> Div {
         .items_center()
         .justify_center()
         .gap_2()
-        .text_size(px(15.))
+        .text_size(ui_text_size(15.))
         .text_color(colors.muted)
         .child(loading_spinner_with_color(20., colors.muted))
         .child(text.into())
@@ -907,7 +907,7 @@ fn inline_loading_row(text: impl Into<String>, colors: UiColors) -> Div {
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(loading_spinner_with_color(14., colors.muted))
         .child(text.into())

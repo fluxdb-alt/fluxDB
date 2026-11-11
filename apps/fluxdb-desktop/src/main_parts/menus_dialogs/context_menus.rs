@@ -69,7 +69,7 @@ fn tab_context_menu(
             hsla(0., 0., 0., 0.16),
         )])
         .p_2()
-        .text_size(px(14.))
+        .text_size(ui_text_size(14.))
         .text_color(colors.text)
         .key_context("TabContextMenu")
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -150,7 +150,7 @@ fn table_group_context_menu(
             hsla(0., 0., 0., 0.18),
         )])
         .p_1()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::BOLD)
         .text_color(colors.text)
         .key_context("TableGroupContextMenu")
@@ -222,7 +222,7 @@ fn table_folder_context_menu(
             hsla(0., 0., 0., 0.18),
         )])
         .p_1()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::BOLD)
         .text_color(colors.text)
         .key_context("TableFolderContextMenu")
@@ -318,7 +318,7 @@ fn table_context_menu(
             hsla(0., 0., 0., 0.18),
         )])
         .p_1()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::BOLD)
         .text_color(colors.text)
         .key_context("TableContextMenu")
@@ -515,7 +515,7 @@ fn collection_context_menu(
             hsla(0., 0., 0., 0.18),
         )])
         .p_1()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::BOLD)
         .text_color(colors.text)
         .key_context("CollectionContextMenu")
@@ -738,7 +738,7 @@ fn table_submenu_shell(top: Pixels, colors: UiColors) -> Div {
             hsla(0., 0., 0., 0.18),
         )])
         .p_1()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::BOLD)
         .text_color(colors.text)
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -903,7 +903,7 @@ fn data_cell_context_menu(
             hsla(0., 0., 0., 0.18),
         )])
         .p_1()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::BOLD)
         .text_color(colors.text)
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1244,7 +1244,7 @@ fn data_row_context_menu(
             hsla(0., 0., 0., 0.18),
         )])
         .p_1()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::BOLD)
         .text_color(colors.text)
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

@@ -107,7 +107,7 @@ fn ai_capacity_field(
         .min_w(px(0.))
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.text)
                 .child(label),
         )
@@ -121,7 +121,7 @@ fn ai_capacity_field(
                         .flex_1()
                         .min_w(px(0.))
                         .debug_selector(move || format!("ai-field:{field_label}"))
-                        .child(Input::new(input).text_size(px(13.))),
+                        .child(Input::new(input).text_size(ui_text_size(13.))),
                 )
                 .child(
                     div()

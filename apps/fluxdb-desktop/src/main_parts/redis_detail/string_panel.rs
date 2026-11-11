@@ -178,8 +178,8 @@ fn redis_string_value_body(
                                         .px_2()
                                         .py_2()
                                         .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                                        .text_size(px(13.))
-                                        .line_height(px(19.)),
+                                        .text_size(ui_text_size(13.))
+                                        .line_height(ui_text_size(19.)),
                                 ),
                         ),
                 )
@@ -246,8 +246,8 @@ fn redis_string_value_body(
                         .overflow_x_scroll()
                         .overflow_y_scrollbar()
                         .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                        .text_size(px(13.))
-                        .line_height(px(19.))
+                        .text_size(ui_text_size(13.))
+                        .line_height(ui_text_size(19.))
                         .text_color(colors.text)
                         .child(
                             div().px_3().py_2().child(if display_value.is_empty() {
@@ -294,8 +294,8 @@ fn redis_string_value_body(
             .overflow_x_scroll()
             .overflow_y_scrollbar()
             .font_family(crate::PLATFORM_MONOSPACE_FONT)
-            .text_size(px(13.))
-            .line_height(px(19.))
+            .text_size(ui_text_size(13.))
+            .line_height(ui_text_size(19.))
             .text_color(colors.text)
             .child(
                 div().px_3().py_2().child(if display_value.is_empty() {
@@ -328,7 +328,7 @@ fn redis_string_copy_button(
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if enabled { colors.text } else { colors.muted })
         .when(enabled, |this| {
             this.cursor_pointer().hover(move |style| style.bg(colors.hover))
@@ -369,7 +369,7 @@ fn redis_string_download_button(
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if enabled { colors.text } else { colors.muted })
         .when(enabled, |this| {
             this.cursor_pointer().hover(move |style| style.bg(colors.hover))
@@ -410,7 +410,7 @@ fn redis_string_edit_button(
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if enabled { colors.text } else { colors.muted })
         .when(enabled, |this| {
             this.cursor_pointer().hover(move |style| style.bg(colors.hover))
@@ -475,7 +475,7 @@ fn redis_string_format_menu(
                 .items_center()
                 .gap_1()
                 .px_1()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(if enabled { colors.text } else { colors.muted })
                 .child(app_icon(AppIcon::AlignLeft, 13., colors.muted))
                 .child(tr("app.redis.string.format"))
@@ -526,7 +526,7 @@ fn redis_string_format_menu_item(
         .px_2()
         .flex()
         .items_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(if active { colors.text } else { colors.muted })
         .bg(if active { colors.hover } else { colors.panel_bg })
@@ -556,7 +556,7 @@ fn redis_string_value_hint(
 ) -> Div {
     if loading {
         return div()
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.muted)
             .child(tr("app.redis.loading"));
     }
@@ -567,10 +567,10 @@ fn redis_string_value_hint(
             } else {
                 tr("app.redis.bytes_partial").replace("%{bytes}", &len.to_string())
             };
-            div().text_size(px(11.)).text_color(colors.muted).child(label)
+            div().text_size(ui_text_size(11.)).text_color(colors.muted).child(label)
         }
         None => div()
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.muted)
             .child(tr("app.redis.loading")),
     }

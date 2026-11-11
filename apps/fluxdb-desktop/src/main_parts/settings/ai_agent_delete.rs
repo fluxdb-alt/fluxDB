@@ -23,7 +23,7 @@ impl NavicatMain {
                 .overlay_closable(true)
                 .keyboard(true)
                 .child(
-                    div().text_size(px(13.)).child(
+                    div().text_size(ui_text_size(13.)).child(
                         tr("app.ai.agents.delete_confirm").replace("%{name}", &name),
                     ),
                 )

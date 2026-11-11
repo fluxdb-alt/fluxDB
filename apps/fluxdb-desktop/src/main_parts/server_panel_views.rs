@@ -222,7 +222,7 @@ fn server_status_view(
     if read_only {
         view = view.child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.server_panel.maintenance.read_only_hint").to_string()),
         );

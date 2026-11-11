@@ -30,7 +30,7 @@ fn group_context_menu(
             hsla(0., 0., 0., 0.16),
         )])
         .p_2()
-        .text_size(px(14.))
+        .text_size(ui_text_size(14.))
         .text_color(colors.text)
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
             cx.stop_propagation();
@@ -221,7 +221,7 @@ fn tab_menu_item(
                 .whitespace_nowrap()
                 .flex()
                 .items_center()
-                .line_height(px(20.))
+                .line_height(ui_text_size(20.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(label),
         )
@@ -255,8 +255,8 @@ fn tab_menu_icon(
             .flex()
             .items_center()
             .justify_center()
-            .text_size(px(20.))
-            .line_height(px(20.))
+            .text_size(ui_text_size(20.))
+            .line_height(ui_text_size(20.))
             .text_color(color)
             .child(icon)
             .into_any_element(),
@@ -407,7 +407,7 @@ fn connection_menu_item(
                     .bg(colors.panel_alt)
                     .flex()
                     .items_center()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(colors.muted)
                     .child(shortcut),
             )

@@ -220,7 +220,7 @@ fn database_backup_modal_panel(colors: UiColors, cx: &mut Context<NavicatMain>) 
         .flex()
         .flex_col()
         .overflow_hidden()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .key_context("DatabaseBackupModal")
         .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
@@ -249,7 +249,7 @@ fn database_backup_modal_header(
                 .child(app_icon(AppIcon::Save, 18., colors.text))
                 .child(
                     div()
-                        .text_size(px(18.))
+                        .text_size(ui_text_size(18.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(tr("app.database_backup.title")),
                 ),
@@ -382,7 +382,7 @@ fn database_backup_general_body(
         .child(database_backup_dir_row(target_dir_input, colors, cx))
         .child(database_backup_mode_info(colors))
         .child(database_backup_file_name_row(file_name_input, colors))
-        .child(div().text_size(px(12.)).text_color(colors.muted).child(format!(
+        .child(div().text_size(ui_text_size(12.)).text_color(colors.muted).child(format!(
             "{}{}",
             tr("app.database_backup.output_file")
                 .replace("%{name}", &resolve_backup_file_name(form)),
@@ -437,7 +437,7 @@ fn database_backup_dir_row(
                                 .focus_bordered(false)
                                 .w_full()
                                 .h_full()
-                                .text_size(px(13.)),
+                                .text_size(ui_text_size(13.)),
                         ),
                 )
                 .child(
@@ -479,14 +479,14 @@ fn database_backup_note_row(input: Entity<InputState>, colors: UiColors) -> Div 
                         .focus_bordered(false)
                         .w_full()
                         .h_full()
-                        .text_size(px(13.)),
+                        .text_size(ui_text_size(13.)),
                 ),
         )
 }
 
 fn database_backup_target_input(database: String, colors: UiColors) -> Div {
     div()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(
@@ -554,7 +554,7 @@ fn database_backup_mode_info(colors: UiColors) -> Div {
             div()
                 .flex_1()
                 .min_w(px(0.))
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .child(tr("app.database_backup.auto_select")),
         )
@@ -586,7 +586,7 @@ fn database_backup_file_name_row(input: Entity<InputState>, colors: UiColors) ->
                         .focus_bordered(false)
                         .w_full()
                         .h_full()
-                        .text_size(px(13.)),
+                        .text_size(ui_text_size(13.)),
                 ),
         )
 }
@@ -664,7 +664,7 @@ fn database_backup_advanced_body(
         .child(div().flex_1())
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.backup.native_option_hint")),
         )
@@ -728,7 +728,7 @@ fn database_backup_checkbox_row(
         )
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .child(label),
         )
@@ -743,7 +743,7 @@ fn database_backup_log_placeholder(colors: UiColors) -> Div {
         .justify_center()
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .child(tr("app.database_backup.log_empty")),
         )
@@ -811,7 +811,7 @@ fn database_backup_task_card(
                             .overflow_hidden()
                             .text_ellipsis()
                             .whitespace_nowrap()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(filename),
                     )
@@ -827,7 +827,7 @@ fn database_backup_task_card(
                         .child(
                             div()
                                 .w_full()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .whitespace_normal()
                                 .text_color(if task.error.is_some() {
                                     rgb(0xd64545)
@@ -843,7 +843,7 @@ fn database_backup_task_card(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(format!(
                             "{} · {}",
@@ -894,7 +894,7 @@ fn database_backup_log_list(
     if task.logs.is_empty() && task.skipped.is_empty() {
         list = list.child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.database_backup.running_log")),
         );
@@ -914,7 +914,7 @@ fn database_backup_log_list(
         if hidden_count > 0 {
             list = list.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(
                         tr("app.database_backup.log_hidden")
@@ -959,7 +959,7 @@ fn backup_log_row(
         .flex()
         .items_start()
         .gap_2()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if success { colors.text } else { rgb(0xd64545) })
         .child(div().flex_none().child(format!("[{stage}]")))
         .child(

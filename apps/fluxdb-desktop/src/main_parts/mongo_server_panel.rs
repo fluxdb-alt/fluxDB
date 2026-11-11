@@ -298,7 +298,7 @@ fn mongo_server_panel_content(
                         .min_w(px(0.))
                         .child(
                             div()
-                                .text_size(px(14.))
+                                .text_size(ui_text_size(14.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .whitespace_nowrap()
                                 .text_ellipsis()
@@ -306,7 +306,7 @@ fn mongo_server_panel_content(
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .whitespace_nowrap()
                                 .text_ellipsis()
@@ -385,7 +385,7 @@ fn mongo_server_panel_content(
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(colors.danger)
                     .child(app_icon(AppIcon::TriangleAlert, 14., colors.danger))
                     .child(
@@ -489,7 +489,7 @@ fn mongo_server_panel_subtabs(
             .flex()
             .items_center()
             .cursor_pointer()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .font_weight(if active {
                 gpui::FontWeight::SEMIBOLD
             } else {
@@ -891,7 +891,7 @@ fn mongo_server_performance_view(
         ))
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(
                     tr("app.mongo_server_panel.performance.note")
@@ -927,14 +927,14 @@ fn mongo_server_performance_chart(
                 .child(
                     div()
                         .flex_1()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(colors.text)
                         .child(label),
                 )
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(current),
@@ -1069,7 +1069,7 @@ fn mongo_server_kill_modal(
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(17.))
+                            .text_size(ui_text_size(17.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(tr("app.mongo_server_panel.kill.title")),
                     )
@@ -1097,7 +1097,7 @@ fn mongo_server_kill_modal(
                 div()
                     .px_5()
                     .pb_4()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .text_color(colors.muted)
                     .child(
                         tr("app.mongo_server_panel.kill.message")

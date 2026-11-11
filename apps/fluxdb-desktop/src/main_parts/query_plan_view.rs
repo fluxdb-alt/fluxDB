@@ -114,7 +114,7 @@ fn query_plan_toolbar(
         .bg(colors.panel_bg)
         .border_1()
         .border_color(colors.border)
-        .text_size(px(11.5))
+        .text_size(ui_text_size(11.5))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(tr("app.query.plan.estimate_only").to_string());
@@ -126,7 +126,7 @@ fn query_plan_toolbar(
         .flex()
         .items_center()
         .rounded(colors.radius)
-        .text_size(px(11.5))
+        .text_size(ui_text_size(11.5))
         .text_color(colors.muted)
         .child(tr("app.query.plan.actual_locked").to_string())
         .tooltip(move |window, cx| {
@@ -170,7 +170,7 @@ fn plan_summary_item(
         .flex()
         .items_baseline()
         .gap_2()
-        .text_size(px(11.5))
+        .text_size(ui_text_size(11.5))
         .child(div().text_color(colors.muted).child(label))
         .child(
             div()
@@ -205,7 +205,7 @@ fn plan_view_toggle(
         .items_center()
         .rounded(colors.radius)
         .cursor_pointer()
-        .text_size(px(11.5))
+        .text_size(ui_text_size(11.5))
         .when(active, |this| {
             this.bg(colors.panel_bg)
                 .border_1()
@@ -327,7 +327,7 @@ fn plan_node_card(
                 .min_w(px(0.))
                 .child(
                     div()
-                        .text_size(px(12.5))
+                        .text_size(ui_text_size(12.5))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(plan_op_label(node)),
@@ -335,7 +335,7 @@ fn plan_node_card(
                 .when_some(subtitle, |this, subtitle| {
                     this.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .font_family(crate::PLATFORM_MONOSPACE_FONT)
                             .text_color(colors.muted)
                             .text_ellipsis()
@@ -413,11 +413,11 @@ fn plan_node_metric(label: String, value: String, colors: UiColors) -> Div {
         .flex_col()
         .items_end()
         .gap_1()
-        .child(div().text_size(px(10.)).text_color(colors.muted).child(label))
+        .child(div().text_size(ui_text_size(10.)).text_color(colors.muted).child(label))
         .child(
             div()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_size(px(11.5))
+                .text_size(ui_text_size(11.5))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(value),
@@ -447,7 +447,7 @@ fn plan_issue_badge(issue: fluxdb_app::PlanIssue, colors: UiColors) -> Div {
         .items_center()
         .rounded(px(10.))
         .bg(colors.panel_alt)
-        .text_size(px(10.5))
+        .text_size(ui_text_size(10.5))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(color)
         .child(label)
@@ -495,14 +495,14 @@ fn query_plan_inspector(
                         .min_w(px(0.))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(plan_op_label(node)),
                         )
                         .when_some(node.object.clone(), |this, object| {
                             this.child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(ui_text_size(11.))
                                     .font_family(crate::PLATFORM_MONOSPACE_FONT)
                                     .text_color(colors.muted)
                                     .text_ellipsis()
@@ -608,7 +608,7 @@ fn query_plan_inspector(
                 .border_color(colors.border)
                 .child(
                     div()
-                        .text_size(px(11.5))
+                        .text_size(ui_text_size(11.5))
                         .text_color(colors.muted)
                         .child(tr("app.query.plan.node_details").to_string()),
                 )
@@ -622,7 +622,7 @@ fn query_plan_inspector(
                         .gap_1()
                         .rounded(colors.radius)
                         .cursor_pointer()
-                        .text_size(px(11.5))
+                        .text_size(ui_text_size(11.5))
                         .text_color(colors.muted)
                         .hover(move |style| style.bg(colors.hover).text_color(colors.text))
                         .child(app_icon(AppIcon::Copy, 12., colors.muted))
@@ -667,7 +667,7 @@ fn plan_stat(label: String, value: String, colors: UiColors) -> Div {
         .border_color(colors.border)
         .child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .text_ellipsis()
                 .child(label),
@@ -675,7 +675,7 @@ fn plan_stat(label: String, value: String, colors: UiColors) -> Div {
         .child(
             div()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(value),
@@ -689,7 +689,7 @@ fn plan_field(label: String, value: String, mono: bool, colors: UiColors) -> Div
         .flex()
         .flex_col()
         .gap_1()
-        .child(div().text_size(px(11.)).text_color(colors.muted).child(label))
+        .child(div().text_size(ui_text_size(11.)).text_color(colors.muted).child(label))
         .child(
             div()
                 .p_2()
@@ -697,7 +697,7 @@ fn plan_field(label: String, value: String, mono: bool, colors: UiColors) -> Div
                 .bg(colors.panel_bg)
                 .border_1()
                 .border_color(colors.border)
-                .text_size(px(11.5))
+                .text_size(ui_text_size(11.5))
                 .text_color(colors.text)
                 .when(mono, |this| this.font_family(crate::PLATFORM_MONOSPACE_FONT))
                 .child(value),
@@ -781,7 +781,7 @@ fn plan_advice_box(advice: &PlanAdvice, colors: UiColors) -> Div {
                 .flex()
                 .items_center()
                 .gap_1()
-                .text_size(px(11.5))
+                .text_size(ui_text_size(11.5))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(accent)
                 .child(if advice.danger || advice.warning {
@@ -793,8 +793,8 @@ fn plan_advice_box(advice: &PlanAdvice, colors: UiColors) -> Div {
         )
         .child(
             div()
-                .text_size(px(11.5))
-                .line_height(px(18.))
+                .text_size(ui_text_size(11.5))
+                .line_height(ui_text_size(18.))
                 .text_color(colors.muted)
                 .child(advice.text.clone()),
         )
@@ -896,7 +896,7 @@ fn raw_plan_row(values: Vec<String>, header: bool, colors: UiColors) -> Div {
                 } else {
                     colors.panel_bg
                 })
-                .text_size(px(11.5))
+                .text_size(ui_text_size(11.5))
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .when(header, |this| {
                     this.font_weight(gpui::FontWeight::SEMIBOLD)

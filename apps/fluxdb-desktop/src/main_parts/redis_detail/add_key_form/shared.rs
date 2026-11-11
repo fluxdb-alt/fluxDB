@@ -7,7 +7,7 @@ fn redis_add_key_form_label(label: impl Into<SharedString>, colors: UiColors) ->
     let label: SharedString = label.into();
     div()
         .flex_none()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(colors.muted)
         .child(label)
@@ -64,7 +64,7 @@ fn redis_add_key_add_row_button(
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(rgb(0x1677ff))
         .when(!applying, |this| {

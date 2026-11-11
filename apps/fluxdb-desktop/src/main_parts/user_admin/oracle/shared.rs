@@ -3,7 +3,7 @@
 
 fn oracle_section_title(text: impl Into<SharedString>, colors: UiColors) -> Div {
     div()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(text.into())
@@ -26,7 +26,7 @@ fn oracle_form_row(label: SharedString, colors: UiColors) -> Div {
         div()
             .w(px(120.))
             .flex_none()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(colors.text)
             .child(label),
@@ -81,7 +81,7 @@ fn oracle_form_input_box(
                 .w_full()
                 .h_full()
                 .px_2()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text),
         )
 }
@@ -90,7 +90,7 @@ fn oracle_form_hint(text: impl Into<SharedString>, colors: UiColors) -> Div {
     div()
         .ml(px(132.))
         .max_w(px(360.))
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(text.into())
 }
@@ -100,7 +100,7 @@ fn oracle_form_error(text: impl Into<SharedString>) -> Div {
     div()
         .ml(px(132.))
         .max_w(px(360.))
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(rgb(0xff3b45))
         .child(text.into())
 }
@@ -111,7 +111,7 @@ fn oracle_readonly_row(label: SharedString, value: String, colors: UiColors) -> 
         div()
             .w(px(360.))
             .text_color(colors.text)
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .child(if value.is_empty() { "-".into() } else { value }),
     )
 }
@@ -139,7 +139,7 @@ fn oracle_tag(text: impl Into<SharedString>, tone: TagTone, colors: UiColors) ->
         .bg(colors.panel_alt)
         .flex()
         .items_center()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(fg)
         .child(text.into())
 }
@@ -175,12 +175,12 @@ fn oracle_privilege_row(
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().text_size(px(13.)).text_color(colors.text).child(title))
+                .child(div().text_size(ui_text_size(13.)).text_color(colors.text).child(title))
                 .child(
                     h_flex()
                         .gap_1()
                         .items_center()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(detail)
                         .when(inherited, |row| {

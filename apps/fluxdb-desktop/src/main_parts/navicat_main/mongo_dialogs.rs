@@ -176,7 +176,7 @@ fn mongo_info_dialog_view(
             .items_center()
             .gap_2()
             .py_6()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .text_color(colors.muted)
             .child(loading_spinner_with_color(14., colors.muted))
             .child(tr("app.mongo.info_dialog.loading")),
@@ -185,7 +185,7 @@ fn mongo_info_dialog_view(
             .flex()
             .flex_col()
             .gap_2()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .child(div().text_color(colors.danger).child(error.message.clone()))
             .child(backup_text_button(
                 tr("app.mongo.info_dialog.refresh"),
@@ -261,13 +261,13 @@ fn mongo_info_dialog_view(
                                 .child(app_icon(AppIcon::Info, 16., colors.text))
                                 .child(
                                     div()
-                                        .text_size(px(17.))
+                                        .text_size(ui_text_size(17.))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(tr("app.mongo.info_dialog.title")),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(colors.muted)
                                         .child(connection_name),
                                 ),
@@ -410,7 +410,7 @@ fn mongo_info_sections(info: &fluxdb_core::MongoServerInfo, colors: UiColors) ->
 
     let databases = if info.databases.is_empty() {
         div()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(colors.muted)
             .child(tr("app.mongo.info_dialog.databases_empty"))
     } else {
@@ -442,12 +442,12 @@ fn mongo_info_sections(info: &fluxdb_core::MongoServerInfo, colors: UiColors) ->
                             .flex_1()
                             .overflow_hidden()
                             .whitespace_nowrap()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .child(database.name.clone()),
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(colors.muted)
                             .child(size),
                     ),
@@ -477,7 +477,7 @@ fn mongo_info_sections(info: &fluxdb_core::MongoServerInfo, colors: UiColors) ->
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.muted)
                         .child(tr("app.mongo.info_dialog.section.databases")),
@@ -489,7 +489,7 @@ fn mongo_info_sections(info: &fluxdb_core::MongoServerInfo, colors: UiColors) ->
 fn mongo_info_block(title: String, rows: Vec<(String, String)>, colors: UiColors) -> Div {
     let mut block = div().flex().flex_col().gap_2().child(
         div()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(colors.muted)
             .child(title),
@@ -504,11 +504,11 @@ fn mongo_info_block(title: String, rows: Vec<(String, String)>, colors: UiColors
                     div()
                         .w(px(96.))
                         .flex_shrink_0()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(label),
                 )
-                .child(div().flex_1().min_w(px(0.)).text_size(px(13.)).child(value)),
+                .child(div().flex_1().min_w(px(0.)).text_size(ui_text_size(13.)).child(value)),
         );
     }
     block
@@ -583,7 +583,7 @@ fn mongo_create_collection_modal(
                                 .child(app_icon(AppIcon::List, 16., colors.text))
                                 .child(
                                     div()
-                                        .text_size(px(17.))
+                                        .text_size(ui_text_size(17.))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(tr("app.mongo.create_collection.title")),
                                 ),
@@ -616,7 +616,7 @@ fn mongo_create_collection_modal(
                         .gap_3()
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(colors.muted)
                                 .child(format!(
                                     "{} · {}",

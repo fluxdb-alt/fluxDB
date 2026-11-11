@@ -89,7 +89,7 @@ fn create_table_check_header_row(colors: UiColors) -> Div {
         .flex_none()
         .flex_shrink_0()
         .bg(colors.panel_alt)
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .flex()
@@ -260,7 +260,7 @@ fn create_table_check_expression_popover(
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.create_table.check.edit")),
@@ -286,7 +286,7 @@ fn create_table_check_expression_popover(
                                 .w_full()
                                 .h_full()
                                 .px_2()
-                                .text_size(px(13.)),
+                                .text_size(ui_text_size(13.)),
                         ),
                 )
                 .child(create_table_check_expression_editor_resize_handle(

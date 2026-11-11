@@ -110,7 +110,7 @@ fn create_table_index_header_row(colors: UiColors) -> Div {
         .flex_none()
         .flex_shrink_0()
         .bg(colors.panel_alt)
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .flex()

@@ -23,7 +23,7 @@ fn ai_agent_model_trigger(
         .hover(move |style| style.bg(colors.hover))
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .child(current.to_string()),
         )
@@ -82,7 +82,7 @@ fn ai_agent_tab_button(
         } else {
             colors.info.alpha(0.0)
         })
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if is_active { colors.text } else { colors.muted })
         .font_weight(if is_active {
             gpui::FontWeight::SEMIBOLD
@@ -117,7 +117,7 @@ fn ai_prompt_field(
         .w_full()
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(colors.text)
                 .child(label),
@@ -189,7 +189,7 @@ fn ai_agent_editor_form(
                         .gap_3()
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(colors.text)
                                 .child(tr("app.ai.agents.enabled")),
                         )
@@ -233,7 +233,7 @@ fn ai_agent_editor_form(
                     .gap_1()
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(colors.text)
                             .child(tr("app.ai.agents.default_generation_model")),
@@ -263,7 +263,7 @@ fn ai_agent_editor_form(
                             .hover(move |style| style.bg(colors.hover))
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(colors.text)
                                     .child(name.clone()),
                             )
@@ -325,14 +325,14 @@ fn ai_agent_editor_form(
                         .child(
                             div()
                                 .w(px(200.))
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(colors.text)
                                 .child(id.to_string()),
                         )
                         .child(
                             div()
                                 .flex_1()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(desc.to_string()),
                         )
@@ -356,7 +356,7 @@ fn ai_agent_editor_form(
                         .child(
                             div()
                                 .w(px(60.))
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(group.to_string()),
                         )
@@ -383,7 +383,7 @@ fn ai_agent_editor_form(
                 .gap_3()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.ai.agents.tools_available")),
@@ -402,7 +402,7 @@ fn ai_agent_editor_form(
                             .child(app_icon(AppIcon::Info, 14., colors.warning))
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(ui_text_size(11.))
                                     .text_color(colors.warning)
                                     .child(tr("app.ai.agents.globally_disabled").replace(
                                         "%{count}",
@@ -429,7 +429,7 @@ fn ai_agent_editor_form(
             .child(app_icon(AppIcon::CircleSlash, 14., colors.danger))
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.danger)
                     .child(message),
             )
@@ -548,12 +548,12 @@ fn settings_ai_agents_panel(
                     .gap_1()
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(colors.text)
                             .child(a.display_name.clone()),
                     )
-                    .child(div().text_size(px(11.)).text_color(colors.muted).child(
+                    .child(div().text_size(ui_text_size(11.)).text_color(colors.muted).child(
                         if a.id == fluxdb_storage::ai_platform::agents::BUILTIN_AGENT_ID {
                             tr("app.ai.agents.builtin_editable").to_string()
                         } else if a.enabled {
@@ -592,7 +592,7 @@ fn settings_ai_agents_panel(
                 .child(
                     div().flex().flex_col().gap_1().child(
                         div()
-                            .text_size(px(14.))
+                            .text_size(ui_text_size(14.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(colors.text)
                             .child("Agent"),
@@ -736,7 +736,7 @@ fn settings_ai_sessions_panel(
                         .gap_3()
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(colors.muted)
                                 .child(
                                     tr("app.ai.sessions.summary")
@@ -859,7 +859,7 @@ fn ai_session_search_field(
                     .focus_bordered(false)
                     .w_full()
                     .h_full()
-                    .text_size(px(12.)),
+                    .text_size(ui_text_size(12.)),
             ),
         )
         .when(!value.is_empty(), |this| {
@@ -931,7 +931,7 @@ fn ai_session_row(
                 .min_w(px(0.))
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .truncate()
@@ -939,7 +939,7 @@ fn ai_session_row(
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(
                             tr("app.ai.sessions.row_summary")
@@ -961,14 +961,14 @@ fn ai_session_row(
                 .min_w(px(0.))
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.text)
                         .truncate()
                         .child(agent_name),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .truncate()
                         .child(target),
@@ -1058,7 +1058,7 @@ fn ai_session_row(
                     .disabled(archiving)
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(if archiving {
                                 tr("app.ai.sessions.processing")
@@ -1161,7 +1161,7 @@ impl NavicatMain {
                 .keyboard(true)
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .child(tr("app.ai.sessions.delete_confirm").replace("%{name}", &title)),
                 )
                 .footer(

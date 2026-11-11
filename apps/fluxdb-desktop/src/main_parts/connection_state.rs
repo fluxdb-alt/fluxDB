@@ -27,7 +27,7 @@ fn drag_preview(label: String, radius: gpui::Pixels) -> impl IntoElement {
         )])
         .flex()
         .items_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(rgb(0xf4f6f8))
         .child(label)
 }

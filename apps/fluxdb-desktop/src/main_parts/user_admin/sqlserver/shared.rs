@@ -1,6 +1,6 @@
 fn sqlserver_section_title(text: impl Into<SharedString>, colors: UiColors) -> Div {
     div()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(text.into())
@@ -13,7 +13,7 @@ fn sqlserver_empty_panel(text: impl Into<SharedString>, colors: UiColors) -> Div
         .items_center()
         .justify_center()
         .p_6()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(text.into())
 }
@@ -33,7 +33,7 @@ fn sqlserver_status_bar(state: &SqlServerSecurityState, colors: UiColors) -> Div
         .border_t_1()
         .border_color(colors.border)
         .bg(colors.panel_bg)
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .child(
             tr("app.sqlserver_security.status_counts")
@@ -104,7 +104,7 @@ fn sqlserver_delete_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(16.))
+                                .text_size(ui_text_size(16.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(tr("app.sqlserver_security.delete_title")),
@@ -132,7 +132,7 @@ fn sqlserver_delete_modal(
                         ),
                 )
                 .child(
-                    div().text_size(px(13.)).text_color(colors.muted).child(
+                    div().text_size(ui_text_size(13.)).text_color(colors.muted).child(
                         tr("app.sqlserver_security.delete_body")
                             .replace(
                                 "%{kind}",

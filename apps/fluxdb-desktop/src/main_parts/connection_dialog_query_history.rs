@@ -72,7 +72,7 @@ fn query_history_drawer(
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .text_size(px(13.))
+                                    .text_size(ui_text_size(13.))
                                     .text_color(colors.muted)
                                     .child(tr("app.history.empty_sql")),
                             )
@@ -188,7 +188,7 @@ fn redis_workbench_history_drawer(
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .text_size(px(13.))
+                                    .text_size(ui_text_size(13.))
                                     .text_color(colors.muted)
                                     .child(message),
                             )
@@ -232,14 +232,14 @@ fn redis_workbench_history_header(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(15.))
+                        .text_size(ui_text_size(15.))
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(colors.text)
                         .child(tr("app.history.title_command")),
                 )
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(tr("app.history.count").replace("%{count}", &count.to_string())),
                 ),
@@ -332,7 +332,7 @@ fn redis_workbench_history_row(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_family(crate::PLATFORM_MONOSPACE_FONT)
                         .text_color(colors.text)
                         .whitespace_nowrap()
@@ -342,7 +342,7 @@ fn redis_workbench_history_row(
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .whitespace_nowrap()
                         .overflow_hidden()
@@ -355,7 +355,7 @@ fn redis_workbench_history_row(
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(status_color)
                         .whitespace_nowrap()
                         .overflow_hidden()
@@ -460,7 +460,7 @@ fn redis_history_action_chip(label: String, danger: bool, colors: UiColors) -> D
         } else {
             rgb(0xffffff)
         })
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if danger { rgb(0xd64545) } else { colors.text })
         .flex()
         .items_center()
@@ -540,7 +540,7 @@ fn query_history_quick_search_modal(
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .whitespace_nowrap()
                                 .child("Esc"),
@@ -589,7 +589,7 @@ fn query_history_quick_search_modal(
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .text_size(px(13.))
+                                    .text_size(ui_text_size(13.))
                                     .text_color(colors.muted)
                                     .child(tr("app.history.empty_sql_search")),
                             )
@@ -624,14 +624,14 @@ fn query_history_header(count: usize, colors: UiColors, cx: &mut Context<Navicat
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(15.))
+                        .text_size(ui_text_size(15.))
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(colors.text)
                         .child(tr("app.history.title_sql")),
                 )
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(tr("app.history.matches").replace("%{count}", &count.to_string())),
                 ),
@@ -929,7 +929,7 @@ fn query_history_chip(label: String, active: bool, colors: UiColors) -> Div {
         } else {
             rgb(0xffffff)
         })
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if active { rgb(0x1687ff) } else { colors.text })
         .flex()
         .items_center()
@@ -984,7 +984,7 @@ fn query_history_row(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.text)
                         .whitespace_nowrap()
                         .overflow_hidden()
@@ -993,7 +993,7 @@ fn query_history_row(
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .whitespace_nowrap()
                         .overflow_hidden()
@@ -1002,7 +1002,7 @@ fn query_history_row(
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(status_color)
                         .child(status),
                 ),
@@ -1095,8 +1095,8 @@ fn query_history_quick_row(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(12.))
-                        .line_height(px(18.))
+                        .text_size(ui_text_size(12.))
+                        .line_height(ui_text_size(18.))
                         .text_color(colors.text)
                         .whitespace_nowrap()
                         .overflow_hidden()
@@ -1105,8 +1105,8 @@ fn query_history_quick_row(
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
-                        .line_height(px(15.))
+                        .text_size(ui_text_size(11.))
+                        .line_height(ui_text_size(15.))
                         .text_color(status_color)
                         .whitespace_nowrap()
                         .overflow_hidden()
@@ -1425,7 +1425,7 @@ fn query_history_detail_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(15.))
+                                .text_size(ui_text_size(15.))
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(colors.text)
                                 .child(title),
@@ -1459,7 +1459,7 @@ fn query_history_detail_modal(
                         .grid()
                         .grid_cols(3)
                         .gap_2()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .child(query_history_detail_meta(
                             tr("app.history.meta_type"),
                             kind.to_string(),
@@ -1666,13 +1666,13 @@ fn query_history_detail_meta(
         .gap_1()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(label),
         )
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .whitespace_nowrap()
                 .overflow_hidden()
@@ -1711,7 +1711,7 @@ where
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(colors.text)
                         .child(title),
@@ -1728,8 +1728,8 @@ where
             div()
                 .p_3()
                 .font_family(EDITOR_FONT)
-                .text_size(px(12.))
-                .line_height(px(18.))
+                .text_size(ui_text_size(12.))
+                .line_height(ui_text_size(18.))
                 .text_color(colors.text)
                 .bg(if colors.is_dark {
                     rgb(0x121417)
@@ -1754,7 +1754,7 @@ fn query_history_detail_button(
         .border_1()
         .border_color(colors.border)
         .bg(if enabled { colors.panel_bg } else { colors.panel_alt })
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if enabled { colors.text } else { colors.muted })
         .flex()
         .items_center()

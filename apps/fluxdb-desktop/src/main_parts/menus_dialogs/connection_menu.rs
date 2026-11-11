@@ -46,7 +46,7 @@ fn connection_context_menu(
             hsla(0., 0., 0., 0.16),
         )])
         .p_2()
-        .text_size(px(14.))
+        .text_size(ui_text_size(14.))
         .text_color(colors.text)
         .key_context("ConnectionContextMenu")
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -324,7 +324,7 @@ fn database_context_menu(
                 hsla(0., 0., 0., 0.16),
             )])
             .p_1()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .text_color(colors.text)
             .key_context("DatabaseContextMenu")
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -367,7 +367,7 @@ fn database_context_menu(
             hsla(0., 0., 0., 0.16),
         )])
         .p_2()
-        .text_size(px(14.))
+        .text_size(ui_text_size(14.))
         .text_color(colors.text)
         .key_context("DatabaseContextMenu")
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -603,7 +603,7 @@ fn schema_context_menu(
             hsla(0., 0., 0., 0.16),
         )])
         .p_2()
-        .text_size(px(14.))
+        .text_size(ui_text_size(14.))
         .text_color(colors.text)
         .key_context("SchemaContextMenu")
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

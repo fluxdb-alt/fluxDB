@@ -127,7 +127,7 @@ fn sqlserver_permissions_panel(
                         div()
                             .w(px(180.))
                             .truncate()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(colors.text)
                             .child(permission.permission.clone()),
@@ -136,7 +136,7 @@ fn sqlserver_permissions_panel(
                         div()
                             .flex_1()
                             .truncate()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(colors.muted)
                             .child(SqlServerSecurityState::permission_target_label(
                                 &permission.target,
@@ -229,7 +229,7 @@ fn sqlserver_permission_composer(
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.sqlserver_security.add_permission_title")),
@@ -238,7 +238,7 @@ fn sqlserver_permission_composer(
                     div()
                         .id("sqlserver-permission-composer-close")
                         .cursor_pointer()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .hover(move |style| style.text_color(colors.text))
                         .child(tr("app.sqlserver_security.collapse_add_permission"))
@@ -285,7 +285,7 @@ fn sqlserver_permission_composer(
                         .gap_2()
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(tr("app.sqlserver_security.selected_permission")),
                         )
@@ -364,7 +364,7 @@ fn sqlserver_permission_scope_row(
                 .cursor_pointer()
                 .flex()
                 .items_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .on_mouse_down(
                     MouseButton::Left,
@@ -434,7 +434,7 @@ fn sqlserver_permission_chips(
                 .cursor_pointer()
                 .flex()
                 .items_center()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.text)
                 .on_mouse_down(
                     MouseButton::Left,
@@ -488,7 +488,7 @@ fn sqlserver_permission_state_row(
                 .cursor_pointer()
                 .flex()
                 .items_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .on_mouse_down(
                     MouseButton::Left,

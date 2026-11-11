@@ -74,7 +74,7 @@ fn redis_key_detail_list_panel(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         // 搜索框放在「新增」按钮前面，布局对齐 Hash 面板：按索引跳转（LINDEX）
                         .child(redis_set_search_box(
@@ -143,7 +143,7 @@ fn redis_key_detail_list_panel(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.redis.list.items_count").replace("%{shown}", &shown.to_string()).replace("%{total}", &total.to_string()))
                         .child(
@@ -335,7 +335,7 @@ fn redis_list_item_add_drawer(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(div().text_size(px(17.)).font_weight(gpui::FontWeight::SEMIBOLD).child(tr("app.redis.list.add_item"))),
+                        .child(div().text_size(ui_text_size(17.)).font_weight(gpui::FontWeight::SEMIBOLD).child(tr("app.redis.list.add_item"))),
                 )
                 .child(
                     div()
@@ -526,7 +526,7 @@ fn redis_list_item_remove_drawer(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(div().text_size(px(17.)).font_weight(gpui::FontWeight::SEMIBOLD).child(tr("app.redis.list.delete_item"))),
+                        .child(div().text_size(ui_text_size(17.)).font_weight(gpui::FontWeight::SEMIBOLD).child(tr("app.redis.list.delete_item"))),
                 )
                 // 表单区（RedisInsight 风格）：位置下拉 + 数量输入 靠左一行，占满剩余高度
                 .child(
@@ -697,7 +697,7 @@ fn redis_list_item_remove_confirm_popover(
         // 标题
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(tr("app.redis.list.remove_title").replace("%{count}", &target.count.to_string())),
@@ -705,14 +705,14 @@ fn redis_list_item_remove_confirm_popover(
         // 简洁描述：从哪个方向移除 + 不可撤销，合并为一行，减少浮层高度
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.redis.list.remove_detail").replace("%{side}", &direction).replace("%{count}", &target.count.to_string())),
         )
         .when(will_delete_all, |this| {
             this.child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(if colors.is_dark { rgb(0xffb4a1) } else { rgb(0xb3402a) })
                     .child(tr("app.redis.list.remove_all_warning")),
@@ -844,7 +844,7 @@ fn redis_list_remove_button(enabled: bool, colors: UiColors) -> Div {
         } else {
             colors.panel_alt
         })
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(if enabled { rgb(0xe5484d) } else { colors.muted })
         .when(enabled, |this| {

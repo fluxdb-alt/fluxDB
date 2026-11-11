@@ -240,7 +240,7 @@ fn settings_native_client_group(
                         div()
                             .min_w(px(0.))
                             .flex_1()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .whitespace_normal()
                             .child(status),
@@ -315,7 +315,7 @@ fn settings_native_client_group(
                         .w_full()
                         .h_full()
                         .px_2()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.text),
                 ),
         ),

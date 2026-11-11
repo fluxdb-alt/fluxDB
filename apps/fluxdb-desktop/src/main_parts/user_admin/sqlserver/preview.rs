@@ -43,7 +43,7 @@ fn sqlserver_preview_panel(
                 .debug_selector(|| "sqlserver-security-preview-code".into())
                 .child(if sql.is_empty() {
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(tr("app.sqlserver_security.preview_empty"))
                 } else {

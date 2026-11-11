@@ -799,7 +799,7 @@ impl NavicatMain {
                 .overlay_closable(true)
                 .keyboard(true)
                 .child(div()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .child(format!(
                         "{} {name}? {}",
                         tr("app.ai.models.delete_confirm_prefix"),

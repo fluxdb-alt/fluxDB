@@ -651,7 +651,7 @@ fn mongo_import_modal(
         .flex()
         .flex_col()
         .overflow_hidden()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .key_context("MongoImportModal")
         .debug_selector(|| "mongo-import-modal".into())
@@ -733,7 +733,7 @@ fn mongo_import_header(
                 .child(app_icon(AppIcon::FolderInput, 17., colors.text))
                 .child(
                     div()
-                        .text_size(px(15.))
+                        .text_size(ui_text_size(15.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(tr("app.mongo.import.title")),
                 ),
@@ -794,14 +794,14 @@ fn mongo_import_summary(
                         .gap_1()
                         .child(
                             div()
-                                .text_size(px(10.5))
+                                .text_size(ui_text_size(10.5))
                                 .text_color(colors.muted)
                                 .child(tr("app.mongo.import.target")),
                         )
                         .child(
                             div()
                                 .truncate()
-                                .text_size(px(13.5))
+                                .text_size(ui_text_size(13.5))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(form.object.name.clone()),
                         ),
@@ -845,7 +845,7 @@ fn mongo_import_summary(
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(app_icon(AppIcon::Loader, 13., colors.info))
                     .child(tr("app.mongo.import.parsing")),
@@ -876,7 +876,7 @@ fn mongo_import_summary(
             for error in report.errors.iter() {
                 block = block.child(
                     div()
-                        .text_size(px(10.5))
+                        .text_size(ui_text_size(10.5))
                         .text_color(colors.danger)
                         .child(error.clone()),
                 );
@@ -924,7 +924,7 @@ fn mongo_import_fields_panel(
                 .items_center()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(tr("app.mongo.import.fields")),
                 ),
@@ -964,13 +964,13 @@ fn mongo_import_field_row(
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .child(field.name.clone()),
                 )
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.muted)
                         .child(if field.sample.is_empty() {
                             tr("app.mongo.import.sample_empty").to_string()
@@ -1030,7 +1030,7 @@ fn mongo_import_preview_panel(form: &MongoImportForm, colors: UiColors) -> Div {
                         .flex()
                         .items_center()
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.muted)
                         .child(column.clone()),
@@ -1053,7 +1053,7 @@ fn mongo_import_preview_panel(form: &MongoImportForm, colors: UiColors) -> Div {
                             .flex()
                             .items_center()
                             .truncate()
-                            .text_size(px(11.5))
+                            .text_size(ui_text_size(11.5))
                             .child(row.get(column_index).cloned().unwrap_or_default()),
                     );
                 }
@@ -1069,7 +1069,7 @@ fn mongo_import_preview_panel(form: &MongoImportForm, colors: UiColors) -> Div {
                         .py_1()
                         .rounded(px(6.))
                         .when(row_index % 2 == 1, |this| this.bg(colors.panel_alt))
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .child(row.first().cloned().unwrap_or_default()),
                 );
             }
@@ -1078,7 +1078,7 @@ fn mongo_import_preview_panel(form: &MongoImportForm, colors: UiColors) -> Div {
             content = content.child(
                 div()
                     .p_4()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(tr("app.mongo.import.preview_empty")),
             );
@@ -1107,14 +1107,14 @@ fn mongo_import_preview_panel(form: &MongoImportForm, colors: UiColors) -> Div {
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(tr("app.mongo.import.preview")),
                 )
                 .when_some(
                     form.preview.as_ref().filter(|preview| preview.truncated),
                     |this, _| {
-                        this.child(div().text_size(px(10.5)).text_color(colors.muted).child(
+                        this.child(div().text_size(ui_text_size(10.5)).text_color(colors.muted).child(
                             tr("app.mongo.import.preview_truncated").replace("%{count}", "50"),
                         ))
                     },
@@ -1177,7 +1177,7 @@ fn mongo_import_options_bar(
                             .items_center()
                             .gap_2()
                             .max_w(px(520.))
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(app_icon(AppIcon::Loader, 12., colors.info))
                             .child(div().truncate().child(progress)),
@@ -1264,7 +1264,7 @@ fn mongo_import_option_toggle(
                 .hover(move |style| style.bg(colors.hover))
         })
         .when(!enabled, |this| this.opacity(0.4).cursor_default())
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .flex()
         .items_center()
         .gap_1p5()
@@ -1305,7 +1305,7 @@ fn mongo_import_notice(text: String, tone: gpui::Rgba) -> Div {
         .items_center()
         .gap_1p5()
         .child(app_icon(AppIcon::Info, 12., tone))
-        .child(div().text_size(px(10.5)).text_color(tone).child(text))
+        .child(div().text_size(ui_text_size(10.5)).text_color(tone).child(text))
 }
 
 fn mongo_import_footer(

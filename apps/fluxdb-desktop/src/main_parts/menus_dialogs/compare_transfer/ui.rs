@@ -92,7 +92,7 @@ fn compare_transfer_header(
         .border_color(colors.border_soft)
         .child(
             div()
-                .text_size(px(15.))
+                .text_size(ui_text_size(15.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(tr("app.compare_transfer.title")),
         )
@@ -135,7 +135,7 @@ fn compare_transfer_tab_button(
         .px_3()
         .py_1()
         .rounded(colors.radius)
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(if selected {
             gpui::FontWeight::SEMIBOLD
         } else {
@@ -238,7 +238,7 @@ fn compare_structure_body(
                 .when_some(state.compare_error.clone(), |this, error| {
                     this.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.danger)
                             .child(error),
                     )
@@ -302,7 +302,7 @@ fn compare_transfer_empty_state(colors: UiColors) -> Div {
         .bg(colors.panel_alt)
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(tr("app.compare_transfer.empty_title")),
@@ -361,7 +361,7 @@ fn compare_transfer_card_header(
             div()
                 .min_w(px(0.))
                 .truncate()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(name)
         }))
@@ -376,7 +376,7 @@ fn compare_transfer_endpoint_tag(label: SharedString, colors: UiColors) -> Div {
         .border_1()
         .border_color(colors.border_soft)
         .bg(colors.panel_alt)
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(label)
@@ -417,7 +417,7 @@ fn compare_transfer_stack_select(
         .gap_1()
         .child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(label),
         )
@@ -466,7 +466,7 @@ fn compare_transfer_summary(
                 .gap_3()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(
                             tr("app.compare_transfer.result_count")
@@ -584,7 +584,7 @@ fn compare_transfer_status_text(
         StructureDiffStatus::Same => (tr("app.compare_transfer.status_same"), colors.muted),
     };
     div()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(color)
         .child(format!("{label} {count}"))
 }
@@ -617,7 +617,7 @@ fn compare_transfer_result_list(
                 .bg(colors.panel_alt)
                 .border_b_1()
                 .border_color(colors.border_soft)
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(div().w(px(16.)))
@@ -671,12 +671,12 @@ fn compare_transfer_result_list(
                         .flex_1()
                         .min_w(px(0.))
                         .truncate()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .child(table.key.clone()),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(status_color)
                         .child(status_label),
                 )
@@ -731,7 +731,7 @@ fn compare_transfer_ddl_pane(label: SharedString, ddl: &str, colors: UiColors) -
                 .px_2()
                 .flex()
                 .items_center()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(label),
@@ -745,7 +745,7 @@ fn compare_transfer_ddl_pane(label: SharedString, ddl: &str, colors: UiColors) -
                 // 的调用位置 id，从而共用滚动状态。
                 .id(scroll_id)
                 .p_2()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .debug_selector(|| "compare-transfer-ddl-content".into())
                 .child(ddl.to_string()),
@@ -773,7 +773,7 @@ fn compare_transfer_log(state: &CompareTransferState, colors: UiColors) -> impl 
                 .bg(colors.panel_alt)
                 .border_b_1()
                 .border_color(colors.border_soft)
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(tr("app.compare_transfer.log_title")),
@@ -788,7 +788,7 @@ fn compare_transfer_log(state: &CompareTransferState, colors: UiColors) -> impl 
                 .gap_0p5()
                 .bg(colors.input_bg)
                 .p_3()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(colors.muted)
                 .children(state.transfer_error.as_ref().map(|error| {
@@ -877,7 +877,7 @@ fn compare_data_transfer_body(
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.muted)
                         .child(tr("app.compare_transfer.write_mode")),
                 )
@@ -971,7 +971,7 @@ fn compare_transfer_mode_button(
         .border_1()
         .border_color(if selected { colors.info } else { colors.border })
         .bg(if selected { colors.tree_selected } else { colors.panel_bg })
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .on_click(cx.listener(move |this, _, _, cx| {
             if let Some(state) = this.compare_transfer.as_mut() {
                 state.transfer_mode = mode;
@@ -1020,7 +1020,7 @@ fn compare_transfer_footer(
             |this| {
                 this.child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.compare_transfer.background_hint")),
                 )

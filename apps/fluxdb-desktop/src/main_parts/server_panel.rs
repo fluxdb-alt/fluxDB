@@ -373,7 +373,7 @@ fn server_panel_content(
                         .min_w(px(0.))
                         .child(
                             div()
-                                .text_size(px(14.))
+                                .text_size(ui_text_size(14.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .whitespace_nowrap()
                                 .text_ellipsis()
@@ -381,7 +381,7 @@ fn server_panel_content(
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .whitespace_nowrap()
                                 .text_ellipsis()
@@ -473,7 +473,7 @@ fn server_panel_content(
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(colors.danger)
                     .child(app_icon(AppIcon::TriangleAlert, 14., colors.danger))
                     .child(
@@ -566,7 +566,7 @@ fn server_panel_subtabs(
             .flex()
             .items_center()
             .cursor_pointer()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .font_weight(if active {
                 gpui::FontWeight::SEMIBOLD
             } else {
@@ -833,7 +833,7 @@ fn server_session_inspector(
                 .border_color(colors.border)
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(tr("app.server_panel.detail.title")),
                 )
@@ -985,7 +985,7 @@ fn server_session_inspector(
                 .when(!can_kill, |this| {
                     this.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(if read_only {
                                 tr("app.server_panel.read_only_hint").to_string()

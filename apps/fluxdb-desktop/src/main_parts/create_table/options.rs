@@ -241,7 +241,7 @@ fn create_table_partitions(
                             )
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(ui_text_size(13.))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(colors.text)
                                     .child(tr("app.create_table.partition.enable")),
@@ -280,7 +280,7 @@ fn create_table_partitions(
                             .border_color(colors.border_soft)
                             .flex()
                             .items_center()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(colors.text)
                             .child(tr("app.create_table.definition")),
@@ -295,7 +295,7 @@ fn create_table_partitions(
                                     .appearance(false)
                                     .bordered(false)
                                     .focus_bordered(false)
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .font_family(EDITOR_FONT)
                                     .size_full(),
                             ),
@@ -359,7 +359,7 @@ fn create_table_table_option_label(label: impl Into<SharedString>, colors: UiCol
             move || format!("create-table-heading:{label}")
         })
         .w(px(84.))
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(label)

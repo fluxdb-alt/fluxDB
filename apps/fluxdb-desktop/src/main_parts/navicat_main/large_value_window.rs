@@ -345,7 +345,7 @@ fn large_value_status(
                         .px_1p5()
                         .rounded(colors.radius * 0.5)
                         .bg(colors.panel_alt)
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.muted)
                         .flex()
@@ -368,7 +368,7 @@ fn large_value_status(
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .tooltip(move |window, cx| {
                             Tooltip::new(range_tooltip.clone()).build(window, cx)
@@ -408,7 +408,7 @@ fn large_value_status(
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(state),
                     ),
@@ -441,7 +441,7 @@ fn large_value_window_view(
             .flex_1()
             .min_h(px(0.))
             .w_full()
-            .child(div().text_size(px(13.)).text_color(colors.muted).child(tr(
+            .child(div().text_size(ui_text_size(13.)).text_color(colors.muted).child(tr(
                 "app.cell_detail.large_unavailable",
             )));
     };
@@ -468,7 +468,7 @@ fn large_value_window_view(
                 .py_2()
                 // 只给纵向滚动：横向滚动区会把可用宽度变成未定值，长内容就不换行了。
                 .overflow_y_scrollbar()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .child(
                     div()

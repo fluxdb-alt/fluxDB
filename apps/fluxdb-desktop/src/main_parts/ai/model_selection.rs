@@ -29,7 +29,7 @@ impl NavicatMain {
             .small().ghost().cursor_pointer().disabled(disabled)
             .tooltip(label.clone())
             .child(div().flex().items_center().gap_1p5().min_w(px(0.))
-                .text_size(px(11.)).font_weight(gpui::FontWeight::NORMAL).text_color(colors.muted)
+                .text_size(ui_text_size(11.)).font_weight(gpui::FontWeight::NORMAL).text_color(colors.muted)
                 .child(div().max_w(px(160.)).truncate().child(label))
                 .child(app_icon(AppIcon::ChevronDown, 10., colors.muted)))
             .dropdown_menu_with_anchor(gpui::Anchor::BottomRight, move |menu, _, _| {
@@ -44,7 +44,7 @@ impl NavicatMain {
                         div().id(SharedString::from(format!("ai-chat-model-label:{render_id}")))
                             .aria_label(label.clone())
                             .debug_selector({ let id = render_id.clone(); move || format!("ai-chat-model-option:{id}") })
-                            .text_size(px(11.)).child(label.clone())
+                            .text_size(ui_text_size(11.)).child(label.clone())
                     }).checked(option.id == selected).disabled(option.unavailable)
                         .on_click(move |_, window, cx| {
                             let _ = owner.update(cx, |this, cx| {

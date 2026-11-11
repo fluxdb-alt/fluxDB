@@ -140,7 +140,7 @@ impl NavicatMain {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .child(app_icon(icon, 14., colors.muted))
                                 .child(label.clone())

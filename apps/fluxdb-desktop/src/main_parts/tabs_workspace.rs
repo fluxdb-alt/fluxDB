@@ -986,7 +986,7 @@ fn tab_switcher_popup(
                 .px_2()
                 .flex()
                 .items_center()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .child(tr("app.tabs.no_match")),
         );
@@ -1230,7 +1230,7 @@ fn first_level_tab_view(
                             div()
                                 .overflow_hidden()
                                 .text_ellipsis()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .when(active, |this| {
                                     this.font_weight(gpui::FontWeight::SEMIBOLD)
                                 })
@@ -1241,7 +1241,7 @@ fn first_level_tab_view(
                             div()
                                 .overflow_hidden()
                                 .text_ellipsis()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(subtitle),
                         ),

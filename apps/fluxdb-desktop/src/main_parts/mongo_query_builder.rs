@@ -864,7 +864,7 @@ fn mongo_query_builder_section(
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.muted)
                         .whitespace_nowrap()
                         .child(tr(root.logic.label_key())),
@@ -873,7 +873,7 @@ fn mongo_query_builder_section(
                     div()
                         .min_w(px(0.))
                         .overflow_hidden()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.muted)
                         .whitespace_nowrap()
                         .text_ellipsis()
@@ -940,7 +940,7 @@ fn mongo_query_builder_section(
     if root.children.is_empty() {
         rows = rows.child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(tr("app.mongo.query.builder_empty")),
         );
@@ -987,7 +987,7 @@ fn mongo_query_builder_section(
             div()
                 .px(px(10.))
                 .pb(px(5.))
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.danger)
                 .child(error.clone()),
         );
@@ -1043,7 +1043,7 @@ fn mongo_query_builder_group(
             div()
                 .flex_none()
                 .w(px(10.))
-                .text_size(px(8.))
+                .text_size(ui_text_size(8.))
                 .text_color(colors.muted)
                 .child(if group.open { "▾" } else { "▸" }),
         )
@@ -1070,7 +1070,7 @@ fn mongo_query_builder_group(
                 .flex_1()
                 .min_w(px(0.))
                 .overflow_hidden()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(colors.muted)
                 .whitespace_nowrap()
@@ -1083,7 +1083,7 @@ fn mongo_query_builder_group(
         .child(
             div()
                 .flex_none()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .whitespace_nowrap()
                 .child(SharedString::from(format!(
@@ -1167,7 +1167,7 @@ fn mongo_query_builder_group(
     if group.children.is_empty() {
         body = body.child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(tr("app.mongo.query.builder_empty")),
         );
@@ -1244,7 +1244,7 @@ fn mongo_query_builder_logic_toggle(
             .h(px(18.))
             .px(px(6.))
             .rounded(px(3.))
-            .text_size(px(9.))
+            .text_size(ui_text_size(9.))
             .font_family(crate::PLATFORM_MONOSPACE_FONT)
             .when(selected, |this| {
                 this.bg(colors.panel_bg).text_color(colors.success).shadow(vec![
@@ -1336,7 +1336,7 @@ fn mongo_query_builder_collapse_button(
         .small()
         .h(px(22.))
         .px(px(7.))
-        .text_size(px(10.5))
+        .text_size(ui_text_size(10.5))
         .text_color(colors.success)
         .label(tr("app.mongo.query.builder_collapse"))
         .on_click(cx.listener(move |this, _, window, cx| {
@@ -1463,7 +1463,7 @@ fn mongo_query_builder_operator_cell(
     .outline()
     .h(px(MONGO_QUERY_BUILDER_CONTROL_HEIGHT))
     .w_full()
-    .text_size(px(11.))
+    .text_size(ui_text_size(11.))
     .font_family(crate::PLATFORM_MONOSPACE_FONT)
     .text_color(colors.success)
     .label(current.label())
@@ -1590,7 +1590,7 @@ fn mongo_query_builder_add_button(
         .ghost()
         .small()
         .h(px(22.))
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .text_color(colors.success)
         .label(tr("app.mongo.query.builder_add"))
         .child(app_icon(AppIcon::Plus, 12., colors.success))
@@ -1617,7 +1617,7 @@ fn mongo_query_builder_add_group_button(
     .ghost()
     .small()
     .h(px(22.))
-    .text_size(px(10.))
+    .text_size(ui_text_size(10.))
     .text_color(colors.success)
     .label(tr("app.mongo.query.builder_add_group"))
     .child(app_icon(AppIcon::Plus, 12., colors.success))

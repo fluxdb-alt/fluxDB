@@ -172,7 +172,7 @@ fn ai_diagnostics_build_dialog(
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.muted)
                         .child(tr("app.ai.chat.diagnostics.scope")),
                 )
@@ -207,7 +207,7 @@ fn ai_diagnostics_body(
             .items_center()
             .gap_2()
             .py_4()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(colors.muted)
             .child(app_icon(AppIcon::Activity, 14., colors.muted))
             .child(tr("app.ai.chat.diagnostics.loading"))
@@ -216,7 +216,7 @@ fn ai_diagnostics_body(
     if let Some(message) = error {
         return div()
             .py_4()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(colors.danger)
             .child(tr("app.ai.chat.diagnostics.load_failed").replace("%{message}", message))
             .into_any_element();
@@ -224,7 +224,7 @@ fn ai_diagnostics_body(
     if rows.is_empty() {
         return div()
             .py_4()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(colors.muted)
             .child(tr("app.ai.chat.diagnostics.empty"))
             .into_any_element();
@@ -256,7 +256,7 @@ fn ai_diagnostics_row(
         .gap_2()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(format!("#{}", row.ordinal)),
         )
@@ -266,7 +266,7 @@ fn ai_diagnostics_row(
                 .flex_1()
                 .min_w(px(0.))
                 .truncate()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .child(ai_diagnostics_summary(row)),
         )
         .child(
@@ -411,7 +411,7 @@ fn ai_diagnostics_summary(row: &fluxdb_app::AiTurnDiagnostic) -> String {
 }
 
 fn ai_diagnostics_detail(row: &fluxdb_app::AiTurnDiagnostic, colors: UiColors) -> Div {
-    let mut detail = div().flex().flex_col().gap_1().text_size(px(11.));
+    let mut detail = div().flex().flex_col().gap_1().text_size(ui_text_size(11.));
     detail = detail.child(ai_diagnostics_kv(
         &tr("app.ai.chat.diagnostics.field.turn_status"),
         &row.status,

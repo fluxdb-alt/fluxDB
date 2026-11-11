@@ -42,7 +42,7 @@ fn er_proposal_build_dialog(
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(
                             tr("app.ai.er_proposal.selection_summary")
@@ -110,7 +110,7 @@ fn er_proposal_dialog_body(
                 .py_2()
                 .border_b_1()
                 .border_color(colors.border_soft)
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(tr("app.ai.er_proposal.select_hint")),
         )
@@ -209,7 +209,7 @@ fn er_proposal_dialog_body(
                                 .when(!selectable, |check| {
                                     check.child(
                                         div()
-                                            .text_size(px(10.))
+                                            .text_size(ui_text_size(10.))
                                             .text_color(colors.muted)
                                             .child("—"),
                                     )
@@ -224,7 +224,7 @@ fn er_proposal_dialog_body(
                                 .gap(px(1.))
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(ui_text_size(11.))
                                         .text_color(colors.text)
                                         .truncate()
                                         .child(format!(
@@ -237,7 +237,7 @@ fn er_proposal_dialog_body(
                                         .flex()
                                         .items_center()
                                         .gap_1()
-                                        .text_size(px(10.))
+                                        .text_size(ui_text_size(10.))
                                         .text_color(colors.muted)
                                         .child(item.role.clone())
                                         .child("·")
@@ -247,7 +247,7 @@ fn er_proposal_dialog_body(
                         .child(
                             div()
                                 .flex_none()
-                                .text_size(px(9.))
+                                .text_size(ui_text_size(9.))
                 .text_color(status_color(item))
                                 .child(format!("#{}", index + 1)),
                         )
@@ -276,7 +276,7 @@ fn er_proposal_dialog_body(
                     .bg(colors.danger.alpha(0.08))
                     .px_3()
                     .py_2()
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.danger)
                     .child(error),
             )
@@ -336,7 +336,7 @@ fn er_proposal_detail(
             .flex_1()
             .min_w(px(0.))
             .p_4()
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.muted)
             .child(tr("app.ai.er_proposal.select_item_hint"))
             .into_any_element();
@@ -360,7 +360,7 @@ fn er_proposal_detail(
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .truncate()
@@ -377,14 +377,14 @@ fn er_proposal_detail(
                         } else {
                             colors.panel_alt
                         })
-                        .text_size(px(9.))
+                        .text_size(ui_text_size(9.))
                         .text_color(status_color(item))
                         .child(status_label(item).to_string()),
                 ),
         )
         .child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(
                     tr("app.ai.er_proposal.source_status")
@@ -401,13 +401,13 @@ fn er_proposal_detail(
                     .gap_1()
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(colors.muted)
                             .child(tr("app.ai.er_proposal.column_pairs")),
                     )
                     .children(relationship.column_pairs.iter().map(|pair| {
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(colors.text)
                             .child(format!(
                                 "{} = {}",
@@ -423,13 +423,13 @@ fn er_proposal_detail(
                     .gap_1()
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(colors.muted)
                             .child(tr("app.ai.er_proposal.cardinality")),
                     )
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(colors.text)
                             .child(format!(
                                 "{} : {}（{}）",
@@ -453,13 +453,13 @@ fn er_proposal_detail(
                         .gap_1()
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(ui_text_size(10.))
                                 .text_color(colors.muted)
                                 .child(tr("app.ai.er_proposal.required_filters")),
                         )
                         .children(relationship.required_filters.iter().map(|filter| {
                             div()
-                                .text_size(px(10.))
+                                .text_size(ui_text_size(10.))
                                 .text_color(colors.text)
                                 .child(format!(
                                     "{} {} {}",
@@ -478,13 +478,13 @@ fn er_proposal_detail(
                         .gap_1()
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(ui_text_size(10.))
                                 .text_color(colors.muted)
                                 .child(tr("app.ai.er_proposal.rationale")),
                         )
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(ui_text_size(10.))
                                 .text_color(colors.text)
                                 .child(description),
                         ),
@@ -493,7 +493,7 @@ fn er_proposal_detail(
     } else if let Some(message) = &item.message {
         body = body.child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(message.clone()),
         );
@@ -505,7 +505,7 @@ fn er_proposal_detail(
                 .bg(colors.warning.alpha(0.08))
                 .px_2()
                 .py_2()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.warning)
                 .child(
                     tr("app.ai.er_proposal.warning")
@@ -522,7 +522,7 @@ fn er_proposal_detail(
             .bg(colors.panel_alt)
             .px_2()
             .py_2()
-            .text_size(px(9.))
+            .text_size(ui_text_size(9.))
             .text_color(colors.muted)
             .child(tr("app.ai.er_proposal.adopt_note")),
     )

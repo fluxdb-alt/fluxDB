@@ -756,7 +756,7 @@ fn user_admin_mysql_content(
                 .justify_center()
                 .px_6()
                 .text_align(gpui::TextAlign::Center)
-                .text_size(px(14.))
+                .text_size(ui_text_size(14.))
                 .text_color(colors.muted)
                 .child(tr("app.user_admin.supported_note")),
         );
@@ -910,7 +910,7 @@ fn user_admin_toolbar(
         .child(app_icon_box(AppIcon::Users, 28., 16., rgb(0x2563eb)))
         .child(
             div()
-                .text_size(px(14.))
+                .text_size(ui_text_size(14.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(tr("app.user_admin.title")),
         )
@@ -1170,7 +1170,7 @@ fn user_admin_user_row(
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(colors.text)
                         .child(title),
@@ -1179,7 +1179,7 @@ fn user_admin_user_row(
                     this.child(
                         div()
                             .truncate()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(detail),
                     )
@@ -1224,7 +1224,7 @@ fn user_admin_draft_user_row(user: DatabaseUserIdentity, colors: UiColors) -> Di
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(colors.text)
                         .child(title),
@@ -1232,7 +1232,7 @@ fn user_admin_draft_user_row(user: DatabaseUserIdentity, colors: UiColors) -> Di
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.user_admin.pending_create").replace("%{detail}", &detail)),
                 ),
@@ -1258,7 +1258,7 @@ fn user_admin_detail(
             .flex()
             .items_center()
             .justify_center()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .text_color(colors.muted)
             .child(tr("app.user_admin.select_user"));
     };
@@ -1424,7 +1424,7 @@ fn user_admin_general_panel(
                     this.child(
                         div()
                             .ml(px(120.))
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(0xff3b45))
                             .child(tr("app.user_admin.password_mismatch")),
                     )
@@ -1433,7 +1433,7 @@ fn user_admin_general_panel(
                     this.child(
                         div()
                             .ml(px(120.))
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(0xff3b45))
                             .child(tr("app.user_admin.username_host_required")),
                     )
@@ -1734,7 +1734,7 @@ fn user_admin_member_table_shell(
                 .bg(colors.panel_alt)
                 .flex()
                 .items_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(title),
@@ -1798,7 +1798,7 @@ fn user_admin_member_of_header(colors: UiColors) -> Div {
         .bg(colors.panel_alt)
         .flex()
         .items_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(div().flex_1().min_w(px(0.)).px_3().child(tr("app.user_admin.field.username")))
@@ -1830,7 +1830,7 @@ fn user_admin_members_header(colors: UiColors) -> Div {
         .bg(colors.panel_alt)
         .flex()
         .items_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(div().flex_1().min_w(px(0.)).px_3().child(tr("app.user_admin.field.username")))
@@ -1879,14 +1879,14 @@ fn user_admin_member_of_row(
                         .min_w(px(0.))
                         .flex_1()
                         .truncate()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.text)
                         .child(role_label),
                 )
                 .when(!detail.is_empty(), |this| {
                     this.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(detail),
                     )
@@ -1961,14 +1961,14 @@ fn user_admin_member_row(
                         .min_w(px(0.))
                         .flex_1()
                         .truncate()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.text)
                         .child(user_label),
                 )
                 .when(!detail.is_empty(), |this| {
                     this.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(detail),
                     )
@@ -2039,7 +2039,7 @@ fn user_admin_placeholder_panel_with_text(
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(text)
 }
@@ -2121,7 +2121,7 @@ fn user_admin_form_input_box(
                 .w_full()
                 .h_full()
                 .px_2()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text),
         )
 }
@@ -2165,7 +2165,7 @@ fn user_admin_password_row(
                         .w_full()
                         .h_full()
                         .px_2()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.text),
                 )
                 .child(user_admin_password_eye_button(visible, colors, cx)),
@@ -2179,7 +2179,7 @@ fn user_admin_form_label(label: impl Into<SharedString>, colors: UiColors) -> Di
     let label = label.into();
     div()
         .w(px(108.))
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(colors.text)
         .child(label)
@@ -2293,7 +2293,7 @@ fn user_admin_delete_user_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.user_admin.delete_user")),
                         )
@@ -2323,7 +2323,7 @@ fn user_admin_delete_user_modal(
                     div()
                         .px_5()
                         .pb_4()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(
                             tr("app.user_admin.delete_confirm")

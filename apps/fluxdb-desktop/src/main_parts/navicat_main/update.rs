@@ -366,7 +366,7 @@ impl NavicatMain {
             notes_view = notes_view
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(format!("v{release_version}")),
@@ -377,15 +377,15 @@ impl NavicatMain {
                         note,
                     )
                     .selectable(true)
-                    .text_size(px(12.))
-                    .line_height(px(18.))
+                    .text_size(ui_text_size(12.))
+                    .line_height(ui_text_size(18.))
                     .text_color(colors.text),
                 );
         }
         if notes_empty {
             notes_view = notes_view.child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(colors.muted)
                     .child(tr("app.settings.update.no_notes")),
             );
@@ -398,7 +398,7 @@ impl NavicatMain {
             .gap_2()
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(if version.is_empty() {
                         format!("{}: v{current_version}", tr("app.settings.update.current_version"))
@@ -525,7 +525,7 @@ impl NavicatMain {
                     .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .text_color(colors.text)
                     .key_context("UpdateDialog")
                     .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
@@ -550,7 +550,7 @@ impl NavicatMain {
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(ui_text_size(11.))
                                     .text_color(colors.muted)
                                     .child(self.update_status_label()),
                             ),
@@ -584,13 +584,13 @@ impl NavicatMain {
                                     .when_some(self.update_ui.error.as_ref(), |this, error| {
                                         this.child(
                                             div()
-                                                .text_size(px(13.))
+                                                .text_size(ui_text_size(13.))
                                                 .text_color(colors.danger)
                                                 .child(Self::update_error_message(error)),
                                         )
                                         .child(
                                             div()
-                                                .text_size(px(11.))
+                                                .text_size(ui_text_size(11.))
                                                 .text_color(colors.muted)
                                                 .child(error.detail.clone()),
                                         )
@@ -635,7 +635,7 @@ impl NavicatMain {
                                             .items_center()
                                             .justify_between()
                                             .gap_3()
-                                            .text_size(px(11.))
+                                            .text_size(ui_text_size(11.))
                                             .text_color(colors.muted)
                                             .child(tr("app.settings.update.downloading_percent")
                                                 .replace("%{percent}", &progress_percent.to_string()))
@@ -647,7 +647,7 @@ impl NavicatMain {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(ui_text_size(11.))
                                             .text_color(colors.muted)
                                             .child(tr("app.settings.update.downloading_detail")),
                                     ),
@@ -658,7 +658,7 @@ impl NavicatMain {
                                     .gap_3()
                                     .child(
                                         div()
-                                            .text_size(px(13.))
+                                            .text_size(ui_text_size(13.))
                                             .child(if status == UpdateUiStatus::Installing {
                                                 tr("app.settings.update.installing_detail")
                                             } else {
@@ -667,7 +667,7 @@ impl NavicatMain {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(ui_text_size(11.))
                                             .text_color(colors.muted)
                                             .child(tr("app.settings.update.unsigned_notice")),
                                     ),

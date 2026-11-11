@@ -17,7 +17,7 @@ fn oracle_create_form(
     let mut form = div().max_w(px(620.)).flex().flex_col().gap_3().child(
         div()
             .mb_1()
-            .text_size(px(15.))
+            .text_size(ui_text_size(15.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(colors.text)
             .child(tr("app.oracle_security.create_user")),

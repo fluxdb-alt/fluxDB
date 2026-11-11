@@ -64,7 +64,7 @@ fn redis_type_tag(label: String, dark: bool) -> Div {
         .border_1()
         .border_color(border)
         .bg(bg)
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(text)
         .overflow_hidden()
@@ -143,7 +143,7 @@ fn redis_action_button(
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(text_color)
         .when(enabled, |this| {
@@ -318,7 +318,7 @@ impl TableDelegate for DataPageTableDelegate {
                     })
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(cx.theme().foreground)
                             .whitespace_nowrap()
@@ -328,7 +328,7 @@ impl TableDelegate for DataPageTableDelegate {
                     .when(self.header_actions && !type_name.is_empty(), |this| {
                         this.child(
                             div()
-                                .text_size(px(9.))
+                                .text_size(ui_text_size(9.))
                                 .text_color(type_color)
                                 .whitespace_nowrap()
                                 .text_ellipsis()
@@ -581,7 +581,7 @@ impl TableDelegate for DataPageTableDelegate {
             })
             .flex()
             .items_center()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(if is_row_index_col {
                 cx.theme().muted_foreground
             } else if null_cell {
@@ -691,7 +691,7 @@ impl TableDelegate for DataPageTableDelegate {
                                                 .max_w(px(96.))
                                                 .overflow_hidden()
                                                 .text_ellipsis()
-                                                .text_size(px(11.))
+                                                .text_size(ui_text_size(11.))
                                                 .text_color(cx.theme().muted_foreground)
                                                 .child(label),
                                         )
@@ -741,7 +741,7 @@ impl TableDelegate for DataPageTableDelegate {
                                     .px_0()
                                     .w_full()
                                     .h_full()
-                                    .text_size(px(12.)),
+                                    .text_size(ui_text_size(12.)),
                             )
                         })
                         .when(temporal_kind.is_some(), |this| {

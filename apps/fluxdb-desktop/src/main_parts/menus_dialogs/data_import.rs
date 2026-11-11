@@ -706,7 +706,7 @@ fn table_data_import_modal(
         .flex()
         .flex_col()
         .overflow_hidden()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .key_context("TableDataImportModal")
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -824,7 +824,7 @@ fn import_dialog_tab_button(
         } else {
             colors.border_soft
         })
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(if active { colors.text } else { colors.muted })
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .cursor_pointer()
@@ -888,7 +888,7 @@ fn import_dialog_log_body(view: ImportDialogLogView<'_>, colors: UiColors) -> Di
     if view.logs.is_empty() {
         list = list.child(
             div()
-                .text_size(px(11.5))
+                .text_size(ui_text_size(11.5))
                 .text_color(colors.muted)
                 .child(tr("app.data.data_import.log_empty")),
         );
@@ -905,7 +905,7 @@ fn import_dialog_log_body(view: ImportDialogLogView<'_>, colors: UiColors) -> Di
                     div()
                         .w(px(56.))
                         .flex_none()
-                        .text_size(px(10.5))
+                        .text_size(ui_text_size(10.5))
                         .text_color(if entry.success {
                             colors.muted
                         } else {
@@ -917,7 +917,7 @@ fn import_dialog_log_body(view: ImportDialogLogView<'_>, colors: UiColors) -> Di
                     div()
                         .flex_1()
                         .min_w(px(0.))
-                        .text_size(px(11.5))
+                        .text_size(ui_text_size(11.5))
                         .text_color(if entry.success {
                             colors.text
                         } else {
@@ -942,7 +942,7 @@ fn import_dialog_log_body(view: ImportDialogLogView<'_>, colors: UiColors) -> Di
                 .flex()
                 .items_center()
                 .gap_5()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(view.imported_label.clone())
                 .child(
@@ -989,7 +989,7 @@ fn table_data_import_header(
                 .child(app_icon(AppIcon::FolderInput, 17., colors.text))
                 .child(
                     div()
-                        .text_size(px(15.))
+                        .text_size(ui_text_size(15.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(tr("app.data.data_import.title")),
                 ),
@@ -1006,7 +1006,7 @@ fn table_data_import_header(
         .when(form.running, |this| {
             this.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(tr("app.data.data_import.running")),
             )
@@ -1062,14 +1062,14 @@ fn table_data_import_summary(
                         .gap_1()
                         .child(
                             div()
-                                .text_size(px(10.5))
+                                .text_size(ui_text_size(10.5))
                                 .text_color(colors.muted)
                                 .child(tr("app.data.data_import.target_table")),
                         )
                         .child(
                             div()
                                 .truncate()
-                                .text_size(px(13.5))
+                                .text_size(ui_text_size(13.5))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(form.object.name.clone()),
                         ),
@@ -1123,7 +1123,7 @@ fn table_data_import_summary(
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(app_icon(AppIcon::Loader, 13., colors.info))
                     .child(tr("app.data.data_import.parsing")),
@@ -1149,14 +1149,14 @@ fn table_data_import_stat(label: &str, value: &str, colors: UiColors) -> Div {
         .gap_1()
         .child(
             div()
-                .text_size(px(10.5))
+                .text_size(ui_text_size(10.5))
                 .text_color(colors.muted)
                 .child(label.to_string()),
         )
         .child(
             div()
                 .truncate()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(value.to_string()),
         )
@@ -1193,7 +1193,7 @@ fn table_data_import_mapping_panel(
         list = list.child(
             div()
                 .p_4()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.data.data_import.mapping_empty")),
         );
@@ -1221,13 +1221,13 @@ fn table_data_import_mapping_panel(
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(tr("app.data.data_import.mapping_title")),
                 )
                 .child(
                     div()
-                        .text_size(px(10.5))
+                        .text_size(ui_text_size(10.5))
                         .text_color(colors.muted)
                         .child(tr("app.data.data_import.mapping_hint")),
                 ),
@@ -1269,7 +1269,7 @@ fn table_data_import_mapping_row(
                 .w(px(140.))
                 .min_w(px(0.))
                 .truncate()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .child(source_name.clone()),
         )
         .child(
@@ -1342,7 +1342,7 @@ fn table_data_import_preview_panel(form: &TableDataImportForm, colors: UiColors)
                     .flex()
                     .items_center()
                     .truncate()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(colors.muted)
                     .child(column.clone()),
@@ -1366,7 +1366,7 @@ fn table_data_import_preview_panel(form: &TableDataImportForm, colors: UiColors)
                         .flex()
                         .items_center()
                         .truncate()
-                        .text_size(px(11.5))
+                        .text_size(ui_text_size(11.5))
                         .child(value),
                 );
             }
@@ -1376,7 +1376,7 @@ fn table_data_import_preview_panel(form: &TableDataImportForm, colors: UiColors)
         content = content.child(
             div()
                 .p_4()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.data.data_import.preview_empty")),
         );
@@ -1404,14 +1404,14 @@ fn table_data_import_preview_panel(form: &TableDataImportForm, colors: UiColors)
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(tr("app.data.data_import.preview_title")),
                 )
                 .when_some(form.preview.as_ref(), |this, preview| {
                     this.child(
                         div()
-                            .text_size(px(10.5))
+                            .text_size(ui_text_size(10.5))
                             .text_color(colors.muted)
                             .child(if preview.truncated {
                                 tr("app.data.data_import.preview_truncated").to_string()
@@ -1474,7 +1474,7 @@ fn table_data_import_options_bar(
                                     .flex()
                                     .items_center()
                                     .gap_1()
-                                    .text_size(px(10.5))
+                                    .text_size(ui_text_size(10.5))
                                     .text_color(colors.warning)
                                     .child(app_icon(AppIcon::Info, 12., colors.warning))
                                     .child(warning),
@@ -1688,7 +1688,7 @@ fn table_data_import_option_toggle(
             this.bg(colors.input_bg).text_color(colors.muted)
         })
         .cursor_pointer()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .flex()
         .items_center()
         .gap_1p5()
@@ -1738,7 +1738,7 @@ fn table_data_import_field(
         .gap_1()
         .child(
             div()
-                .text_size(px(10.5))
+                .text_size(ui_text_size(10.5))
                 .text_color(colors.muted)
                 .child(label.to_string()),
         )
@@ -1761,7 +1761,7 @@ fn table_data_import_notice(text: String, tone: gpui::Rgba) -> Div {
         .child(app_icon(AppIcon::Info, 12., tone))
         .child(
             div()
-                .text_size(px(10.5))
+                .text_size(ui_text_size(10.5))
                 .text_color(tone)
                 .child(text),
         )

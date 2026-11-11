@@ -46,7 +46,7 @@ fn redis_add_key_direction_control(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .bg(if selected {
                     if colors.is_dark {

@@ -117,7 +117,7 @@ fn restore_general_page(
         .child(
             div()
                 .pl(px(132.))
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.database_restore.hint.format_detect")),
         )
@@ -162,7 +162,7 @@ fn restore_general_page(
         .child(
             div()
                 .pl(px(132.))
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.database_restore.hint.preflight")),
         )
@@ -227,7 +227,7 @@ fn restore_objects_page(
                 .child(app_icon(AppIcon::Refresh, 22., colors.muted))
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(tr("app.database_restore.objects.checking")),
                 )
@@ -249,7 +249,7 @@ fn restore_objects_page(
                 .child(app_icon(icon, 22., colors.muted))
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(note.unwrap_or_default()),
                 )
@@ -281,7 +281,7 @@ fn restore_objects_page(
                         .flex_1()
                         .min_w(px(0.))
                         .truncate()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.text)
                         .child(row.name.clone()),
                 )
@@ -289,7 +289,7 @@ fn restore_objects_page(
                     div()
                         .w(px(84.))
                         .flex_none()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(content),
                 )
@@ -297,7 +297,7 @@ fn restore_objects_page(
                     div()
                         .w(px(60.))
                         .flex_none()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(status),
                 )
@@ -336,7 +336,7 @@ fn restore_objects_page(
                         div()
                             .flex_1()
                             .min_w(px(0.))
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(tr("app.database_restore.objects.column.object")),
                     )
@@ -344,7 +344,7 @@ fn restore_objects_page(
                         div()
                             .w(px(84.))
                             .flex_none()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(tr("app.database_restore.objects.column.content")),
                     )
@@ -352,7 +352,7 @@ fn restore_objects_page(
                         div()
                             .w(px(60.))
                             .flex_none()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(tr("app.database_restore.objects.column.target_state")),
                     )
@@ -360,7 +360,7 @@ fn restore_objects_page(
                         div()
                             .w(px(140.))
                             .flex_none()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(tr("app.database_restore.objects.column.action")),
                     ),
@@ -389,7 +389,7 @@ fn restore_objects_page(
                 ))
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(if count == 0 && existing_mode && modal.probe_running {
                             tr("app.database_restore.objects.checking_short").to_string()
@@ -441,7 +441,7 @@ fn restore_advanced_page(
                 ))
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(tr("app.database_restore.advanced.sqlite_note")),
                 )
@@ -490,14 +490,14 @@ fn restore_advanced_page(
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.database_restore.advanced.options_hint")),
                 )
         })
         .child(match &runtime.prepared {
             None => div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.database_restore.advanced.need_plan")),
             Some((_, plan)) => restore_plan_preview(plan, txn, val, colors),
@@ -589,7 +589,7 @@ fn restore_plan_preview(
                     ))
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(colors.text)
                             .child(
                                 tr("app.database_restore.plan.action_counts")
@@ -621,7 +621,7 @@ fn restore_plan_preview(
                             .child(app_icon(AppIcon::Trash, 13., rgb(0xe5484d)))
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(colors.text)
                                     .child(item.clone()),
                             )
@@ -642,7 +642,7 @@ fn restore_plan_preview(
                     .children(plan.tables.iter().flat_map(|t| {
                         t.risks.iter().map(move |r| {
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(colors.muted)
                                 .child(
                                     tr("app.database_restore.plan.risk_line")
@@ -666,7 +666,7 @@ fn restore_plan_preview(
                     ))
                     .children(plan.warnings.iter().map(|w| {
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(colors.muted)
                                 .child(
                                     tr("app.database_restore.plan.warning_line")
@@ -720,7 +720,7 @@ fn restore_kv(key: impl Into<SharedString>, value: &str, colors: UiColors) -> Di
             div()
                 .w(px(72.))
                 .flex_none()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(key),
         )
@@ -728,7 +728,7 @@ fn restore_kv(key: impl Into<SharedString>, value: &str, colors: UiColors) -> Di
             div()
                 .flex_1()
                 .min_w(px(0.))
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .whitespace_normal()
                 .child(value.to_string()),

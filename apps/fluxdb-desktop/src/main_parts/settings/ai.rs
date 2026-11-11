@@ -61,7 +61,7 @@ fn ai_pill(
         .py(px(1.))
         .rounded(px(4.))
         .bg(color.alpha(0.14))
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(color)
         .child(label)
 }
@@ -138,7 +138,7 @@ fn ai_settings_error_block(
                 .child(app_icon(AppIcon::CircleSlash, 15., colors.danger))
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.danger)
                         .child(format!("{}: {message}", tr("app.ai.error.load_failed"))),
                 ),
@@ -160,7 +160,7 @@ fn ai_empty_state(text: &str, colors: UiColors) -> gpui::AnyElement {
     div()
         .px_4()
         .py_6()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(text.to_string())
         .into_any_element()

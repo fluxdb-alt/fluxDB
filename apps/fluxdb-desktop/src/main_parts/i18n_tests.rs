@@ -1385,8 +1385,8 @@ mod i18n_e2e_tests {
             "keys omitted by a partial user pack fall back to English"
         );
         assert_eq!(
-            rust_i18n::t!("app.settings.editor.font_size").as_ref(),
-            "Font size"
+            rust_i18n::t!("app.settings.appearance.code_font_and_size").as_ref(),
+            "Code font and size"
         );
         assert_eq!(
             rust_i18n::t!("app.settings.data.backup_dir").as_ref(),
@@ -1718,4 +1718,366 @@ mod i18n_e2e_tests {
         );
     }
 
+    #[gpui::test]
+    fn appearance_page_renders_and_persists_font_settings(cx: &mut TestAppContext) {
+        let _guard = locale_guard();
+        let temp = tempfile::tempdir().expect("temp profile");
+        let storage = FileStorage::new(temp.path().join("profile"));
+        let settings = Settings {
+            locale: "en".to_string(),
+            ..Settings::default()
+        };
+        storage.save_settings(&settings).expect("save settings");
+        init_i18n(
+            &app_assets_base_path().join("locales"),
+            &storage.root_dir().join("locales"),
+            &settings.locale,
+        );
+        cx.update(|cx| {
+            extend_component_i18n();
+            gpui_component::init(cx);
+        });
+        let mut controller = AppController::new();
+        let _ = controller.dispatch(fluxdb_app::AppCommand::SaveSettings(settings.clone()));
+        assert!(matches!(
+            controller.dispatch(fluxdb_app::AppCommand::OpenSettings),
+            fluxdb_app::AppEvent::TabOpened(_)
+        ));
+        let storage_for_view = storage.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| {
+                navicat_main_new(
+                    window,
+                    cx,
+                    controller,
+                    storage_for_view,
+                    gpui_component::ThemeMode::Light,
+                )
+            });
+            Root::new(view, window, cx)
+        });
+        let view = cx.update(|window, cx| {
+            window
+                .root::<Root>()
+                .expect("base window root")
+                .expect("typed window root")
+                .read(cx)
+                .view()
+                .clone()
+                .downcast::<NavicatMain>()
+                .expect("production NavicatMain root view")
+        });
+        cx.update(|_, cx| {
+            view.update(cx, |this, _| {
+                this.settings_panel_section = SettingsPanelSection::Appearance;
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let save = cx
+            .debug_bounds("settings-appearance-save")
+            .expect("appearance save button must render");
+
+        cx.update(|_, cx| {
+            view.update(cx, |this, _| {
+                this.settings_editor_draft.global_font_family = "Menlo".to_string();
+                this.settings_editor_draft.ui_font_size = 17;
+                this.settings_editor_draft.editor_font_family = "Menlo".to_string();
+                this.settings_editor_draft.editor_font_size = 18;
+                this.settings_editor_draft.editor_line_height = 22;
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_click(save.center(), Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let saved = storage.load_settings().expect("reload saved settings");
+        assert_eq!(saved.global_font_family, "Menlo");
+        assert_eq!(saved.ui_font_size, 17);
+        assert_eq!(saved.editor_font_family, "Menlo");
+        assert_eq!(saved.editor_font_size, 18);
+        assert_eq!(saved.editor_line_height, 22);
+        cx.update(|_, cx| {
+            assert_eq!(
+                gpui_component::Theme::global(cx).font_family.to_string(),
+                "Menlo"
+            );
+            assert_eq!(
+                gpui_component::Theme::global(cx).mono_font_family.to_string(),
+                "Menlo"
+            );
+            // 界面字号驱动窗口 rem 基准，主题字号必须同步到草稿值。
+            assert_eq!(
+                f32::from(gpui_component::Theme::global(cx).font_size),
+                17.0
+            );
+        });
+    }
+
+    /// 新建主题：弹框渲染 → 填写名称 → 保存 → 落盘并立即应用。
+    #[gpui::test]
+    fn appearance_custom_theme_dialog_saves_and_applies(cx: &mut TestAppContext) {
+        let _guard = locale_guard();
+        let temp = tempfile::tempdir().expect("temp profile");
+        let storage = FileStorage::new(temp.path().join("profile"));
+        let settings = Settings {
+            locale: "en".to_string(),
+            ..Settings::default()
+        };
+        storage.save_settings(&settings).expect("save settings");
+        init_i18n(
+            &app_assets_base_path().join("locales"),
+            &storage.root_dir().join("locales"),
+            &settings.locale,
+        );
+        cx.update(|cx| {
+            extend_component_i18n();
+            gpui_component::init(cx);
+        });
+        let mut controller = AppController::new();
+        let _ = controller.dispatch(fluxdb_app::AppCommand::SaveSettings(settings.clone()));
+        assert!(matches!(
+            controller.dispatch(fluxdb_app::AppCommand::OpenSettings),
+            fluxdb_app::AppEvent::TabOpened(_)
+        ));
+        let storage_for_view = storage.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| {
+                navicat_main_new(
+                    window,
+                    cx,
+                    controller,
+                    storage_for_view,
+                    gpui_component::ThemeMode::Light,
+                )
+            });
+            Root::new(view, window, cx)
+        });
+        let view = cx.update(|window, cx| {
+            window
+                .root::<Root>()
+                .expect("base window root")
+                .expect("typed window root")
+                .read(cx)
+                .view()
+                .clone()
+                .downcast::<NavicatMain>()
+                .expect("production NavicatMain root view")
+        });
+        cx.update(|_, cx| {
+            view.update(cx, |this, _| {
+                this.settings_panel_section = SettingsPanelSection::Appearance;
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let new_theme = cx
+            .debug_bounds("settings-theme-new")
+            .expect("new theme button must render");
+        cx.simulate_click(new_theme.center(), Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let name_input = cx
+            .debug_bounds("theme-editor-name")
+            .expect("theme editor dialog must render");
+        // 弹框正文必须真正占高：父容器高度为 auto 时 flex_1 会把表单压成 0 高。
+        assert!(
+            f32::from(name_input.size.height) >= 20.0,
+            "theme editor body must not collapse"
+        );
+
+        cx.update(|window, cx| {
+            view.update(cx, |this, cx| {
+                let input = this
+                    .theme_editor
+                    .as_ref()
+                    .expect("theme editor open")
+                    .name_input
+                    .clone();
+                input.update(cx, |input, cx| {
+                    input.set_value("Test Theme".to_string(), window, cx)
+                });
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let save = cx
+            .debug_bounds("theme-editor-save")
+            .expect("theme editor save button must render");
+        cx.simulate_click(save.center(), Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let theme_file = storage.root_dir().join("themes").join("test-theme.json");
+        assert!(theme_file.exists(), "theme JSON must be written");
+        cx.update(|_, cx| {
+            assert!(
+                gpui_component::ThemeRegistry::global(cx)
+                    .themes()
+                    .contains_key("Test Theme"),
+                "saved theme must be registered"
+            );
+            assert!(
+                view.read(cx).theme_editor.is_none(),
+                "dialog closes after save"
+            );
+            assert_eq!(
+                view.read(cx).settings_editor_draft.light_theme, "Test Theme",
+                "new theme is selected for the current mode"
+            );
+        });
+        // 编辑：改名为 Renamed Theme，旧文件必须删除、新名称同步进入注册表。
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let edit = cx
+            .debug_bounds("settings-theme-card-edit")
+            .expect("hover edit affordance must render on custom theme card");
+        cx.simulate_click(edit.center(), Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|window, cx| {
+            view.update(cx, |this, cx| {
+                let dialog = this.theme_editor.as_ref().expect("editor reopened");
+                assert_eq!(
+                    dialog.name_input.read(cx).value().as_str(),
+                    "Test Theme",
+                    "editing prefills the existing theme name"
+                );
+                let input = dialog.name_input.clone();
+                input.update(cx, |input, cx| {
+                    input.set_value("Renamed Theme".to_string(), window, cx)
+                });
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let save = cx
+            .debug_bounds("theme-editor-save")
+            .expect("save button must render when editing");
+        cx.simulate_click(save.center(), Modifiers::default());
+        let renamed_file = storage.root_dir().join("themes").join("renamed-theme.json");
+        assert!(renamed_file.exists(), "renamed theme JSON must be written");
+        assert!(!theme_file.exists(), "stale theme JSON must be removed on rename");
+        cx.update(|_, cx| {
+            let registry = gpui_component::ThemeRegistry::global(cx);
+            assert!(
+                registry.themes().contains_key("Renamed Theme"),
+                "renamed theme must be registered"
+            );
+            // 注册表里的旧名称由文件监听异步清理，磁盘名单必须立刻更新。
+            assert!(
+                !view.read(cx).custom_theme_names.contains("Test Theme"),
+                "old theme name must leave the on-disk list"
+            );
+            assert_eq!(
+                view.read(cx).settings_editor_draft.light_theme, "Renamed Theme",
+                "edited theme stays selected"
+            );
+        });
+        // 删除：文件移入 .trash，选中回退到该模式默认主题。
+        let default_light = cx.update(|_, cx| {
+            gpui_component::ThemeRegistry::global(cx)
+                .default_light_theme()
+                .name
+                .to_string()
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let delete = cx
+            .debug_bounds("settings-theme-card-delete")
+            .expect("hover delete affordance must render on custom theme card");
+        cx.simulate_click(delete.center(), Modifiers::default());
+        assert!(!renamed_file.exists(), "deleted theme JSON must leave the root dir");
+        let trash_entries = std::fs::read_dir(storage.root_dir().join("themes").join(".trash"))
+            .expect("trash dir must exist")
+            .flatten()
+            .count();
+        assert_eq!(trash_entries, 1, "deleted theme must be recoverable from .trash");
+        cx.update(|_, cx| {
+            assert!(
+                !view.read(cx).custom_theme_names.contains("Renamed Theme"),
+                "deleted theme must leave the on-disk list"
+            );
+            assert_eq!(
+                view.read(cx).settings_editor_draft.light_theme, default_light,
+                "selection falls back to the default light theme"
+            );
+        });
+        // 导入 Zed 主题：文件写入、注册表注入并选中。
+        cx.update(|_, cx| {
+            view.update(cx, |this, cx| {
+                let count = this
+                    .import_theme_content(
+                        r##"{
+                            "name": "Zed One",
+                            "themes": [{
+                                "name": "Zed Test",
+                                "appearance": "light",
+                                "style": {
+                                    "background": "#fafafa",
+                                    "text": "#383a42",
+                                    "editor.background": "#fafafa",
+                                    "syntax": { "keyword": { "color": "#a626a4" } }
+                                }
+                            }]
+                        }"##,
+                        cx,
+                    )
+                    .expect("import zed theme");
+                assert_eq!(count, 1, "one theme imported");
+            });
+        });
+        assert!(
+            storage
+                .root_dir()
+                .join("themes")
+                .join("zed-test.json")
+                .exists(),
+            "imported theme JSON must be written"
+        );
+        cx.update(|_, cx| {
+            assert!(
+                gpui_component::ThemeRegistry::global(cx)
+                    .themes()
+                    .contains_key("Zed Test"),
+                "imported theme must be registered"
+            );
+            assert_eq!(
+                view.read(cx).settings_editor_draft.light_theme, "Zed Test",
+                "imported theme is selected"
+            );
+        });
+        // 导入 VS Code 主题：同一入口按结构识别，真实主题文件（One Dark Pro）落盘并选中。
+        cx.update(|_, cx| {
+            view.update(cx, |this, cx| {
+                let count = this
+                    .import_theme_content(
+                        include_str!("settings/testdata/one-dark-pro.json"),
+                        cx,
+                    )
+                    .expect("import vscode theme");
+                assert_eq!(count, 1, "one vscode theme imported");
+            });
+        });
+        assert!(
+            storage
+                .root_dir()
+                .join("themes")
+                .join("one-dark-pro.json")
+                .exists(),
+            "imported vscode theme JSON must be written"
+        );
+        cx.update(|_, cx| {
+            assert!(
+                gpui_component::ThemeRegistry::global(cx)
+                    .themes()
+                    .contains_key("One Dark Pro"),
+                "imported vscode theme must be registered"
+            );
+            assert_eq!(
+                view.read(cx).settings_editor_draft.dark_theme, "One Dark Pro",
+                "imported vscode theme is selected"
+            );
+            // 深色主题导入后自动切到深色模式，否则配色列表（只列当前模式）看不到它。
+            assert_eq!(
+                view.read(cx).theme_mode,
+                gpui_component::ThemeMode::Dark,
+                "import switches to the imported theme mode"
+            );
+        });
+    }
+
 }
+

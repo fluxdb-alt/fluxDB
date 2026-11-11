@@ -1120,6 +1120,20 @@ impl Editor {
         self.fold_candidates_cache.borrow_mut().take();
     }
 
+    /// 切换编辑器字体族。字体变化会改变字符宽度，需同时失效按列/按宽度
+    /// 计算的缓存，否则光标、折叠与命中位置会沿用旧字体的测量结果。
+    pub(crate) fn set_font_name(&mut self, font_name: impl Into<String>, cx: &mut Context<Self>) {
+        let font_name = font_name.into();
+        if self.font_name == font_name {
+            return;
+        }
+        self.font_name = font_name;
+        self.content_width_cache.borrow_mut().take();
+        self.line_width_hint.borrow_mut().take();
+        self.shaped_line_cache.borrow_mut().clear();
+        cx.notify();
+    }
+
     /// 由接入层/宿主调用，把当前 settings 应用到编辑器。
     /// `line_height` 为 0 时回退到 `font_size + 2.` 的默认行为。
     /// `tab_size` 为 0 时保持当前制表宽不变（供未跟踪该 settings 的调用方使用）。

@@ -344,7 +344,7 @@ fn backup_list_content(
                 .border_color(colors.border_soft)
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::BOLD)
                         .child(
                             tr("app.backup.title_for_db")
@@ -414,7 +414,7 @@ fn backup_list_hint(text: impl Into<SharedString>, colors: UiColors) -> Div {
         .py_6()
         .flex()
         .justify_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(text)
 }
@@ -435,7 +435,7 @@ fn backup_text_button(
         .border_1()
         .border_color(colors.border)
         .bg(colors.panel_bg)
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.text)
         .cursor_pointer()
         .hover(|style| style.bg(colors.hover))
@@ -461,7 +461,7 @@ fn backup_list_header_row(colors: UiColors) -> Div {
         .items_center()
         .gap_2()
         .bg(colors.panel_alt)
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(div().flex_1().min_w_0().child(tr("app.backup.header.name")))
         .child(div().w(px(BACKUP_COL_MODIFIED)).child(tr("app.backup.header.modified")))
@@ -495,7 +495,7 @@ fn backup_running_row(
         .gap_2()
         .border_b_1()
         .border_color(colors.border_soft)
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .child(
             div()
                 .flex_1()
@@ -576,7 +576,7 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
         .gap_2()
         .border_b_1()
         .border_color(colors.border_soft)
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .hover(|style| style.bg(colors.hover))
         .child(
             div()
@@ -708,7 +708,7 @@ fn backup_tables_modal(
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .child(
                         div()
                             .w(px(32.))
@@ -755,7 +755,7 @@ fn backup_tables_modal(
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .key_context("BackupTablesModal")
                 .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
@@ -782,7 +782,7 @@ fn backup_tables_modal(
                                 .child(tr("app.backup.table_manifest"))
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(ui_text_size(11.))
                                         .font_weight(gpui::FontWeight::NORMAL)
                                         .text_color(colors.muted)
                                         .overflow_hidden()
@@ -805,7 +805,7 @@ fn backup_tables_modal(
                             .flex_none()
                             .px_4()
                             .pt_2()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(tr("app.backup.includes_views")),
                     )
@@ -884,7 +884,7 @@ fn restore_records_modal(
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .key_context("RestoreRecordsModal")
                 .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
@@ -911,7 +911,7 @@ fn restore_records_modal(
                                 .child(tr("app.backup.restore_records"))
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(ui_text_size(11.))
                                         .font_weight(gpui::FontWeight::NORMAL)
                                         .text_color(colors.muted)
                                         .overflow_hidden()
@@ -978,14 +978,14 @@ fn restore_record_row(record: &fluxdb_storage::RestoreRecord, colors: UiColors) 
                 .flex()
                 .items_center()
                 .gap_2()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .child(div().text_color(colors.muted).child(time))
                 .child(div().font_weight(gpui::FontWeight::BOLD).text_color(status_color).child(status))
                 .child(div().overflow_hidden().text_ellipsis().child(tr("app.backup.restore_summary.to_target").replace("%{target}", &record.target).replace("%{objects}", &object_count))),
         )
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(record.result.clone()),
         )
@@ -1034,7 +1034,7 @@ fn backup_delete_confirm_modal(
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .key_context("BackupDeleteModal")
                 .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
@@ -1070,7 +1070,7 @@ fn backup_delete_confirm_modal(
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(tr("app.backup.delete_detail")),
                         ),
@@ -1147,7 +1147,7 @@ fn backup_note_modal(
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .key_context("BackupNoteModal")
                 .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
@@ -1167,7 +1167,7 @@ fn backup_note_modal(
                         .child(tr("app.backup.edit_note"))
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .font_weight(gpui::FontWeight::NORMAL)
                                 .text_color(colors.muted)
                                 .overflow_hidden()
@@ -1196,12 +1196,12 @@ fn backup_note_modal(
                                         .focus_bordered(false)
                                         .w_full()
                                         .h_full()
-                                        .text_size(px(13.)),
+                                        .text_size(ui_text_size(13.)),
                                 ),
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(tr("app.backup.note_help")),
                         ),

@@ -56,7 +56,7 @@ fn pg_privileges_panel(
         };
         body = body.child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(summary),
         );
@@ -86,7 +86,7 @@ fn pg_privileges_panel(
         body = body.child(pg_privilege_table(tab_id, admin, colors, cx));
         let note = tr("app.pg_role.privileges.note");
         body = body
-            .child(div().text_size(px(11.)).text_color(colors.muted).child(note));
+            .child(div().text_size(ui_text_size(11.)).text_color(colors.muted).child(note));
     }
 
     // ===== 待保存的授权变更 =====
@@ -144,14 +144,14 @@ fn pg_privileges_panel(
                     .gap_2()
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(0xff9f0a))
                             .child(text),
                     )
                     .child(
                         div()
                             .id(("pg-grant-edit-remove", index))
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(colors.muted)
                             .cursor_pointer()
                             .hover(move |style| style.text_color(rgb(0xff3b45)))
@@ -181,7 +181,7 @@ fn pg_privileges_panel(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.pg_role.pending_grant_changes")),
@@ -246,7 +246,7 @@ fn pg_grant_target_selector(
                 })
                 .flex()
                 .items_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(if selected { colors.text } else { colors.muted })
                 .on_mouse_down(
                     MouseButton::Left,
@@ -268,7 +268,7 @@ fn pg_grant_target_selector(
             .flex_wrap()
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(colors.muted)
                     .child(tr("app.pg_role.header.database")),
             )
@@ -280,7 +280,7 @@ fn pg_grant_target_selector(
             .when(kind != PgGrantObjectKind::Database, |row| {
                 row.child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child("Schema"),
                 )
@@ -295,7 +295,7 @@ fn pg_grant_target_selector(
             .when(pg_grant_uses_object_selector(kind), |row| {
                 row.child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(tr("app.pg_role.header.object")),
                 )
@@ -310,7 +310,7 @@ fn pg_grant_target_selector(
             .when(targets_loading, |row| {
                 row.child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(tr("app.pg_role.loading_targets")),
                 )
@@ -347,7 +347,7 @@ fn pg_privilege_table(
                 .border_b_1()
                 .border_color(colors.border)
                 .bg(colors.panel_alt)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(div().flex_1().min_w(px(0.)).px_3().child(tr("app.pg_role.header.privilege")))
@@ -403,7 +403,7 @@ fn pg_privilege_table(
                 .border_b_1()
                 .border_color(colors.border_soft)
                 .hover(move |style| style.bg(colors.hover))
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .child(
                     div()
@@ -419,7 +419,7 @@ fn pg_privilege_table(
                                 div()
                                     .px_1()
                                     .rounded(colors.radius * 0.5)
-                                    .text_size(px(10.))
+                                    .text_size(ui_text_size(10.))
                                     .text_color(rgb(0xff9f0a))
                                     .child(tr("app.pg_role.pending")),
                             )

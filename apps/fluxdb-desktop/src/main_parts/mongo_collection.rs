@@ -300,7 +300,7 @@ impl NavicatMain {
                 .border_b_1()
                 .border_color(colors.border)
                 .overflow_hidden()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.danger)
                 .whitespace_nowrap()
                 .text_ellipsis()
@@ -376,7 +376,7 @@ fn mongo_section_bar(
                     .rounded(colors.radius)
                     .border_1()
                     .border_color(colors.border)
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.warning)
                     .child(tr("app.mongo.read_only")),
             )
@@ -760,7 +760,7 @@ fn mongo_query_input(
             .bg(tone.mint)
             .flex()
             .items_center()
-            .text_size(px(10.))
+            .text_size(ui_text_size(10.))
             .font_family(crate::PLATFORM_MONOSPACE_FONT)
             .text_color(colors.muted)
             .child(tr("app.mongo.query.filter")),
@@ -946,7 +946,7 @@ fn mongo_query_number_box(
                             .focus_bordered(false)
                             .w_full()
                             .px_2()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .font_family(crate::PLATFORM_MONOSPACE_FONT),
                     ),
             ),
@@ -978,14 +978,14 @@ fn mongo_query_cell_label(
         .border_r_1()
         .border_color(colors.border)
         .bg(tone.mint)
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .text_color(colors.muted)
         .whitespace_nowrap()
         .child(label)
         .when_some(hint, |this, hint| {
             this.child(
                 div()
-                    .text_size(px(9.))
+                    .text_size(ui_text_size(9.))
                     .text_color(colors.muted)
                     .child(hint),
             )
@@ -1043,7 +1043,7 @@ fn mongo_query_advanced_toggle(
         .h(px(20.))
         .ghost()
         .px(px(0.))
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .label(tr("app.mongo.query.advanced"))
         // 首层开着、第二层收起时，低频条件同样不可见：这里也要给计数。
         .when(advanced_count > 0 && !expanded, |this| {
@@ -1161,7 +1161,7 @@ fn mongo_query_count_badge(
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(9.))
+        .text_size(ui_text_size(9.))
         .font_family(crate::PLATFORM_MONOSPACE_FONT)
         .text_color(colors.success)
         .child(SharedString::from(count.to_string()))
@@ -1235,7 +1235,7 @@ fn mongo_query_builder_toggle(
         .h(px(MONGO_QUERY_CONTROL_HEIGHT))
         .ghost()
         .px(px(8.))
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .when(expanded, |this| {
             this.bg(tone.green_soft).text_color(colors.success)
         })
@@ -1317,7 +1317,7 @@ fn mongo_results_toolbar(
         .child(bar)
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(summary),
         )
@@ -1509,20 +1509,20 @@ fn mongo_error_block(
         .gap_2()
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.danger)
                 .child(SharedString::from(error.title.clone())),
         )
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(SharedString::from(error.message.clone())),
         )
         .when_some(error.detail.clone(), |this, detail| {
             this.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(SharedString::from(detail)),
             )
@@ -1569,7 +1569,7 @@ fn mongo_inspector(
                 .child(
                     div()
                         .flex_1()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.text)
                         .child(tr("app.mongo.document_detail")),
                 )
@@ -1603,7 +1603,7 @@ fn mongo_inspector(
                 .gap_2()
                 .border_b_1()
                 .border_color(colors.border_soft)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.mongo.extended_json"))
                 .child(div().flex_1())
@@ -1623,7 +1623,7 @@ fn mongo_inspector(
                 .py_1()
                 .border_t_1()
                 .border_color(colors.border)
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(tr("app.mongo.not_ai_context")),
         )
@@ -1664,7 +1664,7 @@ fn mongo_pager(
         .gap_2()
         .border_t_1()
         .border_color(colors.border)
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .child(SharedString::from(format!(
             "{} {range}",
@@ -1979,7 +1979,7 @@ impl NavicatMain {
                 .close_button(true)
                 .overlay_closable(true)
                 .keyboard(true)
-                .child(div().text_size(px(13.)).child(description.clone()))
+                .child(div().text_size(ui_text_size(13.)).child(description.clone()))
                 .footer(
                     div()
                         .flex()
@@ -2107,7 +2107,7 @@ fn mongo_indexes_stats_banner(colors: UiColors) -> Div {
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.warning)
         .child(app_icon(AppIcon::TriangleAlert, 12., colors.warning))
         .child(tr("app.mongo.indexes.stats_node_note"))
@@ -2129,7 +2129,7 @@ fn mongo_indexes_header(
         .border_b_1()
         .border_color(colors.border)
         .bg(colors.panel_alt)
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .children(
@@ -2256,7 +2256,7 @@ fn mongo_index_row_cell(
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.text)
                         .child(SharedString::from(index.name.clone())),
                 )
@@ -2381,7 +2381,7 @@ fn mongo_index_key_direction(value: &str, colors: UiColors) -> AnyElement {
         "1" => app_icon(AppIcon::ArrowUp, 11., colors.muted).into_any_element(),
         "-1" => app_icon(AppIcon::ArrowDown, 11., colors.muted).into_any_element(),
         other => div()
-            .text_size(px(10.))
+            .text_size(ui_text_size(10.))
             .text_color(colors.muted)
             .child(SharedString::from(format!("({other})")))
             .into_any_element(),
@@ -2420,7 +2420,7 @@ fn mongo_index_expanded_definition(
                         .border_color(colors.border_soft)
                         .bg(colors.panel_alt)
                         .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.text)
                         .child(SharedString::from(field.field.clone()))
                         .child(mongo_index_key_direction(&field.value, colors))
@@ -2429,7 +2429,7 @@ fn mongo_index_expanded_definition(
         .when_some(index.partial_filter.clone(), |this, filter| {
             this.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(SharedString::from(format!(
                         "{}: {filter}",
@@ -2556,7 +2556,7 @@ fn mongo_index_status_pill(ready: bool, colors: UiColors) -> Div {
         .py_0p5()
         .rounded(px(999.))
         .bg(color.opacity(0.14))
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(color)
         .child(label)
@@ -2568,7 +2568,7 @@ fn mongo_index_muted_text(text: SharedString, colors: UiColors) -> Div {
         .overflow_hidden()
         .whitespace_nowrap()
         .text_ellipsis()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .child(text)
 }
@@ -2582,7 +2582,7 @@ fn mongo_index_badge(label: SharedString, color: gpui::Rgba, colors: UiColors) -
         .border_1()
         .border_color(colors.border)
         .bg(colors.panel_bg)
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .text_color(color)
         .whitespace_nowrap()
         .child(label)
@@ -2664,7 +2664,7 @@ fn mongo_info_section(
                             .items_center()
                             .gap_3()
                             .py_0p5()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .child(div().w(px(140.)).text_color(colors.muted).child(label))
                             .child(
                                 div()
@@ -2677,7 +2677,7 @@ fn mongo_info_section(
                         this.child(
                             div()
                                 .mt_2()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(colors.muted)
                                 .child(SharedString::from(format!(
                                     "{}: {view_on}",

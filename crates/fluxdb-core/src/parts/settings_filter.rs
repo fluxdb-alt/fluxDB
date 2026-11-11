@@ -158,6 +158,9 @@ pub struct Settings {
     pub scrollbar_mode: ScrollbarMode,
     #[serde(default)]
     pub ui_density: UiDensity,
+    /// 界面字号（px，设计基准 16）。0 表示旧配置未写入，按 `ui_density` 回退。
+    #[serde(default)]
+    pub ui_font_size: u32,
     #[serde(default = "default_true")]
     pub show_status_bar: bool,
     #[serde(default)]
@@ -188,6 +191,10 @@ pub struct Settings {
     pub editor_font_size: u32,
     #[serde(default = "default_editor_line_height")]
     pub editor_line_height: u32,
+    /// 代码/编辑器字体族；空字符串表示跟随平台等宽字体。
+    /// 当前作用于 SQL 查询编辑器与自研代码编辑器。
+    #[serde(default)]
+    pub editor_font_family: String,
     #[serde(default = "default_editor_tab_width")]
     pub editor_tab_width: u32,
     #[serde(default)]
@@ -265,6 +272,7 @@ impl Default for Settings {
             focus_ring: true,
             scrollbar_mode: ScrollbarMode::default(),
             ui_density: UiDensity::default(),
+            ui_font_size: default_ui_font_size(),
             show_status_bar: true,
             reduce_motion: false,
             performance_diagnostics: false,
@@ -278,6 +286,7 @@ impl Default for Settings {
             show_inspector: true,
             editor_font_size: default_editor_font_size(),
             editor_line_height: default_editor_line_height(),
+            editor_font_family: String::new(),
             editor_tab_width: default_editor_tab_width(),
             editor_word_wrap: false,
             confirm_dangerous_sql: default_dangerous_sql_confirmation(),
@@ -297,6 +306,21 @@ impl Default for Settings {
             pg_dump_path: String::new(),
             pg_client_dir: String::new(),
             pg_client_download_source: String::new(),
+        }
+    }
+}
+
+impl Settings {
+    /// 界面字号（px）。新配置直接使用；旧配置没有该字段（0）时按 `ui_density`
+    /// 回退，保持升级前外观。返回值收敛到 12..=18，脏配置不会撑破布局。
+    pub fn effective_ui_font_size(&self) -> u32 {
+        match self.ui_font_size {
+            0 => match self.ui_density {
+                UiDensity::Compact => 15,
+                UiDensity::Standard => 16,
+                UiDensity::Comfortable => 17,
+            },
+            size => size.clamp(12, 18),
         }
     }
 }
@@ -346,6 +370,10 @@ impl DangerousSqlAction {
             default_checked: false,
         },
     ];
+}
+
+fn default_ui_font_size() -> u32 {
+    16
 }
 
 fn default_editor_font_size() -> u32 {
@@ -478,4 +506,34 @@ pub enum FilterOp {
     IsNotEmpty,
     Exists,
     NotExists,
+}
+
+#[cfg(test)]
+mod ui_font_size_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_config_falls_back_to_ui_density() {
+        let mut settings = Settings {
+            ui_font_size: 0,
+            ui_density: UiDensity::Compact,
+            ..Settings::default()
+        };
+        assert_eq!(settings.effective_ui_font_size(), 15);
+        settings.ui_density = UiDensity::Comfortable;
+        assert_eq!(settings.effective_ui_font_size(), 17);
+    }
+
+    #[test]
+    fn explicit_ui_font_size_is_clamped() {
+        let mut settings = Settings {
+            ui_font_size: 99,
+            ..Settings::default()
+        };
+        assert_eq!(settings.effective_ui_font_size(), 18);
+        settings.ui_font_size = 1;
+        assert_eq!(settings.effective_ui_font_size(), 12);
+        settings.ui_font_size = 14;
+        assert_eq!(settings.effective_ui_font_size(), 14);
+    }
 }

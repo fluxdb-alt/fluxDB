@@ -355,7 +355,7 @@ fn quick_open_table_modal(
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .whitespace_nowrap()
                                 .child("Esc"),
@@ -391,7 +391,7 @@ fn quick_open_table_modal(
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .text_size(px(13.))
+                                    .text_size(ui_text_size(13.))
                                     .text_color(colors.muted)
                                     .child(tr("app.quick_open_table.empty")),
                             )
@@ -471,8 +471,8 @@ fn quick_open_table_row(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(13.))
-                        .line_height(px(18.))
+                        .text_size(ui_text_size(13.))
+                        .line_height(ui_text_size(18.))
                         .text_color(colors.text)
                         .whitespace_nowrap()
                         .overflow_hidden()
@@ -487,8 +487,8 @@ fn quick_open_table_row(
                 .when(!subtitle.is_empty(), |this| {
                     this.child(
                         div()
-                            .text_size(px(11.))
-                            .line_height(px(15.))
+                            .text_size(ui_text_size(11.))
+                            .line_height(ui_text_size(15.))
                             .text_color(colors.muted)
                             .whitespace_nowrap()
                             .overflow_hidden()

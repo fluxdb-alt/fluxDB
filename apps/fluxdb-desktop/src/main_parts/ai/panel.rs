@@ -288,7 +288,7 @@ fn ai_chat_panel(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(
@@ -298,7 +298,7 @@ fn ai_chat_panel(
                 )
                 .child(
                     div()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.muted)
                         .child(tr("app.ai.chat.history_hint")),
                 ),
@@ -308,7 +308,7 @@ fn ai_chat_panel(
                 div()
                     .py_4()
                     .text_color(colors.muted)
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .child(tr("app.ai.chat.empty")),
             );
         }
@@ -354,7 +354,7 @@ fn ai_chat_panel(
                                         div()
                                             .flex_1()
                                             .min_w(px(0.))
-                                            .text_size(px(12.))
+                                            .text_size(ui_text_size(12.))
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .text_color(colors.text)
                                             .truncate()
@@ -379,7 +379,7 @@ fn ai_chat_panel(
                             .child(
                                 div()
                                     .w_full()
-                                    .text_size(px(10.))
+                                    .text_size(ui_text_size(10.))
                                     .text_color(colors.muted)
                                     .truncate()
                                     .child(meta),
@@ -412,13 +412,13 @@ fn ai_chat_panel(
                     .child(app_icon(AppIcon::Bot, 28., colors.muted))
                     .child(
                         div()
-                            .text_size(px(14.))
+                            .text_size(ui_text_size(14.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(tr("app.ai.chat.empty_title")),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(tr("app.ai.chat.empty_subtitle")),
                     )
@@ -493,7 +493,7 @@ fn ai_chat_panel(
                                 .flex()
                                 .items_center()
                                 .gap_1p5()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(colors.muted)
                                 .child(app_icon(AppIcon::Users, 13., colors.muted))
@@ -531,7 +531,7 @@ fn ai_chat_panel(
                                             .flex()
                                             .items_center()
                                             .gap_1p5()
-                                            .text_size(px(11.))
+                                            .text_size(ui_text_size(11.))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(colors.text)
                                             .child(app_icon(AppIcon::Bot, 13., colors.success))
@@ -573,7 +573,7 @@ fn ai_chat_panel(
         if running {
             timeline = timeline.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(if this.ai_chat.stream.is_finished() {
                         tr("app.ai.chat.streaming_reply")
@@ -603,7 +603,7 @@ fn ai_chat_panel(
     if !running && chat.active_turn_id.is_some() && !has_recovery_notice {
         timeline = timeline.child(
             div().id("ai-chat-unfinished").py_1().flex().items_center().gap_1p5()
-                .text_size(px(10.)).text_color(colors.muted)
+                .text_size(ui_text_size(10.)).text_color(colors.muted)
                 .child(app_icon(AppIcon::CircleSlash, 12., colors.warning))
                 .child(tr("app.ai.chat.paused_notice")),
         );
@@ -716,7 +716,7 @@ fn ai_chat_panel(
                     div()
                         .flex_1()
                         .min_w(px(0.))
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .truncate()
                         .child(if history {
@@ -728,7 +728,7 @@ fn ai_chat_panel(
                 .child(
                     div().id("ai-chat-tokens").debug_selector(|| "ai-chat-tokens".into())
                         .aria_label(token_label.clone()).flex_none()
-                        .text_size(px(10.)).text_color(colors.muted)
+                        .text_size(ui_text_size(10.)).text_color(colors.muted)
                         .child(token_label),
                 )
                 .child(
@@ -799,7 +799,7 @@ fn ai_chat_panel(
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.muted)
                         .child(if scope_primary.is_some() {
                             tr("app.ai.chat.turn_target")

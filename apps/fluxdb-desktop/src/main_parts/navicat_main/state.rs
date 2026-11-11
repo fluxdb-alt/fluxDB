@@ -64,6 +64,10 @@ struct NavicatMain {
     new_connection_inputs: NewConnectionInputs,
     /// 模型新建/编辑弹框；`None` 表示未打开（T013）。
     ai_model_dialog: Option<AiModelDialog>,
+    /// 外观页「新建主题」弹框；`None` 表示未打开。
+    theme_editor: Option<ThemeEditorDialog>,
+    /// 用户主题目录中声明的主题名，用于外观页区分内置/自定义。
+    custom_theme_names: BTreeSet<String>,
     /// 插件「管理」弹框；`None` 表示未打开。字段来自插件自己的配置声明。
     ai_plugin_config_dialog: Option<AiPluginConfigDialog>,
     /// 调试用：首帧后自动打开第一个可配置插件的管理弹框（仅 debug 构建读取）。
@@ -1096,10 +1100,16 @@ struct NavicatMain {
     settings_data_groups_collapsed: SettingsDataGroupsCollapsed,
     settings_font_size_slider: Entity<SliderState>,
     _settings_font_size_slider_subscription: Subscription,
+    /// 外观页「界面字号」滑杆（12–18 px），拖动时实时套用全局 rem 基准。
+    settings_ui_font_size_slider: Entity<SliderState>,
+    _settings_ui_font_size_slider_subscription: Subscription,
     settings_line_height_input: Entity<InputState>,
     _settings_line_height_subscription: Subscription,
-    settings_radius_input: Entity<InputState>,
-    _settings_radius_subscription: Subscription,
+    /// 外观页的界面字体 / 代码字体下拉（系统已安装字体，首项为跟随平台默认）。
+    settings_ui_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
+    _settings_ui_font_subscription: Subscription,
+    settings_code_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
+    _settings_code_font_subscription: Subscription,
     pg_client: NativeClientState,
     mysql_client: NativeClientState,
     /// 备份对话框打开时的预检结果：PostgreSQL 连接但本机缺少 pg_dump。

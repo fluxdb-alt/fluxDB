@@ -850,7 +850,7 @@ fn sql_file_build_dialog(
                 .flex_1()
                 .min_h(px(0.))
                 .py_4()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .child(tr("app.sql_file.log_empty")),
         };
@@ -884,7 +884,7 @@ fn sql_file_build_dialog(
                 .child(app_icon(AppIcon::FileSql, 18., colors.text))
                 .child(
                     div()
-                        .text_size(px(18.))
+                        .text_size(ui_text_size(18.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.sql_file.title")),
@@ -1042,7 +1042,7 @@ fn sql_file_path_field(views: &SqlFileDialogViews, colors: UiColors) -> Div {
                                 .focus_bordered(false)
                                 .w_full()
                                 .h_full()
-                                .text_size(px(13.)),
+                                .text_size(ui_text_size(13.)),
                         ),
                 )
                 .child(
@@ -1106,7 +1106,7 @@ fn sql_file_check_row(
     Checkbox::new(id)
         .checked(checked)
         .label(label)
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .on_click(move |new_checked, _window, cx| {
             let value = *new_checked;
             let _ = view.update(cx, |this, cx| {
@@ -1124,7 +1124,7 @@ fn sql_file_check_row(
 fn sql_file_section_label(label: impl Into<SharedString>, colors: UiColors) -> Div {
     let label = label.into();
     div()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(label)
@@ -1143,7 +1143,7 @@ fn sql_file_log_body(task: SqlFileExecutionTaskState, colors: UiColors) -> Div {
         list = list.child(
             div()
                 .text_color(colors.muted)
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .child(tr("app.sql_file.running_log")),
         );
     } else {
@@ -1152,7 +1152,7 @@ fn sql_file_log_body(task: SqlFileExecutionTaskState, colors: UiColors) -> Div {
             list = list.child(
                 div()
                     .text_color(colors.muted)
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .px_2()
                     .py_1()
                     .child(
@@ -1178,7 +1178,7 @@ fn sql_file_log_body(task: SqlFileExecutionTaskState, colors: UiColors) -> Div {
                 .flex()
                 .items_center()
                 .gap_3()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .child(tr("app.sql_file.log.connection").replace("%{id}", &task.connection_id.0.to_string()))
                 .child(tr("app.sql_file.log.database").replace(
@@ -1191,7 +1191,7 @@ fn sql_file_log_body(task: SqlFileExecutionTaskState, colors: UiColors) -> Div {
         )
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .overflow_hidden()
                 .child(task.path.display().to_string()),
@@ -1201,7 +1201,7 @@ fn sql_file_log_body(task: SqlFileExecutionTaskState, colors: UiColors) -> Div {
                 .flex()
                 .items_center()
                 .gap_5()
-                .text_size(px(14.))
+                .text_size(ui_text_size(14.))
                 .child(tr("app.sql_file.log.queries").replace("%{count}", &task.total.max(task.processed).to_string()))
                 .child(tr("app.sql_file.log.processed").replace("%{count}", &task.processed.to_string()))
                 .child(tr("app.sql_file.log.errors").replace("%{count}", &task.errors.to_string()))
@@ -1227,7 +1227,7 @@ fn sql_file_log_error(error: String, colors: UiColors) -> Div {
         .rounded(colors.radius)
         .bg(if colors.is_dark { rgb(0x3a2020) } else { rgb(0xffeeee) })
         .p_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(rgb(0xd64545))
         .child(error)
 }
@@ -1250,7 +1250,7 @@ fn sql_file_log_row(entry: &SqlFileExecutionLogEntry, colors: UiColors) -> Div {
         .flex()
         .items_center()
         .gap_3()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .hover(move |style| style.bg(colors.hover))
         .child(div().w(px(34.)).text_color(colors.muted).child(format!("#{}", entry.index)))
         .child(div().w(px(42.)).text_color(status_color).child(status))
