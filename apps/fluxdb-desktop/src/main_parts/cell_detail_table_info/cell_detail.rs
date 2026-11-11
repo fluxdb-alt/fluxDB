@@ -206,7 +206,7 @@ fn cell_detail_panel(
                             .focus_bordered(false)
                             .w_full()
                             .h_full()
-                            .text_size(px(13.)),
+                            .text_size(ui_text_size(13.)),
                     )
             }
         } else if is_large {
@@ -349,7 +349,7 @@ fn cell_detail_value_header(
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.muted)
                         .child(tr("app.placeholder.value")),
@@ -636,7 +636,7 @@ fn cell_detail_value_preview(
         .cursor_pointer()
         .flex()
         .items_start()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(text_color)
         .hover(move |style| style.bg(colors.hover))
         .on_mouse_down(
@@ -723,7 +723,7 @@ fn cell_detail_meta_item_colored(
         .flex_col()
         .justify_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .child(div().text_color(colors.muted).child(label))
         .child(
             div()
@@ -777,7 +777,7 @@ fn cell_detail_action_button(label: impl Into<SharedString>, colors: UiColors) -
         .border_1()
         .border_color(colors.border)
         .bg(colors.panel_alt)
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.text)
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .cursor_pointer()

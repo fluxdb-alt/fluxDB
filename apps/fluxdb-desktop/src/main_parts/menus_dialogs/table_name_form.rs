@@ -143,7 +143,7 @@ fn table_name_form_modal(
                                 .child(
                                     div()
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_size(px(15.))
+                                        .text_size(ui_text_size(15.))
                                         .child(format!("{title}：{}", object_path.name)),
                                 ),
                         )
@@ -186,7 +186,7 @@ fn table_name_form_modal(
                                     .id((key_context, 2u64))
                                     .debug_selector(|| format!("{key_context}-error"))
                                     .aria_label(error.clone())
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(colors.danger)
                                     .child(error),
                             )
@@ -249,7 +249,7 @@ fn table_name_field(
         .gap_2()
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(label.clone()),
@@ -270,7 +270,7 @@ fn table_name_field(
                         .disabled(running)
                         .w_full()
                         .h_full()
-                        .text_size(px(13.)),
+                        .text_size(ui_text_size(13.)),
                 ),
         )
 }
@@ -303,7 +303,7 @@ fn table_sql_preview_box(
         .gap_1()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child("SQL"),
@@ -321,7 +321,7 @@ fn table_sql_preview_box(
                         .appearance(false)
                         .bordered(false)
                         .readonly(true)
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_family(EDITOR_FONT)
                         .p_2()
                         .size_full(),

@@ -201,7 +201,7 @@ fn user_admin_privileges_toolbar(
         .gap_2()
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(tr("app.user_admin.privileges.list")),
@@ -244,7 +244,7 @@ fn user_admin_privileges_header(privileges: &[&'static str], colors: UiColors) -
         .bg(colors.panel_alt)
         .flex()
         .items_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(
@@ -403,7 +403,7 @@ fn user_admin_privilege_database_cell(
                 .min_w(px(0.))
                 .flex_1()
                 .truncate()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .child(database),
         )
@@ -458,7 +458,7 @@ fn user_admin_privilege_database_menu(
                 .flex()
                 .items_center()
                 .gap_2()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(if active { colors.text } else { colors.muted })
                 .child(div().w(px(16.)).when(active, |this| {
                     this.child(app_icon(AppIcon::Check, 13., rgb(0x2563eb)))

@@ -128,7 +128,7 @@ fn sqlserver_form_panel(
     let mut form = div().max_w(px(620.)).flex().flex_col().gap_3().child(
         div()
             .mb_1()
-            .text_size(px(15.))
+            .text_size(ui_text_size(15.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(colors.text)
             .child(title),
@@ -273,7 +273,7 @@ fn sqlserver_form_panel(
         form = form.child(
             div()
                 .ml(px(120.))
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(rgb(0xff3b45))
                 .child(tr("app.sqlserver_security.password_mismatch")),
         );
@@ -297,7 +297,7 @@ fn sqlserver_form_row(label: SharedString, colors: UiColors) -> Div {
         div()
             .w(px(120.))
             .flex_none()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(colors.text)
             .child(label),
@@ -341,7 +341,7 @@ fn sqlserver_form_input(
                         .w_full()
                         .h_full()
                         .px_2()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.text),
                 ),
         )
@@ -373,7 +373,7 @@ fn sqlserver_form_hint(text: SharedString, colors: UiColors) -> Div {
     div()
         .ml(px(132.))
         .max_w(px(360.))
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(text)
 }

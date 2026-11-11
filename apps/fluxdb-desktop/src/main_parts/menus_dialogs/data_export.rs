@@ -1101,7 +1101,7 @@ fn data_export_modal_panel(
         .flex()
         .flex_col()
         .overflow_hidden()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .key_context("TableDataExportModal")
         .on_action(cx.listener(move |this, _: &CancelDialog, _, cx| {
@@ -1133,7 +1133,7 @@ fn data_export_modal_header(
                 .child(app_icon(AppIcon::Save, 18., colors.text))
                 .child(
                     div()
-                        .text_size(px(18.))
+                        .text_size(ui_text_size(18.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(title),
                 ),
@@ -1193,7 +1193,7 @@ fn data_export_tab_button(
         .items_center()
         .border_b_2()
         .border_color(if active { rgb(0x1687ff) } else { colors.border_soft })
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(if active { colors.text } else { colors.muted })
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .cursor_pointer()
@@ -1297,7 +1297,7 @@ fn data_export_object_select_field(
         .child(
             div()
                 .flex_none()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(label),
@@ -1577,7 +1577,7 @@ fn data_export_scope_segment(
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(if selected { colors.text } else { colors.muted })
         .cursor_pointer()
@@ -1681,7 +1681,7 @@ fn data_export_sql_preview_box(
         .gap_1()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(tr("app.data_export.sql_preview")),
@@ -1699,7 +1699,7 @@ fn data_export_sql_preview_box(
                         .appearance(false)
                         .bordered(false)
                         .focus_bordered(false)
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_family(EDITOR_FONT)
                         .p_2()
                         .size_full(),
@@ -1733,7 +1733,7 @@ fn data_export_custom_summary(
                 .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(tr("app.data_export.custom_conditions")))
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(if has_rules {
                             tr("app.data_export.rules_summary")
@@ -1885,7 +1885,7 @@ fn data_export_custom_modal_header(colors: UiColors, cx: &mut Context<NavicatMai
         .justify_between()
         .child(
             div()
-                .text_size(px(16.))
+                .text_size(ui_text_size(16.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(tr("app.data_export.conditions_title")),
         )
@@ -1984,7 +1984,7 @@ fn data_export_builder_title(label: impl Into<SharedString>, colors: UiColors) -
         .px_3()
         .flex()
         .items_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(label)
@@ -2020,7 +2020,7 @@ fn data_export_empty_log_body(colors: UiColors) -> Div {
         .flex_1()
         .min_h(px(0.))
         .p_5()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(tr("app.data_export.log_empty"))
 }
@@ -2040,7 +2040,7 @@ fn data_export_log_body(task: TableDataExportTaskState, colors: UiColors) -> Div
         list = list.child(
             div()
                 .text_color(colors.muted)
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .px_2()
                 .py_1()
                 .child(
@@ -2064,7 +2064,7 @@ fn data_export_log_body(task: TableDataExportTaskState, colors: UiColors) -> Div
                 .flex()
                 .items_center()
                 .gap_5()
-                .text_size(px(14.))
+                .text_size(ui_text_size(14.))
                 .child(tr("app.data_export.log.table").replace("%{name}", &task.table_name))
                 .child(tr("app.data_export.log.format").replace("%{format}", task.format.label()))
                 .child(tr("app.data_export.log.fields").replace("%{count}", &task.field_count.to_string()))
@@ -2078,7 +2078,7 @@ fn data_export_log_body(task: TableDataExportTaskState, colors: UiColors) -> Div
         )
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .overflow_hidden()
                 .child(if task.path.as_os_str().is_empty() {
@@ -2118,7 +2118,7 @@ fn data_export_log_row(entry: &TableDataExportLogEntry, colors: UiColors) -> Div
         .flex()
         .items_center()
         .gap_3()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .hover(move |style| style.bg(colors.hover))
         .child(div().w(px(34.)).text_color(colors.muted).child(format!("#{}", entry.index)))
         .child(div().w(px(42.)).text_color(status_color).child(status))
@@ -2207,7 +2207,7 @@ fn data_export_modal_footer(
 fn data_export_section_label(label: impl Into<SharedString>, colors: UiColors) -> Div {
     let label = label.into();
     div()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(label)
@@ -2218,7 +2218,7 @@ fn data_export_form_row_label(label: impl Into<SharedString>, colors: UiColors) 
     div()
         .w(px(42.))
         .flex_none()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(label)
@@ -2239,7 +2239,7 @@ fn data_export_choice_chip(label: &'static str, selected: bool, colors: UiColors
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .cursor_pointer()
         .hover(move |style| style.bg(colors.hover))
         .child(label)
@@ -2251,7 +2251,7 @@ fn data_export_badge(label: &'static str, colors: UiColors) -> Div {
         .px_2()
         .rounded(colors.radius)
         .bg(colors.panel_alt)
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .flex()
         .items_center()

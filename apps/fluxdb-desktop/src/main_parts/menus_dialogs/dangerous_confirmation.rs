@@ -93,7 +93,7 @@ fn dangerous_command_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(title),
                         )
@@ -125,7 +125,7 @@ fn dangerous_command_modal(
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(description)
                         .child(preview),

@@ -276,7 +276,7 @@ fn ai_plugin_config_dialog(
                         )
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(localize_ai_plugin_text(&name)),
@@ -284,7 +284,7 @@ fn ai_plugin_config_dialog(
                         .child(div().flex_1())
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(
                                     tr("app.ai.plugins.active_count")
@@ -317,7 +317,7 @@ fn ai_plugin_config_dialog(
                     .bg(colors.info.alpha(0.08))
                     .child(
                         div()
-                            .text_size(px(20.))
+                            .text_size(ui_text_size(20.))
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(colors.text)
                             .child(active.to_string()),
@@ -336,7 +336,7 @@ fn ai_plugin_config_dialog(
                                     .gap_2()
                                     .child(
                                         div()
-                                            .text_size(px(12.))
+                                            .text_size(ui_text_size(12.))
                                             .text_color(colors.text)
                                             .child(
                                                 tr("app.ai.plugins.rules_active")
@@ -346,7 +346,7 @@ fn ai_plugin_config_dialog(
                                     .child(div().flex_1())
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(ui_text_size(11.))
                                             .text_color(colors.muted)
                                             .child(tr("app.ai.plugins.rules_help")),
                                     ),
@@ -383,7 +383,7 @@ fn ai_plugin_config_dialog(
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(px(11.))
+                                                    .text_size(ui_text_size(11.))
                                                     .text_color(if on {
                                                         colors.text
                                                     } else {
@@ -420,7 +420,7 @@ fn ai_plugin_config_dialog(
                         .gap_1()
                         .child(
                             div()
-                                .text_size(px(14.))
+                                .text_size(ui_text_size(14.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(
                                     tr("app.ai.plugins.manage_title")
@@ -429,7 +429,7 @@ fn ai_plugin_config_dialog(
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(tr("app.ai.plugins.config_help")),
                         ),
@@ -493,7 +493,7 @@ fn ai_plugin_config_dialog(
                     .child(app_icon(AppIcon::CircleSlash, 14., colors.danger))
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.danger)
                             .child(message),
                     ),
@@ -589,8 +589,8 @@ fn ai_plugin_config_field_shell(
                     div()
                         .flex_1()
                         .min_w(px(0.))
-                        .text_size(px(11.))
-                        .line_height(px(16.))
+                        .text_size(ui_text_size(11.))
+                        .line_height(ui_text_size(16.))
                         .text_color(colors.muted)
                         .child(help),
                 ),
@@ -607,7 +607,7 @@ fn ai_plugin_config_field_shell(
                     div()
                         .flex_1()
                         .min_w(px(0.))
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.warning)
                         .child(reason),
                 ),
@@ -628,7 +628,7 @@ fn ai_plugin_config_field_shell(
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(colors.text)
                         .child(localize_ai_plugin_text(&field.label)),
@@ -719,7 +719,7 @@ fn ai_plugin_config_text_field(
             let mut chips = div().flex().items_center().gap_1().flex_wrap();
             chips = chips.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(
                         tr("app.ai.plugins.parsed_count")
@@ -735,7 +735,7 @@ fn ai_plugin_config_text_field(
                         .bg(colors.panel_alt)
                         .border_1()
                         .border_color(colors.border_soft)
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.text)
                         .child(item.clone()),
                 );
@@ -743,7 +743,7 @@ fn ai_plugin_config_text_field(
             if parsed.len() > 8 {
                 chips = chips.child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(
                             tr("app.ai.plugins.more_items")
@@ -773,7 +773,7 @@ fn ai_plugin_config_text_field(
                 let selector = selector.clone();
                 move || selector.clone()
             })
-            .child(Input::new(input).text_size(px(13.)))
+            .child(Input::new(input).text_size(ui_text_size(13.)))
             .into_any_element()
     };
     let controls = div()
@@ -849,7 +849,7 @@ fn ai_plugin_config_select_field(
                             div()
                                 .min_w(px(0.))
                                 .truncate()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(if unset { colors.muted } else { colors.text })
                                 .child(current_label),
                         )
@@ -943,7 +943,7 @@ fn ai_plugin_config_resource_field(
                     div()
                         .min_w(px(0.))
                         .truncate()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(if unset { colors.muted } else { colors.text })
                         .child(label),
                 )
@@ -974,7 +974,7 @@ fn ai_plugin_config_resource_field(
                             .child(name.clone())
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(ui_text_size(11.))
                                     .text_color(colors.muted)
                                     .child(detail.clone()),
                             )
@@ -1019,7 +1019,7 @@ fn ai_plugin_config_resource_field(
         // 候选口径由宿主按声明生成：插件只声明需求，不自己解释过滤规则。
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(field.hint.clone()),
         );

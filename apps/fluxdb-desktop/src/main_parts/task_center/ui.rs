@@ -94,14 +94,14 @@ fn task_center_statusbar_area(
                         .overflow_hidden()
                         .truncate()
                         .whitespace_nowrap()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.text)
                         .child(label),
                 )
                 .when(total > 0, |this| {
                     this.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(total.to_string()),
                     )
@@ -146,7 +146,7 @@ fn task_center_overlay(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.task_center.empty")),
         );
@@ -200,7 +200,7 @@ fn task_center_overlay(
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
@@ -220,13 +220,13 @@ fn task_center_overlay(
                                 .gap_1()
                                 .child(
                                     div()
-                                        .text_size(px(15.))
+                                        .text_size(ui_text_size(15.))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(tr("app.task_center.heading")),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(ui_text_size(11.))
                                         .text_color(colors.muted)
                                         .child(
                                             tr("app.task_center.subtitle")
@@ -309,7 +309,7 @@ fn task_center_filter_button(
         .rounded(colors.radius)
         .bg(if active { colors.hover } else { colors.panel_bg })
         .text_color(if active { colors.text } else { colors.muted })
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .flex()
         .items_center()
         .gap_2()
@@ -326,7 +326,7 @@ fn task_center_filter_button(
         .child(label)
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(count.to_string()),
         )
@@ -377,7 +377,7 @@ fn task_center_row(
                 .child(app_icon(row.kind.icon(), 15., status_color))
                 .child(
                     div()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.muted)
                         .child(row.kind.label()),
                 ),
@@ -398,14 +398,14 @@ fn task_center_row(
                             div()
                                 .min_w(px(0.))
                                 .truncate()
-                                .text_size(px(12.5))
+                                .text_size(ui_text_size(12.5))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .child(row.title.clone()),
                         )
                         .child(
                             div()
                                 .flex_none()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(status_color)
                                 .child(row.status.label(row.cancel_requested)),
                         ),
@@ -414,7 +414,7 @@ fn task_center_row(
                     div()
                         .min_w(px(0.))
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(if row.stage.is_empty() {
                             row.target.clone()
@@ -428,7 +428,7 @@ fn task_center_row(
             div()
                 .w(px(58.))
                 .flex_none()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(task_center_elapsed(row.started_at, row.finished_at)),
         )
@@ -467,7 +467,7 @@ fn task_center_detail(
     if row.logs.is_empty() {
         log_list = log_list.child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.task_center.detail.no_logs")),
         );
@@ -475,7 +475,7 @@ fn task_center_detail(
         for line in &row.logs {
             log_list = log_list.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .whitespace_normal()
                     .child(line.clone()),
@@ -513,14 +513,14 @@ fn task_center_detail(
                             div()
                                 .min_w(px(0.))
                                 .truncate()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(row.title.clone()),
                         )
                         .child(
                             div()
                                 .flex_none()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(status_color)
                                 .child(row.status.label(row.cancel_requested)),
                         ),
@@ -543,7 +543,7 @@ fn task_center_detail(
                 .when_some(row.error.clone(), |this, error| {
                     this.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.danger)
                             .whitespace_normal()
                             .child(error),
@@ -555,7 +555,7 @@ fn task_center_detail(
                 .px_4()
                 .pt_3()
                 .flex_none()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(tr("app.task_center.detail.logs")),
         )
@@ -574,7 +574,7 @@ fn task_center_detail(
                 .when(row.status.is_running() && row.cancel_requested, |this| {
                     this.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.warning)
                             .child(tr("app.task_center.status.stopping")),
                     )
@@ -617,7 +617,7 @@ fn task_center_detail_line(label: SharedString, value: String, colors: UiColors)
     div()
         .flex()
         .gap_2()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .child(div().w(px(52.)).flex_none().text_color(colors.muted).child(label))
         .child(
             div()

@@ -83,13 +83,13 @@ fn ai_policy_row(title: &str, note: &str, control: gpui::AnyElement, colors: UiC
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.text)
                         .child(title.to_string()),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(note.to_string()),
                 ),

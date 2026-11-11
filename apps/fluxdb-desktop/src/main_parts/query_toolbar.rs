@@ -651,7 +651,7 @@ fn query_context_item(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .child(label),
         )

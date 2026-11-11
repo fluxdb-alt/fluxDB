@@ -11,7 +11,7 @@ fn query_save_choice_modal(
                 div()
                     .px_5()
                     .pb_4()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .text_color(colors.muted)
                     .child(tr("app.query.save.location")),
             )
@@ -62,7 +62,7 @@ fn query_save_connection_modal(
                     .gap_2()
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .text_color(colors.muted)
                             .child(tr("app.query.save.name")),
                     )
@@ -80,7 +80,7 @@ fn query_save_connection_modal(
                                     .focus_bordered(false)
                                     .w_full()
                                     .h_full()
-                                    .text_size(px(14.)),
+                                    .text_size(ui_text_size(14.)),
                             ),
                     ),
             )
@@ -184,7 +184,7 @@ fn query_save_modal_header(
         .justify_between()
         .child(
             div()
-                .text_size(px(17.))
+                .text_size(ui_text_size(17.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(title),
         )

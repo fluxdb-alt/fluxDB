@@ -154,7 +154,7 @@ fn sqlserver_security_toolbar(
         .child(app_icon_box(AppIcon::Users, 28., 16., rgb(0x2563eb)))
         .child(
             div()
-                .text_size(px(14.))
+                .text_size(ui_text_size(14.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(tr("app.sqlserver_security.title")),
         )
@@ -166,7 +166,7 @@ fn sqlserver_security_toolbar(
         .when(verify, |row| {
             row.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.warning)
                     .child(tr("app.sqlserver_security.needs_verify")),
             )

@@ -111,7 +111,7 @@ fn pg_advanced_empty(colors: UiColors) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(tr("app.pg_role.select_role"))
 }
@@ -119,7 +119,7 @@ fn pg_advanced_empty(colors: UiColors) -> Div {
 fn pg_section_title(title: impl Into<SharedString>, colors: UiColors) -> Div {
     let title: SharedString = title.into();
     div()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(title)
@@ -157,7 +157,7 @@ fn pg_attr_switch_row(
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .font_family("monospace")
                         .text_color(colors.muted)
                         .child(attr),
@@ -167,7 +167,7 @@ fn pg_attr_switch_row(
             div()
                 .flex_1()
                 .min_w(px(0.))
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(hint),
         )
@@ -177,7 +177,7 @@ fn pg_form_label_advanced(label: impl Into<SharedString>, colors: UiColors) -> D
     let label: SharedString = label.into();
     div()
         .w(px(120.))
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(colors.text)
         .child(label)
@@ -204,7 +204,7 @@ fn pg_advanced_hint(text: impl Into<SharedString>, colors: UiColors) -> Div {
     div()
         .ml(px(132.))
         .max_w(px(360.))
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(text)
 }

@@ -133,14 +133,14 @@ fn data_row_viewer_header(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(18.))
+                        .text_size(ui_text_size(18.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(title),
                 )
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(subtitle),
                 ),
@@ -223,7 +223,7 @@ fn data_row_detail_viewer_body(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(app_icon(AppIcon::Search, 14., colors.muted))
                         .child(
@@ -232,7 +232,7 @@ fn data_row_detail_viewer_body(
                                 .focus_bordered(false)
                                 .w_full()
                                 .h_full()
-                                .text_size(px(13.)),
+                                .text_size(ui_text_size(13.)),
                         ),
                 ),
         )
@@ -309,7 +309,7 @@ fn data_row_detail_field(
                 .w(px(38.))
                 .flex_none()
                 .pt_1()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(field.index.to_string()),
@@ -324,7 +324,7 @@ fn data_row_detail_field(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .overflow_hidden()
@@ -336,7 +336,7 @@ fn data_row_detail_field(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .child(div().text_color(type_color).child(field.type_name))
                         .when(field.primary_key, |this| {
                             this.child(
@@ -360,7 +360,7 @@ fn data_row_detail_field(
                 .when_some(field.comment, |this, comment| {
                     this.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .overflow_hidden()
                             .text_ellipsis()
@@ -380,7 +380,7 @@ fn data_row_detail_field(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.placeholder.value"))
                         .child(
@@ -396,7 +396,7 @@ fn data_row_detail_field(
                         .bg(colors.input_bg)
                         .px_2()
                         .py_1()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.text)
                         .overflow_hidden()
                         .child(value_text),
@@ -636,7 +636,7 @@ fn data_row_submenu_shell(top: Pixels, left: Pixels, width: Pixels, colors: UiCo
             hsla(0., 0., 0., 0.18),
         )])
         .p_1()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::BOLD)
         .text_color(colors.text)
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

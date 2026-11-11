@@ -90,7 +90,7 @@ fn ai_tools_tab_button(
         } else {
             colors.info.alpha(0.0)
         })
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if is_active { colors.text } else { colors.muted })
         .font_weight(if is_active {
             gpui::FontWeight::SEMIBOLD
@@ -168,7 +168,7 @@ fn ai_table_head(label: impl Into<SharedString>, w: f32, colors: UiColors) -> Di
     let label = label.into();
     div()
         .w(px(w))
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .child(label)
 }
@@ -234,7 +234,7 @@ fn ai_tools_catalog_panel(
                         .gap_3()
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(
                                     tr("app.ai.tools.catalog_count")
@@ -251,7 +251,7 @@ fn ai_tools_catalog_panel(
                     div()
                         .px_4()
                         .pb_3()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child({
                             let status = if state.ai_plugin_instances.iter().any(|plugin| {
@@ -308,14 +308,14 @@ fn ai_tool_row(
         .child(
             div()
                 .w(px(210.))
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .child(id.to_string()),
         )
         .child(
             div()
                 .w(px(320.))
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(desc),
         )
@@ -335,7 +335,7 @@ fn ai_tool_row(
         .child(
             div()
                 .w(px(80.))
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(group),
         )
@@ -455,7 +455,7 @@ fn ai_plugins_panel(state: &AppState, colors: UiColors, cx: &mut Context<Navicat
                             .min_w(px(0.))
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(ui_text_size(13.))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(if retired { colors.muted } else { colors.text })
                                     .child(localize_ai_plugin_text(&p.display_name)),
@@ -463,7 +463,7 @@ fn ai_plugins_panel(state: &AppState, colors: UiColors, cx: &mut Context<Navicat
                             .when(!p.summary.is_empty(), |this| {
                                 this.child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(ui_text_size(11.))
                                         .text_color(colors.muted)
                                         .child(localize_ai_plugin_text(&p.summary)),
                                 )
@@ -475,7 +475,7 @@ fn ai_plugins_panel(state: &AppState, colors: UiColors, cx: &mut Context<Navicat
                                     .gap_2()
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(ui_text_size(11.))
                                             .text_color(colors.muted)
                                             .child(tr("app.ai.tools.builtin").replace(
                                                 "%{package}",
@@ -510,7 +510,7 @@ fn ai_plugins_panel(state: &AppState, colors: UiColors, cx: &mut Context<Navicat
                                         ))
                                             .child(
                                                 div()
-                                                    .text_size(px(11.))
+                                                    .text_size(ui_text_size(11.))
                                                     .text_color(colors.warning)
                                                     .child(message),
                                             )
@@ -559,13 +559,13 @@ fn ai_plugins_panel(state: &AppState, colors: UiColors, cx: &mut Context<Navicat
                     .gap_3()
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(tr("app.ai.tools.builtin_title")),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(
                                 tr("app.ai.tools.item_count").replace(
@@ -656,7 +656,7 @@ fn ai_audit_panel(state: &AppState, panel: &AiSettingsPanelState, colors: UiColo
                         .child(app_icon(AppIcon::Check, 14., colors.success))
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(tr("app.ai.audit.always_on")),
@@ -664,7 +664,7 @@ fn ai_audit_panel(state: &AppState, panel: &AiSettingsPanelState, colors: UiColo
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.ai.audit.description")),
                 ),
@@ -723,7 +723,7 @@ fn ai_audit_panel(state: &AppState, panel: &AiSettingsPanelState, colors: UiColo
     }
     toolbar = toolbar.child(div().flex_1()).child(
         div()
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.muted)
             .child(
                 tr("app.ai.audit.retention")
@@ -820,7 +820,7 @@ fn ai_audit_stat_card(
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(if selected { colors.text } else { colors.muted })
                         .child(label),
                 )
@@ -830,7 +830,7 @@ fn ai_audit_stat_card(
         )
         .child(
             div()
-                .text_size(px(18.))
+                .text_size(ui_text_size(18.))
                 .font_weight(gpui::FontWeight::BOLD)
                 .text_color(if selected { colors.text } else { colors.muted })
                 .child(count.to_string()),
@@ -875,31 +875,31 @@ fn ai_audit_row(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(row.tool_id.clone()),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(format!("{} · {}", row.origin, row.id)),
                 ),
         )
-        .child(div().w(px(190.)).text_size(px(12.)).text_color(colors.text).child(row.target.clone()))
+        .child(div().w(px(190.)).text_size(ui_text_size(12.)).text_color(colors.text).child(row.target.clone()))
         .child(div().w(px(90.)).child(ai_pill(tag_label, tag_color, colors)))
         .child(
             div()
                 .w(px(210.))
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(ai_audit_rule_label(row)),
         )
         .child(div().flex_1())
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(if expanded {
                     tr("app.ai.audit.collapse")
@@ -948,7 +948,7 @@ fn ai_audit_detail(row: &fluxdb_app::AiAuditRow, colors: UiColors) -> Div {
                 div()
                     .w(px(88.))
                     .flex_shrink_0()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(key),
             )
@@ -966,7 +966,7 @@ fn ai_audit_detail(row: &fluxdb_app::AiAuditRow, colors: UiColors) -> Div {
                 .bg(colors.panel_bg)
                 .border_1()
                 .border_color(colors.border_soft)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.text)
                 .child(row.statement.clone())
                 .into_any_element(),
@@ -977,7 +977,7 @@ fn ai_audit_detail(row: &fluxdb_app::AiAuditRow, colors: UiColors) -> Div {
         div()
             .flex_1()
             .min_w(px(0.))
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.text)
             .child(if row.reason_codes.is_empty() {
                 ai_audit_rule_label(row)
@@ -991,7 +991,7 @@ fn ai_audit_detail(row: &fluxdb_app::AiAuditRow, colors: UiColors) -> Div {
         div()
             .flex_1()
             .min_w(px(0.))
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.muted)
             .child(format!(
                 "{} · {} · {} {}",
@@ -1007,7 +1007,7 @@ fn ai_audit_detail(row: &fluxdb_app::AiAuditRow, colors: UiColors) -> Div {
         div()
             .flex_1()
             .min_w(px(0.))
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.muted)
             .child(tr("app.ai.audit.detail.note_text"))
             .into_any_element(),
@@ -1042,7 +1042,7 @@ fn ai_audit_error_state(message: &str, colors: UiColors) -> gpui::AnyElement {
         .child(
             div()
                 .debug_selector(|| "ai-audit-error".into())
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.danger)
                 .child(format!(
                     "{}: {message}",

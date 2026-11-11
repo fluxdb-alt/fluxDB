@@ -335,7 +335,7 @@ fn redis_server_panel_content(
                         .min_w(px(0.))
                         .child(
                             div()
-                                .text_size(px(14.))
+                                .text_size(ui_text_size(14.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .whitespace_nowrap()
                                 .text_ellipsis()
@@ -343,7 +343,7 @@ fn redis_server_panel_content(
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .whitespace_nowrap()
                                 .text_ellipsis()
@@ -422,7 +422,7 @@ fn redis_server_panel_content(
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(colors.danger)
                     .child(app_icon(AppIcon::TriangleAlert, 14., colors.danger))
                     .child(
@@ -525,7 +525,7 @@ fn redis_server_panel_subtabs(
             .flex()
             .items_center()
             .cursor_pointer()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .font_weight(if active {
                 gpui::FontWeight::SEMIBOLD
             } else {
@@ -1053,7 +1053,7 @@ fn redis_server_kill_modal(
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(17.))
+                            .text_size(ui_text_size(17.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(tr("app.redis_server_panel.kill.title")),
                     )
@@ -1081,7 +1081,7 @@ fn redis_server_kill_modal(
                 div()
                     .px_5()
                     .pb_3()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .text_color(colors.muted)
                     .child(
                         tr("app.redis_server_panel.kill.message")
@@ -1170,7 +1170,7 @@ fn redis_server_clear_modal(
                     .px_5()
                     .pt_4()
                     .pb_3()
-                    .text_size(px(17.))
+                    .text_size(ui_text_size(17.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .child(tr("app.redis_server_panel.slowlog.clear_title")),
             )
@@ -1178,7 +1178,7 @@ fn redis_server_clear_modal(
                 div()
                     .px_5()
                     .pb_4()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .text_color(colors.muted)
                     .child(tr("app.redis_server_panel.slowlog.clear_message").to_string()),
             )

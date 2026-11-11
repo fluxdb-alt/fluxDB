@@ -126,7 +126,7 @@ impl TableDelegate for RedisStreamTableDelegate {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             // 单元格不画竖线，表头下划线由 render_header 统一绘制
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(self.colors.muted)
             .child(self.columns[col_ix].name.clone())
@@ -160,7 +160,7 @@ impl TableDelegate for RedisStreamTableDelegate {
                 // 单元格不画竖线，行分隔由 render_tr 统一绘制
                 .overflow_hidden()
                 .text_ellipsis()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .child(
                     entry
@@ -179,7 +179,7 @@ impl TableDelegate for RedisStreamTableDelegate {
                 .px_3()
                 .flex()
                 .items_center()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .child(entry.id);
         };
@@ -277,8 +277,8 @@ fn redis_stream_table_entry_cell(
         .child(
             div()
                 .w_full()
-                .text_size(px(12.))
-                .line_height(px(16.))
+                .text_size(ui_text_size(12.))
+                .line_height(ui_text_size(16.))
                 .text_color(colors.text)
                 .child(entry.time),
         )
@@ -286,8 +286,8 @@ fn redis_stream_table_entry_cell(
             div()
                 .w_full()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_size(px(11.))
-                .line_height(px(14.))
+                .text_size(ui_text_size(11.))
+                .line_height(ui_text_size(14.))
                 .text_color(colors.muted)
                 .overflow_hidden()
                 .text_ellipsis()
@@ -389,7 +389,7 @@ fn redis_stream_table_delete_confirm_overlay(
         .gap_2()
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(tr("app.redis.stream.delete_confirm")),
@@ -397,7 +397,7 @@ fn redis_stream_table_delete_confirm_overlay(
         .child(
             div()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .overflow_hidden()
                 .text_ellipsis()

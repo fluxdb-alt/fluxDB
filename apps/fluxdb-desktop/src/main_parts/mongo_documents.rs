@@ -621,7 +621,7 @@ fn mongo_document_card(
                         .pr_2()
                         .border_r_1()
                         .border_color(colors.border_soft)
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(SharedString::from(format!("#{}", index + 1))),
                 )
@@ -632,7 +632,7 @@ fn mongo_document_card(
                         .min_w(px(0.))
                         .truncate()
                         .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.text)
                         .child(SharedString::from(format!(
                             "{}: {}",
@@ -734,7 +734,7 @@ fn mongo_json_block(
         None => div().px_2().py_2().child(
             div()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(SharedString::from(document.json.clone())),
         ),
@@ -795,7 +795,7 @@ fn mongo_field_list(
         return div()
             .p_2()
             .font_family(crate::PLATFORM_MONOSPACE_FONT)
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.text)
             .child(SharedString::from(document.json.clone()));
     };
@@ -871,7 +871,7 @@ fn mongo_field_row(
     let row = div()
         .min_h(px(22.))
         .font_family(crate::PLATFORM_MONOSPACE_FONT)
-        .text_size(px(11.));
+        .text_size(ui_text_size(11.));
 
     // `key: 值` 一行一个元素，按字节区间给 key / 冒号 / 值分别上色。
     // `copy_text` 用于嵌套行：屏上是 `{ … }`，复制时给完整内容。
@@ -919,7 +919,7 @@ fn mongo_field_row(
                 div()
                     .flex_none()
                     .pl_3()
-                    .text_size(px(9.))
+                    .text_size(ui_text_size(9.))
                     .text_color(colors.muted)
                     .child(SharedString::from(kind.label())),
             );
@@ -976,7 +976,7 @@ fn mongo_field_row(
             div()
                 .flex_none()
                 .pl_3()
-                .text_size(px(9.))
+                .text_size(ui_text_size(9.))
                 .text_color(colors.muted)
                 .child(SharedString::from(kind.label())),
         );
@@ -1277,7 +1277,7 @@ fn mongo_document_table(
                         .border_b_1()
                         .border_color(colors.border)
                         .bg(colors.panel_alt)
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.text)
                         .child(tr("app.mongo.table.actions")),
                 )
@@ -1295,7 +1295,7 @@ fn mongo_table_row_number(text: String, header: bool, colors: UiColors) -> Div {
         .flex()
         .items_center()
         .justify_end()
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .text_color(colors.muted)
         .child(SharedString::from(text))
         .when(header, |this| this.bg(colors.panel_alt))
@@ -1312,7 +1312,7 @@ fn mongo_table_header_cell(name: String, kind: Option<MongoFieldKind>, colors: U
         .items_center()
         .gap_1p5()
         .overflow_hidden()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.text)
         .child(
             div()
@@ -1325,7 +1325,7 @@ fn mongo_table_header_cell(name: String, kind: Option<MongoFieldKind>, colors: U
             this.child(
                 div()
                     .flex_none()
-                    .text_size(px(9.))
+                    .text_size(ui_text_size(9.))
                     .text_color(colors.muted)
                     .child(SharedString::from(kind.label())),
             )
@@ -1355,7 +1355,7 @@ fn mongo_table_cell(
         .flex()
         .items_center()
         .overflow_hidden()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(color)
         .when(truncated, |this| {
             let tooltip: SharedString = full.clone().into();

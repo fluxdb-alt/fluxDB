@@ -345,7 +345,7 @@ fn column_choices_header(colors: UiColors, cx: &mut Context<NavicatMain>) -> imp
         .justify_between()
         .child(
             div()
-                .text_size(px(17.))
+                .text_size(ui_text_size(17.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(tr("app.column.enum.title")),
         )
@@ -375,7 +375,7 @@ fn column_choices_field(column_name: String, type_name: String, colors: UiColors
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .child(
             div()
                 .overflow_hidden()
@@ -412,7 +412,7 @@ fn column_choices_input_frame(input: Entity<InputState>, width: Pixels, colors: 
                 .focus_bordered(false)
                 .w_full()
                 .h_full()
-                .text_size(px(13.)),
+                .text_size(ui_text_size(13.)),
         )
 }
 
@@ -435,7 +435,7 @@ fn column_choices_list(
         .flex()
         .flex_col()
         .overflow_y_scrollbar()
-        .text_size(px(13.));
+        .text_size(ui_text_size(13.));
 
     if choices.is_empty() && !adding {
         list.child(column_choices_empty_state(colors, cx))
@@ -516,7 +516,7 @@ fn column_choices_add_row(colors: UiColors, cx: &mut Context<NavicatMain>) -> im
         .items_center()
         .gap_2()
         .cursor_pointer()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(rgb(0x1677ff))
         .hover(move |style| style.bg(colors.hover))
         .child(app_icon(AppIcon::Plus, 13., rgb(0x1677ff)))
@@ -541,7 +541,7 @@ fn column_choices_empty_state(colors: UiColors, cx: &mut Context<NavicatMain>) -
         .gap_2()
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .child(tr("app.column.enum.empty")),
         )
@@ -556,7 +556,7 @@ fn column_choices_empty_state(colors: UiColors, cx: &mut Context<NavicatMain>) -
                 .items_center()
                 .gap_1()
                 .cursor_pointer()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .hover(move |style| style.bg(colors.hover))
                 .child(app_icon(AppIcon::Plus, 13., colors.muted))

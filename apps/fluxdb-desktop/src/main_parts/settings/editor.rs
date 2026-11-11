@@ -85,42 +85,14 @@ fn shortcut_text(definition: &ShortcutDefinition) -> (SharedString, SharedString
 
 fn settings_editor_panel(
     settings: Settings,
-    font_size_slider: Entity<SliderState>,
     colors: UiColors,
-    line_height_input: Entity<InputState>,
     dangerous_actions_collapsed: bool,
-    window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     div()
         .flex()
         .flex_col()
         .gap_3()
-        .child(
-            settings_panel_group(tr("app.settings.editor.group.font"), colors)
-                .child(settings_font_size_slider_row(
-                    "settings-editor-font-size",
-                    tr("app.settings.editor.font_size"),
-                    tr("app.settings.editor.font_size_detail"),
-                    AppIcon::Text,
-                    settings.editor_font_size,
-                    font_size_slider,
-                    colors,
-                    window,
-                    cx,
-                ))
-                .child(settings_input_row(
-                    "settings-editor-line-height",
-                    tr("app.settings.editor.line_height"),
-                    tr("app.settings.editor.line_height_detail"),
-                    AppIcon::List,
-                    settings.editor_line_height,
-                    &line_height_input,
-                    colors,
-                    window,
-                    cx,
-                )),
-        )
         .child(
             settings_panel_group(tr("app.settings.editor.group.sql_execution"), colors)
                 .child(settings_choice_row_with_id(

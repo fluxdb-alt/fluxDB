@@ -248,7 +248,7 @@ fn sqlserver_security_draft_row(title: String, subtitle: SharedString, colors: U
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(colors.text)
                         .child(title),
@@ -256,7 +256,7 @@ fn sqlserver_security_draft_row(title: String, subtitle: SharedString, colors: U
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(subtitle),
                 ),
@@ -352,7 +352,7 @@ fn sqlserver_filter_row(
                 })
                 .flex()
                 .items_center()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(if selected { colors.text } else { colors.muted })
                 .on_mouse_down(
                     MouseButton::Left,
@@ -441,7 +441,7 @@ fn sqlserver_principal_row(
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(colors.text)
                         .child(principal.name),
@@ -449,7 +449,7 @@ fn sqlserver_principal_row(
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(if warning { rgb(0xff9f0a) } else { colors.muted })
                         .child(detail),
                 ),

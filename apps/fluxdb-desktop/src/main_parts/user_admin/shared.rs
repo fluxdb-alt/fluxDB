@@ -134,7 +134,7 @@ fn user_admin_badge(text: String, colors: UiColors) -> Div {
         .flex()
         .items_center()
         .overflow_hidden()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .child(div().truncate().child(text))
 }
@@ -183,7 +183,7 @@ where
                 .hover(move |style| style.bg(if active { colors.panel_bg } else { colors.hover }))
                 .flex()
                 .items_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(if active {
                     gpui::FontWeight::SEMIBOLD
                 } else {
@@ -239,7 +239,7 @@ fn user_admin_sql_preview_code_view(
             TextView::markdown(editor_key, user_admin_sql_preview_markdown(sql))
                 .selectable(true)
                 .scrollable(true)
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_family(EDITOR_FONT)
                 .size_full(),
         )
@@ -353,7 +353,7 @@ fn user_admin_sql_preview_modal(
                         .child(
                             div()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_size(px(15.))
+                                .text_size(ui_text_size(15.))
                                 .child(tr("app.user_admin.confirm_sql_title")),
                         )
                         .child(div().flex_1())
@@ -371,7 +371,7 @@ fn user_admin_sql_preview_modal(
                     div()
                         .px_4()
                         .pt_3()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(tr("app.user_admin.confirm_sql_hint")),
                 )
@@ -392,7 +392,7 @@ fn user_admin_sql_preview_modal(
                         div()
                             .px_4()
                             .pb_2()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(0xff3b45))
                             .child(error.message.clone()),
                     )
@@ -520,7 +520,7 @@ fn user_admin_button(
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(fg)
         .child(app_icon_box(icon, 18., 14., fg))
@@ -546,7 +546,7 @@ fn user_admin_input_box(input: Entity<InputState>, colors: UiColors) -> Div {
                 .w_full()
                 .h(px(28.))
                 .px_2()
-                .text_size(px(13.)),
+                .text_size(ui_text_size(13.)),
         )
 }
 
@@ -554,7 +554,7 @@ fn user_admin_empty_row(text: impl Into<SharedString>, colors: UiColors) -> Div 
     let text = text.into();
     div()
         .p_4()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(text)
 }
@@ -562,7 +562,7 @@ fn user_admin_empty_row(text: impl Into<SharedString>, colors: UiColors) -> Div 
 fn user_admin_error_row(text: &str, _colors: UiColors) -> Div {
     div()
         .p_4()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(rgb(0xff3b45))
         .child(localize_backend_error_text(text))
 }

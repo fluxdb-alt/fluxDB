@@ -62,7 +62,7 @@ fn redis_key_detail_set_panel(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(redis_set_search_box(
                             this.redis_set_member_search_input.clone(),
@@ -109,7 +109,7 @@ fn redis_key_detail_set_panel(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.muted)
                         .child(div().w(px(42.)).flex_none().child("#"))
@@ -145,7 +145,7 @@ fn redis_key_detail_set_panel(
                                         .justify_center()
                                         .flex_col()
                                         .gap_2()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(colors.muted)
                                         .child(loading_spinner_with_color(22., colors.muted))
                                 } else if rows.is_empty() {
@@ -156,7 +156,7 @@ fn redis_key_detail_set_panel(
                                         .justify_center()
                                         .flex_col()
                                         .gap_2()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(colors.muted)
                                         .child(app_icon(
                                             if search_query.is_empty() {
@@ -202,7 +202,7 @@ fn redis_key_detail_set_panel(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(footer_left)
                         .child(
@@ -362,7 +362,7 @@ fn redis_set_member_row(
                 .flex()
                 .items_center()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(format!("{:02}", row_index + 1)),
         )
@@ -373,8 +373,8 @@ fn redis_set_member_row(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(13.))
-                .line_height(px(18.))
+                .text_size(ui_text_size(13.))
+                .line_height(ui_text_size(18.))
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(colors.text)
                 .child(member.clone()),
@@ -472,7 +472,7 @@ fn redis_set_member_delete_confirm_popover(
                                     .child(
                                         div()
                                             .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                                            .text_size(px(14.))
+                                            .text_size(ui_text_size(14.))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(colors.text)
                                             .overflow_hidden()
@@ -481,7 +481,7 @@ fn redis_set_member_delete_confirm_popover(
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(12.))
+                                            .text_size(ui_text_size(12.))
                                             .text_color(colors.muted)
                                             .child(message),
                                     ),
@@ -551,7 +551,7 @@ fn redis_set_search_box(input: Entity<InputState>, colors: UiColors) -> Div {
                 .focus_bordered(false)
                 .w_full()
                 .h_full()
-                .text_size(px(12.)),
+                .text_size(ui_text_size(12.)),
         )
 }
 
@@ -577,7 +577,7 @@ fn redis_set_member_add_button(enabled: bool, colors: UiColors) -> Div {
         } else {
             colors.panel_alt
         })
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(if enabled { rgb(0x1687ff) } else { colors.muted })
         .when(enabled, |this| {
@@ -664,7 +664,7 @@ fn redis_set_member_add_drawer(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.redis.set.add_member")),
                         ),
@@ -844,7 +844,7 @@ fn redis_set_member_drawer_row(
                         .w_full()
                         .h_full()
                         .px_2()
-                        .text_size(px(13.)),
+                        .text_size(ui_text_size(13.)),
                 ),
         )
         .child(
@@ -896,7 +896,7 @@ fn redis_set_member_drawer_add_button(enabled: bool, colors: UiColors) -> Div {
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if enabled { rgb(0x1677ff) } else { colors.muted })
         .when(enabled, |this| {
             this.cursor_pointer().hover(move |style| style.bg(colors.hover))

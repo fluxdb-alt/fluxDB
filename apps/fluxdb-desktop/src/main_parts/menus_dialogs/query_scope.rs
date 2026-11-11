@@ -56,7 +56,7 @@ fn new_query_scope_modal(
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(connection.config.name.clone()),
@@ -126,7 +126,7 @@ fn new_query_scope_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.query.new")),
                         )
@@ -273,7 +273,7 @@ fn new_query_connect_state(
         .gap_3()
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .child(if connecting {
                     tr("app.query.connecting")
@@ -284,7 +284,7 @@ fn new_query_connect_state(
         .when_some(error, |this, error| {
             this.child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(0xff6b6b))
                     .child(error.message.clone()),
             )
@@ -297,7 +297,7 @@ fn new_query_connect_state(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .bg(if connecting {
@@ -324,7 +324,7 @@ fn new_query_empty_state(label: impl Into<SharedString>, colors: UiColors) -> im
     let label: SharedString = label.into();
     div()
         .p_3()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(label)
 }
@@ -344,7 +344,7 @@ fn new_query_database_item(
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .hover(move |style| style.bg(colors.hover))
         .on_mouse_down(

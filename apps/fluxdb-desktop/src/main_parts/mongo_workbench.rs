@@ -189,7 +189,7 @@ fn mongo_workbench_toolbar(
         // 语法提示常驻右侧：工作台不支持 JS 求值，写错时用户要能立刻知道边界在哪。
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.mongo.workbench.hint")),
         )
@@ -255,7 +255,7 @@ fn mongo_workbench_placeholder(text: SharedString, colors: UiColors) -> Div {
         .items_center()
         .justify_center()
         .p_4()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(text)
 }
@@ -362,7 +362,7 @@ fn mongo_workbench_record_row(
                 .flex_1()
                 .min_w(px(0.))
                 .overflow_hidden()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(colors.text)
                 .child(execution.text.clone()),
@@ -377,7 +377,7 @@ fn mongo_workbench_record_row(
                 .flex()
                 .items_center()
                 .gap_2()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(status_label)
                 .when(!meta_label.is_empty(), |this| this.child(meta_label))
@@ -516,7 +516,7 @@ fn mongo_workbench_record_row(
                         .gap_1()
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(rgb(0xffb020))
                                 .child(
                                     tr("app.mongo.workbench.preview_truncated")
@@ -552,7 +552,7 @@ fn mongo_workbench_record_row(
                 .overflow_y_scroll()
                 .track_scroll(&scroll_handle)
                 .vertical_scrollbar(&scroll_handle)
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(colors.text)
                 .child(
@@ -675,7 +675,7 @@ fn mongo_workbench_document_card(
                 .pr_2()
                 .border_r_1()
                 .border_color(colors.border_soft)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(SharedString::from(format!("#{}", index + 1))),
         )
@@ -685,7 +685,7 @@ fn mongo_workbench_document_card(
                 .min_w(px(0.))
                 .truncate()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.text)
                 .child(SharedString::from(format!(
                     "{}: {}",

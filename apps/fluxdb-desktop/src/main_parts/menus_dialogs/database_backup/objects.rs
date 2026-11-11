@@ -36,7 +36,7 @@ fn database_backup_objects_body(
             .child(app_icon(AppIcon::Search, 22., colors.muted))
             .child(
                 div()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .text_color(colors.muted)
                     .child(if has_tables {
                         tr("app.backup.objects.no_match")
@@ -46,7 +46,7 @@ fn database_backup_objects_body(
             )
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .when(has_tables, |d| d.child(tr("app.backup.objects.try_other"))),
             )
@@ -128,13 +128,13 @@ fn database_backup_objects_body(
                     .child(app_icon(AppIcon::Database, 22., colors.muted))
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .text_color(colors.text)
                             .child(tr("app.backup.objects.all_summary").replace("%{count}", &total_objects.to_string())),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(tr("app.backup.objects.reenumerate")),
                     ),
@@ -175,7 +175,7 @@ fn database_backup_objects_body(
                                     .cleanable(true)
                                     .w_full()
                                     .h_full()
-                                    .text_size(px(13.)),
+                                    .text_size(ui_text_size(13.)),
                             ),
                         ),
                 )
@@ -213,7 +213,7 @@ fn database_backup_objects_body(
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(
                                     tr("app.backup.objects.selected")
@@ -275,7 +275,7 @@ fn database_backup_objects_body(
                 .child(app_icon(AppIcon::List, 13., colors.muted))
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.backup.objects.scope_note")),
                 ),
@@ -338,7 +338,7 @@ fn database_backup_table_row(
                     div().flex_1().min_w(px(0.)).child(
                         div()
                             .truncate()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .text_color(colors.text)
                             .child(name_string),
                     ),

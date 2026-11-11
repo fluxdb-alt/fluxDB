@@ -146,7 +146,7 @@ fn oracle_user_row(
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(colors.text)
                         .child(user.name.clone()),
@@ -154,7 +154,7 @@ fn oracle_user_row(
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(subtitle),
                 ),
@@ -203,7 +203,7 @@ fn oracle_draft_row(title: String, colors: UiColors) -> Stateful<Div> {
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(colors.text)
                         .child(title),
@@ -211,7 +211,7 @@ fn oracle_draft_row(title: String, colors: UiColors) -> Stateful<Div> {
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.oracle_security.draft_subtitle")),
                 ),
@@ -251,7 +251,7 @@ fn oracle_general_panel(
             .items_center()
             .child(
                 div()
-                    .text_size(px(15.))
+                    .text_size(ui_text_size(15.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
                     .child(name.clone()),
@@ -408,7 +408,7 @@ fn oracle_empty_panel(text: impl Into<SharedString>, colors: UiColors) -> Div {
         .items_center()
         .justify_center()
         .p_6()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(text.into())
 }
@@ -443,7 +443,7 @@ fn oracle_status_bar(state: &OracleUserAdminState, colors: UiColors) -> Div {
         .border_t_1()
         .border_color(colors.border)
         .bg(colors.panel_bg)
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .child(
             tr("app.oracle_security.status_counts")

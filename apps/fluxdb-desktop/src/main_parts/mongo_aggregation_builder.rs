@@ -38,7 +38,7 @@ impl SelectItem for MongoStageOperatorItem {
             .child(
                 div()
                     .flex_none()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .font_family(crate::PLATFORM_MONOSPACE_FONT)
                     .text_color(colors.success)
                     .child(self.name.clone()),
@@ -48,7 +48,7 @@ impl SelectItem for MongoStageOperatorItem {
                     .flex_1()
                     .min_w(px(0.))
                     .truncate()
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.muted)
                     .child(self.hint.clone()),
             )
@@ -610,7 +610,7 @@ fn mongo_aggregation_cards(
                 .border_1()
                 .border_dashed()
                 .border_color(colors.border)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.mongo.aggregation.no_stages")),
         );
@@ -634,7 +634,7 @@ fn mongo_aggregation_cards(
                 .small()
                 .outline()
                 .h(px(26.))
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.success)
                 .disabled(!can_add)
                 .label(tr("app.mongo.aggregation.add_stage"))
@@ -713,7 +713,7 @@ fn mongo_aggregation_stage_card(
         .child(
             div()
                 .flex_none()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(SharedString::from(format!(
                     "{} {}",
@@ -729,7 +729,7 @@ fn mongo_aggregation_stage_card(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(if invalid { colors.danger } else { colors.muted })
                 .child(if invalid {
                     tr("app.mongo.aggregation.invalid_body")
@@ -838,7 +838,7 @@ fn mongo_aggregation_stage_key_cell(
                 .small()
                 .w_full()
                 .h_full()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(colors.success)
                 .search_placeholder(tr("app.mongo.aggregation.search_stage"))
@@ -986,13 +986,13 @@ fn mongo_aggregation_stage_preview(
             .gap_1()
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.danger)
                     .child(SharedString::from(error.title.clone())),
             )
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(SharedString::from(error.message.clone())),
             ),
@@ -1045,7 +1045,7 @@ fn mongo_aggregation_stage_preview(
                                 .whitespace_nowrap()
                                 .text_ellipsis()
                                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.text)
                                 .child(SharedString::from(format!(
                                     "{}: {}",
@@ -1084,7 +1084,7 @@ fn mongo_aggregation_stage_preview(
                 .gap_1p5()
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(header),
                 )

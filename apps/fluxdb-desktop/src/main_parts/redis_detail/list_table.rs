@@ -195,7 +195,7 @@ impl TableDelegate for RedisListTableDelegate {
             .items_center()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(self.colors.muted)
             .child(self.columns[col_ix].name.clone())
@@ -235,7 +235,7 @@ impl TableDelegate for RedisListTableDelegate {
             .flex()
             .items_center()
             .justify_center()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(self.colors.muted)
             .child(tr("app.redis.list.empty"))
     }
@@ -297,7 +297,7 @@ fn redis_list_table_seq_cell(row_ix: usize, index: usize, colors: UiColors) -> i
         .whitespace_nowrap()
         .text_ellipsis()
         .font_family(crate::PLATFORM_MONOSPACE_FONT)
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .child(format!("{:02}", index))
 }
@@ -363,7 +363,7 @@ fn redis_list_table_value_cell(
                 .whitespace_nowrap()
                 .text_ellipsis()
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
                 .child(value),
@@ -442,8 +442,8 @@ fn redis_list_table_value_edit_cell(
                                 .w_full()
                                 .h_full()
                                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                                .line_height(px(19.))
-                                .text_size(px(13.)),
+                                .line_height(ui_text_size(19.))
+                                .text_size(ui_text_size(13.)),
                         ),
                 )
                 .child(

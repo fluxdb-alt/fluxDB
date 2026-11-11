@@ -63,7 +63,7 @@ fn query_parameter_mode_tab(
         .cursor_pointer()
         .flex()
         .items_center()
-        .text_size(px(14.))
+        .text_size(ui_text_size(14.))
         .font_weight(if selected {
             gpui::FontWeight::SEMIBOLD
         } else {
@@ -135,7 +135,7 @@ fn query_parameter_array_body(
                         .focus_bordered(false)
                         .w_full()
                         .h_full()
-                        .text_size(px(13.)),
+                        .text_size(ui_text_size(13.)),
                 ),
         )
 }
@@ -149,7 +149,7 @@ fn query_parameter_input_row(parameter: QueryParameterInput, colors: UiColors) -
         .child(
             div()
                 .w(px(86.))
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(format!("{}：", parameter.label)),
@@ -170,7 +170,7 @@ fn query_parameter_input_row(parameter: QueryParameterInput, colors: UiColors) -
                         .focus_bordered(false)
                         .w_full()
                         .h_full()
-                        .text_size(px(14.)),
+                        .text_size(ui_text_size(14.)),
                 ),
         )
 }
@@ -279,7 +279,7 @@ fn query_parameter_modal_header(
         .justify_between()
         .child(
             div()
-                .text_size(px(17.))
+                .text_size(ui_text_size(17.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(title),
         )

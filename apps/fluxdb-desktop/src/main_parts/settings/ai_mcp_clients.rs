@@ -150,7 +150,7 @@ fn ai_mcp_clients_panel(
         .child(
             div().min_w_0().flex().items_center().gap_2().child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
                     .child(tr("app.ai.mcp.clients_title")),
@@ -180,7 +180,7 @@ fn ai_mcp_clients_panel(
         );
     let mut group = settings_panel_group_el(header).footer(
         div()
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.muted)
             .child(tr("app.ai.mcp.clients_help")),
     );
@@ -190,7 +190,7 @@ fn ai_mcp_clients_panel(
                 .id("ai-mcp-clients-loading")
                 .px_3()
                 .py_2()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.ai.mcp.updating_clients")),
         );
@@ -201,7 +201,7 @@ fn ai_mcp_clients_panel(
                 .id("ai-mcp-clients-error")
                 .px_3()
                 .py_2()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.danger)
                 .child(error.clone())
         );
@@ -225,7 +225,7 @@ fn ai_mcp_clients_panel(
             div()
                 .px_3()
                 .py_3()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.ai.mcp.no_clients")),
         );
@@ -242,9 +242,9 @@ fn ai_mcp_manual_connection(
     div().px_3().py_2().bg(colors.panel_alt.alpha(0.45)).flex().flex_col().gap_2()
         .child(div().flex().flex_wrap().items_center().justify_between().gap_2()
             .child(div().flex().items_center().gap_2()
-                .child(div().text_size(px(12.)).font_weight(gpui::FontWeight::MEDIUM)
+                .child(div().text_size(ui_text_size(12.)).font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(colors.text).child(tr("app.ai.mcp.other_clients")))
-                .child(div().text_size(px(11.)).text_color(colors.muted).child("MCP · stdio")))
+                .child(div().text_size(ui_text_size(11.)).text_color(colors.muted).child("MCP · stdio")))
             .when_some(panel.mcp_connection_details.clone(), |this, details| {
                 let command = details.command_line;
                 let json = details.json_example;
@@ -290,19 +290,19 @@ fn ai_mcp_manual_connection(
                         }))))
             }))
         .when_some(panel.mcp_connection_error.clone(), |this, error| {
-            this.child(div().text_size(px(12.)).text_color(colors.danger).child(error))
+            this.child(div().text_size(ui_text_size(12.)).text_color(colors.danger).child(error))
         })
         .when_some(panel.mcp_connection_details.clone(), |this, details| {
             this.child(gpui_component::collapsible::Collapsible::new().open(panel.mcp_details_open)
                 .content(div().flex().flex_col().gap_2().pt_1().pb_1()
-                    .child(div().text_size(px(11.)).text_color(colors.muted)
+                    .child(div().text_size(ui_text_size(11.)).text_color(colors.muted)
                         .child(tr("app.ai.mcp.manual_help")))
                     .child(div().id("ai-mcp-config-preview").max_h(px(180.)).overflow_scroll()
                         .rounded_md().border_1().border_color(colors.border_soft).bg(colors.input_bg)
-                        .p_3().font_family(PLATFORM_MONOSPACE_FONT).text_size(px(11.))
+                        .p_3().font_family(PLATFORM_MONOSPACE_FONT).text_size(ui_text_size(11.))
                         .text_color(colors.text).child(details.json_example))
                     .child(div().id("ai-mcp-connection-command").min_w_0().text_ellipsis()
-                        .text_size(px(11.)).text_color(colors.muted).child(details.command_line)
+                        .text_size(ui_text_size(11.)).text_color(colors.muted).child(details.command_line)
                         )))
         })
 }
@@ -366,7 +366,7 @@ fn client_registration_row(
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(colors.text)
                                 .child(status.label.clone()),
@@ -379,7 +379,7 @@ fn client_registration_row(
                                 )))
                                 .min_w_0()
                                 .text_ellipsis()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(file_name)
                                 .tooltip(move |window, cx| {
@@ -390,7 +390,7 @@ fn client_registration_row(
                 .when_some(status.error.clone(), |this, error| {
                     this.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.danger)
                             .child(error),
                     )
@@ -402,7 +402,7 @@ fn client_registration_row(
                 .flex()
                 .items_center()
                 .gap_1()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(if status.error.is_some() {
                     color
                 } else {

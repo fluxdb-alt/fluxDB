@@ -83,7 +83,7 @@ fn redis_add_key_drawer(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.redis.add_key.title")),
                         )

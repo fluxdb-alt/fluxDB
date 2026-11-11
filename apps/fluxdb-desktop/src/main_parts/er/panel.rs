@@ -109,7 +109,7 @@ fn er_relationship_panel(
                 // 表单打开时统一标题为「新建本地逻辑关系」，避免内层重复标题。
                 div()
                     .flex_1()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(colors.text)
                     .child(if this.er_relationship_form_open.contains(&tab_id) {
@@ -167,7 +167,7 @@ fn er_relationship_panel(
             .gap(px(4.));
         pending_box = pending_box.child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(if colors.is_dark { rgb(0xe6c27a) } else { rgb(0x8a5a00) })
                 .child(
@@ -179,7 +179,7 @@ fn er_relationship_panel(
             let (side, reason) = er_rebind_pending_display(&item.endpoint);
             pending_box = pending_box.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(
                         tr("app.er_relationship.pending_item")
@@ -193,7 +193,7 @@ fn er_relationship_panel(
         if pending.len() > 4 {
             pending_box = pending_box.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                 .child(
                     tr("app.er_relationship.pending_rest")
@@ -245,7 +245,7 @@ fn er_relationship_panel(
                 .gap(px(10.))
                 .px(px(14.))
                 .py(px(16.))
-                .child(div().text_size(px(12.)).text_color(rgb(0xef4444)).child(error))
+                .child(div().text_size(ui_text_size(12.)).text_color(rgb(0xef4444)).child(error))
                 .child(
                     Button::new(("er-rel-retry-list", tab_id.0))
                         .secondary()
@@ -261,7 +261,7 @@ fn er_relationship_panel(
             div()
                 .px(px(14.))
                 .py(px(16.))
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.er_relationship.empty")),
         );
@@ -301,7 +301,7 @@ fn er_relationship_panel(
                     .gap(px(5.))
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(rgb(0xef4444))
                             .child(tr("app.er_relationship.delete_hint")),
                     )
@@ -416,12 +416,12 @@ fn er_relationship_panel(
                         div()
                             .flex()
                             .items_center()
-                            .child(div().flex_1().text_size(px(12.)).text_color(colors.text).child(relationship.role))
-                            .child(div().text_size(px(11.)).text_color(state.1).child(state.0)),
+                            .child(div().flex_1().text_size(ui_text_size(12.)).text_color(colors.text).child(relationship.role))
+                            .child(div().text_size(ui_text_size(11.)).text_color(state.1).child(state.0)),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(
                                 tr("app.er_relationship.revision_origin")
@@ -435,7 +435,7 @@ fn er_relationship_panel(
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(format!(
                                 "{} → {}",
@@ -449,7 +449,7 @@ fn er_relationship_panel(
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.text)
                             .child(pairs),
                     )
@@ -552,7 +552,7 @@ fn er_form_section(
                 .mb(px(12.))
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(title),
@@ -582,7 +582,7 @@ fn er_form_field(
                 .gap(px(4.))
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(colors.text)
                         .child(label),
@@ -590,7 +590,7 @@ fn er_form_field(
                 .when(optional, |s| {
                     s.child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(colors.muted)
                             .child(tr("app.er_relationship.optional")),
                     )
@@ -837,7 +837,7 @@ fn er_relationship_form(
     form = form.child(
         div()
             .mb(px(12.))
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.muted)
             .child(tr("app.er_form.intro")),
     );
@@ -930,7 +930,7 @@ fn er_relationship_form(
     };
     assoc_body = assoc_body.child(
         div()
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.muted)
             .child(direction),
     );
@@ -945,7 +945,7 @@ fn er_relationship_form(
             .child(
                 div()
                     .flex_1()
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.muted)
                     .child(tr("app.er_form.left_columns")),
             )
@@ -953,7 +953,7 @@ fn er_relationship_form(
             .child(
                 div()
                     .flex_1()
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.muted)
                     .child(tr("app.er_form.right_columns")),
             ),
@@ -972,7 +972,7 @@ fn er_relationship_form(
                     div()
                         .w(px(18.))
                         .flex_shrink_0()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(format!("{}", index + 1)),
                 )
@@ -1035,7 +1035,7 @@ fn er_relationship_form(
     let mut cond_body = div().flex().flex_col().gap(px(8.));
     cond_body = cond_body.child(
         div()
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.muted)
             .child(tr("app.er_form.conditions_intro")),
     );
@@ -1046,7 +1046,7 @@ fn er_relationship_form(
                 .py(px(8.))
                 .rounded_md()
                 .bg(colors.canvas_bg)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.er_form.no_conditions")),
         );
@@ -1107,7 +1107,7 @@ fn er_relationship_form(
             .mt(px(14.))
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(tr("app.er_form.local_only")),
             )

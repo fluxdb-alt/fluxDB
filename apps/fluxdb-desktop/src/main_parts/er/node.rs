@@ -49,7 +49,7 @@ fn field_row(
         .flex()
         .items_center()
         .gap(px(6.))
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .when(highlighted, |d| d.bg(colors.hover))
         .when(!highlighted, |d| d.hover(|s| s.bg(colors.hover)))
         .id(format!("er-field-{}-{}-{}", tab_id.0, table, col.name))
@@ -320,7 +320,7 @@ fn node_view(
                 .min_w_0()
                 .overflow_hidden()
                 .text_ellipsis()
-                .text_size(px(if collapsed { 13. } else { 12. }))
+                .text_size(ui_text_size(if collapsed { 13. } else { 12. }))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(name.clone()),
@@ -385,7 +385,7 @@ fn node_view(
                     .border_1()
                     .border_color(colors.border_soft)
                     .id(format!("er-edgecount-{}-{}", tab_id.0, name.clone()))
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.muted)
                     .tooltip(move |window, cx| {
                         Tooltip::new(
@@ -416,7 +416,7 @@ fn node_view(
                         .px(px(10.))
                         .flex()
                         .items_center()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.er_node.no_visible_columns")),
                 );
@@ -434,7 +434,7 @@ fn node_view(
                             .items_center()
                             .border_t_1()
                             .border_color(colors.border_soft)
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(colors.muted)
                             .child(
                                 tr("app.er_node.field_range")
@@ -460,7 +460,7 @@ fn node_view(
             node = node.child(
                 div()
                     .px(px(10.))
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(if meta.status == ErLoadStatus::Loading {
                         tr("app.er_node.loading_columns")
@@ -477,7 +477,7 @@ fn node_view(
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(rgb(0xef4444))
                     .child(tr("app.er_node.load_failed"))
                     .child(

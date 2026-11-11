@@ -45,6 +45,7 @@ pub fn settings_section_fields(section: SettingsSection) -> &'static [&'static s
             "results_placement",
             "editor_font_size",
             "editor_line_height",
+            "editor_font_family",
             "editor_tab_width",
             "editor_word_wrap",
         ],
@@ -54,6 +55,7 @@ pub fn settings_section_fields(section: SettingsSection) -> &'static [&'static s
             "focus_ring",
             "scrollbar_mode",
             "ui_density",
+            "ui_font_size",
             "show_status_bar",
             "reduce_motion",
             "global_font_family",
@@ -75,6 +77,7 @@ pub fn settings_fields_schema() -> serde_json::Value {
             "results_placement": { "type": "string", "enum": ["bottom", "right"] },
             "editor_font_size": { "type": "integer", "minimum": 10, "maximum": 24 },
             "editor_line_height": { "type": "integer", "minimum": 13, "maximum": 28 },
+            "editor_font_family": { "type": "string", "maxLength": 128 },
             "editor_tab_width": { "type": "integer", "enum": [2, 4, 8] },
             "editor_word_wrap": { "type": "boolean" },
             "theme": { "type": "string", "enum": ["system", "light", "dark"] },
@@ -82,6 +85,7 @@ pub fn settings_fields_schema() -> serde_json::Value {
             "focus_ring": { "type": "boolean" },
             "scrollbar_mode": { "type": "string", "enum": ["scrolling", "hover", "always"] },
             "ui_density": { "type": "string", "enum": ["compact", "standard", "comfortable"] },
+            "ui_font_size": { "type": "integer", "minimum": 12, "maximum": 18 },
             "show_status_bar": { "type": "boolean" },
             "reduce_motion": { "type": "boolean" },
             "global_font_family": { "type": "string", "maxLength": 128 },
@@ -159,6 +163,13 @@ pub fn apply_settings_prefill(
             (SettingsSection::Editor, "editor_line_height") => {
                 settings.editor_line_height = value_u32(value, key, 13, 28)?;
             }
+            (SettingsSection::Editor, "editor_font_family") => {
+                let family = value_str(value, key)?;
+                if family.chars().count() > 128 {
+                    return Err("editor_font_family 不能超过 128 个字符".to_string());
+                }
+                settings.editor_font_family = family.to_string();
+            }
             (SettingsSection::Editor, "editor_tab_width") => {
                 let value = value_u32(value, key, 2, 8)?;
                 if !matches!(value, 2 | 4 | 8) {
@@ -210,6 +221,9 @@ pub fn apply_settings_prefill(
                         ));
                     }
                 };
+            }
+            (SettingsSection::Appearance, "ui_font_size") => {
+                settings.ui_font_size = value_u32(value, key, 12, 18)?;
             }
             (SettingsSection::Appearance, "show_status_bar") => {
                 settings.show_status_bar = value_bool(value, key)?;
@@ -303,6 +317,7 @@ pub fn settings_section_public_json(
             },
             "editor_font_size": settings.editor_font_size,
             "editor_line_height": settings.editor_line_height,
+            "editor_font_family": settings.editor_font_family,
             "editor_tab_width": settings.editor_tab_width,
             "editor_word_wrap": settings.editor_word_wrap,
         }),
@@ -324,6 +339,7 @@ pub fn settings_section_public_json(
                 fluxdb_core::UiDensity::Standard => "standard",
                 fluxdb_core::UiDensity::Comfortable => "comfortable",
             },
+            "ui_font_size": settings.effective_ui_font_size(),
             "show_status_bar": settings.show_status_bar,
             "reduce_motion": settings.reduce_motion,
             "global_font_family": settings.global_font_family,

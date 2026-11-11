@@ -690,7 +690,7 @@ fn mongo_export_modal(
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .track_focus(&focus_handle)
                 .debug_selector(|| "mongo-export-modal".into())
@@ -725,7 +725,7 @@ fn mongo_export_header(form: &MongoExportForm, colors: UiColors, cx: &mut Contex
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(16.))
+                        .text_size(ui_text_size(16.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(tr("app.mongo.export.title")),
                 )
@@ -739,7 +739,7 @@ fn mongo_export_header(form: &MongoExportForm, colors: UiColors, cx: &mut Contex
                         .rounded(colors.radius)
                         .bg(colors.panel_alt)
                         .font_family(EDITOR_FONT)
-                        .text_size(px(11.5))
+                        .text_size(ui_text_size(11.5))
                         .text_color(colors.muted)
                         .child(mongo_export_object_label(&form.object)),
                 ),
@@ -805,7 +805,7 @@ fn mongo_export_tab_button(
         .items_center()
         .border_b_2()
         .border_color(if active { rgb(0x1687ff) } else { colors.border_soft })
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(if active { colors.text } else { colors.muted })
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .cursor_pointer()
@@ -845,7 +845,7 @@ fn mongo_export_general_body(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(if selected { colors.text } else { colors.muted })
                 .cursor_pointer()
@@ -880,7 +880,7 @@ fn mongo_export_general_body(
                     div()
                         .w(px(64.))
                         .flex_none()
-                        .text_size(px(12.5))
+                        .text_size(ui_text_size(12.5))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.muted)
                         .child(tr("app.mongo.export.format")),
@@ -891,7 +891,7 @@ fn mongo_export_general_body(
                         .flex_1()
                         .min_w(px(0.))
                         .truncate()
-                        .text_size(px(11.5))
+                        .text_size(ui_text_size(11.5))
                         .text_color(colors.muted)
                         .child(tr(format_hint_key(form.format))),
                 ),
@@ -905,7 +905,7 @@ fn mongo_export_general_body(
                     div()
                         .w(px(64.))
                         .flex_none()
-                        .text_size(px(12.5))
+                        .text_size(ui_text_size(12.5))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.muted)
                         .child(tr("app.data_export.scope")),
@@ -965,7 +965,7 @@ fn mongo_export_scope_note(form: &MongoExportForm, colors: UiColors) -> Div {
         .flex()
         .flex_col()
         .gap_1()
-        .text_size(px(11.5))
+        .text_size(ui_text_size(11.5))
         .text_color(colors.muted)
         .child(tr("app.mongo.export.scope_hint"));
     if form.scope != MongoExportScope::Conditions {
@@ -984,7 +984,7 @@ fn mongo_export_scope_note(form: &MongoExportForm, colors: UiColors) -> Div {
     if conditions.is_empty() {
         return note.child(
             div()
-                .text_size(px(11.5))
+                .text_size(ui_text_size(11.5))
                 .text_color(colors.muted)
                 .child(tr("app.mongo.export.conditions_empty")),
         );
@@ -997,7 +997,7 @@ fn mongo_export_scope_note(form: &MongoExportForm, colors: UiColors) -> Div {
                 .py(px(1.))
                 .rounded(colors.radius)
                 .bg(colors.panel_alt)
-                .text_size(px(10.5))
+                .text_size(ui_text_size(10.5))
                 .text_color(colors.text)
                 .child(label),
         );
@@ -1065,7 +1065,7 @@ fn mongo_export_query_preview(
                         .flex_1()
                         .min_w(px(0.))
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(tr("app.mongo.export.query_hint")),
                 ),
@@ -1083,8 +1083,8 @@ fn mongo_export_query_preview(
                 .py_2()
                 .overflow_x_scrollbar()
                 .font_family(EDITOR_FONT)
-                .text_size(px(12.))
-                .line_height(px(19.))
+                .text_size(ui_text_size(12.))
+                .line_height(ui_text_size(19.))
                 .text_color(colors.text)
                 // 长条件不折行：横向滚动，语句结构保持一行可读，也不把弹框撑高。
                 .whitespace_nowrap()
@@ -1134,7 +1134,7 @@ fn mongo_export_scope_segment(
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(if active { colors.text } else { colors.muted })
         // 选中态与格式胶囊一致：淡蓝底 + 强调色描边；未选中保留同宽透明边框，
@@ -1194,7 +1194,7 @@ fn mongo_export_footer(form: &MongoExportForm, colors: UiColors, cx: &mut Contex
                 .flex_1()
                 .min_w(px(0.))
                 .truncate()
-                .text_size(px(11.5))
+                .text_size(ui_text_size(11.5))
                 .text_color(colors.muted)
                 .child(summary),
         )

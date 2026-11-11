@@ -184,7 +184,7 @@ fn sqlserver_role_checkbox(checkbox: SqlServerRoleCheckbox, cx: &mut Context<Nav
         )
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(if disabled { colors.muted } else { colors.text })
                 .child(label),
         );

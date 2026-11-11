@@ -11,7 +11,7 @@ fn form_field_label(
             .gap_1()
             .child(
                 div()
-                    .text_size(px(11.5))
+                    .text_size(ui_text_size(11.5))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(colors.muted)
                     .child(text.clone()),
@@ -19,7 +19,7 @@ fn form_field_label(
             .when(required, |this| {
                 this.child(
                     div()
-                        .text_size(px(11.5))
+                        .text_size(ui_text_size(11.5))
                         .text_color(colors.danger)
                         .child("*"),
                 )
@@ -41,7 +41,7 @@ fn field_row_light(
     if !hint.is_empty() {
         row = row.description_fn(move |_, _| {
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(hint.clone())
         });
@@ -231,7 +231,7 @@ fn connection_test_status(status: &ConnectionTestStatus) -> Stateful<Div> {
         .items_center()
         .overflow_hidden()
         .truncate()
-        .text_size(px(14.))
+        .text_size(ui_text_size(14.))
         .text_color(fg)
         .child(text)
 }
@@ -254,7 +254,7 @@ fn bare_input_light(field: ConnectionField, inputs: &NewConnectionInputs) -> Div
         .flex()
         .items_center()
         .overflow_hidden()
-        .child(input.w_full().h_full().px_3().text_size(px(13.5)))
+        .child(input.w_full().h_full().px_3().text_size(ui_text_size(13.5)))
 }
 
 fn input_box_light(

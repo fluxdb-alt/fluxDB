@@ -19,7 +19,7 @@ fn pg_general_panel(
             .flex()
             .items_center()
             .justify_center()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .text_color(colors.muted)
             .child(tr("app.pg_role.select_or_new"))
             .into_any_element();
@@ -137,7 +137,7 @@ fn pg_general_panel(
                         .gap_2()
                         .child(
                             div()
-                                .text_size(px(15.))
+                                .text_size(ui_text_size(15.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(if draft.create {
@@ -172,7 +172,7 @@ fn pg_role_chip(label: impl Into<SharedString>, colors: UiColors) -> Div {
         .bg(colors.panel_alt)
         .flex()
         .items_center()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .child(label)
 }
@@ -227,7 +227,7 @@ fn pg_form_input_box(
                 .w_full()
                 .h_full()
                 .px_2()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text),
         )
 }
@@ -290,7 +290,7 @@ fn pg_switch_row(
                 .when(!enabled, |row| {
                     row.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child(tr("app.pg_role.predefined_readonly")),
                     )
@@ -328,7 +328,7 @@ fn pg_form_label(label: impl Into<SharedString>, colors: UiColors) -> Div {
     let label: SharedString = label.into();
     div()
         .w(px(120.))
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(colors.text)
         .child(label)
@@ -339,7 +339,7 @@ fn pg_form_hint(text: &str, is_error: bool, colors: UiColors) -> Div {
     div()
         .ml(px(132.))
         .max_w(px(360.))
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if is_error { rgb(0xff3b45) } else { colors.muted })
         .child(text.to_string())
 }

@@ -67,7 +67,7 @@ fn create_table_trigger_header_row(colors: UiColors) -> Div {
         .flex_none()
         .flex_shrink_0()
         .bg(colors.panel_alt)
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .flex()
@@ -236,7 +236,7 @@ fn create_table_trigger_body_editor(
             .flex()
             .items_center()
             .justify_center()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .text_color(colors.muted)
             .child(tr("app.create_table.trigger.add_definition"));
     };
@@ -265,7 +265,7 @@ fn create_table_trigger_body_editor(
                 .flex()
                 .items_center()
                 .gap_2()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(tr("app.create_table.definition"))
@@ -273,7 +273,7 @@ fn create_table_trigger_body_editor(
                 .when(create.database_kind == DatabaseKind::Postgres, |this| {
                     this.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .font_weight(gpui::FontWeight::NORMAL)
                             .text_color(colors.muted)
                             .child(tr("app.create_table.trigger.postgres_function_hint")),
@@ -290,7 +290,7 @@ fn create_table_trigger_body_editor(
                         .appearance(false)
                         .bordered(false)
                         .focus_bordered(false)
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_family(EDITOR_FONT)
                         .size_full(),
                 ),

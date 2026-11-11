@@ -30,8 +30,8 @@ fn redis_add_key_string_form(
                         .px_2()
                         .py_2()
                         .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                        .text_size(px(12.))
-                        .line_height(px(18.)),
+                        .text_size(ui_text_size(12.))
+                        .line_height(ui_text_size(18.)),
                 ),
         )
 }

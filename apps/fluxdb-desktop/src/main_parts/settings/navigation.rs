@@ -6,9 +6,12 @@ fn settings_content(
     active_section: SettingsPanelSection,
     colors: UiColors,
     editor_draft: Settings,
+    custom_themes: &BTreeSet<String>,
     font_size_slider: Entity<SliderState>,
+    ui_font_size_slider: Entity<SliderState>,
     line_height_input: Entity<InputState>,
-    radius_input: Entity<InputState>,
+    ui_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
+    code_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
     clients: [NativeClientPanelState; 2],
     dangerous_actions_collapsed: bool,
     data_groups: SettingsDataGroupsCollapsed,
@@ -42,6 +45,7 @@ fn settings_content(
                             colors,
                             editor_draft.clone(),
                             font_size_slider.clone(),
+                            ui_font_size_slider.clone(),
                             line_height_input.clone(),
                             cx,
                         ))
@@ -60,9 +64,12 @@ fn settings_content(
                                     active_section,
                                     colors,
                                     editor_draft,
+                                    custom_themes,
                                     font_size_slider,
+                                    ui_font_size_slider,
                                     line_height_input,
-                                    radius_input,
+                                    ui_font_select,
+                                    code_font_select,
                                     clients,
                                     dangerous_actions_collapsed,
                                     data_groups,
@@ -145,12 +152,13 @@ fn settings_panel_header(
     colors: UiColors,
     editor_draft: Settings,
     font_size_slider: Entity<SliderState>,
+    ui_font_size_slider: Entity<SliderState>,
     line_height_input: Entity<InputState>,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let reset_font_size_slider = font_size_slider.clone();
-    let reset_line_height_input = line_height_input.clone();
-    let save_line_height_input = line_height_input;
+    let appearance_font_size_slider = font_size_slider;
+    let appearance_ui_font_size_slider = ui_font_size_slider;
+    let appearance_line_height_input = line_height_input;
     div()
         .h(px(48.))
         .flex_none()
@@ -167,14 +175,14 @@ fn settings_panel_header(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(15.))
+                        .text_size(ui_text_size(15.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(settings_section_label(active_section)),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(settings_section_description(active_section)),
                 ),
@@ -191,18 +199,10 @@ fn settings_panel_header(
                             .label(tr("app.settings.reset_defaults"))
                             .small()
                             .rounded(colors.radius)
-                            .on_click(cx.listener(move |this, _, window, cx| {
+                            .on_click(cx.listener(move |this, _, _window, cx| {
                                 this.settings_editor_draft = settings_default_editor_draft(
                                     &this.controller.state().settings,
                                 );
-                                let font_size = this.settings_editor_draft.editor_font_size;
-                                reset_font_size_slider.update(cx, |slider, cx| {
-                                    slider.set_value(font_size as f32, window, cx)
-                                });
-                                let value =
-                                    this.settings_editor_draft.editor_line_height.to_string();
-                                reset_line_height_input
-                                    .update(cx, |input, cx| input.set_value(value, window, cx));
                                 this.show_message(
                                     tr("app.settings.message.editor_reset"),
                                     AppMessageKind::Info,
@@ -217,36 +217,18 @@ fn settings_panel_header(
                             .rounded(colors.radius)
                             .primary()
                             .disabled(!dirty)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                let Ok(line_height) = save_line_height_input
-                                    .read(cx)
-                                    .value()
-                                    .trim()
-                                    .parse::<u32>()
-                                else {
-                                    this.show_message(
-                                        tr("app.settings.message.invalid_line_height"),
-                                        AppMessageKind::Warning,
-                                        cx,
-                                    );
-                                    return;
-                                };
-                                let line_height = line_height.clamp(13, 28);
+                            .on_click(cx.listener(move |this, _, _window, cx| {
                                 let mut settings = this.controller.state().settings.clone();
                                 settings_apply_editor_fields(
                                     &mut settings,
                                     &this.settings_editor_draft,
                                 );
-                                settings.editor_line_height = line_height;
                                 save_settings_from_ui(
                                     this,
                                     settings,
                                     tr("app.settings.message.editor_saved"),
                                     cx,
                                 );
-                                save_line_height_input.update(cx, |input, cx| {
-                                    input.set_value(line_height.to_string(), window, cx)
-                                });
                             })),
                     ),
             )
@@ -255,6 +237,9 @@ fn settings_panel_header(
             this.child(settings_appearance_header_actions(
                 &state.settings,
                 &editor_draft,
+                appearance_font_size_slider,
+                appearance_ui_font_size_slider,
+                appearance_line_height_input,
                 cx,
             ))
         })
@@ -301,9 +286,12 @@ fn settings_panel_body(
     active_section: SettingsPanelSection,
     colors: UiColors,
     editor_draft: Settings,
+    custom_themes: &BTreeSet<String>,
     font_size_slider: Entity<SliderState>,
+    ui_font_size_slider: Entity<SliderState>,
     line_height_input: Entity<InputState>,
-    radius_input: Entity<InputState>,
+    ui_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
+    code_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
     clients: [NativeClientPanelState; 2],
     dangerous_actions_collapsed: bool,
     data_groups: SettingsDataGroupsCollapsed,
@@ -313,19 +301,26 @@ fn settings_panel_body(
     match active_section {
         SettingsPanelSection::Editor => settings_editor_panel(
             editor_draft,
-            font_size_slider,
             colors,
-            line_height_input,
             dangerous_actions_collapsed,
-            window,
             cx,
         ),
         SettingsPanelSection::Shortcuts => {
             settings_shortcuts_panel(&editor_draft, colors, window, cx)
         }
-        SettingsPanelSection::Appearance => {
-            settings_appearance_panel(&editor_draft, theme_mode, colors, radius_input, window, cx)
-        }
+        SettingsPanelSection::Appearance => settings_appearance_panel(
+            &editor_draft,
+            theme_mode,
+            custom_themes,
+            colors,
+            font_size_slider,
+            ui_font_size_slider,
+            line_height_input,
+            ui_font_select,
+            code_font_select,
+            window,
+            cx,
+        ),
         SettingsPanelSection::System => settings_system_panel(&editor_draft, colors, cx),
         SettingsPanelSection::Data => {
             settings_data_panel(&editor_draft, clients, data_groups, colors, window, cx)

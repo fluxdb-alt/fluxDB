@@ -477,14 +477,14 @@ fn ai_chat_er_proposal_card(
                         .gap(px(1.))
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(tr("app.ai.er_proposal.card_title")),
                         )
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(ui_text_size(10.))
                                 .text_color(colors.muted)
                                 .truncate()
                                 .child(
@@ -496,7 +496,7 @@ fn ai_chat_er_proposal_card(
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.muted)
                         .child(if review_complete {
                             tr("app.ai.er_proposal.adopted")
@@ -517,7 +517,7 @@ fn ai_chat_er_proposal_card(
                 .gap_1()
                 .children(active_label.into_iter().map(|label| {
                     div()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.text)
                         .truncate()
                         .child(label)
@@ -525,7 +525,7 @@ fn ai_chat_er_proposal_card(
                 .when(batch.counts.total > 2, |list| {
                     list.child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(colors.muted)
                             .child(
                                 tr("app.ai.er_proposal.more_items").replace(

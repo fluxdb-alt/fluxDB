@@ -7,7 +7,7 @@ fn ai_model_table_header(colors: UiColors) -> impl IntoElement {
             .w(px(w))
             .flex_shrink_0()
             .debug_selector(|| format!("ai-head:{label}"))
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(colors.muted)
             .child(label.to_string())
     };
@@ -23,7 +23,7 @@ fn ai_model_table_header(colors: UiColors) -> impl IntoElement {
             div()
                 .flex_1()
                 .min_w(px(0.))
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.ai.models.header.model")),
         )
@@ -120,7 +120,7 @@ fn ai_model_row(
                         .min_w(px(0.))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .truncate()
@@ -128,7 +128,7 @@ fn ai_model_row(
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .truncate()
                                 .child(format!(
@@ -152,7 +152,7 @@ fn ai_model_row(
                 .child(ai_capability_tag(&model.kind, colors))
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(capability_note),
                 )
@@ -179,7 +179,7 @@ fn ai_model_row(
                 .when(decision, |column| {
                     column.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(colors.muted)
                             .child("—"),
                     )
@@ -381,7 +381,7 @@ fn settings_ai_models_panel(
                         .gap_3()
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(colors.muted)
                                 .child(tr("app.ai.models.description")),
                         )
@@ -470,7 +470,7 @@ fn ai_model_search_field(
                 .focus_bordered(false)
                 .w_full()
                 .h_full()
-                .text_size(px(12.)),
+                .text_size(ui_text_size(12.)),
         )
         .when(has_value, |this| {
             this.child(

@@ -126,7 +126,7 @@ fn redis_key_detail_hash_panel(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(redis_set_search_box(
                             this.redis_hash_field_search_input.clone(),
@@ -187,7 +187,7 @@ fn redis_key_detail_hash_panel(
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(tr("app.redis.hash.fields_count").replace("%{shown}", &rows.len().to_string()).replace("%{total}", &total.to_string()))
                                 .child(
@@ -367,7 +367,7 @@ fn redis_hash_full_value_inline_panel(
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(rgb(0xe5484d))
                         .child(tr("app.redis.hash.full_value_failed")),
                 )
@@ -429,8 +429,8 @@ fn redis_hash_full_value_inline_panel(
                                             .px_2()
                                             .py_2()
                                             .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                                            .text_size(px(13.))
-                                            .line_height(px(19.)),
+                                            .text_size(ui_text_size(13.))
+                                            .line_height(ui_text_size(19.)),
                                     ),
                             ),
                     )
@@ -481,8 +481,8 @@ fn redis_hash_full_value_inline_panel(
                     .overflow_x_scroll()
                     .overflow_y_scrollbar()
                     .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                    .text_size(px(13.))
-                    .line_height(px(19.))
+                    .text_size(ui_text_size(13.))
+                    .line_height(ui_text_size(19.))
                     .text_color(colors.text)
                     .child(
                         div()
@@ -538,13 +538,13 @@ fn redis_hash_full_value_inline_panel(
                         .min_w(px(0.))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.redis.hash.full_value_title").replace("%{field}", &field)),
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(subtitle),
                         ),
@@ -651,7 +651,7 @@ fn redis_hash_field_add_drawer(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(div().text_size(px(17.)).font_weight(gpui::FontWeight::SEMIBOLD).child(tr("app.redis.hash.add_field"))),
+                        .child(div().text_size(ui_text_size(17.)).font_weight(gpui::FontWeight::SEMIBOLD).child(tr("app.redis.hash.add_field"))),
                 )
                 .child(
                     div()

@@ -47,7 +47,7 @@ fn server_kill_modal(
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(17.))
+                            .text_size(ui_text_size(17.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(title),
                     )
@@ -75,7 +75,7 @@ fn server_kill_modal(
                 div()
                     .px_5()
                     .pb_3()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .text_color(colors.muted)
                     .child(message),
             )
@@ -91,7 +91,7 @@ fn server_kill_modal(
                         .border_color(colors.border)
                         .bg(colors.panel_alt)
                         .p_2()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_family(crate::PLATFORM_MONOSPACE_FONT)
                         .text_color(colors.text)
                         .child(sql),
@@ -176,7 +176,7 @@ fn server_maintenance_modal(
                     .px_5()
                     .pt_4()
                     .pb_3()
-                    .text_size(px(17.))
+                    .text_size(ui_text_size(17.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .child(tr("app.server_panel.maintenance.title")),
             )
@@ -184,7 +184,7 @@ fn server_maintenance_modal(
                 div()
                     .px_5()
                     .pb_4()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .text_color(colors.muted)
                     .child(message),
             )

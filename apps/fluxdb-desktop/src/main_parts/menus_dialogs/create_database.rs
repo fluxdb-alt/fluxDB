@@ -258,7 +258,7 @@ fn create_database_header(colors: UiColors, cx: &mut Context<NavicatMain>) -> im
                 .child(app_icon(AppIcon::Database, 16., colors.text))
                 .child(
                     div()
-                        .text_size(px(17.))
+                        .text_size(ui_text_size(17.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(tr("app.database.create.title")),
                 ),
@@ -405,7 +405,7 @@ fn create_schema_header(database_name: String, colors: UiColors, cx: &mut Contex
                 .child(app_icon(AppIcon::Database, 16., colors.text))
                 .child(
                     div()
-                        .text_size(px(17.))
+                        .text_size(ui_text_size(17.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(tr("app.schema.create.title").replace("%{database}", &database_name)),
                 ),
@@ -443,7 +443,7 @@ fn create_database_text_field(
         .gap_2()
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(label),
@@ -465,7 +465,7 @@ fn create_database_select_field(
         .gap_2()
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(label),
@@ -502,6 +502,6 @@ fn create_database_input_frame(
                 .disabled(running)
                 .w_full()
                 .h_full()
-                .text_size(px(14.)),
+                .text_size(ui_text_size(14.)),
         )
 }

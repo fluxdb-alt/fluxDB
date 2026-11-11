@@ -46,7 +46,7 @@ fn redis_add_key_json_format_button(
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(rgb(0x1677ff))
         .when(!applying, |this| {

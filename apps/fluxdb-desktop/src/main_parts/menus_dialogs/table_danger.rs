@@ -113,7 +113,7 @@ fn danger_table_modal(
                         .when_some(error, |this, error| {
                             this.child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(rgb(0xe5484d))
                                     .child(error),
                             )
@@ -178,7 +178,7 @@ fn danger_table_header(
                 .child(
                     div()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_size(px(15.))
+                        .text_size(ui_text_size(15.))
                         .child(action.title()),
                 ),
         )
@@ -195,7 +195,7 @@ fn danger_table_header(
 
 fn danger_table_prompt(form: &PendingDangerTableAction) -> impl IntoElement {
     div()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .child({
             let action = form.action.prompt();
@@ -218,7 +218,7 @@ fn danger_table_fk_row(
         .child(
             div()
                 .w(px(76.))
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .child(tr("app.table.danger.foreign_key_check")),
         )
@@ -255,7 +255,7 @@ fn danger_table_ack_row(
         .child(Checkbox::new("danger-table-ack").checked(acknowledged))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .child(tr("app.table.danger.acknowledge")),
         )
         .on_mouse_down(
@@ -288,7 +288,7 @@ fn danger_table_restart_identity_row(
         .child(Checkbox::new("danger-table-restart-identity").checked(restart))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .child(tr("app.table.danger.restart_identity")),
         )
         .on_mouse_down(

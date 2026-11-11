@@ -364,7 +364,7 @@ fn ai_report_footer_meta(report: &fluxdb_app::AiReportView, colors: UiColors) ->
         .flex()
         .items_center()
         .gap_1p5()
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .text_color(colors.muted)
         .child(app_icon(AppIcon::Activity, 12., colors.success))
         .child(format!(
@@ -395,7 +395,7 @@ fn ai_report_body(
         .flex()
         .flex_col()
         .gap_3()
-        .text_size(px(12.));
+        .text_size(ui_text_size(12.));
     column = column.child(
         div()
             .flex()
@@ -443,7 +443,7 @@ fn ai_report_body(
         }
         column = column.child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(meta),
         );
@@ -476,7 +476,7 @@ fn ai_report_body(
             fluxdb_core::ArtifactBlock::Note { text } => {
                 column = column.child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(
                             tr("app.ai_report.model_note")
@@ -489,7 +489,7 @@ fn ai_report_body(
     if report.spec.blocks.is_empty() {
         column = column.child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.ai_report.no_blocks")),
         );
@@ -502,7 +502,7 @@ fn ai_report_body(
     if exporting {
         column = column.child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(tr("app.ai_report.exporting")),
         );
@@ -538,16 +538,16 @@ fn ai_report_metrics(
             .flex()
             .flex_col()
             .gap_0p5()
-            .child(div().text_size(px(10.)).text_color(colors.muted).child(label.to_string()))
+            .child(div().text_size(ui_text_size(10.)).text_color(colors.muted).child(label.to_string()))
             .child(
                 div()
-                    .text_size(px(18.))
+                    .text_size(ui_text_size(18.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
                     .truncate()
                     .child(value),
             )
-            .child(div().text_size(px(10.)).text_color(colors.muted).truncate().child(note))
+            .child(div().text_size(ui_text_size(10.)).text_color(colors.muted).truncate().child(note))
     };
     Some(
         div()
@@ -585,7 +585,7 @@ fn ai_report_tag(label: String, tone: gpui::Rgba, colors: UiColors) -> gpui::Any
         .border_color(colors.border_soft)
         .bg(colors.panel_alt)
         .text_color(tone)
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .child(label)
         .into_any_element()
 }
@@ -607,7 +607,7 @@ fn ai_report_table_block(
     colors: UiColors,
 ) -> gpui::AnyElement {
     let header = div()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .child(
             tr("app.ai_report.table_header")
@@ -660,7 +660,7 @@ fn ai_report_table_block(
             }
             let note = if source.items.len() > shown || source.truncated {
                 div()
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.warning)
                     .child(
                         tr("app.ai_report.table_sampled")
@@ -673,7 +673,7 @@ fn ai_report_table_block(
                     .into_any_element()
             } else {
                 div()
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.muted)
                     .child(
                         tr("app.ai_report.table_rows")
@@ -706,7 +706,7 @@ fn ai_report_cell(text: &str, header: bool, colors: UiColors) -> gpui::AnyElemen
         .min_w(px(0.))
         .px_2()
         .py_1()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .when(header, |cell| {
             cell.font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
@@ -720,7 +720,7 @@ fn ai_report_placeholder(text: impl Into<SharedString>, colors: UiColors) -> gpu
     let text = text.into();
     div()
         .py_3()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .child(text)
         .into_any_element()
@@ -736,7 +736,7 @@ fn ai_report_provenance(report: &fluxdb_app::AiReportView, colors: UiColors) -> 
         .pt_2()
         .border_t_1()
         .border_color(colors.border_soft)
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .text_color(colors.muted)
         .child(if report.metadata_only() {
             tr("app.ai_report.provenance_metadata_only")
@@ -813,7 +813,7 @@ fn ai_report_sql_section(report: &fluxdb_app::AiReportView, colors: UiColors) ->
                     .gap_1()
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(colors.muted)
                             .child(
                                 tr("app.ai_report.source_sql_readonly").replace(
@@ -832,7 +832,7 @@ fn ai_report_sql_section(report: &fluxdb_app::AiReportView, colors: UiColors) ->
                             .p_2()
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(ui_text_size(11.))
                                     .text_color(colors.text)
                                     .child(sql.clone()),
                             ),
@@ -843,7 +843,7 @@ fn ai_report_sql_section(report: &fluxdb_app::AiReportView, colors: UiColors) ->
     if !any {
         column = column.child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(tr("app.ai_report.no_sql")),
         );
@@ -1007,7 +1007,7 @@ fn ai_chat_artifact_card(
                         .child(
                             div()
                                 .min_w(px(0.))
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .truncate()
                                 .child(title),
@@ -1023,7 +1023,7 @@ fn ai_chat_artifact_card(
         .child(
             div()
                 .w_full()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(format!(
                     "{}{}{}",
@@ -1043,7 +1043,7 @@ fn ai_chat_artifact_card(
         .when_some(failure_code, |card, code| {
             card.child(
                 div()
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.danger)
                     .child(
                         tr("app.ai_report.renderer_failed").replace("%{code}", &code)
@@ -1052,7 +1052,7 @@ fn ai_chat_artifact_card(
         })
         .child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(
                     tr("app.ai_report.source_count")

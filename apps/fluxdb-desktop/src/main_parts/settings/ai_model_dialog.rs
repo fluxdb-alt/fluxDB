@@ -34,7 +34,7 @@ fn ai_field(
         .gap_1()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(colors.text)
                 .child(label),
@@ -42,7 +42,7 @@ fn ai_field(
         .child(
             div()
                 .debug_selector(move || format!("ai-field:{debug_label}"))
-                .child(Input::new(input).text_size(px(13.))),
+                .child(Input::new(input).text_size(ui_text_size(13.))),
         )
 }
 
@@ -59,7 +59,7 @@ fn ai_secret_field(
         .gap_1()
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(colors.text)
                 .child(label),
@@ -68,7 +68,7 @@ fn ai_secret_field(
         .child(
             div()
                 .debug_selector(|| "ai-secret-input".into())
-                .child(Input::new(input).mask_toggle().text_size(px(13.))),
+                .child(Input::new(input).mask_toggle().text_size(ui_text_size(13.))),
         )
 }
 
@@ -84,7 +84,7 @@ fn ai_select_field(
         .gap_1()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(colors.text)
                 .child(label.to_string()),
@@ -120,7 +120,7 @@ fn ai_model_id_field(
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(colors.text)
                         .child(tr("app.ai.model_dialog.model_id")),
@@ -144,7 +144,7 @@ fn ai_model_id_field(
         .child(
             div()
                 .debug_selector(|| "ai-model-id-input".into())
-                .child(Input::new(&dialog.inputs.model_key).text_size(px(13.))),
+                .child(Input::new(&dialog.inputs.model_key).text_size(ui_text_size(13.))),
         );
     if dialog.model_options_open && !dialog.model_options.is_empty() {
         // 绝对定位覆盖在后续字段上，不参与弹框高度计算；deferred 保证浮层绘制在其上方。
@@ -195,7 +195,7 @@ fn ai_model_options_panel(
             div()
                 .px_3()
                 .py_2()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.ai.model_dialog.no_model_match")),
         );
@@ -209,7 +209,7 @@ fn ai_model_options_panel(
                     .px_3()
                     .pt_2()
                     .pb_1()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(if group.is_empty() {
                         tr("app.ai.model_dialog.other").to_string()
@@ -235,7 +235,7 @@ fn ai_model_options_panel(
                         colors.panel_bg.alpha(0.0)
                     })
                     .hover(move |style| style.bg(colors.hover))
-                    .text_size(px(12.5))
+                    .text_size(ui_text_size(12.5))
                     .text_color(colors.text)
                     .child(model.clone())
                     .on_mouse_down(
@@ -289,7 +289,7 @@ fn ai_model_options_panel(
                         .appearance(false)
                         .focus_bordered(false)
                         .w_full()
-                        .text_size(px(12.5)),
+                        .text_size(ui_text_size(12.5)),
                 ),
         )
         .child(
@@ -382,7 +382,7 @@ fn ai_model_dialog(
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(14.))
+                        .text_size(ui_text_size(14.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(if is_new {
                             tr("app.ai.models.new")
@@ -426,7 +426,7 @@ fn ai_model_dialog(
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .child(div().text_size(px(11.)).text_color(colors.text).child(
+                                .child(div().text_size(ui_text_size(11.)).text_color(colors.text).child(
                                     if dialog.endpoint_is_full_url {
                                         tr("app.ai.model_dialog.full_url_label")
                                     } else {
@@ -454,9 +454,9 @@ fn ai_model_dialog(
                         .child(
                             div()
                                 .debug_selector(|| "ai-model-endpoint-input".into())
-                                .child(Input::new(&inputs.endpoint).text_size(px(13.))),
+                                .child(Input::new(&inputs.endpoint).text_size(ui_text_size(13.))),
                         )
-                        .child(div().text_size(px(11.)).text_color(colors.muted).child(
+                        .child(div().text_size(ui_text_size(11.)).text_color(colors.muted).child(
                             if dialog.endpoint_is_full_url {
                                 tr("app.ai.model_dialog.full_url_help")
                             } else {
@@ -488,13 +488,13 @@ fn ai_model_dialog(
                                 .gap_1()
                                 .child(
                                     div()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(colors.text)
                                         .child(tr("app.ai.model_dialog.egress")),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(ui_text_size(11.))
                                         .text_color(colors.muted)
                                         .child(
                                             tr("app.ai.model_dialog.egress_help"),
@@ -603,7 +603,7 @@ fn ai_model_dialog(
             .child(app_icon(AppIcon::CircleSlash, 14., colors.danger))
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.danger)
                     .child(message),
             )

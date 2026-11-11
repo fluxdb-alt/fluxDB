@@ -662,7 +662,7 @@ fn mongo_document_delete_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.mongo.delete_title")),
                         )
@@ -689,7 +689,7 @@ fn mongo_document_delete_modal(
                     div()
                         .px_5()
                         .pb_4()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(
                             // `_id` 是这段提示里唯一能区分文档的信息。
@@ -772,13 +772,13 @@ fn mongo_document_editor_drawer(
             .min_w(px(0.))
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(colors.text)
                     .child(tr("app.mongo.duplicate_title")),
             )
             .child(
                 div()
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.muted)
                     .overflow_hidden()
                     .text_ellipsis()
@@ -787,7 +787,7 @@ fn mongo_document_editor_drawer(
     } else {
         div()
             .flex_1()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(colors.text)
             .child(if inserting {
                 tr("app.mongo.insert_title")
@@ -859,7 +859,7 @@ fn mongo_document_editor_drawer(
                 .gap_2()
                 .border_b_1()
                 .border_color(colors.border_soft)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.mongo.extended_json"))
                 .child(div().flex_1())
@@ -999,7 +999,7 @@ fn mongo_document_discard_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.mongo.editor.discard_title")),
                         )
@@ -1026,7 +1026,7 @@ fn mongo_document_discard_modal(
                     div()
                         .px_5()
                         .pb_4()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(tr("app.mongo.editor.discard_message")),
                 )

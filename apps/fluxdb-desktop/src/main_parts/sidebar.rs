@@ -25,7 +25,7 @@ fn connection_browser_titlebar(
                 div()
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
                     .child(tr("app.sidebar.connections")),
@@ -291,7 +291,7 @@ fn tab_view_with_context(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(if active { colors.text } else { colors.muted })
                 .when(active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
                 .tooltip(move |window, cx| Tooltip::new(title_tooltip.clone()).build(window, cx))
@@ -805,7 +805,7 @@ fn sidebar(
                         .child(app_icon_box(AppIcon::Plug, 20., 16., colors.text))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(colors.text)
                                 .child(tr("app.sidebar.add_connection")),
@@ -849,7 +849,7 @@ fn sidebar_search(
                 .focus_bordered(false)
                 .w_full()
                 .h_full()
-                .text_size(px(14.)),
+                .text_size(ui_text_size(14.)),
         )
         .when(has_value, |this| {
             this.child(

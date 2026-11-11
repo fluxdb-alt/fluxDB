@@ -119,7 +119,7 @@ fn data_filter_apply_button(colors: UiColors, applying: bool) -> Div {
             rgb(0x1d7ff2)
         })
         .bg(rgb(0x2f8df6))
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(rgb(0xffffff))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .cursor_pointer()
@@ -226,7 +226,7 @@ fn data_filter_mode_button(
         } else {
             colors.panel_bg
         })
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(if active { rgb(0x006bd6) } else { colors.muted })
         .cursor_pointer()
@@ -267,7 +267,7 @@ fn data_filter_condition_editor(
                         .appearance(false)
                         .bordered(false)
                         .h_full()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .aria_label(tr("app.filter.mode.input")),
                 ),
         )

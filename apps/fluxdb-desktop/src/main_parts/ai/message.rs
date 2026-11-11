@@ -52,7 +52,7 @@ fn ai_reference_tag(label: &str, kind: &str, colors: UiColors) -> gpui::AnyEleme
         .child(
             div()
                 .min_w(px(0.))
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .truncate()
                 .child(label.to_string()),
         )
@@ -72,7 +72,7 @@ fn ai_scope_tag(icon: AppIcon, label: &str, tone: gpui::Rgba, colors: UiColors) 
         .bg(colors.panel_bg)
         .text_color(colors.muted)
         .child(app_icon(icon, 10., tone))
-        .child(div().text_size(px(10.)).child(label.to_string()))
+        .child(div().text_size(ui_text_size(10.)).child(label.to_string()))
         .into_any_element()
 }
 fn ai_reference_chip(
@@ -116,7 +116,7 @@ fn ai_reference_chip(
             div()
                 .min_w(px(0.))
                 .max_w(px(180.))
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .truncate()
                 .child(label.to_string()),
         )
@@ -133,7 +133,7 @@ fn ai_reference_chip(
                     .child(app_icon(AppIcon::TriangleAlert, 10., colors.danger))
                     .child(
                         div()
-                            .text_size(px(9.))
+                            .text_size(ui_text_size(9.))
                             .text_color(colors.danger)
                             .child(tr("app.ai.chat.part.expired")),
                     ),
@@ -180,8 +180,8 @@ fn ai_chat_part_text(part: &fluxdb_app::AiConversationPart) -> String {
 /// `apply_component_theme_colors` 对齐 UiColors）提供，这里只调正文尺寸与前景色。
 fn ai_chat_markdown_style(view: TextView, colors: UiColors) -> TextView {
     view.selectable(true)
-        .text_size(px(12.))
-        .line_height(px(18.))
+        .text_size(ui_text_size(12.))
+        .line_height(ui_text_size(18.))
         .text_color(colors.text)
 }
 
@@ -434,7 +434,7 @@ fn ai_chat_part(
                                     div()
                                         .min_w(px(0.))
                                         .max_w(px(220.))
-                                        .text_size(px(if recovery_status.is_some() { 10. } else { 11. }))
+                                        .text_size(ui_text_size(if recovery_status.is_some() { 10. } else { 11. }))
                                         .text_color(if recovery_status.is_some() { colors.muted } else { colors.text })
                                         .font_weight(gpui::FontWeight::NORMAL)
                                         .truncate()
@@ -445,7 +445,7 @@ fn ai_chat_part(
                                         div()
                                             .min_w(px(0.))
                                             .max_w(px(130.))
-                                            .text_size(px(10.))
+                                            .text_size(ui_text_size(10.))
                                             .text_color(colors.muted)
                                             .truncate()
                                             .child(target),
@@ -456,12 +456,12 @@ fn ai_chat_part(
                             row.child(
                                 div()
                                     .flex_none()
-                                    .text_size(px(10.))
+                                    .text_size(ui_text_size(10.))
                                     .text_color(colors.muted)
                                     .child(format!("{duration_ms}ms")),
                             )
                         })
-                        .when(recovery_status.is_none() && !(part.kind == "notice" && part.status == "complete"), |row| row.child(div().flex_none().max_w(px(160.)).truncate().text_size(px(10.)).text_color(status_color).child(status_text)))
+                        .when(recovery_status.is_none() && !(part.kind == "notice" && part.status == "complete"), |row| row.child(div().flex_none().max_w(px(160.)).truncate().text_size(ui_text_size(10.)).text_color(status_color).child(status_text)))
                         .child(app_icon(if expanded { AppIcon::ChevronDown } else { AppIcon::ChevronRight }, 10., colors.muted)),
                 )
                 .on_click(cx.listener({
@@ -497,7 +497,7 @@ fn ai_chat_part(
                     .child(div().size(px(5.)).rounded_full().bg(color))
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(color)
                             .child(text),
                     ),
@@ -528,7 +528,7 @@ fn ai_chat_part(
                     .child(div().size(px(5.)).rounded_full().bg(colors.info))
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(colors.info)
                             .child(detail),
                     ),
@@ -543,8 +543,8 @@ fn ai_chat_part(
                     })
                     .max_h(px(160.))
                     .overflow_y_scrollbar()
-                    .text_size(px(11.))
-                    .line_height(px(16.))
+                    .text_size(ui_text_size(11.))
+                    .line_height(ui_text_size(16.))
                     .child(if text.is_empty() {
                         part.payload_json.clone()
                     } else {
@@ -642,14 +642,14 @@ fn ai_chat_plan_card(
                         .gap_0p5()
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.text)
                                 .child(step_title),
                         )
                         .when_some(note, |this, note| {
                             this.child(
                                 div()
-                                    .text_size(px(10.))
+                                    .text_size(ui_text_size(10.))
                                     .text_color(colors.muted)
                                     .child(note.to_string()),
                             )
@@ -658,7 +658,7 @@ fn ai_chat_plan_card(
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(tone)
                         .child(status_text),
                 ),
@@ -695,7 +695,7 @@ fn ai_chat_plan_card(
                         .child(
                             div()
                                 .min_w(px(0.))
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.text)
                                 .truncate()
                                 .child(title.to_string()),
@@ -704,7 +704,7 @@ fn ai_chat_plan_card(
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.muted)
                         .child(format!("{done}/{total}")),
                 ),
@@ -822,7 +822,7 @@ fn ai_chat_message_parts(
                 .child(Button::new(SharedString::from(group_id.clone()))
                     .debug_selector({ let id = group_id.clone(); move || id.clone() })
                     .xsmall().ghost().rounded_md().self_start().cursor_pointer()
-                    .child(div().flex().items_center().gap_1p5().text_size(px(10.)).text_color(colors.muted)
+                    .child(div().flex().items_center().gap_1p5().text_size(ui_text_size(10.)).text_color(colors.muted)
                         .child(app_icon(AppIcon::Check, 11., colors.muted))
                         .child(tr("app.ai.chat.plan.summary").replace("%{count}", &tools.len().to_string()))
                         .child(app_icon(if open { AppIcon::ChevronDown } else { AppIcon::ChevronRight }, 10., colors.muted)))

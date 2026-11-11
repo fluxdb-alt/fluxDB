@@ -225,7 +225,7 @@ fn data_cell_submenu_shell(top: Pixels, colors: UiColors) -> Div {
             hsla(0., 0., 0., 0.18),
         )])
         .p_1()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::BOLD)
         .text_color(colors.text)
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

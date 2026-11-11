@@ -80,7 +80,7 @@ fn routine_ddl_modal(
                                 .child(app_icon(AppIcon::FileSql, 17., colors.text))
                                 .child(
                                     div()
-                                        .text_size(px(15.))
+                                        .text_size(ui_text_size(15.))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(title),
                                 ),
@@ -140,7 +140,7 @@ fn routine_ddl_modal(
                                                 .appearance(false)
                                                 .bordered(false)
                                                 .readonly(true)
-                                                .text_size(px(12.))
+                                                .text_size(ui_text_size(12.))
                                                 .font_family(EDITOR_FONT)
                                                 .p_2()
                                                 .size_full(),

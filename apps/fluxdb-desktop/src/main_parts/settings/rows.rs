@@ -56,21 +56,21 @@ fn settings_database_support_row(entry: DatabaseSupportEntry, colors: UiColors) 
                                 .gap_2()
                                 .child(
                                     div()
-                                        .text_size(px(13.))
+                                        .text_size(ui_text_size(13.))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .text_color(colors.text)
                                         .child(database_kind_name(entry.kind)),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(ui_text_size(11.))
                                         .text_color(colors.muted)
                                         .child(entry.source),
                                 ),
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(entry.detail),
                         ),
@@ -106,14 +106,14 @@ fn settings_row_label(
                 .min_w(px(0.))
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(title),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(detail),
                 ),
@@ -146,14 +146,14 @@ fn settings_action_row_with_id(
                         .min_w(px(0.))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(title),
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(detail),
                         ),
@@ -253,7 +253,7 @@ fn settings_log_path_row(
                 div()
                     .min_w(px(0.))
                     .flex_1()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .truncate()
                     .child(display_path),
@@ -352,14 +352,14 @@ fn settings_choice_row_with_id(
                         .min_w(px(0.))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(title),
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(detail),
                         ),
@@ -386,111 +386,6 @@ fn settings_choice_row_with_id(
                             cx.notify();
                         }))
                 })),
-        )
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "设置行参数逐项对应 GPUI 控件契约，打包成结构体反而隐藏调用点差异"
-)]
-fn settings_font_size_slider_row(
-    id: &'static str,
-    title: impl Into<SharedString>,
-    detail: impl Into<SharedString>,
-    icon: AppIcon,
-    current: u32,
-    slider: Entity<SliderState>,
-    colors: UiColors,
-    window: &mut Window,
-    cx: &mut Context<NavicatMain>,
-) -> Stateful<Div> {
-    let title = title.into();
-    let detail = detail.into();
-    let current = current.clamp(10, 24);
-    if (slider.read(cx).value().end() - current as f32).abs() > f32::EPSILON {
-        slider.update(cx, |state, cx| state.set_value(current as f32, window, cx));
-    }
-
-    settings_row_container(id, colors)
-        .min_h(px(68.))
-        .py_2()
-        .child(settings_row_label(title, detail, icon, colors))
-        .child(
-            div()
-                .w(px(260.))
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .text_size(px(12.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(colors.muted)
-                        .child("10px")
-                        .child(format!("{}px", current))
-                        .child("24px"),
-                )
-                .child(Slider::new(&slider).horizontal()),
-        )
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "设置行参数逐项对应 GPUI 控件契约，打包成结构体反而隐藏调用点差异"
-)]
-fn settings_input_row(
-    id: &'static str,
-    title: impl Into<SharedString>,
-    detail: impl Into<SharedString>,
-    icon: AppIcon,
-    current: u32,
-    input: &Entity<InputState>,
-    colors: UiColors,
-    window: &mut Window,
-    cx: &mut Context<NavicatMain>,
-) -> Stateful<Div> {
-    let title = title.into();
-    let detail = detail.into();
-    let expected = current.clamp(13, 28).to_string();
-    let focused = input.read(cx).focus_handle(cx).is_focused(window);
-    if !focused && input.read(cx).value().to_string() != expected {
-        input.update(cx, |input, cx| input.set_value(expected.clone(), window, cx));
-    }
-    let focus_border = if colors.is_dark {
-        rgb(0x8ab4ff)
-    } else {
-        rgb(0x111111)
-    };
-
-    settings_row_container(id, colors)
-        .min_h(px(52.))
-        .py_2()
-        .child(settings_row_label(title, detail, icon, colors))
-        .child(
-            div()
-                .w(px(86.))
-                .h(px(34.))
-                .rounded(colors.radius)
-                .border_1()
-                .border_color(if focused { focus_border } else { colors.border })
-                .bg(colors.input_bg)
-                .flex()
-                .items_center()
-                .overflow_hidden()
-                .cursor_text()
-                .child(
-                    Input::new(input)
-                        .appearance(false)
-                        .focus_bordered(false)
-                        .w_full()
-                        .h_full()
-                        .px_2()
-                        .text_size(px(13.))
-                        .text_color(colors.text),
-                ),
         )
 }
 

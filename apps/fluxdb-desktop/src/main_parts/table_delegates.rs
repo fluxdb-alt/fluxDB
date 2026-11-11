@@ -463,7 +463,7 @@ impl TableDelegate for TableInfoTableDelegate {
             .size_full()
             .flex()
             .items_center()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(cx.theme().muted_foreground)
             .child(self.columns[col_ix].name.clone())
@@ -540,7 +540,7 @@ impl TableDelegate for TableInfoTableDelegate {
                             .flex_1()
                             .overflow_hidden()
                             .text_ellipsis()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .font_weight(if cell.strong {
                                 gpui::FontWeight::SEMIBOLD
                             } else {
@@ -557,7 +557,7 @@ impl TableDelegate for TableInfoTableDelegate {
                                 .px_1()
                                 .rounded(ComponentTheme::global(cx).radius * 0.5)
                                 .bg(cx.theme().warning.opacity(0.18))
-                                .text_size(px(10.))
+                                .text_size(ui_text_size(10.))
                                 .text_color(cx.theme().warning)
                                 .child(badge),
                         )

@@ -34,8 +34,8 @@ fn data_table_cell_hover_action(cx: &mut Context<TableState<DataPageTableDelegat
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(11.))
-                .line_height(px(11.))
+                .text_size(ui_text_size(11.))
+                .line_height(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::BOLD)
                 .text_color(text)
                 .child("!"),
@@ -168,7 +168,7 @@ fn data_cell_temporal_editor_body(
                         .focus_bordered(false)
                         .w_full()
                         .h_full()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .font_family(crate::PLATFORM_MONOSPACE_FONT),
                 ),
         )
@@ -301,7 +301,7 @@ fn data_cell_time_picker_row(
             view.clone(),
             is_dark,
         ))
-        .child(div().text_size(px(13.)).text_color(muted).child(":"))
+        .child(div().text_size(ui_text_size(13.)).text_color(muted).child(":"))
         .child(data_cell_temporal_spin_box(
             TemporalPart::Minute,
             format!("{minute:02}"),
@@ -313,7 +313,7 @@ fn data_cell_time_picker_row(
             view.clone(),
             is_dark,
         ))
-        .child(div().text_size(px(13.)).text_color(muted).child(":"))
+        .child(div().text_size(ui_text_size(13.)).text_color(muted).child(":"))
         .child(data_cell_temporal_spin_box(
             TemporalPart::Second,
             format!("{second:02}"),
@@ -378,7 +378,7 @@ fn data_cell_temporal_spin_box(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(15.))
+                .text_size(ui_text_size(15.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(text)
@@ -390,7 +390,7 @@ fn data_cell_temporal_spin_box(
                             .focus_bordered(false)
                             .w_full()
                             .h_full()
-                            .text_size(px(14.))
+                            .text_size(ui_text_size(14.))
                             .font_family(crate::PLATFORM_MONOSPACE_FONT),
                     )
                 })
@@ -533,7 +533,7 @@ fn data_cell_temporal_action_button(
         .items_center()
         .gap_1()
         .opacity(if enabled { 1.0 } else { 0.42 })
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(if enabled { text } else { muted })
         .when(enabled, |this| {
@@ -778,7 +778,7 @@ fn data_cell_choice_item(
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.text)
         .hover(move |style| style.bg(colors.hover))
         .child(

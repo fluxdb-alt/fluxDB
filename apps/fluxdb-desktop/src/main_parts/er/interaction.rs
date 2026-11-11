@@ -457,7 +457,7 @@ _canvas_size: Option<(f32, f32)>,
                         .border_1()
                         .border_color(colors.border)
                         .bg(colors.panel_bg)
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(colors.muted)
                         .cursor_pointer()
                         .hover(|s| s.bg(colors.hover))

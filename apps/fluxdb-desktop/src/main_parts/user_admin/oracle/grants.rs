@@ -323,7 +323,7 @@ fn oracle_grant_composer(
                     .gap_2()
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(0xff9f0a))
                             .child(oracle_grant_draft_label(draft)),
                     )
@@ -334,7 +334,7 @@ fn oracle_grant_composer(
                                 let selector = format!("oracle-security-grant-remove-{index}");
                                 move || selector.clone()
                             })
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(colors.muted)
                             .cursor_pointer()
                             .hover(move |style| style.text_color(rgb(0xff3b45)))
@@ -446,7 +446,7 @@ fn oracle_grant_name_row(
                                             .px_2()
                                             .flex()
                                             .items_center()
-                                            .text_size(px(12.))
+                                            .text_size(ui_text_size(12.))
                                             .text_color(colors.text)
                                             .bg(colors.panel_bg)
                                             .cursor_pointer()

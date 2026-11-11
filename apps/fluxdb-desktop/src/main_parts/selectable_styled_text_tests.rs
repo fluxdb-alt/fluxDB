@@ -10,7 +10,9 @@ mod selectable_styled_text_tests {
     };
     use gpui_kit::base::TextSelection;
 
-    use crate::{SelectableStyledText, apply_component_theme_colors, extend_component_i18n};
+    use crate::{
+        SelectableStyledText, apply_component_theme_colors, extend_component_i18n, ui_text_size,
+    };
 
     struct SelectionView;
 
@@ -20,7 +22,7 @@ mod selectable_styled_text_tests {
                 div()
                     .debug_selector(move || selector.to_string())
                     .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .child(
                         SelectableStyledText::new(id, text)
                             .highlights(vec![(

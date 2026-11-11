@@ -76,7 +76,7 @@ fn create_table_foreign_key_referenced_fields_cell(
                                 .min_w(px(0.))
                                 .flex_1()
                                 .px_2()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .text_color(colors.text)
                                 .overflow_hidden()
                                 .whitespace_nowrap()
@@ -163,14 +163,14 @@ fn create_table_foreign_key_referenced_fields_popover(
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.create_table.foreign_key.select_referenced_fields")),
                 )
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(tr("app.create_table.foreign_key.selected_count").replace("%{count}", &draft.columns.len().to_string())),
                 ),
@@ -386,7 +386,7 @@ fn create_table_foreign_key_referenced_field_option(
         .flex_none()
         .flex()
         .items_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(if selected { colors.text } else { colors.muted })
         .bg(if is_active { colors.hover } else { colors.panel_bg })
         .cursor_pointer()
@@ -554,7 +554,7 @@ fn create_table_foreign_key_fields_empty(text: impl Into<SharedString>, colors: 
         .px_3()
         .flex()
         .items_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(text)
 }

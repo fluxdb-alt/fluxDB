@@ -133,7 +133,7 @@ fn table_info_header(
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .text_size(px(16.))
+                        .text_size(ui_text_size(16.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(table_name),
@@ -142,7 +142,7 @@ fn table_info_header(
                     div()
                         .flex_none()
                         .px_2()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(
                             tr("app.table_info.column_count")
@@ -717,7 +717,7 @@ fn table_info_empty(text: impl Into<SharedString>, colors: UiColors) -> Stateful
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(text)
 }

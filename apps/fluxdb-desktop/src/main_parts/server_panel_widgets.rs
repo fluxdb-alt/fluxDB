@@ -49,7 +49,7 @@ fn server_toggle(
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if active { colors.text } else { colors.muted })
         .when(active, |this| {
             this.child(app_icon(AppIcon::Check, 12., colors.info))
@@ -88,7 +88,7 @@ fn server_small_button(
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(fg)
         .child(app_icon(icon, 13., fg))
         .child(label)
@@ -119,7 +119,7 @@ fn server_dialog_button(
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(if primary {
             gpui::white()
@@ -157,7 +157,7 @@ fn server_check_row(label: String, checked: bool, colors: UiColors) -> Stateful<
         )
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .child(label),
         )
@@ -173,7 +173,7 @@ fn server_badge(label: String, color: gpui::Rgba, colors: UiColors) -> Div {
         .bg(colors.panel_alt)
         .flex()
         .items_center()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(color)
         .child(label)
 }
@@ -186,7 +186,7 @@ fn server_count_badge(label: String, colors: UiColors) -> Div {
         .bg(colors.panel_alt)
         .flex()
         .items_center()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .child(label)
 }
@@ -198,13 +198,13 @@ fn server_status_fact(label: String, value: String, colors: UiColors) -> Div {
         .gap_1()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(label),
         )
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(value),
@@ -220,7 +220,7 @@ fn server_detail_row(label: String, value: String, colors: UiColors) -> Div {
             div()
                 .w(px(76.))
                 .flex_none()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(label),
         )
@@ -228,7 +228,7 @@ fn server_detail_row(label: String, value: String, colors: UiColors) -> Div {
             div()
                 .flex_1()
                 .min_w(px(0.))
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .overflow_hidden()
                 .whitespace_nowrap()
@@ -244,7 +244,7 @@ fn server_sql_block(label: String, sql: &str, colors: UiColors) -> Div {
         .gap_1()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(label),
         )
@@ -257,7 +257,7 @@ fn server_sql_block(label: String, sql: &str, colors: UiColors) -> Div {
                 .border_color(colors.border)
                 .bg(colors.panel_bg)
                 .p_2()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(colors.text)
                 .child(if sql.trim().is_empty() {
@@ -280,7 +280,7 @@ fn server_table_header(colors: UiColors, columns: Vec<(String, f32, bool)>) -> D
         .border_color(colors.border)
         .children(columns.into_iter().map(|(label, width, flex)| {
             server_cell(label, width, flex, colors.muted)
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
         }))
 }
@@ -290,7 +290,7 @@ fn server_cell(text: impl Into<SharedString>, width: f32, flex: bool, color: gpu
         .overflow_hidden()
         .whitespace_nowrap()
         .text_ellipsis()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(color)
         .child(text.into());
     if flex {
@@ -307,7 +307,7 @@ fn server_empty(label: String, colors: UiColors) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(label)
 }
@@ -320,7 +320,7 @@ fn server_inline_error(message: String, colors: UiColors) -> Div {
         .rounded(colors.radius)
         .border_1()
         .border_color(colors.warning)
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.warning)
         .child(message)
 }

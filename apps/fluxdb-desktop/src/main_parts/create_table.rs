@@ -1106,7 +1106,7 @@ fn create_table_loading_overlay(colors: UiColors) -> Div {
                 .child(loading_spinner_with_color(32., colors.muted))
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.text)
                         .child(tr("app.create_table.loading_design")),
                 ),
@@ -1378,7 +1378,7 @@ fn create_table_tab_action(
         .child(app_icon(AppIcon::Plus, 15., colors.text))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(label),
@@ -1434,7 +1434,7 @@ fn create_table_tab_button(
         )
         .child(
             div().debug_selector(move || format!("create-table-tab:{create_tab:?}"))
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(label),
         )
@@ -1577,7 +1577,7 @@ fn create_table_field_header_row(colors: UiColors) -> Div {
         .flex_none()
         .flex_shrink_0()
         .bg(colors.panel_alt)
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .flex()
@@ -1911,7 +1911,7 @@ fn create_table_index_fields_cell(
                             .min_w(px(0.))
                             .flex_1()
                             .px_2()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .text_color(colors.text)
                             .overflow_hidden()
                             .whitespace_nowrap()
@@ -2010,7 +2010,7 @@ fn create_table_index_fields_popover(
                 .px_3()
                 .flex()
                 .items_center()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .child(tr("app.create_table.error.add_field")),
         );
@@ -2261,7 +2261,7 @@ fn create_table_index_fields_header(colors: UiColors) -> Div {
         .bg(colors.panel_alt)
         .flex()
         .items_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(create_table_index_field_header_cell(
@@ -2509,7 +2509,7 @@ fn create_table_index_field_dropdown_trigger(
                 .flex()
                 .items_center()
                 .gap_1()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(if selected {
                     colors.text
                 } else {
@@ -2592,7 +2592,7 @@ fn create_table_index_field_floating_menu(
                 .flex()
                 .items_center()
                 .gap_1()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(if selected {
                     colors.text
                 } else if disabled {
@@ -2714,7 +2714,7 @@ fn create_table_popover_text_button(label: impl Into<SharedString>, colors: UiCo
         .justify_center()
         .cursor_pointer()
         .hover(move |style| style.bg(colors.hover))
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(label)
@@ -2762,7 +2762,7 @@ fn create_table_labeled_input(
         .child(
             div()
                 .w(px(38.))
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(label),
@@ -2852,7 +2852,7 @@ fn create_table_input_box_enabled<T: 'static>(
                 .w_full()
                 .h_full()
                 .px_2()
-                .text_size(px(13.)),
+                .text_size(ui_text_size(13.)),
         )
 }
 
@@ -2952,7 +2952,7 @@ fn create_table_comment_popover(
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.create_table.popover.edit_comment")),
@@ -2978,7 +2978,7 @@ fn create_table_comment_popover(
                                 .w_full()
                                 .h_full()
                                 .px_2()
-                                .text_size(px(13.)),
+                                .text_size(ui_text_size(13.)),
                         ),
                 )
                 .child(create_table_comment_editor_resize_handle(
@@ -3188,7 +3188,7 @@ fn create_table_operation_button(
         .when_some(label, |this, label| {
             this.child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(color)
                     .child(label),
@@ -3291,7 +3291,7 @@ fn create_table_type_select_cell(
                 .child(
                     Select::new(&select)
                         .small()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .placeholder("varchar")
                         .search_placeholder(
                             tr("app.create_table.search_placeholder_select_or_type"),
@@ -3538,7 +3538,7 @@ fn create_table_default_input_box<T: 'static>(
                 .w(px(input_width))
                 .h_full()
                 .px_2()
-                .text_size(px(13.)),
+                .text_size(ui_text_size(13.)),
         )
         .child(create_table_default_popover(
             view,
@@ -3640,7 +3640,7 @@ fn create_table_default_menu_item(
         .px_2()
         .flex()
         .items_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(if active { colors.text } else { colors.muted })
         .bg(if active { colors.hover } else { colors.panel_bg })
@@ -3731,7 +3731,7 @@ fn create_table_column_options(
             .flex()
             .items_center()
             .px_3()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .text_color(colors.muted)
             .child(tr("app.create_table.error.select_field"))
             .into_any_element();
@@ -3776,7 +3776,7 @@ fn create_table_column_options(
                 .child(
                     div()
                         .w(px(84.))
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.create_table.column.custom_type")),
@@ -3788,7 +3788,7 @@ fn create_table_column_options(
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.text)
                         .child(value),
                 )
@@ -4122,7 +4122,7 @@ fn create_table_enum_values_editor(
         .gap_2()
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(if base == "set" {
@@ -4133,7 +4133,7 @@ fn create_table_enum_values_editor(
         )
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(format!(
                     "{} / {}",
@@ -4192,7 +4192,7 @@ fn create_table_enum_values_editor(
                     .bg(colors.panel_bg)
                     .border_1()
                     .border_color(colors.warning)
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(colors.warning)
                     .child(app_icon(AppIcon::TriangleAlert, 14., colors.warning))
                     .child(tr("app.create_table.column.enum_values_risk")),
@@ -4241,7 +4241,7 @@ fn create_table_option_input(
         .child(
             div()
                 .w(px(56.))
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(label),
@@ -4267,7 +4267,7 @@ fn create_table_option_select(
         .child(
             div()
                 .w(px(56.))
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(label),
@@ -4349,7 +4349,7 @@ fn create_table_option_flag(
         .child(Checkbox::new(create_table_checkbox_id(tab_id, column_id, flag)).checked(checked))
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(label),
@@ -4415,7 +4415,7 @@ fn create_table_table_cell(text: impl Into<String>, colors: UiColors) -> Div {
         .flex()
         .items_center()
         .overflow_hidden()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .child(text.into())
 }
@@ -4450,7 +4450,7 @@ fn create_table_empty_state(message: impl Into<SharedString>, colors: UiColors) 
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(message)
 }
@@ -4494,14 +4494,14 @@ fn create_table_sql_preview(
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.create_table.tab.sql_preview")),
                 )
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.muted)
                         .child(if preview.is_ok() { "1" } else { "0" }),

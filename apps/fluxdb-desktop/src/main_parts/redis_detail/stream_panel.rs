@@ -68,7 +68,7 @@ fn redis_key_detail_stream_panel(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(redis_stream_range_controls(
                             tab_id,
@@ -108,7 +108,7 @@ fn redis_key_detail_stream_panel(
                 .flex()
                 .items_center()
                 .justify_between()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(
                     tr("app.redis.stream.entries_count")
@@ -213,7 +213,7 @@ fn redis_stream_range_controls(
         )
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child("→"),
         )
@@ -275,7 +275,7 @@ fn redis_stream_groups_section(
                 .flex()
                 .items_center()
                 .justify_between()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(if expanded {
                     tr("app.redis.stream.groups_expanded").replace("%{count}", &groups.len().to_string())
@@ -301,7 +301,7 @@ fn redis_stream_groups_section(
             div()
                 .px_3()
                 .pb_2()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(tr("app.redis.stream.no_groups")),
         );
@@ -315,7 +315,7 @@ fn redis_stream_groups_section(
             .gap_1()
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(colors.text)
                     .child(tr("app.redis.stream.group_summary")
                         .replace("%{name}", &group.name)
@@ -327,7 +327,7 @@ fn redis_stream_groups_section(
             rows = rows.child(
                 div()
                     .pl_4()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .font_family(crate::PLATFORM_MONOSPACE_FONT)
                     .child(tr("app.redis.stream.consumer_summary")
@@ -426,7 +426,7 @@ fn redis_stream_entry_add_drawer(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.redis.stream.add_entry")),
                         ),
@@ -462,7 +462,7 @@ fn redis_stream_entry_add_drawer(
                                         )
                                         .child(
                                             div()
-                                                .text_size(px(11.))
+                                                .text_size(ui_text_size(11.))
                                                 .text_color(if id_error.is_some() {
                                                     rgb(0xe5484d)
                                                 } else {
@@ -490,7 +490,7 @@ fn redis_stream_entry_add_drawer(
                                         )
                                         .child(
                                             div()
-                                                .text_size(px(11.))
+                                                .text_size(ui_text_size(11.))
                                                 .text_color(colors.muted)
                                                 .child(
                                                     tr("app.redis.stream.maxlen_hint"),
@@ -522,7 +522,7 @@ fn redis_stream_entry_add_drawer(
                                             .when_some(fields_error, |this, error| {
                                                 this.child(
                                                     div()
-                                                        .text_size(px(11.))
+                                                        .text_size(ui_text_size(11.))
                                                         .text_color(rgb(0xe5484d))
                                                         .child(error),
                                                 )
@@ -681,7 +681,7 @@ fn redis_stream_add_input(
         .gap_1()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(label.clone()),
@@ -698,7 +698,7 @@ fn redis_stream_add_input_label(label: impl Into<SharedString>, colors: UiColors
     let label: SharedString = label.into();
     div()
         .flex_none()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(label)
@@ -722,7 +722,7 @@ fn redis_stream_add_input_box(input: Entity<InputState>, colors: UiColors) -> Di
                 .w_full()
                 .h_full()
                 .px_2()
-                .text_size(px(12.)),
+                .text_size(ui_text_size(12.)),
         )
 }
 

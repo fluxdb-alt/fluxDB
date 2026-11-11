@@ -70,7 +70,7 @@ fn local_filter_popover_layer(
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.filter.value_label")),
@@ -91,7 +91,7 @@ fn local_filter_popover_layer(
                                 .focus_bordered(false)
                                 .w_full()
                                 .h_full()
-                                .text_size(px(13.)),
+                                .text_size(ui_text_size(13.)),
                         ),
                 ),
         )
@@ -99,7 +99,7 @@ fn local_filter_popover_layer(
             div()
                 .px_3()
                 .pb_2()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(tr("app.filter.suggested_values")),
@@ -250,7 +250,7 @@ fn local_filter_manager_layer(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(14.))
+                                .text_size(ui_text_size(14.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(tr("app.filter.title")),
@@ -264,7 +264,7 @@ fn local_filter_manager_layer(
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .hover(move |style| style.bg(colors.hover))
@@ -430,7 +430,7 @@ fn local_filter_manager_condition_row(
                 .flex()
                 .items_center()
                 .overflow_hidden()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .hover(move |style| style.bg(colors.hover))
                 .child(
@@ -492,7 +492,7 @@ fn local_filter_manager_static_select(label: impl Into<String>, colors: UiColors
         .overflow_hidden()
         .whitespace_nowrap()
         .text_ellipsis()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(label.into())
@@ -522,7 +522,7 @@ fn local_filter_manager_field_select(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(selected_field),
@@ -571,7 +571,7 @@ fn local_filter_manager_value_button(
                 .flex_1()
                 .overflow_hidden()
                 .text_ellipsis()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(if value_text.trim().is_empty() && selected_count == 0 {
                     colors.muted
@@ -727,7 +727,7 @@ fn local_filter_value_item(label: String, checked: bool, search: &str, colors: U
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .cursor_pointer()
         .hover(move |style| style.bg(colors.hover))
@@ -750,7 +750,7 @@ fn local_filter_value_item(label: String, checked: bool, search: &str, colors: U
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(9.))
+                .text_size(ui_text_size(9.))
                 .text_color(rgb(0xffffff))
                 .child(if checked { "✓" } else { "" }),
         )

@@ -315,8 +315,8 @@ fn data_filter_group_open_row(depth: u8, colors: UiColors) -> Div {
         .child(div().w(px(28.)))
         .child(
             div()
-                .text_size(px(14.))
-                .line_height(px(14.))
+                .text_size(ui_text_size(14.))
+                .line_height(ui_text_size(14.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(0x006bd6))
                 .child("("),
@@ -347,8 +347,8 @@ fn data_filter_group_close_row(
         .child(div().w(px(28.)))
         .child(
             div()
-                .text_size(px(14.))
-                .line_height(px(14.))
+                .text_size(ui_text_size(14.))
+                .line_height(ui_text_size(14.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(0x006bd6))
                 .child(")"),
@@ -427,7 +427,7 @@ fn data_filter_empty_rule_row(
         ))
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.filter.add_rule_hint")),
         )
@@ -658,14 +658,14 @@ fn data_filter_advanced_rule_row(
                 .overflow_hidden()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.filter.advanced_condition").to_string()),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(expression.to_string()),
                 ),
@@ -730,7 +730,7 @@ fn data_filter_connector_button(
         .h(px(18.))
         .px_1()
         .rounded(colors.radius * 0.5)
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(rgb(0x006bd6))
         .cursor_pointer()
@@ -871,7 +871,7 @@ fn data_sort_builder_section(
                 .rounded(colors.radius)
                 .border_1()
                 .border_color(colors.border)
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.text)
                 .cursor_pointer()
                 .flex()
@@ -902,7 +902,7 @@ fn data_sort_builder_section(
 fn data_filter_section_label(label: impl Into<SharedString>, colors: UiColors) -> Div {
     let label = label.into();
     div()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(label)
@@ -979,7 +979,7 @@ fn data_sort_rule_pill(
                 .px_1()
                 .flex()
                 .items_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .cursor_pointer()
                 .hover(move |style| style.bg(colors.hover))
@@ -1076,7 +1076,7 @@ fn data_filter_clickable_text(text: String, colors: UiColors) -> Div {
         .h(px(20.))
         .px_1()
         .rounded(colors.radius * 0.5)
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(rgb(0x006bd6))
         .cursor_pointer()
@@ -1294,7 +1294,7 @@ fn data_filter_single_value_menu(
                 .child(
                     div()
                         .px_1()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.filter.input_value")),
@@ -1315,7 +1315,7 @@ fn data_filter_single_value_menu(
                                 .focus_bordered(false)
                                 .w_full()
                                 .h_full()
-                                .text_size(px(13.)),
+                                .text_size(ui_text_size(13.)),
                         ),
                 ),
         )
@@ -1330,7 +1330,7 @@ fn data_filter_single_value_menu(
                     div()
                         .px_1()
                         .pb_1()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.filter.suggested_values")),
@@ -1491,7 +1491,7 @@ fn data_filter_value_menu(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(
@@ -1521,7 +1521,7 @@ fn data_filter_value_menu(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.placeholder.input_value")),
@@ -1543,7 +1543,7 @@ fn data_filter_value_menu(
                                 .focus_bordered(false)
                                 .w_full()
                                 .h_full()
-                                .text_size(px(13.)),
+                                .text_size(ui_text_size(13.)),
                         )
                         .child(
                             data_filter_value_small_button(
@@ -1568,7 +1568,7 @@ fn data_filter_value_menu(
                         .child(
                             div()
                                 .flex_1()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(tr("app.filter.dedupe_hint")),
                         )
@@ -1608,7 +1608,7 @@ fn data_filter_value_menu(
                     div()
                         .px_1()
                         .pb_1()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.filter.suggested_values")),
@@ -1633,7 +1633,7 @@ fn data_filter_value_menu(
                                 .focus_bordered(false)
                                 .w_full()
                                 .h_full()
-                                .text_size(px(13.)),
+                                .text_size(ui_text_size(13.)),
                         ),
                 ),
         )
@@ -1660,7 +1660,7 @@ fn data_filter_value_menu(
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(
                             tr("app.filter.selected_count")
@@ -1707,7 +1707,7 @@ fn data_filter_value_header(label: String, colors: UiColors, _cx: &mut Context<N
         .justify_between()
         .child(
             div()
-                .text_size(px(14.))
+                .text_size(ui_text_size(14.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(tr("app.filter.edit_values")),
@@ -1723,7 +1723,7 @@ fn data_filter_value_header(label: String, colors: UiColors, _cx: &mut Context<N
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(rgb(0x006bd6))
                         .child(label),
@@ -1747,7 +1747,7 @@ fn data_filter_value_clear_button(colors: UiColors) -> Div {
         .h(px(20.))
         .px_2()
         .rounded(colors.radius)
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .cursor_pointer()
         .flex()
@@ -1765,7 +1765,7 @@ fn data_filter_value_small_button(label: impl Into<String>, colors: UiColors) ->
         .border_1()
         .border_color(colors.border)
         .bg(colors.panel_alt)
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.text)
         .cursor_pointer()
         .flex()
@@ -1780,7 +1780,7 @@ fn data_filter_batch_toggle(open: &bool, colors: UiColors) -> Div {
         .h(px(20.))
         .px_2()
         .rounded(colors.radius)
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(rgb(0x006bd6))
         .cursor_pointer()
@@ -1819,7 +1819,7 @@ fn data_filter_selected_values_tags(
                 .px_1()
                 .flex()
                 .items_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.filter.no_selected_values")),
         );
@@ -1842,7 +1842,7 @@ fn data_filter_selected_values_tags(
             .overflow_hidden()
             .whitespace_nowrap()
             .text_ellipsis()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(colors.text)
             .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
             .child(shown);
@@ -1907,7 +1907,7 @@ fn data_filter_batch_paste_section(
                 } else {
                     colors.panel_alt
                 })
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(if selected { rgb(0xffffff) } else { colors.text })
                 .cursor_pointer()
                 .flex()
@@ -1937,7 +1937,7 @@ fn data_filter_batch_paste_section(
                 .gap_2()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.filter.batch_paste")),
@@ -1958,7 +1958,7 @@ fn data_filter_batch_paste_section(
                         .focus_bordered(false)
                         .w_full()
                         .h_full()
-                        .text_size(px(12.)),
+                        .text_size(ui_text_size(12.)),
                 ),
         )
         .child(
@@ -1969,7 +1969,7 @@ fn data_filter_batch_paste_section(
                 .child(
                     div()
                         .flex_1()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(
                             tr("app.filter.batch_summary")

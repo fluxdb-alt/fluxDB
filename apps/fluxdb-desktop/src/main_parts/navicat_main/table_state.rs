@@ -421,12 +421,7 @@ impl NavicatMain {
             let sql_editor = sql_editor.clone();
             let settings = self.controller.state().settings.clone();
             sql_editor.update(cx, |sql_editor, cx| {
-                sql_editor.apply_settings(
-                    settings.editor_font_size.clamp(10, 24) as f32,
-                    settings.editor_line_height.clamp(13, 28) as f32,
-                    settings.editor_word_wrap,
-                    settings.editor_tab_width as usize,
-                );
+                apply_code_editor_settings(sql_editor, &settings, cx);
                 sql_editor.sync_text_silent(&editor.text, cx);
             });
             return sql_editor;
@@ -587,7 +582,7 @@ impl NavicatMain {
         profile.tab_size = settings.editor_tab_width.max(1) as usize;
         let config = fluxdb_editor_core::EditorConfig {
             profile,
-            font: editor_component::EDITOR_FONT.to_string(),
+            font: code_font_family(&settings),
             font_size: settings.editor_font_size.clamp(10, 24) as f32,
             line_height: settings.editor_line_height.clamp(13, 28) as f32,
             gutter_line_numbers: true,
@@ -734,19 +729,18 @@ impl NavicatMain {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<editor_component::Editor> {
+        let settings = self.controller.state().settings.clone();
         if let Some(editor) = self.redis_workbench_inputs.get(&tab_id) {
             let editor = editor.clone();
             // 执行 Run 后 workbench.text 被清空，需同步清掉编辑器残留文本。
             // 用户正常输入时编辑器与 workbench.text 通过 Changed 事件同步，
             // 不会出现「workbench.text 为空但编辑器非空且为正在输入」的情形。
-            if workbench.text.is_empty() {
-                let editor_text = editor.read(cx).text();
-                if !editor_text.is_empty() {
-                    editor.update(cx, |editor, cx| {
-                        editor.sync_text_silent("", cx);
-                    });
+            editor.update(cx, |editor, cx| {
+                apply_code_editor_settings(editor, &settings, cx);
+                if workbench.text.is_empty() && !editor.text().is_empty() {
+                    editor.sync_text_silent("", cx);
                 }
-            }
+            });
             return editor;
         }
 
@@ -767,9 +761,9 @@ impl NavicatMain {
         profile.completion_min_prefix = 1;
         let config = fluxdb_editor_core::EditorConfig {
             profile,
-            font: editor_component::EDITOR_FONT.to_string(),
-            font_size: 13.0,
-            line_height: 18.0,
+            font: code_font_family(&settings),
+            font_size: settings.editor_font_size.clamp(10, 24) as f32,
+            line_height: settings.editor_line_height.clamp(13, 28) as f32,
             gutter_line_numbers: true,
         };
         let editor = cx.new(|cx| {
@@ -828,12 +822,16 @@ impl NavicatMain {
             // 执行 `use <db>` 后工作台库会变，集合候选必须跟着换库。
             adapter.set_database(&workbench.database);
         }
+        let settings = self.controller.state().settings.clone();
         if let Some(editor) = self.mongo_workbench_inputs.get(&tab_id) {
             let editor = editor.clone();
             // 执行后 workbench.text 被清空，需同步清掉编辑器残留文本（同 Redis Workbench）。
-            if workbench.text.is_empty() && !editor.read(cx).text().is_empty() {
-                editor.update(cx, |editor, cx| editor.sync_text_silent("", cx));
-            }
+            editor.update(cx, |editor, cx| {
+                apply_code_editor_settings(editor, &settings, cx);
+                if workbench.text.is_empty() && !editor.text().is_empty() {
+                    editor.sync_text_silent("", cx);
+                }
+            });
             return editor;
         }
 
@@ -845,9 +843,9 @@ impl NavicatMain {
         profile.completion_trigger_chars = vec!['.', '[', ' '];
         let config = fluxdb_editor_core::EditorConfig {
             profile,
-            font: editor_component::EDITOR_FONT.to_string(),
-            font_size: 13.0,
-            line_height: 18.0,
+            font: code_font_family(&settings),
+            font_size: settings.editor_font_size.clamp(10, 24) as f32,
+            line_height: settings.editor_line_height.clamp(13, 28) as f32,
             gutter_line_numbers: true,
         };
         // 连接已删除时仍可打开工作台（执行时才报错），但没有连接配置就不装补全，

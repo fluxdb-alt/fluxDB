@@ -158,7 +158,7 @@ fn ai_report_chart_block(
         .gap_2()
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(
                     tr("app.ai_report.chart.title")
@@ -168,7 +168,7 @@ fn ai_report_chart_block(
         )
         .child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(colors.muted)
                 .child(match chart {
                     fluxdb_core::ArtifactChart::Line => tr("app.ai_report.chart.kind.line"),

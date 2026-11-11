@@ -187,7 +187,7 @@ fn redis_key_empty_detail(colors: UiColors) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.muted)
         .child(tr("app.redis.select_key"))
 }
@@ -209,7 +209,7 @@ fn redis_detail_panel_title(label: impl Into<SharedString>, colors: UiColors) ->
     let label: SharedString = label.into();
     div()
         .flex_none()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(label)
@@ -218,7 +218,7 @@ fn redis_detail_panel_title(label: impl Into<SharedString>, colors: UiColors) ->
 fn redis_detail_meta_label(label: impl Into<SharedString>, colors: UiColors) -> Div {
     let label: SharedString = label.into();
     div()
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.muted)
         .child(label)
@@ -307,8 +307,8 @@ fn redis_detail_editable_meta_field(
                             .w_full()
                             .h_full()
                             .px_2()
-                            .text_size(px(if mono { 16. } else { 13. }))
-                            .when(mono, |this| this.line_height(px(24.)))
+                            .text_size(ui_text_size(if mono { 16. } else { 13. }))
+                            .when(mono, |this| this.line_height(ui_text_size(24.)))
                             .when(mono, |this| this.font_family(crate::PLATFORM_MONOSPACE_FONT)),
                     ),
             );
@@ -350,8 +350,8 @@ fn redis_detail_editable_meta_field(
                 .when(!redis_ttl_is_none(&value), |this| {
                     this.whitespace_nowrap()
                         .text_ellipsis()
-                        .text_size(px(if mono { 16. } else { 14. }))
-                        .line_height(px(if mono { 24. } else { 18. }))
+                        .text_size(ui_text_size(if mono { 16. } else { 14. }))
+                        .line_height(ui_text_size(if mono { 24. } else { 18. }))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .when(mono, |this| this.font_family(crate::PLATFORM_MONOSPACE_FONT))
@@ -384,7 +384,7 @@ fn redis_detail_no_ttl_badge(colors: UiColors) -> Div {
         .child(app_icon(AppIcon::CircleSlash, 13., colors.muted))
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(colors.muted)
                 .whitespace_nowrap()
@@ -438,7 +438,7 @@ fn redis_detail_toolbar_button(
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(if enabled { colors.text } else { colors.muted })
         .when(enabled, |this| {
             this.cursor_pointer()
@@ -557,7 +557,7 @@ fn redis_detail_action_button(
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(if !enabled {
             colors.muted

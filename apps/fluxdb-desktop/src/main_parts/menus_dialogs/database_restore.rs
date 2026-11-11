@@ -1074,7 +1074,7 @@ fn restore_modal_panel(colors: UiColors, cx: &mut Context<NavicatMain>) -> Div {
         .flex()
         .flex_col()
         .overflow_hidden()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .text_color(colors.text)
         .key_context("DatabaseRestoreModal")
         .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
@@ -1123,7 +1123,7 @@ fn restore_modal_header(
                         .child(app_icon(AppIcon::Refresh, 18., colors.text))
                         .child(
                             div()
-                                .text_size(px(18.))
+                                .text_size(ui_text_size(18.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.database_restore.title")),
                         ),
@@ -1131,7 +1131,7 @@ fn restore_modal_header(
                 .child(
                     div()
                         .pl(px(30.))
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(colors.muted)
                         .child(context),
                 ),
@@ -1201,7 +1201,7 @@ fn restore_input_frame(input: Entity<InputState>, colors: UiColors) -> Div {
                 .focus_bordered(false)
                 .w_full()
                 .h_full()
-                .text_size(px(13.)),
+                .text_size(ui_text_size(13.)),
         )
 }
 
@@ -1210,7 +1210,7 @@ fn restore_log_list(logs: &[String], colors: UiColors) -> Div {
     if logs.is_empty() {
         list = list.child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.database_restore.no_messages")),
         );
@@ -1220,7 +1220,7 @@ fn restore_log_list(logs: &[String], colors: UiColors) -> Div {
             div()
                 .w_full()
                 .min_w(px(0.))
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .whitespace_normal()
                 .child(line.clone()),
@@ -1261,7 +1261,7 @@ fn restore_modal_footer(
             div()
                 .flex_1()
                 .min_w(px(0.))
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .truncate()
                 .child(status),
@@ -1374,7 +1374,7 @@ fn restore_confirm_overlay(
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.text)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 // 头部：危险图标 + 标题。
@@ -1390,7 +1390,7 @@ fn restore_confirm_overlay(
                         .child(
                             div()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_size(px(15.))
+                                .text_size(ui_text_size(15.))
                                 .child(tr("app.database_restore.destructive_confirm")),
                         ),
                 )
@@ -1404,7 +1404,7 @@ fn restore_confirm_overlay(
                         .gap_3()
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(colors.muted)
                                 .child(tr("app.database_restore.destructive_objects")),
                         )
@@ -1428,13 +1428,13 @@ fn restore_confirm_overlay(
                                         .child(app_icon(AppIcon::Trash, 13., rgb(0xe5484d)))
                                         .child(
                                             div()
-                                                .text_size(px(12.))
+                                                .text_size(ui_text_size(12.))
                                                 .text_color(colors.text)
                                                 .child(item.clone()),
                                         )
                                 })),
                         )
-                        .child(div().text_size(px(12.)).child(
+                        .child(div().text_size(ui_text_size(12.)).child(
                             tr("app.database_restore.enter_target")
                                 .replace("%{target}", &target),
                         ))

@@ -131,7 +131,7 @@ fn data_table_area(
                     .items_center()
                     .justify_center()
                     .gap_2()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
                     .child(loading_spinner_with_color(18., colors.muted))

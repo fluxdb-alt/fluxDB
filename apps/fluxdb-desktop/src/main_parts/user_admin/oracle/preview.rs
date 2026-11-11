@@ -106,14 +106,14 @@ fn oracle_delete_modal(
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
                     div()
-                        .text_size(px(16.))
+                        .text_size(ui_text_size(16.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.oracle_security.delete_title")),
                 )
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(tr("app.oracle_security.delete_body")),
                 )

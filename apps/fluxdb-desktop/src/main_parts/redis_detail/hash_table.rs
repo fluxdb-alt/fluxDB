@@ -312,7 +312,7 @@ impl TableDelegate for RedisHashTableDelegate {
             .items_center()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(self.colors.muted)
             .child(self.columns[col_ix].name.clone())
@@ -324,7 +324,7 @@ impl TableDelegate for RedisHashTableDelegate {
             .flex()
             .items_center()
             .justify_center()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(self.colors.muted)
             .child(tr("app.redis.hash.empty"))
     }
@@ -412,7 +412,7 @@ fn redis_hash_table_seq_cell(row_ix: usize, colors: UiColors) -> impl IntoElemen
         .whitespace_nowrap()
         .text_ellipsis()
         .font_family(crate::PLATFORM_MONOSPACE_FONT)
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(colors.muted)
         .child(format!("{:02}", row_ix + 1))
 }
@@ -434,7 +434,7 @@ fn redis_hash_table_field_cell(
         .overflow_hidden()
         .whitespace_nowrap()
         .text_ellipsis()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_family(crate::PLATFORM_MONOSPACE_FONT)
         .text_color(colors.text)
         .tooltip(move |window, cx| Tooltip::new(field_tooltip.clone()).build(window, cx))
@@ -524,7 +524,7 @@ fn redis_hash_table_value_cell(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(if truncated { colors.muted } else { colors.text })
                 .tooltip(move |window, cx| Tooltip::new(value_tooltip.clone()).build(window, cx))
@@ -618,7 +618,7 @@ fn redis_hash_table_ttl_cell(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
                 .text_color(if truncated { colors.muted } else { colors.text })
                 .when_some(disabled_tooltip, move |this, message| {
@@ -734,8 +734,8 @@ fn redis_hash_table_value_edit_cell(
                                 .w_full()
                                 .h_full()
                                 .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                                .line_height(px(19.))
-                                .text_size(px(13.)),
+                                .line_height(ui_text_size(19.))
+                                .text_size(ui_text_size(13.)),
                         ),
                 )
                 .child(
@@ -832,7 +832,7 @@ fn redis_hash_table_ttl_edit_cell(
                                 .focus_bordered(false)
                                 .w_full()
                                 .h_full()
-                                .text_size(px(13.)),
+                                .text_size(ui_text_size(13.)),
                         ),
                 )
                 .child(
@@ -980,7 +980,7 @@ fn redis_hash_field_delete_confirm_popover(
                                     .child(
                                         div()
                                             .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                                            .text_size(px(14.))
+                                            .text_size(ui_text_size(14.))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(colors.text)
                                             .overflow_hidden()
@@ -989,7 +989,7 @@ fn redis_hash_field_delete_confirm_popover(
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(12.))
+                                            .text_size(ui_text_size(12.))
                                             .text_color(colors.muted)
                                             .child(message),
                                     ),

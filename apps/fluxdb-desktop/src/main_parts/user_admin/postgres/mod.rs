@@ -238,7 +238,7 @@ fn pg_user_admin_toolbar(
         .child(app_icon_box(AppIcon::Users, 28., 16., rgb(0x2563eb)))
         .child(
             div()
-                .text_size(px(14.))
+                .text_size(ui_text_size(14.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(tr("app.pg_role.title")),
         )
@@ -249,7 +249,7 @@ fn pg_user_admin_toolbar(
             |this| {
                 this.child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(rgb(0xff9f0a))
                         .child(tr("app.pg_role.save_needs_verify")),
                 )
@@ -470,7 +470,7 @@ fn pg_role_filter_row(
                 .hover(move |style| style.bg(if active { colors.tree_selected } else { colors.hover }))
                 .flex()
                 .items_center()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(if active { colors.text } else { colors.muted })
                 .on_mouse_down(
                     MouseButton::Left,
@@ -534,7 +534,7 @@ fn pg_user_admin_role_row(
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(colors.text)
                         .child(role.name.clone()),
@@ -546,7 +546,7 @@ fn pg_user_admin_role_row(
                         .child(
                             div()
                                 .truncate()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.muted)
                                 .child(identity),
                         )
@@ -555,7 +555,7 @@ fn pg_user_admin_role_row(
                                 div()
                                     .px_1()
                                     .rounded(colors.radius * 0.5)
-                                    .text_size(px(10.))
+                                    .text_size(ui_text_size(10.))
                                     .text_color(rgb(0xff9f0a))
                                     .child(tr("app.pg_role.unsaved")),
                             )
@@ -595,7 +595,7 @@ fn pg_draft_role_row(draft: &PgRoleDraft, colors: UiColors) -> Div {
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(colors.text)
                         .child(title),
@@ -603,7 +603,7 @@ fn pg_draft_role_row(draft: &PgRoleDraft, colors: UiColors) -> Div {
                 .child(
                     div()
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(colors.muted)
                         .child(if draft.can_login {
                             tr("app.pg_role.draft_can_login")
@@ -694,7 +694,7 @@ fn pg_user_admin_status_bar(admin: &UserAdminState, colors: UiColors) -> Div {
         .bg(colors.panel_bg)
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.muted)
                 .child(
                     tr("app.pg_role.status_counts")
@@ -709,7 +709,7 @@ fn pg_user_admin_status_bar(admin: &UserAdminState, colors: UiColors) -> Div {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(rgb(0xff9f0a))
                     .child(app_icon(AppIcon::Save, 12., rgb(0xff9f0a)))
                     .child(tr("app.pg_role.unsaved_changes")),
@@ -779,7 +779,7 @@ fn pg_delete_role_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.pg_role.delete_role")),
                         )
@@ -806,7 +806,7 @@ fn pg_delete_role_modal(
                     div()
                         .px_5()
                         .pb_4()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(format!(
                             "{}",
@@ -910,7 +910,7 @@ fn pg_switch_role_modal(
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(17.))
+                                .text_size(ui_text_size(17.))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(tr("app.pg_role.discard_title")),
                         )
@@ -937,7 +937,7 @@ fn pg_switch_role_modal(
                     div()
                         .px_5()
                         .pb_4()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(format!(
                             "{}",

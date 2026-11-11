@@ -291,7 +291,7 @@ impl NavicatMain {
                 div()
                     .px_2()
                     .pt_2()
-                    .text_size(px(9.))
+                    .text_size(ui_text_size(9.))
                     .text_color(colors.muted)
                     .child(tr("app.ai.chat.reference.db_candidates_hint")),
             )
@@ -320,7 +320,7 @@ impl NavicatMain {
                     .px_2()
                     .pt_2()
                     .pb_1()
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(colors.muted)
                     .child(tr("app.ai.chat.reference.menu_title"))
                     .child(format!(
@@ -364,7 +364,7 @@ impl NavicatMain {
                                 .rounded(colors.radius)
                                 .px_1p5()
                                 .py(px(4.))
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(colors.text)
                                 .child(
                                     div()
@@ -402,7 +402,7 @@ impl NavicatMain {
                                                     div()
                                                         .min_w(px(0.))
                                                         .truncate()
-                                                        .text_size(px(10.))
+                                                        .text_size(ui_text_size(10.))
                                                         .text_color(colors.muted)
                                                         .child(reference.summary.clone()),
                                                 ),
@@ -423,7 +423,7 @@ impl NavicatMain {
                     .id("ai-reference-search-loading")
                     .px_2()
                     .py_2()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(tr("app.ai.chat.reference.searching")),
             );
@@ -433,7 +433,7 @@ impl NavicatMain {
                     .debug_selector(|| "ai-reference-search-error".into())
                     .px_2()
                     .py_2()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.danger)
                     .child(tr("app.ai.chat.reference.search_failed").replace("%{error}", error)),
             );
@@ -442,7 +442,7 @@ impl NavicatMain {
                 div()
                     .px_2()
                     .py_2()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(colors.muted)
                     .child(
                         tr("app.ai.chat.reference.no_match").replace(
@@ -497,7 +497,7 @@ fn ai_reference_badge(kind: &str, colors: UiColors) -> gpui::AnyElement {
         .py(px(2.))
         .rounded(px(999.))
         .bg(rgba_with_alpha(tone, 0.11))
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .text_color(tone)
         .child(label)
         .into_any_element()

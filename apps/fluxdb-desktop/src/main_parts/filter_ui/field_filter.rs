@@ -88,14 +88,14 @@ fn field_filter_popover_layer(
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(14.))
+                        .text_size(ui_text_size(14.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(tr("app.filter.field_filter")),
                 )
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(colors.muted)
                         .child(format!("{visible_count}/{total_count}")),
@@ -117,7 +117,7 @@ fn field_filter_popover_layer(
                         .focus_bordered(false)
                         .w_full()
                         .h_full()
-                        .text_size(px(14.)),
+                        .text_size(ui_text_size(14.)),
                 ),
         )
         .child(list)
@@ -132,7 +132,7 @@ fn field_filter_popover_layer(
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(colors.muted)
                         .child(tr("app.filter.keep_one_column")),
                 )
@@ -176,7 +176,7 @@ fn field_filter_field_row(label: String, checked: bool, search: &str, colors: Ui
         .flex()
         .items_center()
         .gap_3()
-        .text_size(px(14.))
+        .text_size(ui_text_size(14.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .cursor_pointer()
@@ -207,7 +207,7 @@ fn field_filter_field_row(label: String, checked: bool, search: &str, colors: Ui
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(if colors.is_dark {
                     rgb(0x14161a)
@@ -231,7 +231,7 @@ fn field_filter_footer_action(label: impl Into<SharedString>, colors: UiColors) 
         .h(px(26.))
         .px_1()
         .rounded(colors.radius * 0.5)
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .cursor_pointer()

@@ -43,7 +43,7 @@ fn data_filter_menu_item(
         .flex()
         .items_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.text)
         .bg(if selected {
             if colors.is_dark {
@@ -58,7 +58,7 @@ fn data_filter_menu_item(
         .child(
             div()
                 .w(px(11.))
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(colors.text)
                 .child(if selected { "✓" } else { "" }),
         )
@@ -129,7 +129,7 @@ fn data_filter_menu_empty_item(label: impl Into<SharedString>, colors: UiColors)
         .px_3()
         .flex()
         .items_center()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(label)
 }
@@ -143,7 +143,7 @@ fn data_filter_menu_search_footer(search_input: Entity<InputState>, colors: UiCo
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.muted)
         .child(app_icon(AppIcon::Search, 14., colors.muted))
         .child(
@@ -152,7 +152,7 @@ fn data_filter_menu_search_footer(search_input: Entity<InputState>, colors: UiCo
                 .focus_bordered(false)
                 .w_full()
                 .h_full()
-                .text_size(px(13.)),
+                .text_size(ui_text_size(13.)),
         )
 }
 
@@ -163,7 +163,7 @@ fn data_filter_value_item(label: String, checked: bool, colors: UiColors) -> Div
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.text)
         .hover(move |style| style.bg(colors.hover))
         .child(
@@ -184,7 +184,7 @@ fn data_filter_value_item(label: String, checked: bool, colors: UiColors) -> Div
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(9.))
+                .text_size(ui_text_size(9.))
                 .text_color(rgb(0xffffff))
                 .child(if checked { "✓" } else { "" }),
         )
@@ -216,7 +216,7 @@ fn data_filter_dialog_button(
         } else {
             colors.panel_alt
         })
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .text_color(colors.text)
         .cursor_pointer()
         .flex()
@@ -367,7 +367,7 @@ fn data_filter_check(checked: bool, colors: UiColors) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(10.))
+        .text_size(ui_text_size(10.))
         .text_color(rgb(0xffffff))
         .hover(move |style| {
             style.bg(if checked {
@@ -390,8 +390,8 @@ fn data_filter_small_button(label: &'static str, colors: UiColors) -> Div {
             .flex()
             .items_center()
             .justify_center()
-            .text_size(px(12.))
-            .line_height(px(12.))
+            .text_size(ui_text_size(12.))
+            .line_height(ui_text_size(12.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .child(label)
             .into_any_element(),
@@ -426,8 +426,8 @@ fn data_filter_group_icon(_colors: UiColors) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(9.))
-        .line_height(px(9.))
+        .text_size(ui_text_size(9.))
+        .line_height(ui_text_size(9.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(rgb(0x1677ff))
         .child("()")
@@ -452,8 +452,8 @@ fn data_filter_delete_button(colors: UiColors) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(15.))
-        .line_height(px(15.))
+        .text_size(ui_text_size(15.))
+        .line_height(ui_text_size(15.))
         .text_color(colors.muted)
         .hover(move |style| {
             style

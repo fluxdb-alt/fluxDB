@@ -10,7 +10,7 @@ fn copy_table_mode_rows(
         .gap_2()
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.muted)
                 .child(tr("app.table.copy.content")),
@@ -64,7 +64,7 @@ fn copy_table_mode_row(
         .cursor_pointer()
         .hover(|this| this.border_color(colors.border))
         .child(Checkbox::new(("copy-table-mode", copy_data as u64)).checked(checked))
-        .child(div().text_size(px(13.)).child(label))
+        .child(div().text_size(ui_text_size(13.)).child(label))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, _, cx| {

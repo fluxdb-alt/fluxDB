@@ -20,7 +20,7 @@ fn sqlserver_general_panel(
             .items_center()
             .child(
                 div()
-                    .text_size(px(15.))
+                    .text_size(ui_text_size(15.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
                     .child(principal.name.clone()),
@@ -38,7 +38,7 @@ fn sqlserver_general_panel(
                         sqlserver_form_row(tr("app.sqlserver_security.role_name"), colors).child(
                             div()
                                 .text_color(colors.text)
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .child(role.name.clone()),
                         ),
                     )
@@ -46,7 +46,7 @@ fn sqlserver_general_panel(
                         sqlserver_form_row(tr("app.sqlserver_security.role_owner"), colors).child(
                             div()
                                 .text_color(colors.text)
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .child(role.owner.clone().unwrap_or_else(|| "-".into())),
                         ),
                     )
@@ -133,7 +133,7 @@ fn sqlserver_readonly_value_row(label: SharedString, value: String, colors: UiCo
         div()
             .w(px(360.))
             .text_color(colors.text)
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .child(value),
     )
 }

@@ -467,7 +467,7 @@ fn redis_key_list(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(13.))
+                .text_size(ui_text_size(13.))
                 .text_color(colors.muted)
                 .child(tr("app.redis.empty")),
         )
@@ -649,7 +649,7 @@ fn redis_key_list_folder_row(
         .child(
             div()
                 .flex_none()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(format!("{}", row.count)),
         )
@@ -750,7 +750,7 @@ fn redis_key_list_loading_overlay(colors: UiColors) -> Div {
         .items_center()
         .justify_center()
         .gap_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(loading_spinner_with_color(18., colors.muted))
@@ -783,7 +783,7 @@ fn redis_key_detail_loading_overlay(colors: UiColors) -> Div {
         .items_center()
         .justify_center()
         .gap_2()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(colors.text)
         .child(loading_spinner_with_color(18., colors.muted))
@@ -929,7 +929,7 @@ fn redis_list_type_tag(kind: String, colors: UiColors) -> Div {
         .border_1()
         .border_color(border)
         .bg(bg)
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(text)
         .child(kind.to_ascii_uppercase())
@@ -941,7 +941,7 @@ fn redis_key_list_text(text: String, mono: bool) -> Div {
         .overflow_hidden()
         .whitespace_nowrap()
         .text_ellipsis()
-        .text_size(px(13.))
+        .text_size(ui_text_size(13.))
         .when(mono, |this| this.font_family(crate::PLATFORM_MONOSPACE_FONT))
         .child(text)
 }
@@ -1070,7 +1070,7 @@ fn redis_key_delete_confirm_popover(
                                 .child(
                                     div()
                                         .font_family(crate::PLATFORM_MONOSPACE_FONT)
-                                        .text_size(px(14.))
+                                        .text_size(ui_text_size(14.))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .text_color(colors.text)
                                         .overflow_hidden()
@@ -1079,7 +1079,7 @@ fn redis_key_delete_confirm_popover(
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(colors.muted)
                                         .child(tr("app.redis.key.delete_irreversible")),
                                 ),
@@ -1142,7 +1142,7 @@ fn redis_key_delete_confirm_button(label: impl Into<SharedString>, danger: bool,
         .items_center()
         .justify_center()
         .gap_1()
-        .text_size(px(12.))
+        .text_size(ui_text_size(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(if danger { rgb(0xe5484d) } else { colors.text })
         .cursor_pointer()
@@ -1182,7 +1182,7 @@ fn redis_key_list_status_bar(
         .child(div().flex_1())
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(colors.muted)
                 .child(tr("app.redis.scan.summary").replace("%{results}", &result_count.to_string()).replace("%{scanned}", &scanned.to_string())),
         )
@@ -1199,7 +1199,7 @@ fn redis_key_list_status_bar(
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
                     .cursor_pointer()
