@@ -17,6 +17,16 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 
 ## 最近更新
 
+### v0.1.18
+
+- **服务器面板**：连接右键菜单新增「服务器」页签，MySQL / MariaDB / TiDB、PostgreSQL / KingbaseES、SQL Server、Oracle 与达梦提供概览、会话与锁等待；Redis 提供客户端与慢日志，MongoDB 提供当前操作与会话内性能趋势。查询、会话和客户端可在二次确认后终止，只读连接三层拦截，面板支持手动或每 5 秒自动刷新。
+- **切换查询作用域**：工具栏可按连接类型切换目标数据库与 Schema，无需新建查询；切库会清空结果，执行中禁止切换，PostgreSQL / KingbaseES 通过 `RESET search_path` 回到默认 Schema。
+- **自定义主题与字体**：可新建、编辑、删除主题并调整 SQL 高亮 token，导入 Zed / VS Code 主题（含 JSONC），并分别设置界面字体 / 字号与代码字体 / 字号 / 行高，支持实时预览。
+- **本地 MCP 改为应用内 HTTP**：移除 stdio 子进程，改为仅回环监听的 Streamable HTTP 端点并校验 Bearer 令牌，已有客户端配置自动接管。
+- **改进与修复**：集中式 SQLite 迁移（`VACUUM INTO` 备份、更高版本失败关闭）；统一 SQLite / SQL Server / TiDB 的值类型与只读语义；Redis 数据库按数值排序；SQL Server 负 DECIMAL 精确渲染。
+
+[完整更新说明](./release-notes/v0.1.18/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.17
 
 - **结构对比与数据传输**：连接右键菜单新增「结构对比与同步」「跨连接数据传输」；对比按 `schema.name` 配对基础表，展示缺失 / 多出 / 结构不同 / 一致与两端 DDL，可按勾选新建、删除或重建；传输支持追加与清空后写入，目标表不存在时自动建表，分页读写、可取消。
@@ -26,14 +36,6 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 - **修复**：修正 MySQL 旧档案 TLS 模式迁移误判；筛选切换字段时按新列类型保留兼容值；补齐备份 / 恢复取消任务文案；修复 Kingbase 补全兼容性与导出分页嵌套 `block_on`。
 
 [完整更新说明](./release-notes/v0.1.17/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
-
-### v0.1.16
-
-- **新增人大金仓 KingbaseES**：复用 PostgreSQL 连接链路（PG 兼容模式），支持连接测试、库 / Schema 与对象浏览、SQL 查询与补全、数据查看与编辑、表结构查看与设计，以及用户与权限入口；默认端口 54321，支持 TLS、SSH、代理与连接串导入。
-- **首版边界**：仅支持 PG 兼容模式；原生备份 / 恢复与 `psql` / `ksql` 等外部工具入口暂不支持；用户与权限页沿用 PostgreSQL 实现，尚未单独回归。
-- **修复**：修复 Kingbase 打开表属性 DDL 时的 panic（`pg_sequence` 数值列声明为 `int2`，改为显式 `::bigint`）；连接类型栏底部计数更新为 11 种。
-
-[完整更新说明](./release-notes/v0.1.16/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
 
 ## 为什么选择 FluxDB
 
