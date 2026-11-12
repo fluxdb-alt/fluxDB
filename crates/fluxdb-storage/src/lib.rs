@@ -3,6 +3,8 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 mod credential;
+/// SQLite 结构版本迁移：旧库升级、迁移前备份与失败关闭，见 [`migrations`]。
+mod migrations;
 mod sqlite;
 
 /// 共享数据密钥加载（AES-256-GCM）：连接凭据与模型 Key 共用一把密钥。
@@ -13,7 +15,7 @@ pub(crate) mod secret_crypto;
 #[path = "parts/ai_platform/mod.rs"]
 pub mod ai_platform;
 
-/// SQLite 连接类型再导出：供不直接依赖 rusqlite 的适配层（如 fluxdb-mcp）
+/// SQLite 连接类型再导出：供不直接依赖 rusqlite 的适配层
 /// 在 `with_ai_connection` 闭包外显式标注连接参数。
 pub use rusqlite::Connection as AiConnection;
 
@@ -920,6 +922,13 @@ pub(crate) fn ensure_private_dir(path: &std::path::Path) -> Result<()> {
 
 /// 将已存在的文件权限收紧为仅属主可读写（Unix 0o600；Windows no-op）。
 /// 用于配置文件（历史上可能含明文 password option）与 SQLite 数据库。
+/// 收紧本地文件权限为 0600（Windows 无操作）。
+///
+/// 供其他 crate 写入本机凭据文件（如 MCP 访问令牌）时复用同一套权限策略。
+pub fn harden_local_file_perms(path: &std::path::Path) -> Result<()> {
+    harden_file_perms(path)
+}
+
 pub(crate) fn harden_file_perms(path: &std::path::Path) -> Result<()> {
     #[cfg(unix)]
     {

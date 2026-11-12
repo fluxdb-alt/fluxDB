@@ -156,7 +156,7 @@ pub fn er_relationship_scope(
         .ok_or_else(|| {
             SqlExecError::new(
                 "target_database_required",
-                "target 必须带库，或表定位中给出 database",
+                "target 必须带库，或表定位中给出 database；合法格式：conn:<id>[/db:<database>][/schema:<schema>]",
             )
         })?;
     if let Some(target_database) = &target.database
@@ -164,7 +164,7 @@ pub fn er_relationship_scope(
     {
         return Err(SqlExecError::new(
             "scope_mismatch",
-            "表定位的 database 超出当前 target 作用域",
+            "表定位的 database 超出当前 target 作用域；删除表定位里的 database，或让 target 的 db 与之一致",
         ));
     }
     let schema = target.schema.clone();
@@ -174,7 +174,7 @@ pub fn er_relationship_scope(
         {
             return Err(SqlExecError::new(
                 "scope_mismatch",
-                "表定位的 schema 超出当前 target 作用域",
+                "表定位的 schema 超出当前 target 作用域；删除表定位里的 schema，或让 target 的 schema 与之一致",
             ));
         }
         if !resolver.sql_object_allowed(target, &table.name) {

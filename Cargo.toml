@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "apps/fluxdb-desktop",
-    "apps/fluxdb-mcp",
     "crates/fluxdb-app",
     "crates/fluxdb-completion",
     "crates/fluxdb-connectors",

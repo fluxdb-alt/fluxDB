@@ -19,7 +19,6 @@ fluxdb-core = { path = "../../crates/fluxdb-core" }
 fluxdb-editor-core = { path = "../../crates/fluxdb-editor-core" }
 fluxdb-i18n = { path = "../../crates/fluxdb-i18n" }
 
-fluxdb-mcp = { path = "../fluxdb-mcp" }
 fluxdb-storage = { path = "../../crates/fluxdb-storage" }
 gpui = { package = "gpui-pre", version = "=0.3.8" }
 # gpui-component / gpui-base 0.7.1 的过程宏（`actions!`、`#[derive(Action)]` 等）用

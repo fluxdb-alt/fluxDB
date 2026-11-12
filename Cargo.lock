@@ -2438,6 +2438,7 @@ name = "fluxdb-app"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
  "csv",
  "dirs 6.0.0",
  "fluxdb-completion",
@@ -2445,9 +2446,13 @@ dependencies = [
  "fluxdb-core",
  "fluxdb-editor-core",
  "fluxdb-storage",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "libc",
  "memchr",
  "ring",
+ "rmcp",
  "rusqlite",
  "semver",
  "serde",
@@ -2455,7 +2460,10 @@ dependencies = [
  "sha2 0.10.9",
  "sqlformat",
  "sqlparser",
+ "tokio",
+ "tokio-util",
  "toml_edit 0.22.27",
+ "tower-service",
  "tracing",
  "ureq",
  "url",
@@ -2530,7 +2538,6 @@ dependencies = [
  "fluxdb-core",
  "fluxdb-editor-core",
  "fluxdb-i18n",
- "fluxdb-mcp",
  "fluxdb-storage",
  "futures",
  "gpui-component",
@@ -2577,23 +2584,6 @@ dependencies = [
  "serde_json",
  "sys-locale",
  "tempfile",
-]
-
-[[package]]
-name = "fluxdb-mcp"
-version = "0.1.0"
-dependencies = [
- "fluxdb-app",
- "fluxdb-core",
- "fluxdb-storage",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -4264,6 +4254,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4286,6 +4282,7 @@ dependencies = [
  "http",
  "http-body",
  "httparse",
+ "httpdate",
  "itoa",
  "pin-project-lite",
  "smallvec",
@@ -7610,17 +7607,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d1f571c72940a19d9532fe52dbea8bc9912bf1d766c2970bb824056b86f3f59"
 dependencies = [
  "async-trait",
+ "bytes",
  "chrono",
  "futures",
+ "http",
+ "http-body",
+ "http-body-util",
  "pastey 0.2.3",
  "pin-project-lite",
+ "rand 0.10.3",
  "schemars",
  "serde",
  "serde_json",
+ "sse-stream",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-stream",
  "tokio-util",
+ "tower-service",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -8801,6 +8807,19 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "sse-stream"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c25ac7aff0abd1dbc474536e40416e1102c7dd9bfba0b9861c6d357f835dcfb4"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http-body",
+ "http-body-util",
+ "pin-project-lite",
 ]
 
 [[package]]

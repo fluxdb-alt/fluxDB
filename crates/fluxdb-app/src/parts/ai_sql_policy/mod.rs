@@ -640,7 +640,7 @@ pub const DB_RUN_INPUT_SCHEMA: &str = r##"{
   "additionalProperties": false,
   "required": ["target", "sql"],
   "properties": {
-    "target": { "type": "string", "minLength": 1 },
+    "target": { "type": "string", "minLength": 1, "description": "数据源句柄：conn:<id>[/db:<database>][/schema:<schema>]；id 取自 fluxdb_connections_list" },
     "sql": { "type": "string", "minLength": 1, "maxLength": 65536 },
     "parameters": { "type": "array", "maxItems": 1024, "items": { "$ref": "#/$defs/parameter" } },
     "max_rows": { "type": "integer", "minimum": 1, "maximum": 1000 },
@@ -668,7 +668,7 @@ pub const DB_SEARCH_OBJECTS_INPUT_SCHEMA: &str = r#"{
   "additionalProperties": false,
   "required": ["target"],
   "properties": {
-    "target": { "type": "string", "minLength": 1 },
+    "target": { "type": "string", "minLength": 1, "description": "数据源句柄：conn:<id>[/db:<database>][/schema:<schema>]；只写 conn:<id> 且连接无默认库时返回库清单" },
     "query": { "type": "string", "maxLength": 256 },
     "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
   }
@@ -679,7 +679,7 @@ pub const DB_DESCRIBE_OBJECT_INPUT_SCHEMA: &str = r#"{
   "additionalProperties": false,
   "required": ["target", "object_ref"],
   "properties": {
-    "target": { "type": "string", "minLength": 1 },
+    "target": { "type": "string", "minLength": 1, "description": "数据源句柄：conn:<id>[/db:<database>][/schema:<schema>]" },
     "object_ref": {
       "type": "object",
       "additionalProperties": false,
@@ -708,21 +708,21 @@ pub fn standard_sql_tool_specs() -> fluxdb_core::Result<Vec<ToolSpec>> {
             id: "db.run".into(),
             version: 1,
             description:
-                "执行单条 SQL：只读语句直接返回结果，写语句需审批；mode=explain 只看计划。".into(),
+                "执行单条 SQL：只读语句直接返回结果，写语句需审批；mode=explain 只看计划。target 为 conn:<id>[/db:<database>][/schema:<schema>]，SQL 里的库名必须落在 target 作用域内。".into(),
             risk: fluxdb_core::ToolRisk::Write,
             input_schema_json: DB_RUN_INPUT_SCHEMA.into(),
         },
         fluxdb_core::ToolDescriptor {
             id: "db.search_objects".into(),
             version: 1,
-            description: "按名字模糊搜索表/视图（渐进元数据，只读）".into(),
+            description: "按名字模糊搜索表/视图（渐进元数据，只读）；target 为 conn:<id>[/db:<database>][/schema:<schema>]，只给连接且无默认库时返回库清单".into(),
             risk: fluxdb_core::ToolRisk::Read,
             input_schema_json: DB_SEARCH_OBJECTS_INPUT_SCHEMA.into(),
         },
         fluxdb_core::ToolDescriptor {
             id: "db.describe_object".into(),
             version: 1,
-            description: "读取表或视图的列、索引、外键、注释和可选 DDL（只读）".into(),
+            description: "读取表或视图的列、索引、外键、注释和可选 DDL（只读）；target 为 conn:<id>[/db:<database>][/schema:<schema>]".into(),
             risk: fluxdb_core::ToolRisk::Read,
             input_schema_json: DB_DESCRIBE_OBJECT_INPUT_SCHEMA.into(),
         },

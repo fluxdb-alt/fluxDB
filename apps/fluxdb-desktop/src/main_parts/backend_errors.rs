@@ -88,8 +88,8 @@ fn localize_backend_error_text(text: &str) -> String {
         "执行已取消" => "app.backend_error.execution_cancelled",
         "取消信号在写操作返回后才到达，是否已提交无法确定" => "app.backend_error.cancel_after_write",
         "SQL 无法解析，无法校验作用域" => "app.backend_error.sql_parse_failed",
-        "SQL 引用的 database/schema 超出当前 target 作用域" => "app.backend_error.sql_target_out_of_scope",
-        "SQL 调用的函数所在 database/schema 超出当前 target 作用域" => "app.backend_error.sql_function_out_of_scope",
+        "SQL 引用的 database/schema 超出当前 target 作用域；去掉 SQL 里的库/schema 前缀，或把 target 改写为 conn:<id>/db:<database>[/schema:<schema>]" => "app.backend_error.sql_target_out_of_scope",
+        "SQL 调用的函数所在 database/schema 超出当前 target 作用域；去掉函数名前的库/schema 前缀，或把 target 改写为 conn:<id>/db:<database>[/schema:<schema>]" => "app.backend_error.sql_function_out_of_scope",
         "检索已取消" => "app.backend_error.retrieval_cancelled",
         "对象不在授权范围内" => "app.backend_error.object_out_of_scope",
         "DDL 超过结果大小上限" => "app.backend_error.ddl_result_too_large",
@@ -99,8 +99,8 @@ fn localize_backend_error_text(text: &str) -> String {
         "object_ref 必须是对象" => "app.backend_error.object_ref_not_object",
         "object_ref 缺少 name" => "app.backend_error.object_ref_missing_name",
         "object_ref 缺少 kind" => "app.backend_error.object_ref_missing_kind",
-        "object_ref 的 database 超出当前 target 作用域" => "app.backend_error.object_ref_database_out_of_scope",
-        "object_ref 的 schema 超出当前 target 作用域" => "app.backend_error.object_ref_schema_out_of_scope",
+        "object_ref 的 database 超出当前 target 作用域；删除 object_ref.database，或让 target 的 db 与之一致" => "app.backend_error.object_ref_database_out_of_scope",
+        "object_ref 的 schema 超出当前 target 作用域；删除 object_ref.schema，或让 target 的 schema 与之一致" => "app.backend_error.object_ref_schema_out_of_scope",
         "缺少 sql" => "app.backend_error.missing_sql",
         "sql 不能为空" => "app.backend_error.sql_empty",
         "parameters 必须是 tagged 值数组" => "app.backend_error.parameters_tagged_array",
@@ -239,6 +239,7 @@ fn localize_backend_error_text(text: &str) -> String {
         "备份文件已存在，拒绝覆盖" => "app.backend_error.backup_file_exists",
         "此数据库尚不支持恢复" => "app.backend_error.restore_unsupported",
         "MCP 服务已关闭" => "app.backend_error.mcp_service_closed",
+        "本地 MCP 服务未开启，请先打开开关" => "app.backend_error.mcp_service_not_running",
         "该数据源为只读或连接已标记只读，禁止写入" => "app.backend_error.datasource_read_only",
         "该调用需要人工确认，但 MCP 未启用审批队列" => "app.backend_error.mcp_approval_queue_disabled",
         "无法登记执行审计" => "app.backend_error.execution_audit_register_failed",
@@ -880,7 +881,7 @@ fn localize_backend_dynamic_error(text: &str) -> Option<String> {
         (
             "app.backend_error.dyn_target_segment_invalid",
             "target 片段无法识别: ",
-            "",
+            "；合法格式：conn:<id>[/db:<database>][/schema:<schema>]",
         ),
         (
             "app.backend_error.dyn_turns_range_invalid",
@@ -1055,7 +1056,7 @@ fn localize_backend_dynamic_error(text: &str) -> Option<String> {
         (
             "app.backend_error.dyn_datasource_handle_invalid",
             "未授权或已失效的数据源句柄: ",
-            "",
+            "；请先调用 fluxdb_connections_list 获取有效 target",
         ),
         (
             "app.backend_error.dyn_artifact_type_unknown",

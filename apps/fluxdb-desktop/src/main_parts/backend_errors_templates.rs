@@ -89,7 +89,7 @@ fn localize_backend_template_error(text: &str) -> Option<String> {
         ("app.backend_error.tmpl_184", "{} 连接 · 只读上下文，不授予写权限"),
         ("app.backend_error.tmpl_222", "无标题 - Redis 命令 DB {}"),
         ("app.backend_error.tmpl_255", "表 {} 备份不含数据，清空后导入无意义"),
-        ("app.backend_error.tmpl_032", "target 连接 ID 非法: {}"),
+        ("app.backend_error.tmpl_032", "target 连接 ID 非法: {}；合法格式：conn:<id>[/db:<database>][/schema:<schema>]（id 为数字）"),
         ("app.backend_error.tmpl_033", "连接 {} 的定位类型无法识别: {}"),
         ("app.backend_error.tmpl_034", "片段 payload 解析失败: {}"),
         ("app.backend_error.tmpl_035", "片段包含私有推理字段 {}，拒绝持久化"),

@@ -2,7 +2,7 @@
 //
 // 内部 Agent 与外部 MCP Client 走**同一条执行服务**——相同的 schema 校验、
 // 风险分类、强制审计、授权、连接器与回执；只换 Caller/Owner，不复制第二套实现，
-// 也不创建假 Turn。协议层（stdio/JSON-RPC）在 `fluxdb-mcp` 二进制，UI 在桌面端，
+// 也不创建假 Turn。协议层（Streamable HTTP/JSON-RPC）在应用内端点，UI 在桌面端，
 // 两者都经由本模块对外部请求执行。
 //
 // 数据源模型：用户显式把某个连接加入对外服务，并为其选择「只读 / 允许读写 / 默认」。
@@ -98,6 +98,31 @@ pub struct McpDatasourceHandle {
     pub kind: McpResourceKind,
     /// 有效只读：为 true 时写工具不列出也拒绝。
     pub read_only: bool,
+    /// 库名提示：来自用户「选择展示数据库」设置，回落连接自带默认库；空表示无从得知。
+    ///
+    /// 只是静态提示，不探活、不代表授权新增范围；模型仍须在 target 里显式写 `/db:<database>`。
+    pub databases: Vec<String>,
+}
+
+/// 桌面端「显示数据库」保存的 `options` 键（换行分隔的库名）。
+const VISIBLE_DATABASES_OPTION: &str = "visible_databases";
+
+/// 数据源的静态库清单：用户配置的可见库优先，其次连接默认库；按出现顺序去重。
+fn configured_databases(config: &fluxdb_core::ConnectionConfig) -> Vec<String> {
+    let visible = config
+        .options
+        .get(VISIBLE_DATABASES_OPTION)
+        .map(|value| value.lines().map(str::trim))
+        .into_iter()
+        .flatten()
+        .filter(|value| !value.is_empty());
+    let mut databases: Vec<String> = Vec::new();
+    for name in visible.chain(default_database(config)) {
+        if !databases.iter().any(|existing| existing == name) {
+            databases.push(name.to_string());
+        }
+    }
+    databases
 }
 
 /// 由连接配置与数据源写入策略装配句柄。
@@ -115,6 +140,7 @@ pub fn datasource_handle(
         label,
         kind,
         read_only: !allows_write || connection_read_only,
+        databases: config.map(configured_databases).unwrap_or_default(),
     }
 }
 
@@ -146,7 +172,9 @@ impl McpDatasourceResolver {
             .ok_or_else(|| {
                 McpCallError::new(
                     "STALE_RESOURCE",
-                    format!("未授权或已失效的数据源句柄: {target}"),
+                    format!(
+                        "未授权或已失效的数据源句柄: {target}；请先调用 fluxdb_connections_list 获取有效 target"
+                    ),
                     false,
                 )
             })
@@ -246,7 +274,7 @@ impl McpCallOutcome {
 
 /// 宿主提供的 request 仓储：实现 `fluxdb_operation_status`。
 ///
-/// 执行服务本身不持有存储连接（保持可测试、无 IO），由宿主（stdio 二进制）注入。
+/// 执行服务本身不持有存储连接（保持可测试、无 IO），由宿主（应用内 HTTP 端点）注入。
 /// 未注入时该工具返回 `operation_unsupported`，不静默假装成功。
 pub trait McpRequestHost: Send + Sync {
     fn request_status(
@@ -381,7 +409,9 @@ pub fn connections_list_view() -> fluxdb_core::Result<McpToolView> {
         name: "fluxdb_connections_list".into(),
         internal_id: None,
         version: 1,
-        description: "列出当前已加入对外服务的数据源与读写策略（不返回 endpoint 或凭据）".into(),
+        description: "列出已加入对外服务的数据源、读写策略、库名提示（databases）与 target 前缀；\
+后续检索/执行请把 target 写成 conn:<id>[/db:<database>][/schema:<schema>]（不返回 endpoint 或凭据）"
+            .into(),
         input_schema: serde_json::json!({
             "type": "object",
             "additionalProperties": false,
@@ -515,6 +545,8 @@ impl McpExecutionService {
                         McpResourceKind::Redis => "redis",
                     },
                     "write_policy": if handle.read_only { "read_only" } else { "read_write" },
+                    // 静态库提示；真正可检索的库仍以连接器为准。
+                    "databases": &handle.databases,
                 })
             })
             .collect::<Vec<_>>();
@@ -685,6 +717,39 @@ fn target_of(prepared: &crate::ValidatedArguments) -> Option<&str> {
 
 fn tool_error_to_call(error: ToolError) -> McpCallError {
     McpCallError::new(error.code, error.message, error.retryable)
+}
+
+#[cfg(test)]
+mod configured_databases_tests {
+    use super::*;
+
+    fn connection(options: &[(&str, &str)], database: Option<&str>) -> fluxdb_core::ConnectionConfig {
+        serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "name": "c",
+            "kind": "MySql",
+            "endpoint": { "Tcp": { "host": "h", "port": 3306, "database": database } },
+            "options": options.iter().copied().collect::<BTreeMap<_, _>>(),
+        }))
+        .expect("测试连接配置")
+    }
+
+    #[test]
+    fn visible_databases_then_default_without_duplicates() {
+        let config = connection(
+            &[("visible_databases", "shop\n\n analytics \nshop")],
+            Some("analytics"),
+        );
+        assert_eq!(
+            configured_databases(&config),
+            vec!["shop".to_string(), "analytics".to_string()]
+        );
+        assert_eq!(
+            configured_databases(&connection(&[], Some("main"))),
+            vec!["main".to_string()]
+        );
+        assert!(configured_databases(&connection(&[], None)).is_empty());
+    }
 }
 
 include!("ai_mcp_call.rs");

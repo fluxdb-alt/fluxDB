@@ -59,7 +59,7 @@ pub struct ServerSessionView {
     pub closed_at_ms: Option<i64>,
 }
 
-/// 建立一个 stdio Client 连接记录。`client_info_json` 仅用于审计，不是认证/授权凭据。
+/// 建立一个 MCP Client 连接记录（应用内 HTTP 端点上的会话）。`client_info_json` 仅用于审计，不是认证/授权凭据。
 pub fn start_server_session(
     conn: &Connection,
     now_ms: i64,

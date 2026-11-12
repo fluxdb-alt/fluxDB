@@ -1,8 +1,8 @@
 //! AI 管理与运行实体的建表语句（设计文档 §42 的唯一代码来源）。
 //!
-//! 首次打开数据库时由 [`crate::sqlite::create_schema`] 幂等创建，没有增量升级
-//! 步骤：结构一旦发布即视为稳定，`CREATE TABLE IF NOT EXISTS` 不会重建未知结构，
-//! 由 [`crate::ai_platform::verify_ai_schema`] 检出并报错。
+//! 本文件是**新建库**的建表语句来源；已存在的旧库不会被 `CREATE TABLE IF NOT EXISTS`
+//! 改成新结构，结构变化一律通过 [`crate::migrations`] 的版本步骤处理。
+//! 因此修改本文件的表定义时，必须同步追加一个迁移步骤，否则新旧库结构会分叉。
 
 /// 管理实体 DDL（模型 / Agent / 提示词 / 插件 / 绑定 / MCP / 预算 / 运行设置）。
 pub const MANAGEMENT_SQL: &str = r##"CREATE TABLE IF NOT EXISTS ai_model_profiles (
@@ -140,7 +140,9 @@ CREATE TABLE IF NOT EXISTS ai_mcp_server_profiles (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
-    transport TEXT NOT NULL DEFAULT 'stdio' CHECK (transport='stdio'),
+    -- 传输方式：'http' 为应用内本地端点（Streamable HTTP）；'stdio' 仅保留给
+    -- 迁移前的历史数据（迁移步骤 2 会统一改写为 'http'）。
+    transport TEXT NOT NULL DEFAULT 'http' CHECK (transport IN ('stdio','http')),
     options_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(options_json)),
     revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
     created_at_ms INTEGER NOT NULL,

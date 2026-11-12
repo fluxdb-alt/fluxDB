@@ -56,11 +56,16 @@ pub fn open(root: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
-/// 建表（idempotent），并读回当前 schema 版本（PRAGMA user_version）。
+/// 建表（idempotent）并推进结构版本，返回迁移后的 `PRAGMA user_version`。
 ///
 /// 表定义的唯一来源是各职责模块的 `CREATE_SQL` 常量（连接、历史），
 /// 不在此处复制一份，避免两处漂移。
+///
+/// 全新库由建表语句直接建成最新结构并打上最新版本；已存在的旧库交给
+/// [`crate::migrations::upgrade`] 逐版本升级（含备份、事务与失败关闭）。
 pub fn create_schema(conn: &Connection) -> Result<i64> {
+    // 必须在建表之前判定，否则新库会被当成「已存在」而走迁移路径。
+    let fresh = crate::migrations::is_fresh_database(conn)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS kv (
             key   TEXT PRIMARY KEY,
@@ -74,9 +79,14 @@ pub fn create_schema(conn: &Connection) -> Result<i64> {
         .map_err(sqlite_error)?;
     crate::connection_secrets::ensure_schema(conn)?;
     crate::ai_platform::ensure_schema(conn)?;
+    let version = if fresh {
+        crate::migrations::stamp_latest(conn)?;
+        crate::migrations::LATEST_VERSION
+    } else {
+        crate::migrations::upgrade(conn)?
+    };
     crate::ai_platform::verify_ai_schema(conn)?;
-    conn.query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(sqlite_error)
+    Ok(version)
 }
 
 /// 读单个 key 的 JSON 值，缺失返回 None。

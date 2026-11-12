@@ -1,7 +1,7 @@
 //! 对外本地 MCP Server 的 Profile 与数据源持久化（设计 §28.6、§42.10–42.11、T060）。
 //!
 //! 与 `mcp.rs`（本应用作为 **Client** 接入外部工具）严格区分：这些表描述的是
-//! 本应用 **对外** 暴露的 stdio Server。规则：
+//! 本应用 **对外** 暴露的 MCP Server（应用内 Streamable HTTP 端点）。规则：
 //! 1. 对象级 CAS：Profile 与数据源的保存都带 `expected_revision`，命中 0 行即冲突。
 //! 2. 默认最小权限：新建 Profile 强制 `enabled=0`；新建数据源策略为 `default`
 //!    （跟随全局，全局默认是只读）。
@@ -150,7 +150,7 @@ pub fn save_server_profile(
     };
     let sql = "INSERT INTO ai_mcp_server_profiles (id, display_name, enabled, transport,
             options_json, revision, created_at_ms, updated_at_ms)
-        VALUES (?1,?2,?3,'stdio',?4,1,?5,?5)
+        VALUES (?1,?2,?3,'http',?4,1,?5,?5)
         ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, enabled=excluded.enabled,
             options_json=excluded.options_json,
             revision=ai_mcp_server_profiles.revision+1, updated_at_ms=excluded.updated_at_ms

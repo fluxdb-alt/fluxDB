@@ -15,6 +15,8 @@ impl AppController {
             recency: Arc::new(Mutex::new(RecencyFrequency::new())),
             query_cancel_flags: Arc::new(Mutex::new(BTreeMap::new())),
             er_catalog: Arc::new(Mutex::new(ErCatalogCache::default())),
+            mcp_http: Arc::new(Mutex::new(None)),
+            mcp_http_error: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -67,6 +69,8 @@ impl AppController {
     /// 注入 AI 平台存储（模型/Agent/插件/MCP 管理页使用）。
     pub fn set_ai_storage(&mut self, storage: fluxdb_storage::FileStorage) {
         self.ai_storage = Some(storage);
+        // 应用启动时若端点开关为开启，直接恢复监听；关闭时不占端口。
+        self.sync_mcp_http_endpoint();
     }
 
     /// 注入大字段内容存储：连接器取数时经进程级注册表把超大字段外置到这里。

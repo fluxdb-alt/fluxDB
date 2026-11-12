@@ -1,9 +1,7 @@
-/// 通用 stdio 接入信息；不包含连接凭据或客户端原有配置。
+/// 手动接入信息：端点 URL 与可直接粘贴的 JSON 示例（令牌只出现在示例里）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpConnectionDetails {
-    pub command: String,
-    pub args: Vec<String>,
-    pub command_line: String,
+    pub url: String,
     pub json_example: String,
 }
 
@@ -17,81 +15,111 @@ pub struct McpClientsSnapshot {
 impl McpRegistration {
     pub fn connection_details(&self) -> fluxdb_core::Result<McpConnectionDetails> {
         self.validate()?;
-        let (command, args) = self.command_args();
-        // Windows 输出 PowerShell 语法，Unix 输出 POSIX shell 语法；参数原值另行提供。
-        let quote = |value: &str| {
-            if cfg!(windows) {
-                format!("'{}'", value.replace('\'', "''"))
-            } else {
-                format!("'{}'", value.replace('\'', "'\\''"))
-            }
-        };
-        let command_line = std::iter::once(command.as_str())
-            .chain(args.iter().map(String::as_str))
-            .map(quote)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let command_line = if cfg!(windows) {
-            format!("& {command_line}")
-        } else {
-            command_line
-        };
         let json_example = serde_json::to_string_pretty(&serde_json::json!({
-            "mcpServers": {
-                &self.server_name: {"command":command, "args":args}
-            }
+            "mcpServers": {&self.server_name: self.http_entry()}
         }))
         .map_err(|_| write_error("生成 MCP 配置示例失败"))?;
         Ok(McpConnectionDetails {
-            command,
-            args,
-            command_line,
+            url: self.url.clone(),
             json_example,
         })
     }
 
     fn launch(&self) -> fluxdb_storage::McpClientLaunch {
-        let (command, args) = self.command_args();
-        fluxdb_storage::McpClientLaunch { command, args }
+        fluxdb_storage::McpClientLaunch {
+            url: self.url.clone(),
+            authorization: self.authorization(),
+        }
     }
 }
 
 /// 把 Codex TOML 的 `[mcp_servers.<name>]` 条目转成 JSON 值，让两种配置格式
-/// 共用同一份条目校验（`url` / `type` / `command` / `args`）。
+/// 共用同一份条目校验（`url` / `http_headers`）。
 fn codex_entry_to_json(entry: &toml_edit::Item) -> fluxdb_core::Result<serde_json::Value> {
     let mut map = serde_json::Map::new();
-    for key in ["url", "type", "command"] {
-        if let Some(value) = entry.get(key) {
-            map.insert(
-                key.to_string(),
-                value
-                    .as_str()
-                    .map(|text| serde_json::Value::String(text.to_string()))
-                    // 非字符串值同样要留下"该键存在"的痕迹，交由共享校验拒绝。
-                    .unwrap_or(serde_json::Value::Null),
-            );
-        }
+    if let Some(url) = entry.get("url") {
+        map.insert(
+            "url".to_string(),
+            url.as_str()
+                .map(|text| serde_json::Value::String(text.to_string()))
+                // 非字符串值同样要留下"该键存在"的痕迹，交由共享校验拒绝。
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
+    // 旧 stdio 字段仅用于识别本应用遗留条目（见 `is_legacy_fluxdb_stdio`）。
+    if let Some(command) = entry.get("command") {
+        map.insert(
+            "command".to_string(),
+            command
+                .as_str()
+                .map(|text| serde_json::Value::String(text.to_string()))
+                .unwrap_or(serde_json::Value::Null),
+        );
     }
     if let Some(args) = entry.get("args") {
         let items = args
             .as_array()
-            .ok_or_else(|| write_error("MCP 参数不是数组"))?
-            .iter()
-            .map(|value| {
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(|text| serde_json::Value::String(text.to_string()))
+                            .unwrap_or(serde_json::Value::Null)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        map.insert("args".to_string(), serde_json::Value::Array(items));
+    }
+    if let Some(headers) = entry.get("http_headers") {
+        let table = headers
+            .as_table_like()
+            .ok_or_else(|| write_error("MCP http_headers 不是表"))?;
+        let mut json_headers = serde_json::Map::new();
+        for (key, value) in table.iter() {
+            json_headers.insert(
+                key.to_string(),
                 value
                     .as_str()
                     .map(|text| serde_json::Value::String(text.to_string()))
-                    .ok_or_else(|| write_error("MCP 参数必须是字符串"))
-            })
-            .collect::<fluxdb_core::Result<Vec<_>>>()?;
-        map.insert("args".to_string(), serde_json::Value::Array(items));
+                    .unwrap_or(serde_json::Value::Null),
+            );
+        }
+        map.insert(
+            "headers".to_string(),
+            serde_json::Value::Object(json_headers),
+        );
     }
     Ok(serde_json::Value::Object(map))
 }
 
-/// 只提取非敏感的启动信息；绝不把客户端整个配置带入状态、日志或持久化记录。
+/// 旧版 stdio 条目：启动命令来自 fluxdb 可执行文件（`fluxdb-mcp` 或桌面端 `--mcp-server`）。
 ///
-/// `None` 表示没有同名条目；同名条目存在但不是合法 stdio 服务时返回错误，
+/// 只用于识别本应用自己写过的槽位，避免把用户自建的同名服务当成可覆盖条目。
+fn is_legacy_fluxdb_stdio(entry: &serde_json::Value) -> bool {
+    let command = entry
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if command.contains("fluxdb") {
+        return true;
+    }
+    entry
+        .get("args")
+        .and_then(|v| v.as_array())
+        .is_some_and(|args| {
+            args.iter()
+                .filter_map(|arg| arg.as_str())
+                .any(|arg| arg == "--mcp-server")
+        })
+}
+
+/// 只提取端点与授权头用于归属核对；绝不把客户端整个配置带入状态或日志。
+///
+/// `None` 表示没有同名条目；同名条目不是 HTTP 服务时返回错误，
 /// 由调用方展示原因而不是当作"未注册"。
 fn client_launch(
     client: McpClientKind,
@@ -137,27 +165,29 @@ fn client_launch(
     let Some(entry) = entry else {
         return Ok(None);
     };
-    if entry.get("url").is_some()
-        || entry
-            .get("type")
-            .and_then(|v| v.as_str())
-            .is_some_and(|v| v != "stdio")
-    {
-        return Err(write_error("同名 fluxdb 条目不是 stdio 服务，未改写"));
-    }
-    let command = entry
-        .get("command")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| write_error("同名 fluxdb 条目缺少启动程序，未改写"))?
-        .to_string();
-    let args: Vec<String> = serde_json::from_value(
-        entry
-            .get("args")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!([])),
-    )
-    .map_err(|_| write_error("同名 fluxdb 条目的参数不是字符串数组，未改写"))?;
-    Ok(Some(fluxdb_storage::McpClientLaunch { command, args }))
+    let Some(url) = entry.get("url").and_then(|v| v.as_str()) else {
+        // 升级前写入的 stdio 条目（旧版本启动参数指向 fluxdb 可执行文件）：
+        // 视为本应用的可接管槽位，按「未配置」展示，用户点安装即可换成 HTTP。
+        if is_legacy_fluxdb_stdio(&entry) {
+            return Ok(None);
+        }
+        return Err(write_error("同名 fluxdb 条目不是 HTTP 服务，未改写"));
+    };
+    // 头名大小写不敏感（HTTP 语义）。
+    let authorization = entry
+        .get("headers")
+        .and_then(|v| v.as_object())
+        .and_then(|headers| {
+            headers
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("authorization"))
+                .and_then(|(_, value)| value.as_str())
+        })
+        .ok_or_else(|| write_error("同名 fluxdb 条目缺少 Authorization 头，未改写"))?;
+    Ok(Some(fluxdb_storage::McpClientLaunch {
+        url: url.to_string(),
+        authorization: authorization.to_string(),
+    }))
 }
 
 /// 列出全部已适配客户端的展示行（不含注册判定，由调用方用权威解析结果填充）。
@@ -225,7 +255,7 @@ pub fn mcp_clients_snapshot(
 /// 显式安装即接管客户端配置里的同名键：写入本应用当前实例的启动命令并登记管理权。
 ///
 /// 同名键是本应用在客户端配置中的固定槽位，用户点击安装表达的是「这里归 fluxdb」，
-/// 因此不再与上次记录比对；无法解析的配置和同名非 stdio 条目（可能是用户自有的远端
+/// 因此不再与上次记录比对；无法解析的配置和同名非 HTTP 条目（可能是用户自有的远端
 /// 服务）仍然拒绝改写。
 pub fn connect_mcp_client_registration(
     storage: &fluxdb_storage::FileStorage,
@@ -235,7 +265,7 @@ pub fn connect_mcp_client_registration(
 ) -> fluxdb_core::Result<()> {
     registration.validate()?;
     let mut managed = storage.load_mcp_client_registrations()?;
-    // 先解析同名条目：配置不可解析或同名条目不是 stdio 服务时拒绝改写。
+    // 先解析同名条目：配置不可解析或同名条目不是 HTTP 服务时拒绝改写。
     client_launch(client, home)?;
     register(client, home, registration)?;
     managed.insert(client.key().into(), registration.launch());
@@ -295,18 +325,27 @@ pub fn sync_mcp_client_registrations(
 }
 
 impl AppController {
-    fn mcp_registration(&self, binary_path: &str) -> fluxdb_core::Result<McpRegistration> {
-        if binary_path.trim().is_empty() {
-            return Err(write_error("找不到本地 MCP Server 可执行文件"));
-        }
-        let storage = self.ai_storage()?;
-        let config_root = std::fs::canonicalize(storage.root_dir())
-            .map_err(|_| write_error("无法解析 MCP 数据目录"))?;
+    /// 客户端注册信息来自正在运行的应用内 MCP 端点；开关关闭时没有可写入的地址。
+    fn mcp_registration(&self) -> fluxdb_core::Result<McpRegistration> {
+        let slot = self
+            .mcp_http
+            .lock()
+            .map_err(|_| write_error("MCP 服务状态不可用"))?;
+        let Some(handle) = slot.as_ref() else {
+            let start_error = self
+                .mcp_http_error
+                .lock()
+                .ok()
+                .and_then(|error| error.clone());
+            return Err(write_error(
+                start_error.unwrap_or_else(|| "本地 MCP 服务未开启，请先打开开关".into()),
+            ));
+        };
+        let endpoint = handle.endpoint();
         let registration = McpRegistration {
             server_name: DEFAULT_MCP_SERVER_NAME.into(),
-            binary_path: PathBuf::from(binary_path),
-            profile_id: DEFAULT_MCP_PROFILE_ID.into(),
-            config_root: Some(config_root),
+            url: endpoint.url.clone(),
+            token: endpoint.token.clone(),
         };
         registration.validate()?;
         Ok(registration)
@@ -317,22 +356,20 @@ impl AppController {
             let storage = self.ai_storage()?;
             let home = home_dir()?;
             match command {
-                AppCommand::RefreshMcpClients { binary_path } => {
-                    // 首次打开时先初始化隔离存储根，生成的命令与实际注册使用同一份参数。
+                AppCommand::RefreshMcpClients => {
+                    // 首次打开时先初始化隔离存储根，命令示例与实际注册使用同一份端点。
                     storage.load_mcp_client_registrations()?;
-                    let snapshot =
-                        mcp_clients_snapshot(&storage, &home, self.mcp_registration(&binary_path))?;
+                    let snapshot = mcp_clients_snapshot(&storage, &home, self.mcp_registration())?;
                     Ok(AppEvent::AiMcpClientsLoaded(snapshot))
                 }
                 AppCommand::SetMcpClientRegistration {
                     client_key,
                     registered,
-                    binary_path,
                 } => {
                     let client = client_from_key(&client_key)
                         .ok_or_else(|| write_error("未适配的客户端，请使用通用接入"))?;
                     if registered {
-                        let registration = self.mcp_registration(&binary_path)?;
+                        let registration = self.mcp_registration()?;
                         connect_mcp_client_registration(&storage, &home, client, &registration)?;
                     } else {
                         remove_mcp_client_registration(&storage, &home, client)?;
@@ -341,11 +378,14 @@ impl AppController {
                         clients: vec![client.label().into()],
                     })
                 }
-                AppCommand::SyncMcpClients { binary_path } => {
+                AppCommand::SyncMcpClients => {
                     if storage.load_mcp_client_registrations()?.is_empty() {
                         return Ok(AppEvent::AiMcpClientsSynced { clients: vec![] });
                     }
-                    let registration = self.mcp_registration(&binary_path)?;
+                    // 启动时的后台维护：端点关闭时无事可做，不能因此弹出错误。
+                    let Ok(registration) = self.mcp_registration() else {
+                        return Ok(AppEvent::AiMcpClientsSynced { clients: vec![] });
+                    };
                     let clients = sync_mcp_client_registrations(&storage, &home, &registration)?;
                     Ok(AppEvent::AiMcpClientsSynced { clients })
                 }
@@ -353,5 +393,99 @@ impl AppController {
             }
         })();
         result.unwrap_or_else(|error: fluxdb_core::Error| AppEvent::AiSettingsError(error.message))
+    }
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_home(tag: &str) -> PathBuf {
+        let home = std::env::temp_dir().join(format!(
+            "fluxdb-mcp-clients-{tag}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&home).expect("create home");
+        home
+    }
+
+    fn registration() -> McpRegistration {
+        McpRegistration {
+            server_name: DEFAULT_MCP_SERVER_NAME.into(),
+            url: "http://127.0.0.1:47821/mcp".into(),
+            token: "test-token".into(),
+        }
+    }
+
+    #[test]
+    fn registers_http_endpoint_and_detects_it_as_current() {
+        let home = temp_home("http");
+        let registration = registration();
+        let expected = registration.launch();
+
+        register(McpClientKind::Codex, &home, &registration).expect("register codex");
+        register(McpClientKind::ClaudeCode, &home, &registration).expect("register claude");
+
+        for client in McpClientKind::all() {
+            let current = client_launch(*client, &home)
+                .expect("read client config")
+                .expect("entry must exist");
+            assert_eq!(current, expected, "{} 应被识别为当前端点", client.key());
+        }
+
+        // 旧 stdio 字段必须被清掉，避免两套传输并存。
+        let claude = std::fs::read_to_string(McpClientKind::ClaudeCode.config_path(&home))
+            .expect("read claude config");
+        let claude: serde_json::Value = serde_json::from_str(&claude).expect("json");
+        let entry = &claude["mcpServers"][DEFAULT_MCP_SERVER_NAME];
+        assert_eq!(entry["type"], "http");
+        assert!(entry.get("command").is_none(), "不应残留 command");
+
+        unregister(McpClientKind::ClaudeCode, &home, DEFAULT_MCP_SERVER_NAME)
+            .expect("unregister claude");
+        assert!(
+            client_launch(McpClientKind::ClaudeCode, &home)
+                .expect("read after unregister")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn legacy_stdio_slot_is_takeover_ready() {
+        let home = temp_home("legacy");
+        std::fs::write(
+            McpClientKind::ClaudeCode.config_path(&home),
+            r#"{"mcpServers":{"fluxdb":{"type":"stdio","command":"/Applications/FluxDB.app/Contents/MacOS/fluxdb","args":["--mcp-server"]}}}"#,
+        )
+        .expect("seed legacy config");
+        assert!(
+            client_launch(McpClientKind::ClaudeCode, &home)
+                .expect("legacy own entry must not be treated as foreign")
+                .is_none()
+        );
+
+        // 显式安装必须能接管旧槽位，否则用户无法从 stdio 迁移到 HTTP。
+        register(McpClientKind::ClaudeCode, &home, &registration())
+            .expect("take over legacy slot");
+        let current = client_launch(McpClientKind::ClaudeCode, &home)
+            .expect("read after install")
+            .expect("http entry");
+        assert_eq!(current, registration().launch());
+    }
+
+    #[test]
+    fn rejects_non_loopback_or_header_breaking_endpoints() {
+        let mut registration = registration();
+        registration.url = "http://10.0.0.1:47821/mcp".into();
+        assert!(registration.validate().is_err(), "非回环地址必须拒绝");
+
+        registration.url = "http://127.0.0.1:47821/mcp".into();
+        registration.token = "a\r\nX: b".into();
+        assert!(registration.validate().is_err(), "令牌不得破坏请求头");
     }
 }
