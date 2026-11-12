@@ -19,6 +19,16 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 
 ## Latest changes
 
+### v0.1.18
+
+- **Server panels**: a connection's context menu opens a "Server" tab with overview, sessions and lock waits for MySQL / MariaDB / TiDB, PostgreSQL / KingbaseES, SQL Server, Oracle and Dameng; Redis adds clients and slow log, and MongoDB adds current operations and an in-session trend. Queries, sessions and clients can be terminated after confirmation, read-only connections are blocked at three layers, and panels refresh manually or every 5 seconds.
+- **Switch query scope**: the toolbar switches the target database and schema per connection type without opening a new query. Database switches clear results, running queries block switching, and PostgreSQL / KingbaseES return to the default schema with `RESET search_path`.
+- **Custom themes and fonts**: create, edit and delete themes with SQL highlight tokens, import Zed / VS Code themes (JSONC included), and set UI font/size and code font/size/line-height independently with live preview.
+- **Local MCP over in-app HTTP**: the stdio helper process is replaced by a loopback-only Streamable HTTP endpoint with a Bearer token, and existing client configs are taken over automatically.
+- **Improvements and fixes**: centralized SQLite migrations with `VACUUM INTO` backups and fail-closed version checks, unified SQLite / SQL Server / TiDB value and read-only semantics, numeric Redis database sorting, and exact negative DECIMAL rendering on SQL Server.
+
+[Full release notes](./release-notes/v0.1.18/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.17
 
 - **Structure compare and data transfer**: new connection context-menu entries for structure compare/sync and cross-connection data transfer. Tables are paired by `schema.name` and reported as missing, extra, modified or identical with side-by-side DDL, then the selected tables can be created, dropped or recreated. Transfer supports append and truncate-then-write, creates a missing target table, and reads/writes in pages with cancellation.
@@ -28,14 +38,6 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 - **Fixes**: corrected legacy MySQL TLS-mode migration, kept compatible filter values when switching fields, added missing backup/restore cancel strings, and fixed KingbaseES completion compatibility and a nested `block_on` in export pagination.
 
 [Full release notes](./release-notes/v0.1.17/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
-
-### v0.1.16
-
-- **KingbaseES support**: reuses the PostgreSQL connection path in PG compatibility mode for connection tests, database/schema and object browsing, SQL queries and completion, data viewing and editing, table structure viewing and design, and the users and privileges entry. The default port is 54321, with TLS, SSH, proxy and connection-string import.
-- **First-release limits**: PG compatibility mode only; native backup/restore and external `psql` / `ksql` entries are not supported yet; the users and privileges page reuses the PostgreSQL implementation and has not been separately regression-tested.
-- **Fixes**: fixed a panic when opening table DDL on Kingbase (`pg_sequence` numeric columns are declared `int2`; the query now casts to `::bigint`), and the connection-kind rail now reports 11 built-in drivers.
-
-[Full release notes](./release-notes/v0.1.16/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
 
 ## Why FluxDB
 
