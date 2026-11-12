@@ -33,6 +33,17 @@ dirs = "6"
 # 注册到 Codex 的 `~/.codex/config.toml`：保留用户既有格式与注释，只增量改 `[mcp_servers.*]`。
 toml_edit = "0.22"
 
+# 应用内 MCP 端点（Streamable HTTP）：服务端协议实现、异步运行时与 HTTP/1.1 监听。
+# hyper/http-body-util/tower-service 均已在 Cargo.lock（gpui/ureq 间接引入），无新增版本线。
+rmcp = { version = "1.8", default-features = false, features = ["server", "transport-streamable-http-server", "schemars"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server", "http1", "http2", "tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+tower-service = "0.3"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

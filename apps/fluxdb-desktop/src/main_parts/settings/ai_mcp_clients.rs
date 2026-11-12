@@ -1,16 +1,7 @@
 impl NavicatMain {
-    fn mcp_binary_path(&self) -> String {
-        self.ai_mcp_binary_override
-            .clone()
-            .or_else(|| fluxdb_app::bundled_mcp_binary().map(|p| p.display().to_string()))
-            .unwrap_or_default()
-    }
-
     fn refresh_mcp_install_status(&mut self, cx: &mut Context<Self>) {
         self.run_mcp_clients_command(
-            AppCommand::RefreshMcpClients {
-                binary_path: self.mcp_binary_path(),
-            },
+            AppCommand::RefreshMcpClients,
             "refresh".into(),
             None,
             cx,
@@ -18,14 +9,7 @@ impl NavicatMain {
     }
 
     fn sync_mcp_clients(&mut self, cx: &mut Context<Self>) {
-        self.run_mcp_clients_command(
-            AppCommand::SyncMcpClients {
-                binary_path: self.mcp_binary_path(),
-            },
-            "sync".into(),
-            None,
-            cx,
-        );
+        self.run_mcp_clients_command(AppCommand::SyncMcpClients, "sync".into(), None, cx);
     }
 
     fn set_mcp_client(&mut self, key: String, registered: bool, cx: &mut Context<Self>) {
@@ -33,7 +17,6 @@ impl NavicatMain {
             AppCommand::SetMcpClientRegistration {
                 client_key: key.clone(),
                 registered,
-                binary_path: self.mcp_binary_path(),
             },
             key,
             Some(if registered {
@@ -58,7 +41,6 @@ impl NavicatMain {
         }
         self.ai_mcp_clients_busy = Some(operation);
         self.ai_mcp_clients_error = None;
-        let binary_path = self.mcp_binary_path();
         let mut controller = self.controller.clone();
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -68,7 +50,7 @@ impl NavicatMain {
                     let snapshot = if matches!(event, AppEvent::AiMcpClientsLoaded(_)) {
                         event.clone()
                     } else {
-                        controller.dispatch(AppCommand::RefreshMcpClients { binary_path })
+                        controller.dispatch(AppCommand::RefreshMcpClients)
                     };
                     (event, snapshot)
                 })
@@ -244,22 +226,18 @@ fn ai_mcp_manual_connection(
             .child(div().flex().items_center().gap_2()
                 .child(div().text_size(ui_text_size(12.)).font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(colors.text).child(tr("app.ai.mcp.other_clients")))
-                .child(div().text_size(ui_text_size(11.)).text_color(colors.muted).child("MCP · stdio")))
+                .child(div().text_size(ui_text_size(11.)).text_color(colors.muted).child("MCP · HTTP")))
             .when_some(panel.mcp_connection_details.clone(), |this, details| {
-                let command = details.command_line;
+                let url = details.url;
                 let json = details.json_example;
                 this.child(div().flex().flex_wrap().items_center().gap_1()
-                    .child(Button::new("ai-mcp-copy-command").small().ghost().cursor_pointer()
-                        .disabled(busy).child(tr("app.ai.mcp.copy_command"))
-                        .tooltip(if cfg!(windows) {
-                            tr("app.ai.mcp.copy_powershell")
-                        } else {
-                            tr("app.ai.mcp.copy_start_command")
-                        })
+                    .child(Button::new("ai-mcp-copy-url").small().ghost().cursor_pointer()
+                        .disabled(busy).child(tr("app.ai.mcp.copy_url"))
+                        .tooltip(tr("app.ai.mcp.copy_url_hint"))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(command.clone()));
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(url.clone()));
                             this.show_message(
-                                tr("app.ai.mcp.command_copied"),
+                                tr("app.ai.mcp.url_copied"),
                                 AppMessageKind::Success,
                                 cx,
                             );
@@ -302,7 +280,7 @@ fn ai_mcp_manual_connection(
                         .p_3().font_family(PLATFORM_MONOSPACE_FONT).text_size(ui_text_size(11.))
                         .text_color(colors.text).child(details.json_example))
                     .child(div().id("ai-mcp-connection-command").min_w_0().text_ellipsis()
-                        .text_size(ui_text_size(11.)).text_color(colors.muted).child(details.command_line)
+                        .text_size(ui_text_size(11.)).text_color(colors.muted).child(details.url)
                         )))
         })
 }

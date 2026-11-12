@@ -186,7 +186,12 @@ impl AiSqlTarget {
                 )
             })?;
         let connection_id = id_text.parse::<u64>().map_err(|_| {
-            SqlExecError::new("invalid_target", format!("target 连接 ID 非法: {id_text}"))
+            SqlExecError::new(
+                "invalid_target",
+                format!(
+                    "target 连接 ID 非法: {id_text}；合法格式：conn:<id>[/db:<database>][/schema:<schema>]（id 为数字）"
+                ),
+            )
         })?;
         let mut database = None;
         let mut schema = None;
@@ -198,7 +203,9 @@ impl AiSqlTarget {
             } else if !part.is_empty() {
                 return Err(SqlExecError::new(
                     "invalid_target",
-                    format!("target 片段无法识别: {part}"),
+                    format!(
+                        "target 片段无法识别: {part}；合法格式：conn:<id>[/db:<database>][/schema:<schema>]"
+                    ),
                 ));
             }
         }
@@ -207,6 +214,17 @@ impl AiSqlTarget {
             database,
             schema,
         })
+    }
+}
+
+/// 连接在 target 未带库时可用的默认库（口径同连接器 `mysql_database_for_path`）。
+pub(crate) fn default_database(config: &fluxdb_core::ConnectionConfig) -> Option<&str> {
+    match &config.endpoint {
+        fluxdb_core::Endpoint::Tcp {
+            database: Some(database),
+            ..
+        } => Some(database.trim()).filter(|value| !value.is_empty()),
+        _ => None,
     }
 }
 
@@ -258,13 +276,13 @@ impl AiSqlObjectRef {
         if target.database.is_some() && database != target.database {
             return Err(SqlExecError::new(
                 "scope_mismatch",
-                "object_ref 的 database 超出当前 target 作用域",
+                "object_ref 的 database 超出当前 target 作用域；删除 object_ref.database，或让 target 的 db 与之一致",
             ));
         }
         if target.schema.is_some() && schema != target.schema {
             return Err(SqlExecError::new(
                 "scope_mismatch",
-                "object_ref 的 schema 超出当前 target 作用域",
+                "object_ref 的 schema 超出当前 target 作用域；删除 object_ref.schema，或让 target 的 schema 与之一致",
             ));
         }
         Ok(Self {

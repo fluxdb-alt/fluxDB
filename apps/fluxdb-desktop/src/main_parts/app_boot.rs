@@ -1,10 +1,4 @@
 fn main() {
-    let mut args = std::env::args().skip(1);
-    if args.next().as_deref() == Some("--mcp-server") {
-        // stdio 子进程不能进入桌面单实例守卫、日志初始化或 GPUI。
-        std::process::exit(fluxdb_mcp::run_cli(args));
-    }
-
     // 实例标识最先校验：单实例守卫与数据目录解析都依赖它，非法取值必须在此明确
     // 报错退出，否则用户只会看到后续步骤的"无法解析应用数据目录"而不知根因。
     if let Err(err) = fluxdb_storage::instance_profile() {
@@ -3576,7 +3570,6 @@ fn navicat_main_new(
         ai_mcp_connection_details: None,
         ai_mcp_connection_error: None,
         ai_mcp_details_open: false,
-        ai_mcp_binary_override: None,
         ai_agent_editor: None,
         ai_agent_editor_debug_pending: debug_ai_agent_draft_requested(),
         ai_agent_delete_just_removed: String::new(),

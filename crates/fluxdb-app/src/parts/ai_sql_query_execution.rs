@@ -341,7 +341,7 @@ fn validate_sql_scope(
     if visit_relations(statement, |name| out_of_scope(name, "relation")).is_break() {
         return Err(SqlExecError::new(
             "scope_mismatch",
-            "SQL 引用的 database/schema 超出当前 target 作用域",
+            "SQL 引用的 database/schema 超出当前 target 作用域；去掉 SQL 里的库/schema 前缀，或把 target 改写为 conn:<id>/db:<database>[/schema:<schema>]",
         ));
     }
     if visit_expressions(statement, |expr| {
@@ -355,7 +355,7 @@ fn validate_sql_scope(
     {
         return Err(SqlExecError::new(
             "scope_mismatch",
-            "SQL 调用的函数所在 database/schema 超出当前 target 作用域",
+            "SQL 调用的函数所在 database/schema 超出当前 target 作用域；去掉函数名前的库/schema 前缀，或把 target 改写为 conn:<id>/db:<database>[/schema:<schema>]",
         ));
     }
     Ok(())
@@ -514,6 +514,40 @@ fn receipt_from_with_ref(
     }
 }
 
+/// 无库上下文时的回退：返回可用库名，供模型拼出完整的 target 再检索。
+///
+/// 只读、有界；`list_objects(None)` 的契约就是列库，不额外过滤名称。
+fn list_databases(
+    connector: &dyn Connector,
+    target: &AiSqlTarget,
+    limit: u64,
+    should_cancel: &dyn Fn() -> bool,
+) -> Result<serde_json::Value, SqlExecError> {
+    if should_cancel() {
+        return Err(SqlExecError::new("cancelled", "检索已取消"));
+    }
+    let databases = connector
+        .list_objects(None)
+        .map_err(|error| SqlExecError::new("metadata_error", format!("库列表获取失败: {error}")))?;
+    if should_cancel() {
+        return Err(SqlExecError::new("cancelled", "检索已取消"));
+    }
+    let items: Vec<serde_json::Value> = databases
+        .iter()
+        .filter(|object| matches!(object.path.kind, ObjectKind::Database))
+        .take(limit as usize)
+        .map(|object| serde_json::json!({ "name": object.path.name, "kind": "database" }))
+        .collect();
+    Ok(serde_json::json!({
+        "objects": items,
+        "count": items.len(),
+        "next_step": format!(
+            "以上是该连接可见的数据库；检索表请把 target 写成 conn:{}/db:<database>",
+            target.connection_id.0
+        ),
+    }))
+}
+
 /// 元数据探索：按名字模糊搜索表/视图（只读、有界、可取消）。
 ///
 /// 复用连接器补全索引（各方言自己实现），不 dump 全库 DDL。
@@ -536,6 +570,15 @@ pub fn search_objects(
     let connector = fluxdb_connectors::connector_for(&config).map_err(|error| {
         SqlExecError::new("connector_error", format!("无法创建连接器: {error}"))
     })?;
+    // MySQL 家族 / SQL Server / MongoDB 的检索必须先有库上下文，连接又没配默认库时
+    // 直接返回库清单，让模型先选库，而不是拿到「缺少数据库上下文」这种无法行动的报错。
+    if target.database.is_none()
+        && default_database(&config).is_none()
+        && (config.kind.is_mysql_family()
+            || matches!(config.kind, DatabaseKind::SqlServer | DatabaseKind::MongoDb))
+    {
+        return list_databases(&*connector, target, bounded, should_cancel);
+    }
     let tables = connector
         .list_completion_tables_with_cancel(
             target.database.as_deref(),

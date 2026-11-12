@@ -1595,7 +1595,6 @@ pub enum AppCommand {
     /// 仅宿主用户确认后在后台派发；不作为 AI 工具直接开放。
     ApplyConfirmedConfig {
         proposal: Box<ConfigProposal>,
-        binary_path: String,
     },
     /// 刷新设置页「大模型 / 工具与MCP / 会话历史」列表（模型、Agent、插件实例、MCP Client、会话）。
     RefreshAiSettings,
@@ -1670,19 +1669,13 @@ pub enum AppCommand {
         profile_id: String,
         connection_id: i64,
     },
-    RefreshMcpClients {
-        binary_path: String,
-    },
+    RefreshMcpClients,
     SetMcpClientRegistration {
         client_key: String,
         registered: bool,
-        binary_path: String,
     },
     /// 只维护已显式选择且配置归属未改变的客户端。
-    SyncMcpClients {
-        /// Server 可执行文件绝对路径；有待维护的接入记录时必须可用。
-        binary_path: String,
-    },
+    SyncMcpClients,
     DeleteAiAgent {
         id: String,
         expected_revision: i64,

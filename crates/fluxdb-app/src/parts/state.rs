@@ -2411,6 +2411,12 @@ pub struct AppController {
     /// 各持一份 `AppController` 副本，`Arc<Mutex>` 让两边共享同一缓存与并发协调。
     /// 见 parts/er_catalog.rs。
     er_catalog: Arc<Mutex<crate::ErCatalogCache>>,
+    /// 应用内 MCP HTTP 端点：`None` 表示未启动。控制器会被克隆到 UI/后台线程，
+    /// 端点句柄必须共享，否则关闭开关时停不掉另一个副本里的监听。
+    mcp_http: Arc<Mutex<Option<crate::McpHttpHandle>>>,
+    /// 端点最近一次启动失败的原因（端口占用等）；成功启动或关闭开关时清空。
+    /// 用于设置页把「未开启」与「启动失败」区分开。
+    mcp_http_error: Arc<Mutex<Option<String>>>,
 }
 
 #[cfg(test)]

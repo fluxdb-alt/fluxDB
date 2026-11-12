@@ -474,7 +474,6 @@ impl NavicatMain {
         );
         let draft_before = self.settings_editor_draft.clone();
         let settings_before = self.controller.state().settings.clone();
-        let binary_path = self.mcp_binary_path();
         let mut controller = self.controller.clone();
         cx.notify();
         cx.spawn_in(_window, async move |view, cx| {
@@ -482,7 +481,6 @@ impl NavicatMain {
                 .background_spawn(async move {
                     let event = controller.dispatch(AppCommand::ApplyConfirmedConfig {
                         proposal: Box::new(proposal),
-                        binary_path,
                     });
                     let refresh_error = if matches!(event, AppEvent::ConfigProposalApplied(_)) {
                         match controller.dispatch(AppCommand::RefreshAiSettings) {

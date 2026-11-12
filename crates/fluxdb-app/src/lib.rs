@@ -185,6 +185,10 @@ include!("parts/ai_redis_keys.rs");
 include!("parts/ai_redis_read.rs");
 include!("parts/ai_redis_exec.rs");
 include!("parts/ai_mcp_server.rs");
+/// 应用内 MCP HTTP 端点（Streamable HTTP）：端点生命周期、令牌与协议适配。
+#[path = "parts/mcp_http_host.rs"]
+pub mod mcp_http_host;
+pub use mcp_http_host::*;
 include!("parts/ai_mcp_install.rs");
 include!("parts/ai_mcp_clients.rs");
 include!("parts/ai_scripted.rs");

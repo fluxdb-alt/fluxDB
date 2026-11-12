@@ -21,6 +21,58 @@ impl AppController {
         })
     }
 
+    /// 让应用内 MCP HTTP 端点与 Profile 的启用开关保持一致。
+    ///
+    /// 幂等：已启动且仍启用时不动；端口被占用等启动失败只记录日志并保持关闭，
+    /// 用户下次切换开关会重试。关闭时立即取消全部会话，释放端口。
+    pub(crate) fn sync_mcp_http_endpoint(&self) {
+        let Ok(storage) = self.ai_storage() else {
+            return;
+        };
+        let enabled = storage
+            .with_ai_connection(|conn| {
+                fluxdb_storage::ai_platform::mcp_server::load_server_profile(
+                    conn,
+                    crate::DEFAULT_MCP_PROFILE_ID,
+                )
+                .map(|profile| profile.is_some_and(|profile| profile.enabled))
+            })
+            .unwrap_or(false);
+        let Ok(mut slot) = self.mcp_http.lock() else {
+            return;
+        };
+        if !enabled {
+            if let Some(handle) = slot.take() {
+                handle.stop();
+            }
+            if let Ok(mut error) = self.mcp_http_error.lock() {
+                *error = None;
+            }
+            return;
+        }
+        if slot.is_some() {
+            return;
+        }
+        match crate::mcp_http_host::start(
+            storage,
+            crate::DEFAULT_MCP_PROFILE_ID,
+            crate::mcp_http_host::DEFAULT_MCP_HTTP_PORT,
+        ) {
+            Ok(handle) => {
+                *slot = Some(handle);
+                if let Ok(mut error) = self.mcp_http_error.lock() {
+                    *error = None;
+                }
+            }
+            Err(message) => {
+                tracing::warn!(%message, "MCP HTTP 端点未启动");
+                if let Ok(mut error) = self.mcp_http_error.lock() {
+                    *error = Some(message);
+                }
+            }
+        }
+    }
+
     /// 显式解密模型 API Key，供编辑弹框「眼睛」按钮按需调用。
     ///
     /// 明文只作为本函数返回值短暂存在：不进入 `AppEvent`/`AppState`、任何 DTO、

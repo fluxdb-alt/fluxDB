@@ -18,7 +18,6 @@ impl AppController {
     fn apply_confirmed_config(
         &mut self,
         proposal: &ConfigProposal,
-        binary_path: &str,
     ) -> fluxdb_core::Result<ConfigApplyOutcome> {
         let storage = self.ai_storage()?;
         let now = ai_chat_now();
@@ -47,7 +46,7 @@ impl AppController {
             now,
         )?;
         tx.commit().map_err(|e| config_error(&e.to_string()))?;
-        let outcome = self.execute_config_change(proposal, binary_path);
+        let outcome = self.execute_config_change(proposal);
         let status = match &outcome {
             Ok(ConfigApplyOutcome::ModelEditor { .. }) => "editing",
             Ok(_) => "applied",
@@ -70,7 +69,6 @@ impl AppController {
     fn execute_config_change(
         &mut self,
         proposal: &ConfigProposal,
-        binary_path: &str,
     ) -> fluxdb_core::Result<ConfigApplyOutcome> {
         let storage = self.ai_storage()?;
         let revision = || {
@@ -198,7 +196,6 @@ impl AppController {
                 AppCommand::SetMcpClientRegistration {
                     client_key: client_key.clone(),
                     registered: *registered,
-                    binary_path: binary_path.to_string(),
                 }
             }
         };
@@ -432,7 +429,7 @@ mod config_proposal_apply_tests {
                 .is_none()
         );
         let result = controller
-            .apply_confirmed_config(&proposal, "")
+            .apply_confirmed_config(&proposal)
             .expect("apply");
         assert_eq!(result, ConfigApplyOutcome::Applied);
         let saved = storage
@@ -448,7 +445,7 @@ mod config_proposal_apply_tests {
         assert_eq!(restricted.revision, 1);
         assert_eq!(
             controller
-                .apply_confirmed_config(&proposal, "")
+                .apply_confirmed_config(&proposal)
                 .expect_err("replay")
                 .message,
             "config_proposal_already_applied"
@@ -477,7 +474,7 @@ mod config_proposal_apply_tests {
         let stale = proposal(ConfigProposalKind::SettingUpdate(prefill), 0);
         assert_eq!(
             controller
-                .apply_confirmed_config(&stale, "")
+                .apply_confirmed_config(&stale)
                 .expect_err("stale")
                 .message,
             "config_proposal_stale"
@@ -492,7 +489,7 @@ mod config_proposal_apply_tests {
         );
         assert_eq!(
             controller
-                .apply_confirmed_config(&unknown, "")
+                .apply_confirmed_config(&unknown)
                 .expect_err("unknown")
                 .message,
             "config_proposal_invalid"
@@ -534,7 +531,7 @@ mod config_proposal_apply_tests {
             1,
         );
         controller
-            .apply_confirmed_config(&update, "")
+            .apply_confirmed_config(&update)
             .expect("update");
         let agent = storage
             .with_ai_connection(|conn| agents::load_agent(conn, &id))
@@ -557,7 +554,7 @@ mod config_proposal_apply_tests {
             .expect("reference");
         let delete = proposal(ConfigProposalKind::AgentDelete { id: id.clone() }, 2);
         controller
-            .apply_confirmed_config(&delete, "")
+            .apply_confirmed_config(&delete)
             .expect("soft delete");
         assert!(
             !storage
@@ -602,7 +599,7 @@ mod config_proposal_apply_tests {
             revision as u64,
         );
         let outcome = controller
-            .apply_confirmed_config(&update, "")
+            .apply_confirmed_config(&update)
             .expect("prepare");
         let ConfigApplyOutcome::ModelEditor {
             id: editor_id,

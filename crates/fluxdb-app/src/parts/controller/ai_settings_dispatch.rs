@@ -164,6 +164,8 @@ impl AppController {
                     storage.and_then(|st| save_ai_mcp_server_profile(&mut self.state, &st, input, now));
                 match result {
                     Ok((id, revision)) => {
+                        // 开关变化立即作用到应用内端点：开启则监听，关闭则停止并释放端口。
+                        self.sync_mcp_http_endpoint();
                         return AppEvent::AiMcpServerProfileSaved { id, revision };
                     }
                     Err(e) => return AppEvent::AiSettingsError(e.message),

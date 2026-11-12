@@ -98,8 +98,6 @@ struct NavicatMain {
     ai_mcp_connection_details: Option<fluxdb_app::McpConnectionDetails>,
     ai_mcp_connection_error: Option<String>,
     ai_mcp_details_open: bool,
-    /// 注册时使用的 `fluxdb-mcp` 二进制路径覆盖（测试注入；生产留空走 bundled_mcp_binary）。
-    ai_mcp_binary_override: Option<String>,
     /// 「Agent 配置」编辑草稿；`None` 表示未选中任何 Agent。
     ai_agent_editor: Option<AiAgentEditorState>,
     /// 调试用：首帧后自动打开 Agent 新建草稿（仅 debug 构建读取）。

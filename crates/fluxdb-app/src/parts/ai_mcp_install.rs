@@ -1,18 +1,19 @@
 // 本地 MCP Server 的「一键注册到各 CLI 客户端」（设计 §28.5、§39.1 派生能力）。
 //
-// 目标：像 Pencil 扩展那样，把 `fluxdb-mcp` 这个 stdio Server 注册进用户已安装的
+// 目标：把应用内的 MCP 端点（Streamable HTTP，`127.0.0.1`）注册进用户已安装的
 // Codex CLI / Claude Code 的**用户级配置**，用户无需手写 JSON/TOML。硬约束：
 // 1. **注册可控**：显式接入，启动只维护已选择且归属核对通过的客户端。
 // 2. **可回滚**：注册/卸载只增删本应用拥有的 server 条目，不触碰其它 server。
 // 3. **写入前备份、原子替换、失败不半写**：临时文件 + rename；备份保留原内容。
 // 4. **不猜格式**：目标文件若无法解析，报错退出，绝不改写未知结构。
-// 5. **不含秘密**：配置里只有二进制绝对路径、profile ID、config-root，无密码/API Key。
+// 5. **凭据最小化**：只写本机回环端点 URL 与应用自行签发的 Bearer 令牌，
+//    不含数据库密码或模型 API Key；令牌不得进入日志或对外事件。
 //
-// 传输固定 stdio（设计 §28.5：本地单机、无监听面、无需端口/token）。
+// 传输固定 Streamable HTTP（不再提供独立 stdio 进程）。
 
 // 本文件以 include! 引入 crate 根作用域：Path/PathBuf 已在 lib.rs 顶部导入。
 
-/// 已适配配置格式的 CLI 客户端；未适配的客户端使用通用 stdio 启动信息。
+/// 已适配配置格式的 CLI 客户端；未适配的客户端使用设置页给出的地址与示例手动接入。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum McpClientKind {
     /// Codex CLI：`~/.codex/config.toml` 的 `[mcp_servers.<name>]`。
@@ -75,50 +76,29 @@ pub const DEFAULT_MCP_SERVER_NAME: &str = "fluxdb";
 /// 默认 Server Profile ID（自动为“一键注册”创建一个只读、空授权的 Profile）。
 pub const DEFAULT_MCP_PROFILE_ID: &str = "fluxdb.local";
 
-/// 解析随桌面端一起打包的 `fluxdb-mcp` 二进制路径：优先取当前可执行文件的同级目录。
-///
-/// 未打包独立 Server 时复用桌面可执行文件的 `--mcp-server` 入口，不猜测开发机目录。
-pub fn bundled_mcp_binary() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    mcp_binary_next_to(&exe)
-}
-
-fn is_desktop_binary(exe: &Path) -> bool {
-    matches!(
-        exe.file_stem().and_then(|name| name.to_str()),
-        Some("fluxdb-desktop" | "fluxdb")
-    )
-}
-
-fn mcp_binary_next_to(exe: &Path) -> Option<PathBuf> {
-    let dir = exe.parent()?;
-    let candidate = dir.join(if cfg!(windows) {
-        "fluxdb-mcp.exe"
-    } else {
-        "fluxdb-mcp"
-    });
-    if candidate.is_file() {
-        Some(candidate)
-    } else {
-        (is_desktop_binary(exe) && exe.is_file()).then(|| exe.to_path_buf())
-    }
-}
-
-/// 一次注册的目标描述（由 UI 传入，全部为非敏感信息）。
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// 一次注册的目标描述（端点 URL 与令牌来自应用内运行的 MCP HTTP 服务）。
+#[derive(Clone, PartialEq, Eq)]
 pub struct McpRegistration {
     /// 写入客户端配置的 server 名（如 `fluxdb`）；同时用于 Claude 的 allow 规则前缀。
     pub server_name: String,
-    /// 独立 MCP Server 或支持 `--mcp-server` 的桌面程序绝对路径。
-    pub binary_path: PathBuf,
-    /// Server Profile ID。
-    pub profile_id: String,
-    /// 可选隔离配置根；`None` 表示 Server 复用平台默认存储目录。
-    pub config_root: Option<PathBuf>,
+    /// 应用内 MCP 端点 URL（`http://127.0.0.1:<port>/mcp`）。
+    pub url: String,
+    /// 本机回环端点 Bearer 令牌。
+    pub token: String,
+}
+
+impl std::fmt::Debug for McpRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpRegistration")
+            .field("server_name", &self.server_name)
+            .field("url", &self.url)
+            .field("token", &"<redacted>")
+            .finish()
+    }
 }
 
 impl McpRegistration {
-    /// 校验注册输入：路径必须绝对、名称/ID 非空、名称不含会破坏配置的字符。
+    /// 校验注册输入：只接受本机回环 HTTP 端点，名称与令牌不得破坏配置/请求头。
     pub fn validate(&self) -> fluxdb_core::Result<()> {
         let err = |message: &str| {
             fluxdb_core::Error::new(fluxdb_core::ErrorKind::Internal, message.to_string())
@@ -133,32 +113,40 @@ impl McpRegistration {
         {
             return Err(err("MCP server 名称仅允许字母、数字、连字符与下划线"));
         }
-        if self.profile_id.trim().is_empty() {
-            return Err(err("Server Profile ID 不能为空"));
+        let parsed = url::Url::parse(&self.url)
+            .map_err(|_| err("MCP 端点 URL 无效，请先开启本地 MCP 服务"))?;
+        let loopback = match parsed.host() {
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+            None => false,
+        };
+        if parsed.scheme() != "http" || !loopback {
+            return Err(err("MCP 端点必须是本机回环 HTTP 地址"));
         }
-        if !self.binary_path.is_absolute() {
-            return Err(err("fluxdb-mcp 必须使用绝对路径"));
-        }
-        if let Some(root) = &self.config_root {
-            if !root.is_absolute() {
-                return Err(err("config-root 必须是绝对路径"));
-            }
+        // 令牌进入 HTTP 头：拒绝空白与控制字符，避免头注入。
+        if self.token.is_empty()
+            || !self
+                .token
+                .chars()
+                .all(|c| c.is_ascii_graphic() && c != '"' && c != '\\')
+        {
+            return Err(err("MCP 访问令牌无效"));
         }
         Ok(())
     }
 
-    /// 该 server 在客户端里的启动命令与参数（stdio）。
-    fn command_args(&self) -> (String, Vec<String>) {
-        let mut args = Vec::new();
-        if is_desktop_binary(&self.binary_path) {
-            args.push("--mcp-server".to_string());
-        }
-        args.extend(["--server-profile".to_string(), self.profile_id.clone()]);
-        if let Some(root) = &self.config_root {
-            args.push("--config-root".to_string());
-            args.push(root.to_string_lossy().into_owned());
-        }
-        (self.binary_path.to_string_lossy().into_owned(), args)
+    /// 该 server 在客户端配置里的 HTTP 条目。
+    fn http_entry(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "http",
+            "url": self.url,
+            "headers": {"Authorization": self.authorization()},
+        })
+    }
+
+    fn authorization(&self) -> String {
+        format!("Bearer {}", self.token)
     }
 }
 
@@ -258,7 +246,6 @@ fn register_codex(
             ))
         })?
     };
-    let (command, args) = registration.command_args();
     let before = doc.to_string();
     if !doc.contains_key("mcp_servers") {
         doc["mcp_servers"] = toml_edit::Item::Table(toml_edit::Table::new());
@@ -272,12 +259,16 @@ fn register_codex(
     let entry = servers[&registration.server_name]
         .as_table_like_mut()
         .ok_or_else(|| write_error("同名 MCP 条目不是表，拒绝改写"))?;
-    entry.insert("command", toml_edit::value(command));
-    let mut arg_array = toml_edit::Array::new();
-    for arg in args {
-        arg_array.push(arg);
-    }
-    entry.insert("args", toml_edit::value(arg_array));
+    // 显式安装即接管同名槽位：清掉旧 stdio 启动字段，避免两套传输并存。
+    entry.remove("command");
+    entry.remove("args");
+    entry.insert("url", toml_edit::value(registration.url.clone()));
+    let mut headers = toml_edit::Table::new();
+    headers.insert(
+        "Authorization",
+        toml_edit::value(registration.authorization()),
+    );
+    entry.insert("http_headers", toml_edit::Item::Table(headers));
     let after = doc.to_string();
     if before == after {
         return Ok(ClientWriteFact {
@@ -359,7 +350,6 @@ fn register_claude(
     let object = root
         .as_object_mut()
         .ok_or_else(|| write_error("~/.claude.json 根不是对象，拒绝改写"))?;
-    let (command, args) = registration.command_args();
     let servers = object
         .entry("mcpServers")
         .or_insert_with(|| serde_json::json!({}));
@@ -368,11 +358,16 @@ fn register_claude(
         .ok_or_else(|| write_error("mcpServers 不是对象，拒绝改写"))?;
     let entry = servers
         .entry(registration.server_name.clone())
-        .or_insert_with(|| serde_json::json!({"type":"stdio"}))
+        .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or_else(|| write_error("同名 MCP 条目不是对象，拒绝改写"))?;
-    entry.insert("command".into(), serde_json::json!(command));
-    entry.insert("args".into(), serde_json::json!(args));
+    // 显式安装即接管同名槽位：清掉旧 stdio 启动字段，避免两套传输并存。
+    entry.remove("command");
+    entry.remove("args");
+    let http = registration.http_entry();
+    entry.insert("type".into(), http["type"].clone());
+    entry.insert("url".into(), http["url"].clone());
+    entry.insert("headers".into(), http["headers"].clone());
     // enabledMcpServers：Claude Code 用它记录启停；注册即可用。
     let enabled = object
         .entry("enabledMcpServers")
