@@ -126,6 +126,7 @@ fn pg_list_schemas(
                     kind: ObjectKind::Schema,
                 },
                 rows: None,
+                size_bytes: None,
                 modified_at: None,
                 comment: None,
                 stable: None,
@@ -157,9 +158,20 @@ fn pg_list_relations(
         let rows = session
             .client
             .query(
+                // 侧边栏只需量级判断，不能用 `pg_total_relation_size` 逐表打开关系文件：
+                // 几千张表会产生几千次文件/TOAST/索引统计。这里用 pg_class.relpages
+                //（堆 + 索引的页数统计）估算，纯 catalog 查询；精确大小由表详情页按需查。
                 "SELECT c.relname, c.relkind::text, c.reltuples::bigint, \
                         c.oid::bigint AS oid, \
-                        pg_catalog.obj_description(c.oid, 'pg_class') AS comment \
+                        pg_catalog.obj_description(c.oid, 'pg_class') AS comment, \
+                        CASE WHEN c.relkind IN ('r','p','m') THEN \
+                            (c.relpages::bigint + COALESCE(( \
+                                SELECT SUM(i.relpages)::bigint \
+                                FROM pg_catalog.pg_index x \
+                                JOIN pg_catalog.pg_class i ON i.oid = x.indexrelid \
+                                WHERE x.indrelid = c.oid \
+                            ), 0)) * current_setting('block_size')::bigint \
+                        END AS size_bytes \
                  FROM pg_catalog.pg_class c \
                  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
                  WHERE n.nspname = $1 AND c.relkind IN ('r','p','f','v','m') \
@@ -178,6 +190,11 @@ fn pg_list_relations(
             let reltuples: i64 = row.get(2);
             let oid: i64 = row.get(3);
             let comment: Option<String> = row.get(4);
+            // 0 通常表示尚未 ANALYZE 或空表，不展示以免把「未知」显示成真实占用。
+            let size_bytes = row
+                .get::<_, Option<i64>>(5)
+                .and_then(|value| u64::try_from(value).ok())
+                .filter(|value| *value > 0);
             let kind = if matches!(relkind.as_str(), "v" | "m") {
                 ObjectKind::View
             } else {
@@ -193,6 +210,7 @@ fn pg_list_relations(
                 },
                 // reltuples 是规划器估计值（ANALYZE 后才准），仅作树形行数提示。
                 rows: (reltuples >= 0).then_some(reltuples as u64),
+                size_bytes,
                 modified_at: None,
                 comment: comment.filter(|comment| !comment.trim().is_empty()),
                 // 表/视图稳定对象标识（PG pg_class.oid）：改名但同对象重绑的依据。

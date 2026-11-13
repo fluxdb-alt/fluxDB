@@ -54,6 +54,7 @@ fn mongo_list_collections(
                 kind,
             },
             rows: None,
+            size_bytes: None,
             modified_at: None,
             comment: None,
             stable: None,

@@ -18,6 +18,7 @@ fn tree(
         accent_color,
         None,
         None,
+        None,
         colors,
     )
 }
@@ -33,6 +34,7 @@ fn tree_with_highlight(
     accent_color: Option<gpui::Rgba>,
     selected_bg: Option<gpui::Rgba>,
     highlight_query: Option<&str>,
+    trailing: Option<String>,
     colors: UiColors,
 ) -> Div {
     let selected_bg = selected_bg.unwrap_or(colors.tree_selected);
@@ -105,6 +107,16 @@ fn tree_with_highlight(
                 .items_center()
                 .child(highlighted_tree_label(&text, highlight_query, colors)),
         )
+        .when_some(trailing, |this, trailing| {
+            // 表名先截断，大小列保持完整；弱化色避免和表名抢注意力。
+            this.child(
+                div()
+                    .flex_none()
+                    .text_size(ui_text_size(11.))
+                    .text_color(colors.muted)
+                    .child(trailing),
+            )
+        })
         .when(star, |this| {
             this.child(div().w(px(18.)).text_color(rgb(0xffc400)).child("★"))
         })
@@ -303,6 +315,7 @@ fn database_tree(
         selected.then_some(connection_color_rgba(connection_color_hex)),
         Some(connection_color_row_bg(connection_color_hex, colors)),
         None,
+        None,
         colors,
     )
     .debug_selector(move || {
@@ -391,7 +404,7 @@ fn schema_tree(
     };
     let schema_selector = schema.clone();
     tree_with_highlight(
-        arrow, "schema", schema, indent, selected, false, None, None, None, colors,
+        arrow, "schema", schema, indent, selected, false, None, None, None, None, colors,
     )
     .debug_selector(move || format!("schema-row:{schema_selector}"))
     .on_mouse_down(
@@ -679,6 +692,15 @@ fn table_folder_tree(
         )
 }
 
+/// 表大小标签：窄侧边栏、未知大小、0 字节都不占用行宽。
+/// 0 在 MySQL/PG 里既可能是空表，也可能是统计未更新，展示「0 B」会误导。
+fn table_size_label(object: &ObjectSummary, show: bool) -> Option<String> {
+    show.then_some(object.size_bytes)
+        .flatten()
+        .filter(|bytes| *bytes > 0)
+        .map(fluxdb_core::format_byte_length)
+}
+
 /// `is_mongo` 由调用方按连接类型给出：Mongo 集合走集合工作台，其余走数据编辑器。
 #[allow(clippy::too_many_arguments)]
 fn table_tree(
@@ -689,12 +711,14 @@ fn table_tree(
     pinned: bool,
     search_query: Option<&str>,
     is_mongo: bool,
+    show_size: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let path = object.path.clone();
     let menu_path = object.path.clone();
     let is_table = object.path.kind == ObjectKind::Table;
+    let size_label = table_size_label(object, show_size);
     let is_routine = matches!(
         object.path.kind,
         ObjectKind::Procedure | ObjectKind::Function
@@ -711,6 +735,7 @@ fn table_tree(
         selected.then_some(connection_color_rgba(connection_color_hex)),
         Some(connection_color_row_bg(connection_color_hex, colors)),
         search_query,
+        size_label,
         colors,
     )
     .debug_selector({
@@ -793,6 +818,7 @@ fn saved_query_tree(
         None,
         None,
         search_query,
+        None,
         colors,
     )
     .on_mouse_down(
@@ -1303,6 +1329,7 @@ fn connection_databases(connection: &ConnectionState, include_system: bool) -> V
                             kind: ObjectKind::Database,
                         },
                         rows: None,
+                        size_bytes: None,
                         modified_at: None,
                         comment: None,
                         stable: None,
@@ -1736,3 +1763,40 @@ fn app_theme_from_mode(mode: ThemeMode) -> AppTheme {
 
 /// sidebar 虚拟化拉平：连接浏览器树的行种类。
 use fluxdb_core::SidebarLayout;
+
+#[cfg(test)]
+mod table_size_label_tests {
+    use super::*;
+
+    fn table(size: Option<u64>) -> ObjectSummary {
+        ObjectSummary {
+            path: ObjectPath {
+                connection_id: ConnectionId(1),
+                database: Some("main".into()),
+                schema: None,
+                name: "orders".into(),
+                kind: ObjectKind::Table,
+            },
+            rows: None,
+            size_bytes: size,
+            modified_at: None,
+            comment: None,
+            stable: None,
+        }
+    }
+
+    #[test]
+    fn hidden_for_narrow_sidebar_and_unknown_size() {
+        assert_eq!(table_size_label(&table(Some(1024)), false), None);
+        assert_eq!(table_size_label(&table(None), true), None);
+        assert_eq!(table_size_label(&table(Some(0)), true), None);
+    }
+
+    #[test]
+    fn formats_known_size_with_existing_byte_formatter() {
+        assert_eq!(
+            table_size_label(&table(Some(1024 * 1024)), true).as_deref(),
+            Some("1.0 MB")
+        );
+    }
+}

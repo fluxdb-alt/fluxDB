@@ -71,6 +71,7 @@ fn redis_list_databases(
                 kind: ObjectKind::RedisDb,
             },
             rows,
+            size_bytes: None,
             modified_at: None,
             comment: None,
             stable: None,

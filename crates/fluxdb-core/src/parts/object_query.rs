@@ -26,6 +26,13 @@ pub struct ObjectPath {
 pub struct ObjectSummary {
     pub path: ObjectPath,
     pub rows: Option<u64>,
+    /// 表/物化视图占用空间（数据 + 索引，字节），供对象树快速识别大表。
+    ///
+    /// 取不到（视图、无权限、SQLite 等）或数据库只能给统计估算时按实际能力返回；
+    /// MySQL/TiDB 来自 `information_schema.tables` 统计值，PostgreSQL 为 catalog
+    /// `relpages` 估算，均可能滞后于真实占用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modified_at: Option<String>,
     pub comment: Option<String>,

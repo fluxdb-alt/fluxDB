@@ -45,6 +45,7 @@ fn database_object(connection_id: ConnectionId, database: &str) -> ObjectSummary
             kind: ObjectKind::Database,
         },
         rows: None,
+        size_bytes: None,
         modified_at: None,
         comment: None,
         stable: None,

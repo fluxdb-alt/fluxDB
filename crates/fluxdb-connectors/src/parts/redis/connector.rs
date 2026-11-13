@@ -529,6 +529,7 @@ impl Connector for RedisConnector {
                             kind: ObjectKind::RedisKey,
                         },
                         rows: None,
+                        size_bytes: None,
                         modified_at: None,
                         comment: None,
                         stable: None,
