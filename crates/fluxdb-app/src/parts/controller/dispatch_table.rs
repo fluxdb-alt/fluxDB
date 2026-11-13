@@ -234,6 +234,7 @@ impl AppController {
                     connection.objects.push(ObjectSummary {
                         path: copied,
                         rows: None,
+                        size_bytes: None,
                         modified_at: None,
                         comment: None,
                         stable: None,

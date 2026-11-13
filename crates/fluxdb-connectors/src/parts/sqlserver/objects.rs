@@ -42,6 +42,7 @@ fn sqlserver_list_databases(config: &ConnectionConfig) -> fluxdb_core::Result<Ve
                     kind: ObjectKind::Database,
                 },
                 rows: None,
+                size_bytes: None,
                 modified_at: None,
                 comment: None,
                 stable: None,
@@ -87,6 +88,7 @@ fn sqlserver_list_schemas(
                     kind: ObjectKind::Schema,
                 },
                 rows: None,
+                size_bytes: None,
                 modified_at: None,
                 comment: None,
                 stable: None,
@@ -115,7 +117,8 @@ fn sqlserver_list_relations(
             &mut client,
             "SELECT o.name, o.type, o.object_id, o.create_date, o.modify_date, \
                     CAST(ep.value AS nvarchar(max)) AS comment, \
-                    SUM(CASE WHEN p.index_id IN (0,1) THEN p.rows ELSE 0 END) AS row_count \
+                    SUM(CASE WHEN p.index_id IN (0,1) THEN p.rows ELSE 0 END) AS row_count, \
+                    SUM(p.used_page_count) * 8192 AS size_bytes \
              FROM sys.objects o \
              JOIN sys.schemas s ON s.schema_id = o.schema_id \
              LEFT JOIN sys.extended_properties ep \
@@ -139,20 +142,28 @@ fn sqlserver_list_relations(
         };
         let object_type = row.values.get(1).and_then(cell_text).unwrap_or_default();
         let stable = row.values.get(2).and_then(cell_i64).and_then(|value| u64::try_from(value).ok());
+        // `used_page_count` 覆盖堆/聚集索引与非聚集索引；SQL Server 页固定 8 KiB。
+        let size_bytes = row
+            .values
+            .get(7)
+            .and_then(cell_i64)
+            .and_then(|value| u64::try_from(value).ok())
+            .filter(|value| *value > 0);
         objects.push(ObjectSummary {
             path: ObjectPath {
                 connection_id: config.id,
                 database: Some(database.clone()),
                 schema: Some(schema.clone()),
                 name,
-            kind: match object_type.trim().to_ascii_uppercase().as_str() {
-                "V" => ObjectKind::View,
-                "P" | "PC" => ObjectKind::Procedure,
-                "FN" | "IF" | "TF" | "FS" | "FT" => ObjectKind::Function,
-                _ => ObjectKind::Table,
-            },
+                kind: match object_type.trim().to_ascii_uppercase().as_str() {
+                    "V" => ObjectKind::View,
+                    "P" | "PC" => ObjectKind::Procedure,
+                    "FN" | "IF" | "TF" | "FS" | "FT" => ObjectKind::Function,
+                    _ => ObjectKind::Table,
+                },
             },
             rows: row.values.get(6).and_then(cell_i64).and_then(|value| u64::try_from(value).ok()),
+            size_bytes,
             modified_at: row.values.get(4).and_then(cell_text),
             comment: row.values.get(5).and_then(cell_text),
             stable,

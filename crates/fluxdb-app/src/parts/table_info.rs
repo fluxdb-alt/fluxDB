@@ -253,6 +253,7 @@ mod replace_loaded_children_tests {
                 kind,
             },
             rows: None,
+            size_bytes: None,
             modified_at: None,
             comment: None,
             stable: None,

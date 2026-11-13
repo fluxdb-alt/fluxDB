@@ -21,6 +21,13 @@ impl SidebarRowKind {
     }
 }
 
+/// 侧边栏窄于该宽度时不展示表大小，避免表名只剩几个像素。
+const TABLE_SIZE_MIN_SIDEBAR_WIDTH: f32 = 220.;
+
+fn sidebar_table_size_visible(width: f32) -> bool {
+    width >= TABLE_SIZE_MIN_SIDEBAR_WIDTH
+}
+
 /// sidebar 拉平后的一行。只携带渲染各 `*_tree` 构建函数所需的「每行变量」，
 /// expanded/selected/pinned/connecting 等环境量在虚拟化闭包里按行现算，不落进缓存。
 #[derive(Clone, Debug)]
@@ -873,6 +880,7 @@ fn build_sidebar_row(
                 .unwrap_or("#9ca3af");
             let is_mongo = connection
                 .is_some_and(|connection| connection.config.kind == DatabaseKind::MongoDb);
+            let show_size = sidebar_table_size_visible(this.connection_browser_width);
             table_tree(
                 &object,
                 row.indent,
@@ -881,6 +889,7 @@ fn build_sidebar_row(
                 pinned,
                 search_opt,
                 is_mongo,
+                show_size,
                 colors,
                 cx,
             )
@@ -924,6 +933,19 @@ fn build_sidebar_row(
             .cursor_pointer()
             .into_any_element()
         }
+    }
+}
+
+#[cfg(test)]
+mod sidebar_table_size_tests {
+    use super::*;
+
+    #[test]
+    fn table_size_hidden_below_minimum_width() {
+        assert!(!sidebar_table_size_visible(180.0));
+        assert!(!sidebar_table_size_visible(219.9));
+        assert!(sidebar_table_size_visible(220.0));
+        assert!(sidebar_table_size_visible(600.0));
     }
 }
 

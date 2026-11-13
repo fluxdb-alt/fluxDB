@@ -136,6 +136,7 @@ fn sqlite_list_objects(
                     kind,
                 },
                 rows: None,
+                size_bytes: None,
                 modified_at: None,
                 comment: None,
                 stable: None,

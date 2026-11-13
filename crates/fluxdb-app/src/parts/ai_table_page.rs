@@ -1456,6 +1456,7 @@ mod ai_table_page_tests {
                     kind: ObjectKind::Database,
                 },
                 rows: None,
+                size_bytes: None,
                 modified_at: None,
                 comment: None,
                 stable: None,

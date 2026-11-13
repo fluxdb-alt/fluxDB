@@ -198,6 +198,7 @@ fn open_completion_view(
                     kind: ObjectKind::Table,
                 },
                 rows: None,
+                size_bytes: None,
                 modified_at: None,
                 comment: None,
                 stable: None,

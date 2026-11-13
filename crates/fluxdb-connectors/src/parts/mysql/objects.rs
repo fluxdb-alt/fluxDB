@@ -89,6 +89,12 @@ async fn mysql_table_objects(
         } else {
             ObjectKind::Table
         };
+        // 视图没有独立数据段，避免把 0 当成真实占用。
+        let size_bytes = (kind == ObjectKind::Table)
+            .then(|| row.try_get::<Option<i64>, _>("size_bytes").map_err(mysql_error))
+            .transpose()?
+            .flatten()
+            .and_then(|value| u64::try_from(value).ok());
 
         objects.push(ObjectSummary {
             path: ObjectPath {
@@ -99,6 +105,7 @@ async fn mysql_table_objects(
                 kind,
             },
             rows,
+            size_bytes,
             modified_at: modified_at.filter(|value| !value.is_empty()),
             comment: comment.filter(|comment| !comment.is_empty()),
             stable: None,
@@ -138,6 +145,7 @@ async fn mysql_show_table_objects(
                 kind,
             },
             rows: None,
+            size_bytes: None,
             modified_at: None,
             comment: None,
             stable: None,
@@ -157,6 +165,7 @@ fn mysql_table_objects_query() -> &'static str {
         CAST(table_name AS CHAR) AS object_name,
         CAST(table_type AS CHAR) AS object_type,
         CAST(table_rows AS SIGNED) AS row_count,
+        CAST(COALESCE(data_length, 0) + COALESCE(index_length, 0) AS SIGNED) AS size_bytes,
         CAST(update_time AS CHAR) AS modified_at,
         CAST(table_comment AS CHAR) AS object_comment
     FROM information_schema.tables
