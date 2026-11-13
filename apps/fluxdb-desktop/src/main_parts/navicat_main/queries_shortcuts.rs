@@ -815,6 +815,11 @@ impl NavicatMain {
             self.close_command_palette(window, cx);
             return;
         }
+        if self.tab_switcher.take().is_some() {
+            self.focus_handle.focus(window, cx);
+            cx.notify();
+            return;
+        }
         // 服务器面板的终止/维护确认框优先级最高。
         if self.server_kill_confirm.take().is_some()
             || self.server_maintenance_confirm.take().is_some()

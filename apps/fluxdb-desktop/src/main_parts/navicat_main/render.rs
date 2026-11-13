@@ -1,5 +1,15 @@
 impl Render for NavicatMain {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.tab_switcher.is_some() && self.tab_switcher_scroll_pending {
+            let children = self.tab_switcher_scroll.children_count();
+            if children == 0 {
+                cx.notify();
+            } else {
+                self.tab_switcher_scroll
+                    .scroll_to_item(self.tab_switcher_selected.min(children - 1));
+                self.tab_switcher_scroll_pending = false;
+            }
+        }
         let window_title = tr("app.window_title");
         if window.window_title() != window_title {
             window.set_window_title(&window_title);
@@ -253,6 +263,13 @@ impl Render for NavicatMain {
             .on_action(cx.listener(Self::command_palette_next_scope))
             .on_action(cx.listener(Self::command_palette_previous_scope))
             .on_action(cx.listener(Self::command_palette_cancel))
+            .on_action(cx.listener(Self::next_tab_action))
+            .on_action(cx.listener(Self::previous_tab_action))
+            .on_action(cx.listener(Self::open_tab_switcher_action))
+            .on_action(cx.listener(Self::tab_switcher_next_action))
+            .on_action(cx.listener(Self::tab_switcher_previous_action))
+            .on_action(cx.listener(Self::tab_switcher_confirm_action))
+            .on_action(cx.listener(Self::tab_switcher_cancel_action))
             .on_action(cx.listener(Self::copy_data_selection))
             .on_action(cx.listener(Self::copy_footer_sql_selection))
             .on_action(cx.listener(Self::delete_connection_shortcut))
@@ -369,14 +386,10 @@ impl Render for NavicatMain {
                                     .when_some(self.tab_switcher, |this, kind| {
                                         this.child(tab_switcher_popup(
                                             kind,
-                                            &state,
-                                            active_scope.as_ref(),
+                                            self,
                                             self.tab_switcher_search_input.clone(),
                                             &self.tab_switcher_search,
                                             two_level_tabs,
-                                            &self.workspace_tab_order,
-                                            &self.tab_order,
-                                            &self.pinned_tabs,
                                             colors,
                                             cx,
                                         ))

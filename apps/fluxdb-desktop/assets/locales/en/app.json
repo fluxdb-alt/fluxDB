@@ -3541,6 +3541,12 @@
     "quick_open_table_detail": "Search tables in the current database and open one",
     "command_palette": "Command palette",
     "command_palette_detail": "Search commands, tables, queries, history and connections",
+    "next_tab": "Next tab",
+    "next_tab_detail": "Open the tab switcher and move to the next tab in the current workspace",
+    "previous_tab": "Previous tab",
+    "previous_tab_detail": "Open the tab switcher and move to the previous tab in the current workspace",
+    "tab_switcher": "Switch tab",
+    "tab_switcher_detail": "Search and switch to a tab in the current workspace",
     "copy_data": "Copy data",
     "copy_data_detail": "Copy the selected table data"
   },

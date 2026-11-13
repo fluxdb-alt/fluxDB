@@ -79,6 +79,18 @@ fn shortcut_text(definition: &ShortcutDefinition) -> (SharedString, SharedString
             tr("app.shortcuts.command_palette"),
             tr("app.shortcuts.command_palette_detail"),
         ),
+        "app.next_tab" => (
+            tr("app.shortcuts.next_tab"),
+            tr("app.shortcuts.next_tab_detail"),
+        ),
+        "app.previous_tab" => (
+            tr("app.shortcuts.previous_tab"),
+            tr("app.shortcuts.previous_tab_detail"),
+        ),
+        "app.tab_switcher" => (
+            tr("app.shortcuts.tab_switcher"),
+            tr("app.shortcuts.tab_switcher_detail"),
+        ),
         "query.copy_data" => (
             tr("app.shortcuts.copy_data"),
             tr("app.shortcuts.copy_data_detail"),
@@ -340,6 +352,9 @@ fn shortcut_is_application(action: ShortcutAction) -> bool {
             | ShortcutAction::CloseCurrentTab
             | ShortcutAction::ToggleConnectionBrowser
             | ShortcutAction::CommandPalette
+            | ShortcutAction::NextTab
+            | ShortcutAction::PreviousTab
+            | ShortcutAction::OpenTabSwitcher
     )
 }
 

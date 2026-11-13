@@ -1495,11 +1495,16 @@ fn navicat_main_new(
     );
     let tab_switcher_search_subscription = cx.subscribe(
         &tab_switcher_search_input,
-        |this: &mut NavicatMain, input, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
+        |this: &mut NavicatMain, input, event: &InputEvent, cx| match event {
+            InputEvent::Change => {
                 this.tab_switcher_search = input.read(cx).value().to_string();
+                this.tab_switcher_selected = 0;
+                this.tab_switcher_scroll.scroll_to_item(0);
+                this.tab_switcher_scroll_pending = true;
                 cx.notify();
             }
+            InputEvent::PressEnter { .. } => {}
+            InputEvent::Focus | InputEvent::Blur => {}
         },
     );
     let query_history_search_subscription = cx.subscribe(
@@ -3123,6 +3128,10 @@ fn navicat_main_new(
         _tab_switcher_search_subscription: tab_switcher_search_subscription,
         tab_switcher: None,
         tab_switcher_search: String::new(),
+        tab_switcher_selected: 0,
+        tab_switcher_scroll: ScrollHandle::new(),
+        tab_switcher_scroll_pending: false,
+        tab_switcher_commit_on_ctrl_release: false,
         query_history_search_input,
         _query_history_search_subscription: query_history_search_subscription,
         query_history_search: String::new(),

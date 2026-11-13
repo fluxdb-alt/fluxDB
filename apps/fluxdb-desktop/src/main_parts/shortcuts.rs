@@ -22,6 +22,9 @@ pub(crate) enum ShortcutAction {
     OpenQueryHistoryQuickSearch,
     QuickOpenTable,
     CommandPalette,
+    NextTab,
+    PreviousTab,
+    OpenTabSwitcher,
     CopyDataSelection,
 }
 
@@ -44,6 +47,36 @@ pub(crate) const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         macos: "cmd-shift-p",
         other: "ctrl-shift-p",
         action: ShortcutAction::CommandPalette,
+        context: None,
+    },
+    ShortcutDefinition {
+        id: "app.next_tab",
+        title: "Next tab",
+        detail: "Switch to the next tab in the current workspace",
+        icon: AppIcon::ChevronRight,
+        macos: "ctrl-tab",
+        other: "ctrl-tab",
+        action: ShortcutAction::NextTab,
+        context: None,
+    },
+    ShortcutDefinition {
+        id: "app.previous_tab",
+        title: "Previous tab",
+        detail: "Switch to the previous tab in the current workspace",
+        icon: AppIcon::ChevronLeft,
+        macos: "ctrl-shift-tab",
+        other: "ctrl-shift-tab",
+        action: ShortcutAction::PreviousTab,
+        context: None,
+    },
+    ShortcutDefinition {
+        id: "app.tab_switcher",
+        title: "Switch tab",
+        detail: "Search and switch to a tab in the current workspace",
+        icon: AppIcon::List,
+        macos: "cmd-shift-e",
+        other: "ctrl-shift-e",
+        action: ShortcutAction::OpenTabSwitcher,
         context: None,
     },
     ShortcutDefinition {
@@ -225,6 +258,13 @@ pub(crate) fn bind_shortcut(
         }
         ShortcutAction::CommandPalette => {
             cx.bind_keys([KeyBinding::new(spec, CommandPalette, context)])
+        }
+        ShortcutAction::NextTab => cx.bind_keys([KeyBinding::new(spec, NextTab, context)]),
+        ShortcutAction::PreviousTab => {
+            cx.bind_keys([KeyBinding::new(spec, PreviousTab, context)])
+        }
+        ShortcutAction::OpenTabSwitcher => {
+            cx.bind_keys([KeyBinding::new(spec, OpenTabSwitcher, context)])
         }
         ShortcutAction::CopyDataSelection => {
             cx.bind_keys([KeyBinding::new(spec, CopyDataSelection, context)])

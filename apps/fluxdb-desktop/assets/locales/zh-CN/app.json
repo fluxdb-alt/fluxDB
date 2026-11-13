@@ -3541,6 +3541,12 @@
     "quick_open_table_detail": "搜索当前库中的表并直接打开",
     "command_palette": "统一命令面板",
     "command_palette_detail": "搜索命令、表、查询、历史和连接",
+    "next_tab": "下一个标签页",
+    "next_tab_detail": "打开标签页切换器并移到当前工作区的下一个标签页",
+    "previous_tab": "上一个标签页",
+    "previous_tab_detail": "打开标签页切换器并移到当前工作区的上一个标签页",
+    "tab_switcher": "切换标签页",
+    "tab_switcher_detail": "搜索并切换到当前工作区的标签页",
     "copy_data": "复制数据",
     "copy_data_detail": "复制当前选中的表格数据"
   },

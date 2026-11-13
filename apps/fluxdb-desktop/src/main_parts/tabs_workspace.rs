@@ -259,6 +259,54 @@ fn active_first_level_scope(state: &AppState) -> Option<FirstLevelScope> {
     }
 }
 
+fn preferred_tab_switcher_kind(state: &AppState) -> TabSwitcherKind {
+    match active_first_level_scope(state) {
+        Some(FirstLevelScope::Database(_)) | Some(FirstLevelScope::RedisConnection(_)) => {
+            TabSwitcherKind::Tables
+        }
+        _ => TabSwitcherKind::Databases,
+    }
+}
+
+fn tab_switcher_entries_for_app(
+    app: &NavicatMain,
+    kind: TabSwitcherKind,
+    search: &str,
+) -> Vec<TabSwitcherEntry> {
+    let state = app.controller.state();
+    let active_scope = active_first_level_scope(state);
+    tab_switcher_entries(
+        kind,
+        state,
+        active_scope.as_ref(),
+        search,
+        &app.workspace_tab_order,
+        &app.tab_order,
+        &app.pinned_tabs,
+    )
+}
+
+fn tab_switcher_entries(
+    kind: TabSwitcherKind,
+    state: &AppState,
+    active_scope: Option<&FirstLevelScope>,
+    search: &str,
+    workspace_tab_order: &[FirstLevelScope],
+    tab_order: &[TabId],
+    pinned_tabs: &BTreeSet<TabId>,
+) -> Vec<TabSwitcherEntry> {
+    match kind {
+        TabSwitcherKind::Databases => first_level_tab_entries(
+            &order_first_level_tab_groups(first_level_tab_groups(state), workspace_tab_order),
+            active_scope,
+            search,
+        ),
+        TabSwitcherKind::Tables => {
+            table_tab_entries(state, active_scope, search, tab_order, pinned_tabs)
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum TabKindDiscriminant {
     DataEditor,
@@ -558,7 +606,8 @@ fn first_level_tab_entries(
                 }
                 Some(TabSwitcherEntry {
                     id: *first_tab_id,
-                    title: format!("{database} {connection_name}"),
+                    title: database.clone(),
+                    detail: Some(connection_name.clone()),
                     active: matches!(
                         active_scope,
                         Some(FirstLevelScope::Database(active)) if active == scope
@@ -578,6 +627,7 @@ fn first_level_tab_entries(
                 Some(TabSwitcherEntry {
                     id: *first_tab_id,
                     title: connection_name.clone(),
+                    detail: Some(tr("app.tabs.redis").to_string()),
                     active: matches!(
                         active_scope,
                         Some(FirstLevelScope::RedisConnection(active))
@@ -594,6 +644,7 @@ fn first_level_tab_entries(
                 Some(TabSwitcherEntry {
                     id: *first_tab_id,
                     title: settings_title.to_string(),
+                    detail: None,
                     active: matches!(active_scope, Some(FirstLevelScope::Settings)),
                     icon: AppIcon::Settings,
                 })
@@ -606,6 +657,7 @@ fn first_level_tab_entries(
                 Some(TabSwitcherEntry {
                     id: *first_tab_id,
                     title: title.to_string(),
+                    detail: None,
                     active: matches!(active_scope, Some(FirstLevelScope::AiChat)),
                     icon: AppIcon::Bot,
                 })
@@ -632,11 +684,27 @@ fn table_tab_entries(
         .into_iter()
         .map(|tab| TabSwitcherEntry {
             id: tab.id,
-            title: tab_title(tab, true),
+            title: if tab.dirty {
+                format!("* {}", localized_tab_title(tab))
+            } else {
+                localized_tab_title(tab)
+            },
+            detail: tab_switcher_tab_detail(state, tab),
             active: state.active_tab == Some(tab.id),
             icon: AppIcon::Table,
         })
         .collect()
+}
+
+fn tab_switcher_tab_detail(state: &AppState, tab: &TabState) -> Option<String> {
+    let workspace = tab.workspace()?;
+    let connection = state
+        .connections
+        .iter()
+        .find(|connection| connection.config.id == workspace.connection_id)
+        .map(|connection| connection.config.name.clone())
+        .unwrap_or_else(|| format!("#{}", workspace.connection_id.0));
+    Some(format!("{connection} / {}", workspace.database))
 }
 
 fn tab_matches_workspace_scope(tab: &TabState, active_scope: Option<&FirstLevelScope>) -> bool {
@@ -950,39 +1018,52 @@ fn tab_switcher_button(
 
 fn tab_switcher_popup(
     kind: TabSwitcherKind,
-    state: &AppState,
-    active_scope: Option<&FirstLevelScope>,
+    app: &NavicatMain,
     search_input: Entity<InputState>,
     search: &str,
     two_level: bool,
-    workspace_tab_order: &[FirstLevelScope],
-    tab_order: &[TabId],
-    pinned_tabs: &BTreeSet<TabId>,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let entries = match kind {
-        TabSwitcherKind::Databases => first_level_tab_entries(
-            &order_first_level_tab_groups(first_level_tab_groups(state), workspace_tab_order),
-            active_scope,
-            search,
-        ),
-        TabSwitcherKind::Tables => {
-            table_tab_entries(state, active_scope, search, tab_order, pinned_tabs)
-        }
+    let state = app.controller.state();
+    let active_scope = active_first_level_scope(state);
+    let entries = tab_switcher_entries(
+        kind,
+        state,
+        active_scope.as_ref(),
+        search,
+        &app.workspace_tab_order,
+        &app.tab_order,
+        &app.pinned_tabs,
+    );
+    let selected = app.tab_switcher_selected;
+    let scroll = &app.tab_switcher_scroll;
+    let selected = if entries.is_empty() {
+        0
+    } else {
+        selected.min(entries.len() - 1)
+    };
+    let list_height = if entries.is_empty() {
+        32.
+    } else {
+        (entries.len() as f32 * 30.
+            + entries.len().saturating_sub(1) as f32 * 4.)
+            .min(330.)
     };
     let top = tab_switcher_popup_top(kind, two_level);
 
     let mut list = div()
-        .max_h(px(330.))
-        .overflow_y_scrollbar()
+        .id("tab-switcher-scroll")
+        .size_full()
+        .track_scroll(scroll)
+        .overflow_y_scroll()
         .flex()
         .flex_col()
         .gap_1();
     if entries.is_empty() {
         list = list.child(
             div()
-                .h(px(38.))
+                .h(px(32.))
                 .px_2()
                 .flex()
                 .items_center()
@@ -991,8 +1072,13 @@ fn tab_switcher_popup(
                 .child(tr("app.tabs.no_match")),
         );
     } else {
-        for entry in entries {
-            list = list.child(tab_switcher_item(entry, colors, cx));
+        for (index, entry) in entries.into_iter().enumerate() {
+            list = list.child(tab_switcher_item(
+                entry,
+                index == selected,
+                colors,
+                cx,
+            ));
         }
     }
 
@@ -1000,10 +1086,10 @@ fn tab_switcher_popup(
         .absolute()
         .top(px(top))
         .right(px(10.))
-        .w(px(360.))
+        .w(px(520.))
         .rounded(colors.radius_lg)
         .border_1()
-        .border_color(colors.border)
+        .border_color(colors.border_soft)
         .bg(menu_surface_bg(colors))
         .occlude()
         .shadow(vec![box_shadow(
@@ -1016,11 +1102,63 @@ fn tab_switcher_popup(
         .p_2()
         .flex()
         .flex_col()
-        .gap_2()
+        .gap_1()
+        .key_context("TabSwitcher")
+        .debug_selector(|| "tab-switcher".into())
+        .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
+            if this.tab_switcher_commit_on_ctrl_release
+                && matches!(event.keystroke.key.as_str(), "control" | "ctrl")
+                && this.tab_switcher.is_some()
+            {
+                this.confirm_tab_switcher(cx);
+                this.focus_handle.focus(window, cx);
+                cx.notify();
+                cx.stop_propagation();
+            }
+        }))
+        .on_modifiers_changed(cx.listener(
+            |this, event: &gpui::ModifiersChangedEvent, window, cx| {
+                if this.tab_switcher_commit_on_ctrl_release
+                    && !event.modifiers.control
+                    && this.tab_switcher.is_some()
+                {
+                    this.confirm_tab_switcher(cx);
+                    this.focus_handle.focus(window, cx);
+                    cx.notify();
+                }
+            },
+        ))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-        .child(Input::new(&search_input).small())
-        .child(list)
+        .child(
+            div()
+                .h(px(30.))
+                .px_2()
+                .border_b_1()
+                .border_color(colors.border_soft)
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(app_icon(AppIcon::Search, 12., colors.muted))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .child(
+                            Input::new(&search_input)
+                                .appearance(false)
+                                .focus_bordered(false)
+                                .small(),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .relative()
+                .h(px(list_height))
+                .child(list)
+                .child(div().absolute().inset_0().child(Scrollbar::vertical(scroll))),
+        )
 }
 
 fn tab_switcher_popup_top(kind: TabSwitcherKind, two_level: bool) -> f32 {
@@ -1033,20 +1171,25 @@ fn tab_switcher_popup_top(kind: TabSwitcherKind, two_level: bool) -> f32 {
 
 fn tab_switcher_item(
     entry: TabSwitcherEntry,
+    selected: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
+    let active = entry.active;
     div()
         .id(("tab-switcher-item", entry.id.0))
-        .h(px(38.))
-        .rounded(colors.radius_lg)
+        .h(px(30.))
+        .flex_none()
+        .rounded(px(4.))
         .px_2()
         .cursor_pointer()
         .flex()
         .items_center()
-        .gap_3()
+        .gap_2()
         .text_color(colors.text)
-        .bg(if entry.active {
+        .bg(if selected {
+            colors.tree_selected
+        } else if entry.active {
             colors.hover
         } else {
             gpui::Rgba {
@@ -1068,19 +1211,50 @@ fn tab_switcher_item(
         .child(app_icon_box(
             entry.icon,
             20.,
-            16.,
+            13.,
             tab_switcher_icon_color(entry.icon, colors),
         ))
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.))
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_ellipsis()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(entry.title),
+                .flex()
+                .items_baseline()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(ui_text_size(12.))
+                        .line_height(ui_text_size(16.))
+                        .font_weight(if selected || active {
+                            gpui::FontWeight::SEMIBOLD
+                        } else {
+                            gpui::FontWeight::NORMAL
+                        })
+                        .text_color(colors.text)
+                        .whitespace_nowrap()
+                        .max_w(px(300.))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(entry.title),
+                )
+                .when_some(entry.detail, |this, detail| {
+                    this.child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .text_size(ui_text_size(10.5))
+                            .line_height(ui_text_size(15.))
+                            .text_color(colors.muted)
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(detail),
+                    )
+                }),
         )
+        .when(active, |this| {
+            this.child(app_icon(AppIcon::Check, 12., colors.success))
+        })
 }
 
 fn tab_switcher_icon_color(icon: AppIcon, colors: UiColors) -> gpui::Rgba {
