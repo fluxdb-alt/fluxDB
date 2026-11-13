@@ -6,6 +6,64 @@
     "no_scope": "请先打开一个数据库",
     "not_loaded": "当前库还没有加载表，请先在侧边栏展开"
   },
+  "command_palette": {
+    "placeholder": "搜索命令、表、查询、历史和连接…",
+    "empty": "没有匹配项",
+    "scope": {
+      "all": "全部",
+      "commands": "命令",
+      "objects": "对象",
+      "queries": "查询",
+      "history": "历史",
+      "connections": "连接"
+    },
+    "badge": {
+      "command": "命令",
+      "table": "表",
+      "view": "视图",
+      "query": "查询",
+      "history": "历史",
+      "connection": "连接",
+      "current": "当前连接"
+    },
+    "command": {
+      "new_query": "新建查询",
+      "new_query_detail": "打开一个新的 SQL 查询标签页",
+      "new_connection": "新建连接",
+      "new_connection_detail": "打开新建连接窗口",
+      "refresh": "刷新",
+      "refresh_detail": "刷新当前连接、对象或数据页",
+      "save_or_apply": "保存 / 应用",
+      "save_or_apply_detail": "保存查询或应用当前数据修改",
+      "close_tab": "关闭当前标签页",
+      "close_tab_detail": "关闭当前打开的标签页",
+      "toggle_sidebar": "切换连接侧边栏",
+      "toggle_sidebar_detail": "显示或隐藏左侧连接浏览器",
+      "quick_open_table": "快速打开表",
+      "quick_open_table_detail": "搜索当前库中的表并直接打开",
+      "query_history": "SQL 历史快搜",
+      "query_history_detail": "搜索并重用历史查询",
+      "open_settings": "打开设置",
+      "open_settings_detail": "打开应用设置",
+      "toggle_theme": "切换明暗主题",
+      "toggle_theme_detail": "在深色和浅色主题之间切换",
+      "search_data": "搜索数据",
+      "search_data_detail": "打开当前数据页的搜索面板"
+    },
+    "connection": {
+      "connected": "已连接",
+      "disconnected": "未连接",
+      "unknown": "连接 %{id}",
+      "no_tabs": "连接已打开，但没有可切换的标签页"
+    },
+    "hint": {
+      "select": "选择",
+      "open": "打开 / 执行",
+      "scope": "切换范围",
+      "close": "关闭"
+    },
+    "count": "共 %{count} 项"
+  },
   "menu": {
     "open": "打开",
     "quit": "退出"
@@ -3481,6 +3539,8 @@
     "search_history_detail": "快速搜索并重用历史查询",
     "quick_open_table": "快速打开表",
     "quick_open_table_detail": "搜索当前库中的表并直接打开",
+    "command_palette": "统一命令面板",
+    "command_palette_detail": "搜索命令、表、查询、历史和连接",
     "copy_data": "复制数据",
     "copy_data_detail": "复制当前选中的表格数据"
   },

@@ -6,6 +6,64 @@
     "no_scope": "Open a database first",
     "not_loaded": "No tables are loaded for this database yet. Expand it in the sidebar first."
   },
+  "command_palette": {
+    "placeholder": "Search commands, tables, queries, history and connections…",
+    "empty": "No matching results",
+    "scope": {
+      "all": "All",
+      "commands": "Commands",
+      "objects": "Objects",
+      "queries": "Queries",
+      "history": "History",
+      "connections": "Connections"
+    },
+    "badge": {
+      "command": "Command",
+      "table": "Table",
+      "view": "View",
+      "query": "Query",
+      "history": "History",
+      "connection": "Connection",
+      "current": "Current"
+    },
+    "command": {
+      "new_query": "New query",
+      "new_query_detail": "Open a new SQL query tab",
+      "new_connection": "New connection",
+      "new_connection_detail": "Open the new connection window",
+      "refresh": "Refresh",
+      "refresh_detail": "Refresh the current connection, object or data page",
+      "save_or_apply": "Save / Apply",
+      "save_or_apply_detail": "Save the query or apply current data changes",
+      "close_tab": "Close current tab",
+      "close_tab_detail": "Close the currently open tab",
+      "toggle_sidebar": "Toggle connection sidebar",
+      "toggle_sidebar_detail": "Show or hide the connection browser",
+      "quick_open_table": "Quick open table",
+      "quick_open_table_detail": "Search tables in the current database and open one",
+      "query_history": "SQL history quick search",
+      "query_history_detail": "Search and reuse past queries",
+      "open_settings": "Open settings",
+      "open_settings_detail": "Open application settings",
+      "toggle_theme": "Toggle light/dark theme",
+      "toggle_theme_detail": "Switch between the dark and light themes",
+      "search_data": "Search data",
+      "search_data_detail": "Open the search panel for the current data page"
+    },
+    "connection": {
+      "connected": "Connected",
+      "disconnected": "Disconnected",
+      "unknown": "Connection %{id}",
+      "no_tabs": "The connection is open, but it has no tab to switch to"
+    },
+    "hint": {
+      "select": "Select",
+      "open": "Open / Run",
+      "scope": "Switch scope",
+      "close": "Close"
+    },
+    "count": "%{count} results"
+  },
   "menu": {
     "open": "Open",
     "quit": "Quit"
@@ -3481,6 +3539,8 @@
     "search_history_detail": "Search and reuse previous queries",
     "quick_open_table": "Quick open table",
     "quick_open_table_detail": "Search tables in the current database and open one",
+    "command_palette": "Command palette",
+    "command_palette_detail": "Search commands, tables, queries, history and connections",
     "copy_data": "Copy data",
     "copy_data_detail": "Copy the selected table data"
   },

@@ -253,6 +253,23 @@ fn open_quick_open_table_from_root(cx: &mut App) {
     });
 }
 
+/// 应用级「统一命令面板」入口：与快速打开表相同，保证窗口没有焦点时也能打开。
+fn open_command_palette_from_root(cx: &mut App) {
+    let Some(window) = cx
+        .active_window()
+        .or_else(|| cx.windows().into_iter().next())
+        .and_then(|handle| handle.downcast::<Root>())
+    else {
+        return;
+    };
+    let _ = window.update(cx, |root, window, cx| {
+        let Some(main) = navicat_main_from_root(root) else {
+            return;
+        };
+        main.update(cx, |main, cx| main.open_command_palette(window, cx));
+    });
+}
+
 /// Windows/Linux：系统关窗（如 Alt+F4）时先做未保存检查。
 ///
 /// 有未保存内容则阻止本次关闭并弹确认框，由确认按钮执行真正退出。
@@ -295,6 +312,10 @@ fn register_shortcuts(cx: &mut App, settings: &Settings) {
     cx.on_action(|_: &QuickOpenTable, cx| {
         cx.stop_propagation();
         cx.defer(open_quick_open_table_from_root);
+    });
+    cx.on_action(|_: &CommandPalette, cx| {
+        cx.stop_propagation();
+        cx.defer(open_command_palette_from_root);
     });
     cx.bind_keys([KeyBinding::new(
         if cfg!(target_os = "macos") {
@@ -339,6 +360,16 @@ fn register_shortcuts(cx: &mut App, settings: &Settings) {
         KeyBinding::new("up", QuickOpenTablePrevious, Some("QuickOpenTable")),
         KeyBinding::new("down", QuickOpenTableNext, Some("QuickOpenTable")),
         KeyBinding::new("enter", QuickOpenTableConfirm, Some("QuickOpenTable")),
+        KeyBinding::new("up", CommandPalettePrevious, Some("CommandPalette")),
+        KeyBinding::new("down", CommandPaletteNext, Some("CommandPalette")),
+        KeyBinding::new("enter", CommandPaletteConfirm, Some("CommandPalette")),
+        KeyBinding::new("tab", CommandPaletteNextScope, Some("CommandPalette")),
+        KeyBinding::new(
+            "shift-tab",
+            CommandPalettePreviousScope,
+            Some("CommandPalette"),
+        ),
+        KeyBinding::new("escape", CommandPaletteCancel, Some("CommandPalette")),
         KeyBinding::new("escape", CancelDialog, None),
         KeyBinding::new(
             "delete",
