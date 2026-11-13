@@ -112,6 +112,7 @@ impl NavicatMain {
         self.query_history_quick_open = false;
         self.query_history_open = false;
         self.tab_switcher = None;
+        self.command_palette.open = false;
         self.quick_open_table_entries = tables;
         self.quick_open_table_search.clear();
         self.quick_open_table_selected = 0;

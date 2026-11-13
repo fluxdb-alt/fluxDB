@@ -246,6 +246,13 @@ impl Render for NavicatMain {
             .on_action(cx.listener(Self::quick_open_table_previous))
             .on_action(cx.listener(Self::quick_open_table_next))
             .on_action(cx.listener(Self::quick_open_table_confirm))
+            .on_action(cx.listener(Self::open_command_palette_action))
+            .on_action(cx.listener(Self::command_palette_previous))
+            .on_action(cx.listener(Self::command_palette_next))
+            .on_action(cx.listener(Self::command_palette_confirm))
+            .on_action(cx.listener(Self::command_palette_next_scope))
+            .on_action(cx.listener(Self::command_palette_previous_scope))
+            .on_action(cx.listener(Self::command_palette_cancel))
             .on_action(cx.listener(Self::copy_data_selection))
             .on_action(cx.listener(Self::copy_footer_sql_selection))
             .on_action(cx.listener(Self::delete_connection_shortcut))
@@ -998,6 +1005,9 @@ impl Render for NavicatMain {
                     colors,
                     cx,
                 ))
+            })
+            .when(self.command_palette.open, |this| {
+                this.child(command_palette_modal(self, colors, cx))
             })
             // 性能诊断 HUD：设置开启时在窗口右上角悬浮显示 FPS / 帧耗时 / CPU / GPU / 内存。
             // 挂在根容器（`relative`）最上层，fps_monitor 首次调用会懒建每窗口单例并复用。

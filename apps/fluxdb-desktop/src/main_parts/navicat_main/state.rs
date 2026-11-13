@@ -564,6 +564,7 @@ struct NavicatMain {
     quick_open_table_selected: usize,
     /// 只来自侧边栏已加载对象树，不额外查询数据库 catalog。
     quick_open_table_entries: Vec<ObjectPath>,
+    command_palette: CommandPaletteState,
     query_history_connection_select:
         Entity<SelectState<SearchableVec<QueryHistoryConnectionFilterItem>>>,
     _query_history_connection_select_subscription: Subscription,

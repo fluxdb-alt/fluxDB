@@ -75,6 +75,10 @@ fn shortcut_text(definition: &ShortcutDefinition) -> (SharedString, SharedString
             tr("app.shortcuts.quick_open_table"),
             tr("app.shortcuts.quick_open_table_detail"),
         ),
+        "app.command_palette" => (
+            tr("app.shortcuts.command_palette"),
+            tr("app.shortcuts.command_palette_detail"),
+        ),
         "query.copy_data" => (
             tr("app.shortcuts.copy_data"),
             tr("app.shortcuts.copy_data_detail"),
@@ -269,18 +273,21 @@ fn settings_shortcuts_panel(
         }
     });
     let mut panel = div().flex().flex_col().gap_3();
-    for (title, definitions) in [
+    for (title, application) in [
         (
             tr("app.settings.shortcuts.group.application"),
-            &SHORTCUT_DEFINITIONS[..5],
+            true,
         ),
         (
             tr("app.settings.shortcuts.group.query_data"),
-            &SHORTCUT_DEFINITIONS[5..],
+            false,
         ),
     ] {
         let mut group = settings_panel_group(title, colors);
-        for definition in definitions {
+        for definition in SHORTCUT_DEFINITIONS
+            .iter()
+            .filter(|definition| shortcut_is_application(definition.action) == application)
+        {
             group = group.child(settings_shortcut_row(
                 settings,
                 *definition,
@@ -321,6 +328,18 @@ fn settings_shortcuts_panel(
                 "⌘/ / Ctrl+/",
                 colors,
             )),
+    )
+}
+
+fn shortcut_is_application(action: ShortcutAction) -> bool {
+    matches!(
+        action,
+        ShortcutAction::NewQuery
+            | ShortcutAction::Refresh
+            | ShortcutAction::SaveOrApply
+            | ShortcutAction::CloseCurrentTab
+            | ShortcutAction::ToggleConnectionBrowser
+            | ShortcutAction::CommandPalette
     )
 }
 
@@ -455,7 +474,9 @@ fn settings_shortcut_row(
             .into_any_element()
     };
 
+    let debug_selector = format!("settings-shortcut:{}", definition.id);
     settings_row_container(definition.id, colors)
+        .debug_selector(move || debug_selector.clone())
         .min_h(px(52.))
         .child(settings_row_label(title, detail, definition.icon, colors))
         .child(value)

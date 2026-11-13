@@ -33,6 +33,7 @@ impl NavicatMain {
         cx: &mut Context<Self>,
     ) {
         self.quick_open_table_open = false;
+        self.command_palette.open = false;
         if self.tab_switcher == Some(kind) {
             self.tab_switcher = None;
         } else {

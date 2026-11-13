@@ -1039,6 +1039,9 @@ fn navicat_main_new(
     let quick_open_table_input = cx.new(|cx| {
         InputState::new(window, cx).placeholder(tr("app.placeholder.search_table"))
     });
+    let command_palette_input = cx.new(|cx| {
+        InputState::new(window, cx).placeholder(tr("app.command_palette.placeholder"))
+    });
     let redis_history_search_input = cx.new(|cx| {
         InputState::new(window, cx).placeholder(tr("app.placeholder.search_command_scope"))
     });
@@ -1534,6 +1537,17 @@ fn navicat_main_new(
                 this.confirm_quick_open_table(cx);
             }
             InputEvent::Focus | InputEvent::Blur => {}
+        },
+    );
+    let command_palette_subscription = cx.subscribe(
+        &command_palette_input,
+        |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.command_palette.search = input.read(cx).value().to_string();
+                this.command_palette.selected = 0;
+                this.command_palette.scroll.scroll_to_item(0);
+                cx.notify();
+            }
         },
     );
     let redis_history_search_subscription = cx.subscribe(
@@ -3121,6 +3135,15 @@ fn navicat_main_new(
         quick_open_table_open: false,
         quick_open_table_selected: 0,
         quick_open_table_entries: Vec::new(),
+        command_palette: CommandPaletteState {
+            input: command_palette_input,
+            _subscription: command_palette_subscription,
+            scroll: ScrollHandle::new(),
+            open: false,
+            search: String::new(),
+            scope: CommandPaletteScope::All,
+            selected: 0,
+        },
         redis_history_search_input,
         _redis_history_search_subscription: redis_history_search_subscription,
         redis_history_search: String::new(),

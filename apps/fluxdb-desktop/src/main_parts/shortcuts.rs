@@ -21,6 +21,7 @@ pub(crate) enum ShortcutAction {
     OpenDataSearch,
     OpenQueryHistoryQuickSearch,
     QuickOpenTable,
+    CommandPalette,
     CopyDataSelection,
 }
 
@@ -33,6 +34,16 @@ pub(crate) const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         macos: "cmd-y",
         other: "ctrl-y",
         action: ShortcutAction::NewQuery,
+        context: None,
+    },
+    ShortcutDefinition {
+        id: "app.command_palette",
+        title: "Command palette",
+        detail: "Search commands, tables, queries, history and connections",
+        icon: AppIcon::Search,
+        macos: "cmd-shift-p",
+        other: "ctrl-shift-p",
+        action: ShortcutAction::CommandPalette,
         context: None,
     },
     ShortcutDefinition {
@@ -211,6 +222,9 @@ pub(crate) fn bind_shortcut(
         }
         ShortcutAction::QuickOpenTable => {
             cx.bind_keys([KeyBinding::new(spec, QuickOpenTable, context)])
+        }
+        ShortcutAction::CommandPalette => {
+            cx.bind_keys([KeyBinding::new(spec, CommandPalette, context)])
         }
         ShortcutAction::CopyDataSelection => {
             cx.bind_keys([KeyBinding::new(spec, CopyDataSelection, context)])

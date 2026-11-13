@@ -365,6 +365,7 @@ impl NavicatMain {
         }
         self.query_history_open = false;
         self.quick_open_table_open = false;
+        self.command_palette.open = false;
         self.query_history_quick_open = true;
         self.query_history_detail = None;
         self.query_history_quick_search_input.update(cx, |input, cx| {
@@ -810,6 +811,10 @@ impl NavicatMain {
     }
 
     fn cancel_dialog(&mut self, _: &CancelDialog, window: &mut Window, cx: &mut Context<Self>) {
+        if self.command_palette.open {
+            self.close_command_palette(window, cx);
+            return;
+        }
         // 服务器面板的终止/维护确认框优先级最高。
         if self.server_kill_confirm.take().is_some()
             || self.server_maintenance_confirm.take().is_some()
