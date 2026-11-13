@@ -352,16 +352,20 @@ impl NavicatMain {
     }
 
     fn show_query_history_quick_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.controller.state().query_history.is_empty() {
+        // 快捷搜索按当前标签的「连接 + 库」作用域过滤，不跨库展示历史。
+        let (connection, database, _) = self.active_query_history_filters(cx);
+        self.query_history_connection_filter = connection;
+        self.query_history_database_filter = database;
+        self.query_history_quick_search.clear();
+        self.query_history_quick_selected = 0;
+        self.query_history_quick_kind_filter = QueryHistoryKindFilter::All;
+        if query_history_quick_entries(self.controller.state(), self).is_empty() {
             self.show_message(tr("app.history.empty_sql").as_ref(), AppMessageKind::Info, cx);
             return;
         }
         self.query_history_open = false;
         self.quick_open_table_open = false;
         self.query_history_quick_open = true;
-        self.query_history_quick_search.clear();
-        self.query_history_quick_selected = 0;
-        self.query_history_quick_kind_filter = QueryHistoryKindFilter::All;
         self.query_history_detail = None;
         self.query_history_quick_search_input.update(cx, |input, cx| {
             input.set_value(String::new(), window, cx);
