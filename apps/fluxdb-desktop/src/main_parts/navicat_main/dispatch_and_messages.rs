@@ -98,7 +98,8 @@ impl NavicatMain {
         }
         self.persisted_history_loaded = true;
         let storage = self.storage.clone();
-        let _ = cx.spawn(async move |view, cx| {
+        // 必须 detach：GPUI 的 Task drop 即取消，丢掉句柄会让加载永远不执行。
+        cx.spawn(async move |view, cx| {
             let query_history = storage.load_query_history().ok();
             let redis_history = storage.load_redis_workbench_history().ok();
             let saved_queries = storage.load_saved_queries().ok();
@@ -136,7 +137,8 @@ impl NavicatMain {
                 }
                 cx.notify();
             });
-        });
+        })
+        .detach();
     }
 
     fn start_completion_index_warmup_for_tab(&mut self, tab_id: TabId, cx: &mut Context<Self>) {

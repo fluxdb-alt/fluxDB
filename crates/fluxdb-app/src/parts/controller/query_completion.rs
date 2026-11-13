@@ -2375,10 +2375,12 @@ fn query_history_tables(sql: &str) -> Vec<String> {
     let mut tables: BTreeSet<String> = tokens
         .windows(2)
         .filter(|window| {
+            // 只跳过纯数值 token（如 LIMIT 1000）；按首字符判断会误杀
+            // `3d_active_history` 这类数字开头的表名。
             matches!(
                 window[0].to_ascii_lowercase().as_str(),
                 "from" | "join" | "update" | "into" | "table"
-            ) && !window[1].chars().next().is_some_and(|c| c.is_ascii_digit())
+            ) && window[1].parse::<f64>().is_err()
         })
         .map(|window| window[1].to_ascii_lowercase())
         .collect();
@@ -2428,5 +2430,21 @@ mod identifier_quote_tests {
         };
         quote_completion_insert_text(&mut physical, DatabaseKind::Oracle, &|_| true);
         assert_eq!(physical.insert_text, "\"c\".\"CUSTOMER_NAME\"");
+    }
+}
+
+#[cfg(test)]
+mod query_history_table_tests {
+    use super::*;
+
+    #[test]
+    fn numeric_prefix_table_survives_limit_literal() {
+        let tables = query_history_tables("select * from `3d_active_history` LIMIT 1000");
+        assert_eq!(tables, vec!["3d_active_history"]);
+    }
+
+    #[test]
+    fn numeric_literal_after_from_is_not_a_table() {
+        assert!(query_history_tables("select * from 1000").is_empty());
     }
 }

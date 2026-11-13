@@ -693,6 +693,18 @@ fn query_history_quick_entries(state: &AppState, this: &NavicatMain) -> Vec<Quer
             if !query_history_kind_filter_matches(entry, this.query_history_quick_kind_filter) {
                 return None;
             }
+            // 快捷搜索只看当前标签的连接 + 库；与抽屉共用同一组作用域字段。
+            if this
+                .query_history_connection_filter
+                .is_some_and(|connection| entry.connection_id != connection)
+            {
+                return None;
+            }
+            if let Some(database) = &this.query_history_database_filter
+                && entry.database.as_deref() != Some(database.as_str())
+            {
+                return None;
+            }
             let connection = query_history_connection_name(state, entry.connection_id);
             let score =
                 query_history_search_score(entry, connection.as_deref(), &this.query_history_quick_search)?;
