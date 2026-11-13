@@ -371,6 +371,9 @@ impl NavicatMain {
                 cx.write_to_clipboard(ClipboardItem::new_string(object_path.name));
                 self.show_message(tr("app.table.toast.name_copied").as_ref(), AppMessageKind::Success, cx);
             }
+            TableMenuAction::SetShortcut => {
+                self.open_table_shortcut_dialog_for(object_path, window, cx);
+            }
             TableMenuAction::ViewData => {
                 self.dispatch(AppCommand::OpenDataEditor(object_path), cx);
             }

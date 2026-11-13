@@ -185,6 +185,8 @@ enum TableMenuAction {
     Truncate,
     /// 从当前分组中移出该表。
     RemoveFromGroup,
+    /// 打开表快捷组弹窗，把该表加入某个组（或新建组）。
+    SetShortcut,
 }
 
 /// MongoDB 集合右键菜单动作（视图只读时不会渲染写入类项）。

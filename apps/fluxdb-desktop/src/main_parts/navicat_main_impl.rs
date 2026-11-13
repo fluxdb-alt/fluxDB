@@ -34,5 +34,6 @@ include!("navicat_main/mongo_export_csv.rs");
 include!("navicat_main/mongo_export.rs");
 include!("navicat_main/queries_shortcuts.rs");
 include!("navicat_main/quick_open_table.rs");
+include!("navicat_main/table_shortcuts.rs");
 include!("navicat_main/command_palette.rs");
 include!("navicat_main/update.rs");

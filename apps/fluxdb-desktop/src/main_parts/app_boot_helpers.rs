@@ -320,6 +320,44 @@ fn open_tab_switcher_from_root(cx: &mut App) {
     });
 }
 
+/// ⌥1–⌥9 应用级入口：按编号激活当前工作区第 N 个标签。
+fn activate_tab_slot_from_root(cx: &mut App, slot: usize) {
+    let Some(window) = cx
+        .active_window()
+        .or_else(|| cx.windows().into_iter().next())
+        .and_then(|handle| handle.downcast::<Root>())
+    else {
+        return;
+    };
+    let _ = window.update(cx, |root, window, cx| {
+        let Some(main) = navicat_main_from_root(root) else {
+            return;
+        };
+        main.update(cx, |main, cx| {
+            main.activate_tab_slot_action(&ActivateTabSlot { slot }, window, cx)
+        });
+    });
+}
+
+/// 表快捷组应用级入口：按设置中的组下标触发表快捷组。
+fn open_table_shortcut_from_root(cx: &mut App, slot: usize) {
+    let Some(window) = cx
+        .active_window()
+        .or_else(|| cx.windows().into_iter().next())
+        .and_then(|handle| handle.downcast::<Root>())
+    else {
+        return;
+    };
+    let _ = window.update(cx, |root, window, cx| {
+        let Some(main) = navicat_main_from_root(root) else {
+            return;
+        };
+        main.update(cx, |main, cx| {
+            main.open_table_shortcut_action(&OpenTableShortcut { slot }, window, cx)
+        });
+    });
+}
+
 /// Windows/Linux：系统关窗（如 Alt+F4）时先做未保存检查。
 ///
 /// 有未保存内容则阻止本次关闭并弹确认框，由确认按钮执行真正退出。
@@ -378,6 +416,16 @@ fn register_shortcuts(cx: &mut App, settings: &Settings) {
     cx.on_action(|_: &OpenTabSwitcher, cx| {
         cx.stop_propagation();
         cx.defer(open_tab_switcher_from_root);
+    });
+    cx.on_action(|action: &ActivateTabSlot, cx| {
+        cx.stop_propagation();
+        let slot = action.slot;
+        cx.defer(move |cx| activate_tab_slot_from_root(cx, slot));
+    });
+    cx.on_action(|action: &OpenTableShortcut, cx| {
+        cx.stop_propagation();
+        let slot = action.slot;
+        cx.defer(move |cx| open_table_shortcut_from_root(cx, slot));
     });
     cx.bind_keys([KeyBinding::new(
         if cfg!(target_os = "macos") {
@@ -462,5 +510,31 @@ fn register_shortcuts(cx: &mut App, settings: &Settings) {
             DeleteConnectionShortcut,
             Some("DeleteConnectionModal"),
         ),
+        KeyBinding::new("up", TableShortcutPickerPrevious, Some("TableShortcutPicker")),
+        KeyBinding::new("down", TableShortcutPickerNext, Some("TableShortcutPicker")),
+        KeyBinding::new(
+            "enter",
+            TableShortcutPickerConfirm,
+            Some("TableShortcutPicker"),
+        ),
+        KeyBinding::new(
+            "escape",
+            TableShortcutPickerCancel,
+            Some("TableShortcutPicker"),
+        ),
     ]);
+
+    // 编号直达与表快捷组：放在应用快捷键之后注册，冲突组在绑定前已过滤。
+    bind_tab_slot_shortcuts(cx);
+    bind_table_shortcut_groups(cx, settings);
+    let digit_bindings = (1..=TABLE_SHORTCUT_TARGET_LIMIT)
+        .map(|slot| {
+            KeyBinding::new(
+                slot.to_string().as_str(),
+                SelectTableShortcut { slot },
+                Some("TableShortcutPicker"),
+            )
+        })
+        .collect::<Vec<_>>();
+    cx.bind_keys(digit_bindings);
 }

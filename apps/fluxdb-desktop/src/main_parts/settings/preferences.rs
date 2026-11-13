@@ -90,6 +90,7 @@ fn settings_apply_section_fields(
         SettingsPanelSection::Editor => settings_apply_editor_fields(settings, draft),
         SettingsPanelSection::Shortcuts => {
             settings.custom_keybindings = draft.custom_keybindings.clone();
+            settings.table_shortcut_groups = draft.table_shortcut_groups.clone();
         }
         SettingsPanelSection::Appearance => settings_apply_appearance_fields(settings, draft),
         SettingsPanelSection::System => settings_apply_system_fields(settings, draft),
@@ -194,6 +195,7 @@ fn save_settings_section_from_ui(
                 bind_shortcut(cx, &new, definition.action, definition.context);
             }
         }
+        rebind_table_shortcut_groups(cx, &saved, &settings);
     }
 
     let _ = this.controller.dispatch(AppCommand::SaveSettings(settings));
