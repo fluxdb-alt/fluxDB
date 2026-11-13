@@ -113,6 +113,7 @@ impl NavicatMain {
         self.query_history_open = false;
         self.tab_switcher = None;
         self.command_palette.open = false;
+        self.quick_open_table_for_shortcut = false;
         self.quick_open_table_entries = tables;
         self.quick_open_table_search.clear();
         self.quick_open_table_selected = 0;
@@ -127,6 +128,7 @@ impl NavicatMain {
     fn close_quick_open_table(&mut self, cx: &mut Context<Self>) {
         if self.quick_open_table_open {
             self.quick_open_table_open = false;
+            self.quick_open_table_for_shortcut = false;
             cx.notify();
         }
     }
@@ -189,6 +191,10 @@ impl NavicatMain {
         else {
             return;
         };
+        if self.quick_open_table_for_shortcut {
+            self.add_table_shortcut_target(entry, cx);
+            return;
+        }
         self.open_quick_open_table_entry(entry, cx);
     }
 
@@ -444,7 +450,11 @@ fn quick_open_table_row(
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, _, cx| {
-                this.open_quick_open_table_entry(entry.clone(), cx);
+                if this.quick_open_table_for_shortcut {
+                    this.add_table_shortcut_target(entry.clone(), cx);
+                } else {
+                    this.open_quick_open_table_entry(entry.clone(), cx);
+                }
                 cx.stop_propagation();
             }),
         )

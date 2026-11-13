@@ -811,6 +811,21 @@ impl NavicatMain {
     }
 
     fn cancel_dialog(&mut self, _: &CancelDialog, window: &mut Window, cx: &mut Context<Self>) {
+        // 表快捷组：录制中先退出录制，再按一次才关闭弹窗。
+        if let Some(dialog) = self.table_shortcut_dialog.as_mut() {
+            if dialog.capturing {
+                dialog.capturing = false;
+                dialog.invalid = false;
+            } else {
+                self.table_shortcut_dialog = None;
+            }
+            cx.notify();
+            return;
+        }
+        if self.table_shortcut_picker.take().is_some() {
+            cx.notify();
+            return;
+        }
         if self.command_palette.open {
             self.close_command_palette(window, cx);
             return;

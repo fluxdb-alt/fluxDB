@@ -217,3 +217,166 @@ fn tab_switching_cycles_and_picks_a_visible_tab(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(active_tab(cx), Some(tab_ids[5]));
 }
+
+/// 编号直达按标签条顺序切换；多表快捷组在生产视图里弹出选择器。
+#[gpui::test]
+fn numbered_tabs_and_table_group_picker_work_in_production_view(cx: &mut TestAppContext) {
+    use fluxdb_app::AppCommand;
+    use fluxdb_core::{
+        ConnectionConfig, ConnectionId, DatabaseKind, Endpoint, ObjectKind, TableShortcutGroup,
+        TableShortcutTarget,
+    };
+    use gpui::KeyBinding;
+
+    use crate::{ActivateTabSlot, OpenTableShortcut, SelectTableShortcut};
+
+    let _guard = locale_guard();
+    let temp = tempfile::tempdir().expect("isolated profile");
+    let storage = FileStorage::new(temp.path().join("profile"));
+    let settings = Settings {
+        locale: "en".into(),
+        table_shortcut_groups: vec![TableShortcutGroup {
+            id: "orders".into(),
+            name: "Orders".into(),
+            keys: "alt-shift-k".into(),
+            targets: vec![
+                TableShortcutTarget {
+                    connection_id: ConnectionId(1),
+                    connection_name: "shortcuts-sqlite".into(),
+                    database: Some("main".into()),
+                    schema: None,
+                    name: "orders".into(),
+                    kind: ObjectKind::Table,
+                },
+                TableShortcutTarget {
+                    connection_id: ConnectionId(1),
+                    connection_name: "shortcuts-sqlite".into(),
+                    database: Some("main".into()),
+                    schema: None,
+                    name: "order_items".into(),
+                    kind: ObjectKind::Table,
+                },
+            ],
+        }],
+        ..Default::default()
+    };
+    storage.save_settings(&settings).expect("settings");
+    init_i18n(
+        &app_assets_base_path().join("locales"),
+        &storage.root_dir().join("locales"),
+        "en",
+    );
+
+    let mut controller = AppController::new();
+    controller.dispatch(AppCommand::SaveSettings(settings));
+    controller.dispatch(AppCommand::ReplaceConnections(vec![ConnectionConfig {
+        id: ConnectionId(1),
+        name: "shortcuts-sqlite".into(),
+        kind: DatabaseKind::Sqlite,
+        endpoint: Endpoint::SqliteFile {
+            path: temp.path().join("shortcuts.sqlite"),
+            read_only: true,
+        },
+        options: Default::default(),
+        redis_profile: None,
+        mysql_profile: None,
+        postgres_profile: None,
+        dameng_profile: None,
+        mongo_profile: None,
+        sqlserver_profile: None,
+        oracle_profile: None,
+    }]));
+
+    let mut tab_ids = Vec::new();
+    for _ in 0..3 {
+        let fluxdb_app::AppEvent::TabOpened(tab_id) =
+            controller.dispatch(AppCommand::OpenQueryEditorInDatabase {
+                connection_id: ConnectionId(1),
+                database: Some("main".into()),
+                schema: None,
+            })
+        else {
+            panic!("query tab");
+        };
+        tab_ids.push(tab_id);
+    }
+
+    cx.update(|cx| {
+        extend_component_i18n();
+        gpui_component::init(cx);
+    });
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let view = cx.new(|cx| {
+            let mut app = navicat_main_new(
+                window,
+                cx,
+                controller,
+                storage,
+                gpui_component::ThemeMode::Light,
+            );
+            app.ai_chat.recovery_pending = false;
+            app
+        });
+        Root::new(view, window, cx)
+    });
+    cx.simulate_resize(gpui::size(gpui::px(1440.), gpui::px(900.)));
+    let view = cx.update(|window, cx| {
+        window
+            .root::<Root>()
+            .expect("root")
+            .expect("typed root")
+            .read(cx)
+            .view()
+            .clone()
+            .downcast::<NavicatMain>()
+            .expect("production view")
+    });
+    cx.update(|_, cx| {
+        cx.bind_keys([
+            KeyBinding::new("alt-1", ActivateTabSlot { slot: 1 }, None),
+            KeyBinding::new("alt-9", ActivateTabSlot { slot: 9 }, None),
+            KeyBinding::new("alt-shift-k", OpenTableShortcut { slot: 0 }, None),
+            KeyBinding::new(
+                "1",
+                SelectTableShortcut { slot: 1 },
+                Some("TableShortcutPicker"),
+            ),
+        ]);
+    });
+    cx.update(|window, cx| {
+        view.update(cx, |app, cx| app.focus_handle.focus(window, cx));
+        window.draw(cx).clear(cx);
+    });
+    cx.run_until_parked();
+
+    let active_tab = |cx: &mut TestAppContext| {
+        cx.update(|cx| view.read(cx).controller.state().active_tab)
+    };
+    assert_eq!(active_tab(cx), Some(tab_ids[2]));
+
+    cx.simulate_keystrokes("alt-1");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    assert_eq!(active_tab(cx), Some(tab_ids[0]));
+
+    // 越界编号保持当前标签，不做环绕。
+    cx.simulate_keystrokes("alt-9");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    assert_eq!(active_tab(cx), Some(tab_ids[0]));
+
+    cx.simulate_keystrokes("alt-shift-k");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    let picker_open = cx.update(|_, cx| view.read(cx).table_shortcut_picker.is_some());
+    assert!(picker_open, "multi-table shortcut must open the picker");
+
+    // 数字直选走选择器自己的键位上下文；连接未打开时只提示，不静默连接。
+    cx.simulate_keystrokes("1");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_, cx| view.read(cx).table_shortcut_picker.is_none()),
+        "digit selection must close the picker"
+    );
+}

@@ -343,6 +343,15 @@ fn table_context_menu(
             cx,
         ))
         .child(table_menu_item(
+            tr("app.context.set_shortcut").to_string(),
+            AppIcon::Key,
+            false,
+            Some(TableMenuAction::SetShortcut),
+            &menu,
+            colors,
+            cx,
+        ))
+        .child(table_menu_item(
             tr("app.context.view_data").to_string(),
             AppIcon::Eye,
             false,

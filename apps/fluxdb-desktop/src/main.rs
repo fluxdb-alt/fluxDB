@@ -56,8 +56,9 @@ use fluxdb_core::{
     RedisServerActivity, RedisServerVersion, RedisSlowLogEntry, ResultsPlacement, Row, RowIdentity,
     SavedQuery, ScrollbarMode, ServerActivity, ServerLockWait, ServerMaintenanceAction,
     ServerMetric, ServerSession, Settings, SidebarOrderEntry, SortDirection, SortSpec,
-    SqlDialect as _, SqlServerPrincipalKind, Theme as AppTheme, TriggerInfo, UserResourceLimits,
-    WorkbenchHistoryItem, WorkbenchHistoryScope, WorkbenchHistoryStore, data_table_page_size_max,
+    SqlDialect as _, SqlServerPrincipalKind, TableShortcutGroup, TableShortcutTarget,
+    Theme as AppTheme, TriggerInfo, UserResourceLimits, WorkbenchHistoryItem,
+    WorkbenchHistoryScope, WorkbenchHistoryStore, data_table_page_size_max,
     database_user_admin_provider, role_memberships_from_grants, sql_dialect,
     sqlite_attached_database_path, supports_database_user_admin,
 };
@@ -238,6 +239,8 @@ include!("main_parts/i18n_tests.rs");
 include!("main_parts/tabs_workspace_tests.rs");
 #[cfg(test)]
 include!("main_parts/quick_open_table_tests.rs");
+#[cfg(test)]
+include!("main_parts/table_shortcut_tests.rs");
 #[cfg(test)]
 include!("main_parts/sidebar_refresh_tests.rs");
 #[cfg(test)]

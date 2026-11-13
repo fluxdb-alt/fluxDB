@@ -230,6 +230,10 @@ pub struct Settings {
     /// 用户自定义的应用级快捷键，键为稳定 action id，值为 GPUI keystroke 规范。
     #[serde(default)]
     pub custom_keybindings: BTreeMap<String, String>,
+    /// 表级快捷组：一个快捷键绑定一组表，组内单表直接打开、多表弹出选择。
+    /// 按键规范与 `custom_keybindings` 相同；组顺序即快捷键动作携带的槽位。
+    #[serde(default)]
+    pub table_shortcut_groups: Vec<TableShortcutGroup>,
     /// 数据库备份文件的默认保存目录，为空时回退到系统下载目录。
     #[serde(default)]
     pub backup_dir: String,
@@ -257,6 +261,40 @@ pub struct Settings {
     /// 支持占位符 `{version}`（如 `17.6-1`）与 `{platform}`（`windows-x64` / `osx`）。
     #[serde(default)]
     pub pg_client_download_source: String,
+}
+
+/// 表级快捷组。
+///
+/// `keys` 存 GPUI keystroke 规范（如 `cmd-shift-1`）。`targets` 保持用户可见顺序：
+/// 选择器按 1–9 编号直选，顺序即渲染顺序。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TableShortcutGroup {
+    /// 稳定 id，供 UI 与持久化区分同名组；新建组时生成。
+    #[serde(default)]
+    pub id: String,
+    /// 可选组名；为空时界面回落到快捷键文本。
+    #[serde(default)]
+    pub name: String,
+    pub keys: String,
+    #[serde(default)]
+    pub targets: Vec<TableShortcutTarget>,
+}
+
+/// 表级快捷组中的一张表。
+///
+/// `connection_id` 是稳定主键；`connection_name` 只是展示快照，连接被删后仍能提示
+/// 用户该绑定原本指向哪里，不参与匹配。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TableShortcutTarget {
+    pub connection_id: ConnectionId,
+    #[serde(default)]
+    pub connection_name: String,
+    #[serde(default)]
+    pub database: Option<String>,
+    #[serde(default)]
+    pub schema: Option<String>,
+    pub name: String,
+    pub kind: ObjectKind,
 }
 
 impl Default for Settings {
@@ -298,6 +336,7 @@ impl Default for Settings {
             results_placement: ResultsPlacement::default(),
             redis_workbench_editor_width: default_redis_workbench_editor_width(),
             custom_keybindings: BTreeMap::new(),
+            table_shortcut_groups: Vec::new(),
             backup_dir: default_backup_dir(),
             mysqldump_path: String::new(),
             mysql_client_dir: String::new(),

@@ -135,6 +135,15 @@ impl NavicatMain {
                     return;
                 };
                 view.update(cx, |this, cx| {
+                    // 表快捷组触发的按需连接：连接成功后再打开目标表，失败则丢弃。
+                    let pending_open = this
+                        .pending_table_shortcut_open
+                        .as_ref()
+                        .filter(|(id, _)| *id == connection_id)
+                        .map(|(_, path)| path.clone());
+                    if pending_open.is_some() {
+                        this.pending_table_shortcut_open = None;
+                    }
                     if matches!(event, AppEvent::ObjectsLoaded(None, _)) {
                         this.controller
                             .merge_open_connection_from(&controller, connection_id);
@@ -155,6 +164,11 @@ impl NavicatMain {
                     this.loading_databases
                         .retain(|key| !key.starts_with(&format!("{}:", connection_id.0)));
                     this._connection_tasks.remove(&connection_id.0);
+                    if matches!(event, AppEvent::ObjectsLoaded(None, _))
+                        && let Some(path) = pending_open
+                    {
+                        this.dispatch(AppCommand::OpenDataEditor(path), cx);
+                    }
                     cx.notify();
                 });
             });

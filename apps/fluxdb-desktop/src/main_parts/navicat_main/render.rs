@@ -270,6 +270,14 @@ impl Render for NavicatMain {
             .on_action(cx.listener(Self::tab_switcher_previous_action))
             .on_action(cx.listener(Self::tab_switcher_confirm_action))
             .on_action(cx.listener(Self::tab_switcher_cancel_action))
+            .on_action(cx.listener(Self::table_shortcut_picker_next))
+            .on_action(cx.listener(Self::table_shortcut_picker_previous))
+            .on_action(cx.listener(Self::table_shortcut_picker_confirm))
+            .on_action(cx.listener(Self::table_shortcut_picker_cancel))
+            .on_action(cx.listener(Self::select_table_shortcut))
+            // 应用级监听未注册时（如无头测试/视图直连）仍可由视图处理。
+            .on_action(cx.listener(Self::activate_tab_slot_action))
+            .on_action(cx.listener(Self::open_table_shortcut_action))
             .on_action(cx.listener(Self::copy_data_selection))
             .on_action(cx.listener(Self::copy_footer_sql_selection))
             .on_action(cx.listener(Self::delete_connection_shortcut))
@@ -1002,8 +1010,21 @@ impl Render for NavicatMain {
             .when(self.query_history_quick_open, |this| {
                 this.child(query_history_quick_search_modal(&state, self, colors, cx))
             })
+            // 表快捷组编辑弹窗；快速打开表弹层打开时叠加在它上方（添加表流程）。
+            .when_some(self.table_shortcut_dialog.clone(), |this, dialog| {
+                this.child(table_shortcut_dialog_modal(&dialog, &state, colors, cx))
+            })
             .when(self.quick_open_table_open, |this| {
                 this.child(quick_open_table_modal(self, colors, cx))
+            })
+            .when_some(self.table_shortcut_picker.clone(), |this, picker| {
+                this.child(table_shortcut_picker_modal(
+                    &picker,
+                    &state.settings,
+                    &state,
+                    colors,
+                    cx,
+                ))
             })
             // gpui-component 的 Dialog 层不再由应用自绘：`gpui_component::init` 会把
             // `WindowState` 注册为 `Root` 插件，sheet / dialog / notification 层由 `Root`

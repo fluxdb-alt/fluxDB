@@ -3144,6 +3144,10 @@ fn navicat_main_new(
         quick_open_table_open: false,
         quick_open_table_selected: 0,
         quick_open_table_entries: Vec::new(),
+        quick_open_table_for_shortcut: false,
+        table_shortcut_dialog: None,
+        table_shortcut_picker: None,
+        pending_table_shortcut_open: None,
         command_palette: CommandPaletteState {
             input: command_palette_input,
             _subscription: command_palette_subscription,

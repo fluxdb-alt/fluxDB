@@ -42,6 +42,35 @@ struct MongoServerKillConfirm {
     opid: String,
 }
 
+/// 编辑表快捷组的弹窗草稿。
+///
+/// 组 id 在新建时生成一次，编辑期间保持不变，用于冲突检测时排除自身；
+/// 组内表直接在草稿上增删，点保存才写入设置并重绑按键。
+#[derive(Clone)]
+struct TableShortcutDialog {
+    group_id: String,
+    /// 已有组在设置里的下标；`None` 表示新建组。
+    group_index: Option<usize>,
+    name_input: Entity<InputState>,
+    keys: String,
+    targets: Vec<TableShortcutTarget>,
+    /// 正在录制按键：下一次按键写入 `keys`。
+    capturing: bool,
+    /// 最近的按键被拒绝（无修饰键 / 无法解析）。
+    invalid: bool,
+    /// 已本地化的冲突说明，非空时禁止保存。
+    conflict: Option<String>,
+    focus_handle: FocusHandle,
+}
+
+/// 多表快捷组的选择器状态；组内只有一张表时不会创建。
+#[derive(Clone)]
+struct TableShortcutPicker {
+    group_index: usize,
+    selected: usize,
+    focus_handle: FocusHandle,
+}
+
 struct NavicatMain {
     ai_chat: AiChatUi,
     query_files: QueryFilesUi,
@@ -568,6 +597,14 @@ struct NavicatMain {
     quick_open_table_selected: usize,
     /// 只来自侧边栏已加载对象树，不额外查询数据库 catalog。
     quick_open_table_entries: Vec<ObjectPath>,
+    /// 快速打开表弹层当前用于「给表快捷组添加表」：选中后加入草稿而不是打开表。
+    quick_open_table_for_shortcut: bool,
+    /// 表快捷组编辑弹窗；`None` 表示未打开。
+    table_shortcut_dialog: Option<TableShortcutDialog>,
+    /// 表快捷组多表选择器；`None` 表示未打开。
+    table_shortcut_picker: Option<TableShortcutPicker>,
+    /// 等待连接打开后继续打开的表（连接未打开时由表快捷组登记）。
+    pending_table_shortcut_open: Option<(ConnectionId, ObjectPath)>,
     command_palette: CommandPaletteState,
     query_history_connection_select:
         Entity<SelectState<SearchableVec<QueryHistoryConnectionFilterItem>>>,

@@ -308,8 +308,19 @@ fn settings_shortcuts_panel(
                 cx,
             ));
         }
+        // 编号直达是固定保留键位，只展示不可编辑；表快捷组不允许占用这些键。
+        if application {
+            group = group.child(settings_preference_row(
+                tr("app.table_shortcuts.tab_slot"),
+                tr("app.table_shortcuts.tab_slot_detail"),
+                AppIcon::Key,
+                "⌥1–9 / Alt+1–9",
+                colors,
+            ));
+        }
         panel = panel.child(group);
     }
+    panel = panel.child(settings_table_shortcut_groups(settings, colors, window, cx));
     panel.child(
         settings_panel_group(tr("app.settings.shortcuts.group.sql_editor"), colors)
             .child(settings_preference_row(
@@ -393,21 +404,21 @@ fn settings_shortcut_row(
                         return;
                     };
                     let settings = &this.settings_editor_draft;
-                    if let Some(conflict) = SHORTCUT_DEFINITIONS.iter().find(|other| {
-                        other.id != definition.id && current_shortcut(settings, other) == spec
-                    }) {
-                        let (conflict_title, _) = shortcut_text(conflict);
-                        this.show_message(
-                            format!(
-                                "{} {}",
-                                tr("app.settings.shortcuts.conflict_prefix"),
-                                conflict_title
-                            ),
-                            AppMessageKind::Warning,
-                            cx,
-                        );
-                        cx.stop_propagation();
-                        return;
+                    // 冲突范围与应用内一致：其它应用快捷键、已建表快捷组与保留键位。
+                    // 只有“重新录制了本快捷键自己的当前键位”不算冲突。
+                    match table_shortcut_conflict(settings, &spec, None) {
+                        Some(ShortcutConflict::AppShortcut(other)) if other.id == definition.id => {}
+                        Some(_) => {
+                            let message =
+                                table_shortcut_conflict_message(settings, &spec, None)
+                                    .unwrap_or_else(|| {
+                                        tr("app.settings.shortcuts.conflict_prefix").to_string()
+                                    });
+                            this.show_message(message.as_str(), AppMessageKind::Warning, cx);
+                            cx.stop_propagation();
+                            return;
+                        }
+                        None => {}
                     }
                     apply_shortcut_change(this, definition, &spec, &capture_state, cx);
                     cx.stop_propagation();
