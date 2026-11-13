@@ -58,6 +58,7 @@ mod i18n_e2e_tests {
     include!("i18n_tests/query_summary_layout.rs");
     include!("i18n_tests/query_scope_switch.rs");
     include!("i18n_tests/command_palette.rs");
+    include!("i18n_tests/tab_switching.rs");
     include!("i18n_tests/query_plan_scroll.rs");
     include!("i18n_tests/query_incomplete_footer.rs");
     include!("i18n_tests/sql_completion_mysql_e2e.rs");

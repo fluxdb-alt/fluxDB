@@ -70,7 +70,7 @@ use gpui::prelude::*;
 use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, App, AssetSource, Bounds, ClipboardItem,
     Context, Div, DragMoveEvent, Empty, Entity, FocusHandle, Focusable, Hsla, IntoElement,
-    KeyBinding, KeyDownEvent, Keystroke, ListAlignment, ListState, Menu, MouseButton,
+    KeyBinding, KeyDownEvent, KeyUpEvent, Keystroke, ListAlignment, ListState, Menu, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, NoAction, PathPromptOptions, Pixels, Point,
     Render, Role, ScrollHandle, ScrollStrategy, SharedString, Size, Stateful,
     StatefulInteractiveElement, Subscription, Task, TitlebarOptions, Transformation,

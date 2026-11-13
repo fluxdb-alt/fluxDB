@@ -67,6 +67,9 @@ enum CommandPaletteCommand {
     ToggleSidebar,
     QuickOpenTable,
     QueryHistory,
+    NextTab,
+    PreviousTab,
+    OpenTabSwitcher,
     OpenSettings,
     ToggleTheme,
     OpenDataSearch,
@@ -137,6 +140,27 @@ const COMMAND_PALETTE_COMMANDS: &[CommandPaletteCommandSpec] = &[
         detail_key: "app.command_palette.command.query_history_detail",
         icon: AppIcon::FileSearch,
         shortcut_id: Some("query.search_history"),
+    },
+    CommandPaletteCommandSpec {
+        command: CommandPaletteCommand::NextTab,
+        title_key: "app.shortcuts.next_tab",
+        detail_key: "app.shortcuts.next_tab_detail",
+        icon: AppIcon::ChevronRight,
+        shortcut_id: Some("app.next_tab"),
+    },
+    CommandPaletteCommandSpec {
+        command: CommandPaletteCommand::PreviousTab,
+        title_key: "app.shortcuts.previous_tab",
+        detail_key: "app.shortcuts.previous_tab_detail",
+        icon: AppIcon::ChevronLeft,
+        shortcut_id: Some("app.previous_tab"),
+    },
+    CommandPaletteCommandSpec {
+        command: CommandPaletteCommand::OpenTabSwitcher,
+        title_key: "app.shortcuts.tab_switcher",
+        detail_key: "app.shortcuts.tab_switcher_detail",
+        icon: AppIcon::List,
+        shortcut_id: Some("app.tab_switcher"),
     },
     CommandPaletteCommandSpec {
         command: CommandPaletteCommand::OpenSettings,
@@ -365,6 +389,15 @@ impl NavicatMain {
                 CommandPaletteCommand::QuickOpenTable => self.open_quick_open_table(window, cx),
                 CommandPaletteCommand::QueryHistory => {
                     self.show_query_history_quick_search(window, cx)
+                }
+                CommandPaletteCommand::NextTab => {
+                    self.next_tab_action(&NextTab, window, cx)
+                }
+                CommandPaletteCommand::PreviousTab => {
+                    self.previous_tab_action(&PreviousTab, window, cx)
+                }
+                CommandPaletteCommand::OpenTabSwitcher => {
+                    self.open_tab_switcher_action(&OpenTabSwitcher, window, cx)
                 }
                 CommandPaletteCommand::OpenSettings => {
                     self.dispatch(AppCommand::OpenSettings, cx);
@@ -627,6 +660,9 @@ impl NavicatMain {
             }
             CommandPaletteCommand::QuickOpenTable => self.quick_open_table_scope().is_some(),
             CommandPaletteCommand::QueryHistory => !state.query_history.is_empty(),
+            CommandPaletteCommand::NextTab
+            | CommandPaletteCommand::PreviousTab
+            | CommandPaletteCommand::OpenTabSwitcher => active_tab.is_some(),
             CommandPaletteCommand::OpenDataSearch => {
                 self.active_searchable_data_tab_id().is_some()
             }
@@ -1065,6 +1101,7 @@ fn command_palette_row(
         .id(("command-palette-row", index))
         .debug_selector(move || row_selector.clone())
         .h(px(50.))
+        .flex_none()
         .rounded(colors.radius_lg)
         .px_3()
         .flex()

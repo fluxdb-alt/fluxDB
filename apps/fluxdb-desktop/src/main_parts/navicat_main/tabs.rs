@@ -36,15 +36,150 @@ impl NavicatMain {
         self.command_palette.open = false;
         if self.tab_switcher == Some(kind) {
             self.tab_switcher = None;
+            self.tab_switcher_commit_on_ctrl_release = false;
+            self.focus_handle.focus(window, cx);
         } else {
             self.tab_switcher = Some(kind);
+            self.tab_switcher_commit_on_ctrl_release = false;
             self.tab_switcher_search.clear();
+            let entries = tab_switcher_entries_for_app(self, kind, "");
+            self.tab_switcher_selected = entries
+                .iter()
+                .position(|entry| entry.active)
+                .unwrap_or(0);
+            self.tab_switcher_scroll
+                .scroll_to_item(self.tab_switcher_selected);
+            self.tab_switcher_scroll_pending = true;
             self.tab_switcher_search_input.update(cx, |input, cx| {
                 input.set_value(String::new(), window, cx);
                 input.focus(window, cx);
             });
         }
         cx.notify();
+    }
+
+    fn next_tab_action(
+        &mut self,
+        _: &NextTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tab_switcher.is_none() {
+            self.open_tab_switcher_action(&OpenTabSwitcher, window, cx);
+        }
+        self.tab_switcher_commit_on_ctrl_release = true;
+        self.tab_switcher_next_action(&TabSwitcherNext, window, cx);
+    }
+
+    fn previous_tab_action(
+        &mut self,
+        _: &PreviousTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tab_switcher.is_none() {
+            self.open_tab_switcher_action(&OpenTabSwitcher, window, cx);
+        }
+        self.tab_switcher_commit_on_ctrl_release = true;
+        self.tab_switcher_previous_action(&TabSwitcherPrevious, window, cx);
+    }
+
+    fn open_tab_switcher_action(
+        &mut self,
+        _: &OpenTabSwitcher,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut kind = preferred_tab_switcher_kind(self.controller.state());
+        if tab_switcher_entries_for_app(self, kind, "").is_empty() {
+            kind = match kind {
+                TabSwitcherKind::Tables => TabSwitcherKind::Databases,
+                TabSwitcherKind::Databases => TabSwitcherKind::Tables,
+            };
+        }
+        self.toggle_tab_switcher(kind, window, cx);
+        self.tab_switcher_commit_on_ctrl_release = false;
+    }
+
+    fn tab_switcher_next_action(
+        &mut self,
+        _: &TabSwitcherNext,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(kind) = self.tab_switcher else {
+            return;
+        };
+        let entries = tab_switcher_entries_for_app(self, kind, &self.tab_switcher_search);
+        if entries.is_empty() {
+            return;
+        }
+        self.tab_switcher_selected = (self.tab_switcher_selected + 1) % entries.len();
+        self.tab_switcher_scroll
+            .scroll_to_item(self.tab_switcher_selected);
+        self.tab_switcher_scroll_pending = true;
+        cx.notify();
+    }
+
+    fn tab_switcher_previous_action(
+        &mut self,
+        _: &TabSwitcherPrevious,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(kind) = self.tab_switcher else {
+            return;
+        };
+        let entries = tab_switcher_entries_for_app(self, kind, &self.tab_switcher_search);
+        if entries.is_empty() {
+            return;
+        }
+        self.tab_switcher_selected =
+            (self.tab_switcher_selected + entries.len() - 1) % entries.len();
+        self.tab_switcher_scroll
+            .scroll_to_item(self.tab_switcher_selected);
+        self.tab_switcher_scroll_pending = true;
+        cx.notify();
+    }
+
+    fn tab_switcher_confirm_action(
+        &mut self,
+        _: &TabSwitcherConfirm,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.confirm_tab_switcher(cx);
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    fn confirm_tab_switcher(&mut self, cx: &mut Context<Self>) {
+        let Some(kind) = self.tab_switcher else {
+            return;
+        };
+        let entries = tab_switcher_entries_for_app(self, kind, &self.tab_switcher_search);
+        let Some(entry) = entries
+            .get(self.tab_switcher_selected.min(entries.len().saturating_sub(1)))
+            .cloned()
+        else {
+            return;
+        };
+        self.tab_switcher = None;
+        self.tab_switcher_commit_on_ctrl_release = false;
+        self.dispatch(AppCommand::ActivateTab(entry.id), cx);
+    }
+
+    fn tab_switcher_cancel_action(
+        &mut self,
+        _: &TabSwitcherCancel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tab_switcher.take().is_some() {
+            self.tab_switcher_commit_on_ctrl_release = false;
+            self.focus_handle.focus(window, cx);
+            cx.notify();
+        }
     }
 
     fn toggle_tab_pin(&mut self, tab_id: TabId, cx: &mut Context<Self>) {

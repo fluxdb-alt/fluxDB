@@ -1582,6 +1582,7 @@ enum TabSwitcherKind {
 struct TabSwitcherEntry {
     id: TabId,
     title: String,
+    detail: Option<String>,
     active: bool,
     icon: AppIcon,
 }

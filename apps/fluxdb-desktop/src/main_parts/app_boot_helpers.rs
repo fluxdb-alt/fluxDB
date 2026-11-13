@@ -270,6 +270,56 @@ fn open_command_palette_from_root(cx: &mut App) {
     });
 }
 
+fn next_tab_from_root(cx: &mut App) {
+    let Some(window) = cx
+        .active_window()
+        .or_else(|| cx.windows().into_iter().next())
+        .and_then(|handle| handle.downcast::<Root>())
+    else {
+        return;
+    };
+    let _ = window.update(cx, |root, window, cx| {
+        let Some(main) = navicat_main_from_root(root) else {
+            return;
+        };
+        main.update(cx, |main, cx| main.next_tab_action(&NextTab, window, cx));
+    });
+}
+
+fn previous_tab_from_root(cx: &mut App) {
+    let Some(window) = cx
+        .active_window()
+        .or_else(|| cx.windows().into_iter().next())
+        .and_then(|handle| handle.downcast::<Root>())
+    else {
+        return;
+    };
+    let _ = window.update(cx, |root, window, cx| {
+        let Some(main) = navicat_main_from_root(root) else {
+            return;
+        };
+        main.update(cx, |main, cx| main.previous_tab_action(&PreviousTab, window, cx));
+    });
+}
+
+fn open_tab_switcher_from_root(cx: &mut App) {
+    let Some(window) = cx
+        .active_window()
+        .or_else(|| cx.windows().into_iter().next())
+        .and_then(|handle| handle.downcast::<Root>())
+    else {
+        return;
+    };
+    let _ = window.update(cx, |root, window, cx| {
+        let Some(main) = navicat_main_from_root(root) else {
+            return;
+        };
+        main.update(cx, |main, cx| {
+            main.open_tab_switcher_action(&OpenTabSwitcher, window, cx)
+        });
+    });
+}
+
 /// Windows/Linux：系统关窗（如 Alt+F4）时先做未保存检查。
 ///
 /// 有未保存内容则阻止本次关闭并弹确认框，由确认按钮执行真正退出。
@@ -316,6 +366,18 @@ fn register_shortcuts(cx: &mut App, settings: &Settings) {
     cx.on_action(|_: &CommandPalette, cx| {
         cx.stop_propagation();
         cx.defer(open_command_palette_from_root);
+    });
+    cx.on_action(|_: &NextTab, cx| {
+        cx.stop_propagation();
+        cx.defer(next_tab_from_root);
+    });
+    cx.on_action(|_: &PreviousTab, cx| {
+        cx.stop_propagation();
+        cx.defer(previous_tab_from_root);
+    });
+    cx.on_action(|_: &OpenTabSwitcher, cx| {
+        cx.stop_propagation();
+        cx.defer(open_tab_switcher_from_root);
     });
     cx.bind_keys([KeyBinding::new(
         if cfg!(target_os = "macos") {
@@ -370,6 +432,10 @@ fn register_shortcuts(cx: &mut App, settings: &Settings) {
             Some("CommandPalette"),
         ),
         KeyBinding::new("escape", CommandPaletteCancel, Some("CommandPalette")),
+        KeyBinding::new("up", TabSwitcherPrevious, Some("TabSwitcher")),
+        KeyBinding::new("down", TabSwitcherNext, Some("TabSwitcher")),
+        KeyBinding::new("enter", TabSwitcherConfirm, Some("TabSwitcher")),
+        KeyBinding::new("escape", TabSwitcherCancel, Some("TabSwitcher")),
         KeyBinding::new("escape", CancelDialog, None),
         KeyBinding::new(
             "delete",
