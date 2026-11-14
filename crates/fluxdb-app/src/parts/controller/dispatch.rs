@@ -206,6 +206,22 @@ impl AppController {
                     Err(error) => AppEvent::Failed(error),
                 }
             }
+            AppCommand::LoadRelationRows {
+                tab_id,
+                key,
+                object,
+                filters,
+                limit,
+            } => {
+                // 关系预览只读少量行：limit 由桌面端限制，这里不再放大。
+                let result = self
+                    .load_data_page(&object, Pagination::new(0, limit), &[], &filters, None);
+                AppEvent::RelationRowsLoaded {
+                    tab_id,
+                    key,
+                    result,
+                }
+            }
             AppCommand::CreateErRelationship {
                 scope_key,
                 relationship,

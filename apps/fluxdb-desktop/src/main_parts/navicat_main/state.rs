@@ -1166,6 +1166,40 @@ struct NavicatMain {
     data_change_sql_preview_tabs: BTreeSet<TabId>,
     data_filter_panels: BTreeSet<TabId>,
     data_filter_rules: BTreeMap<TabId, Vec<DataFilterRule>>,
+    /// 右侧关系面板打开的表页。
+    data_relation_panels: BTreeSet<TabId>,
+    /// 当前库外键关系边缓存（与 ER 图共享后台缓存，这里只保存给面板渲染的快照）。
+    data_relation_edges: BTreeMap<TabId, Vec<fluxdb_core::ErForeignKeyEdge>>,
+    /// 当前库 ER 逻辑关系（无物理外键时也能从数据页导航）。
+    data_logical_relationships: BTreeMap<TabId, Vec<fluxdb_core::ErRelationship>>,
+    data_relation_loading: BTreeSet<TabId>,
+    data_relation_failed: BTreeSet<TabId>,
+    _data_relation_tasks: BTreeMap<TabId, Task<()>>,
+    _data_logical_relationship_tasks: BTreeMap<TabId, Task<()>>,
+    /// 关系面板已展开的条目（键 = 标签页 + 链接身份）。
+    data_relation_expanded: BTreeSet<(TabId, String)>,
+    /// 展开条目的首屏预览（每个链接最多一页，避免为面板常驻大结果）。
+    data_relation_previews: BTreeMap<(TabId, String), RelationPreviewState>,
+    _data_relation_preview_tasks: BTreeMap<(TabId, String), Task<()>>,
+    /// 数据页视图模式；表单视图只改布局，编辑仍走同一改动集。
+    data_view_modes: BTreeMap<TabId, DataViewMode>,
+    /// 表单视图按列复用的输入框；切回表格时保留，标签页关闭时释放。
+    data_form_inputs: BTreeMap<(TabId, usize), Entity<InputState>>,
+    _data_form_input_subscriptions: BTreeMap<(TabId, usize), Subscription>,
+    /// 表单输入框最近同步的源行；换行才重填，避免覆盖正在输入的内容。
+    data_form_synced_row: BTreeMap<TabId, usize>,
+    /// 表单输入框上次由页面回填的文本；与输入框当前文本不一致即视为用户未提交的编辑，
+    /// 逐帧同步时不得用页面旧值覆盖（失焦提交失败时也不丢输入）。
+    data_form_synced_texts: BTreeMap<(TabId, usize), String>,
+    /// 表单底栏实体：订阅输入框变化，只重绘按钮状态，避免逐键重建整个窗口。
+    data_form_footers: BTreeMap<TabId, Entity<DataFormFooter>>,
+    /// 正在用页面值程序化回填输入框；期间的 Change 不再刷新底栏（切行时批量回填）。
+    data_form_syncing_inputs: bool,
+    /// 已展开候选下拉的表单字段（标签页 + 列下标）；同一标签页同时只展开一个。
+    data_form_choice_menus: BTreeSet<(TabId, usize)>,
+    /// 右侧关系面板宽度（像素）。
+    data_relation_panel_widths: BTreeMap<TabId, f32>,
+    data_relation_panel_resize_start: Option<DataRelationPanelResizeStart>,
     data_sort_rules: BTreeMap<TabId, Vec<DataSortRule>>,
     data_filter_draft_rules: BTreeMap<TabId, Vec<DataFilterRule>>,
     data_sort_draft_rules: BTreeMap<TabId, Vec<DataSortRule>>,

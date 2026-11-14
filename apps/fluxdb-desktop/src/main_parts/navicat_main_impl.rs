@@ -17,6 +17,8 @@ include!("navicat_main/cell_editing.rs");
 include!("navicat_main/large_value_window.rs");
 include!("navicat_main/filter_text.rs");
 include!("navicat_main/filter_builder.rs");
+include!("navicat_main/relations.rs");
+include!("navicat_main/form_view.rs");
 include!("navicat_main/table_state.rs");
 include!("navicat_main/table_actions.rs");
 include!("navicat_main/routine_actions.rs");

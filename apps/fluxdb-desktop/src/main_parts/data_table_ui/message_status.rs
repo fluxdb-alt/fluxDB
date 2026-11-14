@@ -177,7 +177,12 @@ fn data_cell_edit_text(value: &CellValue) -> String {
 }
 
 fn data_cell_edit_text_unchanged(current: &CellValue, input: &str) -> bool {
-    data_cell_edit_text(current) == input
+    // 大文本/JSON 直接按 &str 比较，避免表单每帧为每个字段复制一份完整文本。
+    match current {
+        CellValue::Null => input.is_empty(),
+        CellValue::Text(value) | CellValue::Json(value) => input == value.as_str(),
+        _ => data_cell_edit_text(current) == input,
+    }
 }
 
 /// 单元格长度：文本按字符数算，不经过 `cell_value_label`。

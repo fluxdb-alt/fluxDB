@@ -2585,7 +2585,10 @@
       "export": "Export",
       "generate": "Generate data",
       "field_filter": "Field filter",
-      "table_info": "Table properties"
+      "table_info": "Table properties",
+      "relations": "Relations",
+      "view_grid": "Grid",
+      "view_form": "Form"
     },
     "toast": {
       "rows_copied": "Copied %{count} rows",
@@ -2690,6 +2693,49 @@
     "search": {
       "label": "Find data:",
       "next": "Next"
+    },
+    "relations": {
+      "title": "Relations",
+      "select_row": "Select a row to view foreign-key relations",
+      "current_row": "Current row",
+      "parents": "References (parent rows)",
+      "children": "Referenced by (child rows)",
+      "loading": "Loading relations…",
+      "load_failed": "Failed to load relations. Please retry",
+      "empty": "No navigable relations for this table",
+      "null_value": "Contains NULL, cannot locate a target row",
+      "logical": "ER design relations",
+      "parent_count": "%{count} keys",
+      "child_count": "%{count} tables",
+      "logical_count": "%{count}",
+      "er": "ER relations",
+      "er_physical": "physical",
+      "er_logical": "design",
+      "er_parent_tag": "parent",
+      "er_child_tag": "child",
+      "er_current_tag": "current",
+      "preview_loading": "Loading preview…",
+      "preview_failed": "Failed to load preview",
+      "preview_empty": "No matching rows",
+      "preview_count": "%{count} rows",
+      "row_count": "%{count} rows",
+      "open_table": "Open in grid"
+    },
+    "form": {
+      "empty": "No rows to show on this page",
+      "position": "%{index} / %{total}",
+      "previous": "Previous",
+      "next": "Next",
+      "pk": "PK",
+      "type_nullable": "%{type} · nullable",
+      "null_placeholder": "NULL",
+      "open_related": "Open %{table}",
+      "save": "Save",
+      "revert": "Revert",
+      "hint": "Press Enter to commit a field; switching rows or saving commits automatically",
+      "record_title": "%{table} record #%{pk}",
+      "all_fields": "All fields · single record view",
+      "ref_null": "NULL — no referenced row to open"
     }
   },
   "query": {

@@ -1660,6 +1660,30 @@ struct DataFilterPanelResizeStart {
     height: f32,
 }
 
+/// 数据页视图模式：表格保持批量浏览，表单聚焦单行编辑（与图一设计稿一致）。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum DataViewMode {
+    #[default]
+    Grid,
+    Form,
+}
+
+/// 关系面板宽度拖拽起点；宽度按标签页记忆。
+#[derive(Clone, Copy, Debug)]
+struct DataRelationPanelResizeStart {
+    tab_id: TabId,
+    x: f32,
+    width: f32,
+}
+
+/// 关系面板条目的展开预览状态。
+#[derive(Clone, Debug)]
+enum RelationPreviewState {
+    Loading,
+    Loaded(fluxdb_core::DataPage),
+    Failed,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct CellDetailDrawerResizeStart {
     tab_id: TabId,
@@ -1726,6 +1750,15 @@ struct DataTableWidthKey {
     query_result_page_index: Option<usize>,
 }
 
+/// 单列外键的跳转目标：目标表身份 + 目标列。
+///
+/// 只对单列外键生成单元格跳转；复合外键没有单值可跳，统一走右侧关系面板。
+#[derive(Clone, Debug, PartialEq)]
+struct ForeignKeyTarget {
+    object: ObjectPath,
+    ref_column: String,
+}
+
 #[derive(Clone)]
 struct DataPageTableDelegate {
     view: WeakEntity<NavicatMain>,
@@ -1734,6 +1767,8 @@ struct DataPageTableDelegate {
     source_column_indexes: Vec<Option<usize>>,
     column_types: Vec<String>,
     column_meta: Vec<DataTableColumnMeta>,
+    /// 源列下标 → 单列外键目标；不存在外键的列为空。
+    foreign_key_targets: BTreeMap<usize, ForeignKeyTarget>,
     /// 当前显示页数据，与结果页缓存共享同一份 `DataPage`；单元格文本在渲染时按需格式化，
     /// 不再为整页预生成第二份文本拷贝（宽结果集下这是与数据同量级的内存开销）。
     page: Arc<DataPage>,

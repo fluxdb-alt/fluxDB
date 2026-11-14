@@ -456,6 +456,13 @@ impl TableDelegate for DataPageTableDelegate {
                     .get(col_ix)
                     .is_some_and(|column| column.key.as_ref() == name)
         });
+        // 只有单列外键且当前值非 NULL 才提供跳转：NULL 没有可定位的引用行，
+        // 复合外键的单列值也不足以唯一定位，避免给出会查错的条件。
+        let foreign_key_jump = (!is_row_index_col)
+            .then(|| self.foreign_key_targets.get(&source_col_ix).cloned())
+            .flatten()
+            .zip(cell_value.cloned())
+            .filter(|(_, value)| !matches!(value, CellValue::Null));
         let cell_bg: Hsla = if cx.theme().is_dark() {
             rgb(0x222832).into()
         } else {
@@ -487,6 +494,7 @@ impl TableDelegate for DataPageTableDelegate {
         let view_for_edit = self.view.clone();
         let view_for_menu = self.view.clone();
         let view_for_info = self.view.clone();
+        let view_for_fk = self.view.clone();
         let meta_for_menu =
             self.column_meta
                 .get(col_ix)
@@ -780,6 +788,25 @@ impl TableDelegate for DataPageTableDelegate {
                     },
                 )
             })
+            .when_some(
+                foreign_key_jump.filter(|_| hovered && !redis_cell),
+                |this, (target, value)| {
+                    this.child(
+                        data_table_cell_foreign_key_action(cx)
+                        .debug_selector(move || format!("data-cell-fk-jump:{row_ix}:{col_ix}"))
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            let _ = view_for_fk.update(cx, |this, cx| {
+                                this.open_related_table(
+                                    target.object.clone(),
+                                    vec![(target.ref_column.clone(), value.clone())],
+                                    cx,
+                                );
+                            });
+                            cx.stop_propagation();
+                        }),
+                    )
+                },
+            )
             .when(hovered && !redis_cell, |this| {
                 this.child(data_table_cell_hover_action(cx).debug_selector(move || {
                     format!("data-cell-detail:{row_ix}:{col_ix}")

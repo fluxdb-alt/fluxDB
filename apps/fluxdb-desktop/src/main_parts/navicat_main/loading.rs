@@ -742,6 +742,7 @@ impl NavicatMain {
             redis_table_width,
             self.data_table_sort_handler(cx),
         );
+        self.apply_foreign_key_targets_to_delegate(tab_id, &mut delegate);
         if !delegate.redis_page {
             self.apply_data_table_column_widths(&mut delegate);
         }

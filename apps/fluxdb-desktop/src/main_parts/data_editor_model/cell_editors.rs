@@ -42,6 +42,52 @@ fn data_table_cell_hover_action(cx: &mut Context<TableState<DataPageTableDelegat
         )
 }
 
+/// 外键单元格的“跳到引用行”浮层。
+///
+/// 与单元格详情按钮分开成两个命中区：详情固定在最右侧，本按钮紧邻其左，
+/// 都不改动单元格文本，双击编辑/复制语义保持原样。
+fn data_table_cell_foreign_key_action(
+    cx: &mut Context<TableState<DataPageTableDelegate>>,
+) -> Div {
+    let container_bg = if cx.theme().is_dark() {
+        rgb(0x252a31)
+    } else {
+        rgb(0xf3f5f8)
+    };
+    let border = if cx.theme().is_dark() {
+        rgb(0x535b66)
+    } else {
+        rgb(0xc8ced8)
+    };
+    let text = if cx.theme().is_dark() {
+        rgb(0x7cb3ff)
+    } else {
+        rgb(0x1677ff)
+    };
+
+    div()
+        .absolute()
+        .right(px(22.))
+        .top_0()
+        .bottom_0()
+        .w(px(26.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(container_bg)
+        .child(
+            div()
+                .size(px(16.))
+                .rounded_full()
+                .border_1()
+                .border_color(border)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(app_icon(AppIcon::Link, 11., text)),
+        )
+}
+
 fn data_cell_temporal_picker(
     kind: DataCellTemporalKind,
     edit_input: Entity<InputState>,

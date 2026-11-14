@@ -343,9 +343,27 @@ impl NavicatMain {
                 let still_open = this.er_proposal_modal.borrow().dialog_open;
                 match event {
                     fluxdb_app::AppEvent::ErRelationshipProposalsAdopted {
+                        scope_key,
                         relationships,
-                        ..
                     } => {
+                        this.refresh_logical_relationships_for_scope(
+                            &scope_key,
+                            |rows| {
+                                for adopted in &relationships {
+                                    if let Some(existing) =
+                                        rows.iter_mut().find(|row| row.id == adopted.id)
+                                    {
+                                        *existing = adopted.clone();
+                                    } else {
+                                        rows.push(adopted.clone());
+                                    }
+                                }
+                                rows.sort_by(|a, b| {
+                                    a.role.cmp(&b.role).then_with(|| a.id.cmp(&b.id))
+                                });
+                            },
+                            cx,
+                        );
                         let session_id = this
                             .controller
                             .state()

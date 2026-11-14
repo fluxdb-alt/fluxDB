@@ -176,6 +176,7 @@ impl DataPageTableDelegate {
             source_column_indexes,
             column_types,
             column_meta,
+            foreign_key_targets: BTreeMap::new(),
             page,
             source_row_indexes,
             null_cells,
@@ -305,6 +306,83 @@ fn cell_value_equals(value: &CellValue, expected: &str) -> bool {
 }
 
 impl DataPageTableDelegate {
+    /// 按当前表的列与已读到的外键元数据建立「单元格 → 引用行」映射。
+    ///
+    /// 只收录单列外键：复合外键需要一组值才能定位目标行，单元格上的单值跳转
+    /// 会产生错误条件，统一留给关系面板用多条件打开。
+    fn apply_foreign_key_targets(&mut self, object: &ObjectPath, foreign_keys: &[ForeignKeyInfo]) {
+        self.foreign_key_targets.clear();
+        for foreign_key in foreign_keys {
+            self.insert_foreign_key_target(object, foreign_key);
+        }
+    }
+
+    /// 叠加 ER 逻辑关系目标：物理外键优先，逻辑关系只补空缺目标。
+    ///
+    /// 逻辑关系由本地 ER 模型给出，可能与物理外键描述同一列；保留已存在目标
+    /// 可避免设计关系覆盖数据库真实约束。
+    fn apply_logical_relationship_targets(
+        &mut self,
+        object: &ObjectPath,
+        relationships: &[fluxdb_core::ErRelationship],
+    ) {
+        for foreign_key in logical_relationship_foreign_keys(object, relationships) {
+            let Some(source_index) = self.column_index_for_foreign_key(&foreign_key) else {
+                continue;
+            };
+            if self.foreign_key_targets.contains_key(&source_index) {
+                continue;
+            }
+            self.insert_foreign_key_target(object, &foreign_key);
+        }
+    }
+
+    fn column_index_for_foreign_key(&self, foreign_key: &ForeignKeyInfo) -> Option<usize> {
+        let columns = if foreign_key.columns.is_empty() {
+            std::slice::from_ref(&foreign_key.column)
+        } else {
+            foreign_key.columns.as_slice()
+        };
+        let [source_column] = columns else {
+            return None;
+        };
+        self.page
+            .columns
+            .iter()
+            .position(|column| column.name == *source_column)
+    }
+
+    fn insert_foreign_key_target(&mut self, object: &ObjectPath, foreign_key: &ForeignKeyInfo) {
+        // 契约：列对为空时回退到单列的 column/ref_column（部分驱动只填后者）；
+        // 复合外键没有单值可跳，留给关系面板。
+        let ref_columns = if foreign_key.ref_columns.is_empty() {
+            std::slice::from_ref(&foreign_key.ref_column)
+        } else {
+            foreign_key.ref_columns.as_slice()
+        };
+        let [ref_column] = ref_columns else {
+            return;
+        };
+        let Some(source_index) = self.column_index_for_foreign_key(foreign_key) else {
+            return;
+        };
+        let target = ForeignKeyTarget {
+            object: ObjectPath {
+                connection_id: object.connection_id,
+                database: object.database.clone(),
+                // 外键元数据没写引用端 schema 时沿用当前表 schema（同 schema 引用的常见情形）。
+                schema: foreign_key
+                    .ref_schema
+                    .clone()
+                    .or_else(|| object.schema.clone()),
+                name: foreign_key.ref_table.clone(),
+                kind: ObjectKind::Table,
+            },
+            ref_column: ref_column.clone(),
+        };
+        self.foreign_key_targets.insert(source_index, target);
+    }
+
     /// 单元格完整显示文本（换行折叠）。只在编辑/右键/复制等交互时调用。
     fn data_cell_full_text(&self, row_ix: usize, col_ix: usize) -> String {
         if self.show_row_index && col_ix == 0 {
