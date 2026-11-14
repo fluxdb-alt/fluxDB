@@ -4,18 +4,18 @@ impl NavicatMain {
     // 通用编辑器不感知 SQL 语义，以下方法基于编辑器文本 / 选区 + 适配层语句切分，
     // 提供 statement / selection 语义，供执行路径与工具栏使用。
 
-    /// 取查询页当前文本。
-    fn query_editor_text(&self, tab_id: TabId, cx: &Context<Self>) -> String {
+    /// 取查询屏当前文本。
+    fn query_editor_text(&self, key: QueryPaneKey, cx: &Context<Self>) -> String {
         self.query_editors
-            .get(&tab_id)
+            .get(&key)
             .map(|editor| editor.read(cx).text())
             .unwrap_or_default()
     }
 
     /// 取当前选区字节区间（空选区为 `cursor..cursor`）。
-    fn query_selection_range(&self, tab_id: TabId, cx: &Context<Self>) -> std::ops::Range<usize> {
+    fn query_selection_range(&self, key: QueryPaneKey, cx: &Context<Self>) -> std::ops::Range<usize> {
         self.query_editors
-            .get(&tab_id)
+            .get(&key)
             .map(|editor| {
                 let range = editor.read(cx).selection_range();
                 range.start..range.end
@@ -24,9 +24,9 @@ impl NavicatMain {
     }
 
     /// 取当前全部语句列表（带稳定 id）。
-    fn query_statement_runs(&self, tab_id: TabId, cx: &Context<Self>) -> Vec<SqlStatementRun> {
-        let text = self.query_editor_text(tab_id, cx);
-        sql_editor_adapter::build_statement_runs(&text, self.query_editor_database_kind(tab_id))
+    fn query_statement_runs(&self, key: QueryPaneKey, cx: &Context<Self>) -> Vec<SqlStatementRun> {
+        let text = self.query_editor_text(key, cx);
+        sql_editor_adapter::build_statement_runs(&text, self.query_editor_database_kind(key.tab_id))
     }
 
     /// 语句执行状态映射：写入某条语句状态（语句被编辑后 id 变化自然衰减）。
@@ -35,26 +35,26 @@ impl NavicatMain {
     /// 即时反映运行结果。仓库为空（无该 tab 的仓库）时仅记日志，不 panic。
     fn set_statement_status(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         id: SqlStatementId,
         status: SqlStatementStatus,
         cx: &mut Context<Self>,
     ) {
-        if let Some(store) = self.query_statement_statuses.get(&tab_id) {
+        if let Some(store) = self.query_statement_statuses.get(&key) {
             if let Ok(mut map) = store.lock() {
                 map.set_id_status(id, status);
             }
         }
-        if let Some(editor) = self.query_editors.get(&tab_id) {
+        if let Some(editor) = self.query_editors.get(&key) {
             let editor = editor.clone();
             editor.update(cx, |_, cx| cx.notify());
         }
     }
 
     /// 选中的 SQL 文本（非空选区且 trim 后非空）。
-    fn selected_sql_text(&self, tab_id: TabId, cx: &Context<Self>) -> Option<String> {
-        let text = self.query_editor_text(tab_id, cx);
-        let range = self.query_selection_range(tab_id, cx);
+    fn selected_sql_text(&self, key: QueryPaneKey, cx: &Context<Self>) -> Option<String> {
+        let text = self.query_editor_text(key, cx);
+        let range = self.query_selection_range(key, cx);
         if range.start >= range.end {
             return None;
         }
@@ -63,42 +63,42 @@ impl NavicatMain {
     }
 
     /// 选区恰好完整命中某条语句（trim 语义对齐旧实现）时返回该语句。
-    fn selected_complete_statement(&self, tab_id: TabId, cx: &Context<Self>) -> Option<SqlStatementRun> {
-        let text = self.query_editor_text(tab_id, cx);
-        let range = self.query_selection_range(tab_id, cx);
+    fn selected_complete_statement(&self, key: QueryPaneKey, cx: &Context<Self>) -> Option<SqlStatementRun> {
+        let text = self.query_editor_text(key, cx);
+        let range = self.query_selection_range(key, cx);
         let selected = trim_range(&text, range)?;
         // 普通 SQL 的语句区间不含结尾分号，但用户全选一整行时通常会把 `;` 一起选进来。
         // 比较前去掉选区的结尾分号，避免“完整语句却按钮不可用”。
         let selected_text = &text[selected.clone()];
-        sql_editor_adapter::build_statement_runs(&text, self.query_editor_database_kind(tab_id))
+        sql_editor_adapter::build_statement_runs(&text, self.query_editor_database_kind(key.tab_id))
             .into_iter()
             .find(|statement| selection_matches_statement(selected_text, &statement.text))
     }
 
     /// 光标所在语句。
-    fn current_statement(&self, tab_id: TabId, cx: &Context<Self>) -> Option<SqlStatementRun> {
-        let text = self.query_editor_text(tab_id, cx);
+    fn current_statement(&self, key: QueryPaneKey, cx: &Context<Self>) -> Option<SqlStatementRun> {
+        let text = self.query_editor_text(key, cx);
         let cursor = self
             .query_editors
-            .get(&tab_id)
+            .get(&key)
             .map(|editor| editor.read(cx).cursor_offset())
             .unwrap_or(0)
             .min(text.len());
-        sql_editor_adapter::build_statement_runs(&text, self.query_editor_database_kind(tab_id))
+        sql_editor_adapter::build_statement_runs(&text, self.query_editor_database_kind(key.tab_id))
             .into_iter()
             .find(|statement| statement.range.start <= cursor && cursor <= statement.range.end)
     }
 
     /// 当前选中语句的 EXPLAIN 版本（仅 `EXPLAIN` 前缀方言的 EXPLAIN / SELECT / WITH）。
-    fn selected_explain_sql_text(&self, tab_id: TabId, cx: &Context<Self>) -> Option<String> {
+    fn selected_explain_sql_text(&self, key: QueryPaneKey, cx: &Context<Self>) -> Option<String> {
         // 与 Run 的取数顺序一致：完整语句选区 → 选区原文 → 光标所在语句。
         // 用户选了什么就解释什么，不会偷偷换成全文或另一条语句。
         let source = self
-            .selected_complete_statement(tab_id, cx)
+            .selected_complete_statement(key, cx)
             .map(|statement| statement.text)
-            .or_else(|| self.selected_sql_text(tab_id, cx))
-            .or_else(|| self.current_statement(tab_id, cx).map(|statement| statement.text))?;
-        sql_editor_adapter::explain_sql_text(&source, self.query_editor_database_kind(tab_id))
+            .or_else(|| self.selected_sql_text(key, cx))
+            .or_else(|| self.current_statement(key, cx).map(|statement| statement.text))?;
+        sql_editor_adapter::explain_sql_text(&source, self.query_editor_database_kind(key.tab_id))
     }
 
     /// 编辑器触发 Execute 事件时的统一入口：按区间还原语句执行，否则按文本执行。
@@ -106,14 +106,14 @@ impl NavicatMain {
     /// Explain 路由到 EXPLAIN 包装路径，Run/Select 走语句/文本执行（整改 6.1/6.2 模式保真）。
     fn start_query_execute_event(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         editor: Entity<editor_component::Editor>,
         range: fluxdb_editor_core::Range,
         mode: fluxdb_editor_core::ExecuteMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self._query_execute_tasks.contains_key(&tab_id.0) {
+        if self._query_execute_tasks.contains_key(&key) {
             self.show_message(tr("app.query.error.running").as_ref(), AppMessageKind::Warning, cx);
             return;
         }
@@ -121,7 +121,7 @@ impl NavicatMain {
         // 事件不再携带全文，文本在此按需从编辑器读取。
         let full = editor.read(cx).text();
         let statement =
-            sql_editor_adapter::build_statement_runs(&full, self.query_editor_database_kind(tab_id))
+            sql_editor_adapter::build_statement_runs(&full, self.query_editor_database_kind(key.tab_id))
             .into_iter()
             .find(|statement| {
                 statement.range.start == range.start && statement.range.end == range.end
@@ -148,13 +148,13 @@ impl NavicatMain {
             }
             match sql_editor_adapter::explain_sql_text(
                 &source,
-                self.query_editor_database_kind(tab_id),
+                self.query_editor_database_kind(key.tab_id),
             ) {
                 Some(explain) => {
-                    // 手写 EXPLAIN 已由 explain_sql_text 原样返回；这里只接管页签，
+                    // 手写 EXPLAIN 已由 explain_sql_text 原样返回；这里只接管该屏结果页，
                     // 不改变用户语句，避免重复包装或误判实际执行。
-                    self.query_output_tabs.insert(tab_id, QueryOutputTab::Plan);
-                    self.start_query_text_execution(tab_id, explain, window, cx);
+                    self.query_output_tabs.insert(key, QueryOutputTab::Plan);
+                    self.start_query_text_execution(key, explain, window, cx);
                 }
                 None => {
                     self.show_message(tr("app.query.error.explain_unsupported").as_ref(), AppMessageKind::Warning, cx);
@@ -165,12 +165,12 @@ impl NavicatMain {
 
         // Run / Select：按语句或区间文本执行（Select 为只读语义，与 Run 共享执行流程）。
         if let Some(statement) = statement {
-            self.start_query_statement_execution(tab_id, editor, statement, window, cx);
+            self.start_query_statement_execution(key, editor, statement, window, cx);
         } else {
             let text = editor
                 .read(cx)
                 .text_in_range(fluxdb_editor_core::Range::new(range.start, range.end));
-            self.start_query_text_execution(tab_id, text, window, cx);
+            self.start_query_text_execution(key, text, window, cx);
         }
     }
 }
@@ -212,19 +212,19 @@ fn trim_range(text: &str, range: std::ops::Range<usize>) -> Option<std::ops::Ran
 impl NavicatMain {
     fn start_query_statement_execution(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         sql_editor: Entity<editor_component::Editor>,
         statement: SqlStatementRun,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self._query_execute_tasks.contains_key(&tab_id.0) {
+        if self._query_execute_tasks.contains_key(&key) {
             self.show_message(tr("app.query.error.running").as_ref(), AppMessageKind::Warning, cx);
             return;
         }
 
         if self.prepare_query_parameter_prompt(
-            tab_id,
+            key,
             &statement.text,
             PendingQueryExecution::Statement {
                 statement: statement.clone(),
@@ -235,7 +235,7 @@ impl NavicatMain {
             return;
         }
         if self.request_dangerous_query_confirmation(
-            tab_id,
+            key,
             &statement.text,
             PendingQueryExecution::Statement {
                 statement: statement.clone(),
@@ -246,7 +246,7 @@ impl NavicatMain {
         }
 
         self.start_query_statement_execution_resolved(
-            tab_id,
+            key,
             sql_editor,
             statement.clone(),
             statement.text.clone(),
@@ -256,28 +256,39 @@ impl NavicatMain {
 
     fn start_query_statement_execution_resolved(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         _sql_editor: Entity<editor_component::Editor>,
         statement: SqlStatementRun,
         text: String,
         cx: &mut Context<Self>,
     ) {
-        if self._query_execute_tasks.contains_key(&tab_id.0) {
+        if self._query_execute_tasks.contains_key(&key) {
             self.show_message(tr("app.query.error.running").as_ref(), AppMessageKind::Warning, cx);
             return;
         }
 
         self.query_execution_sources
-            .insert(tab_id, vec![statement.clone()]);
-        self.set_statement_status(tab_id, statement.id, SqlStatementStatus::Running, cx);
-        self.dispatch(AppCommand::StartQueryExecution(tab_id), cx);
+            .insert(key, vec![statement.clone()]);
+        self.set_statement_status(key, statement.id, SqlStatementStatus::Running, cx);
+        self.dispatch(
+            AppCommand::StartQueryExecution {
+                tab_id: key.tab_id,
+                pane_id: key.pane_id,
+            },
+            cx,
+        );
         let mut controller = self.controller.clone();
         let statement_id = statement.id;
+        let tab_id = key.tab_id;
         let task = cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move {
-                    match controller.dispatch(AppCommand::ExecuteQueryText { tab_id, text }) {
-                        AppEvent::QueryFinished(_, execution) => Ok(execution),
+                    match controller.dispatch(AppCommand::ExecuteQueryText {
+                        tab_id,
+                        pane_id: key.pane_id,
+                        text,
+                    }) {
+                        AppEvent::QueryFinished(_, _, execution) => Ok(execution),
                         AppEvent::Failed(error) => Err(error),
                         _ => Err(fluxdb_core::UserFacingError {
                             title: tr("app.query.error.execution").to_string(),
@@ -294,7 +305,7 @@ impl NavicatMain {
                     return;
                 };
                 view.update(cx, |this, cx| {
-                    this._query_execute_tasks.remove(&tab_id.0);
+                    this._query_execute_tasks.remove(&key);
                     let status = if result
                         .as_ref()
                         .is_ok_and(|execution| execution.summaries.iter().all(|summary| summary.success))
@@ -303,7 +314,7 @@ impl NavicatMain {
                     } else {
                         SqlStatementStatus::Failure
                     };
-                    this.set_statement_status(tab_id, statement_id, status, cx);
+                    this.set_statement_status(key, statement_id, status, cx);
                     let tab_still_exists = this
                         .controller
                         .state()
@@ -313,7 +324,8 @@ impl NavicatMain {
                     if tab_still_exists {
                         this.dispatch(
                             AppCommand::FinishQueryExecution {
-                                tab_id,
+                                tab_id: key.tab_id,
+                                pane_id: key.pane_id,
                                 result,
                             },
                             cx,
@@ -322,23 +334,23 @@ impl NavicatMain {
                 });
             });
         });
-        self._query_execute_tasks.insert(tab_id.0, task);
+        self._query_execute_tasks.insert(key, task);
     }
 
     fn start_query_text_execution(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         text: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self._query_execute_tasks.contains_key(&tab_id.0) {
+        if self._query_execute_tasks.contains_key(&key) {
             self.show_message(tr("app.query.error.running").as_ref(), AppMessageKind::Warning, cx);
             return;
         }
 
         if self.prepare_query_parameter_prompt(
-            tab_id,
+            key,
             &text,
             PendingQueryExecution::Text,
             window,
@@ -346,33 +358,44 @@ impl NavicatMain {
         ) {
             return;
         }
-        if self.request_dangerous_query_confirmation(tab_id, &text, PendingQueryExecution::Text, cx)
+        if self.request_dangerous_query_confirmation(key, &text, PendingQueryExecution::Text, cx)
         {
             return;
         }
 
-        self.start_query_text_execution_resolved(tab_id, text, cx);
+        self.start_query_text_execution_resolved(key, text, cx);
     }
 
     fn start_query_text_execution_resolved(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         text: String,
         cx: &mut Context<Self>,
     ) {
-        if self._query_execute_tasks.contains_key(&tab_id.0) {
+        if self._query_execute_tasks.contains_key(&key) {
             self.show_message(tr("app.query.error.running").as_ref(), AppMessageKind::Warning, cx);
             return;
         }
 
-        self.query_execution_sources.remove(&tab_id);
-        self.dispatch(AppCommand::StartQueryExecution(tab_id), cx);
+        self.query_execution_sources.remove(&key);
+        self.dispatch(
+            AppCommand::StartQueryExecution {
+                tab_id: key.tab_id,
+                pane_id: key.pane_id,
+            },
+            cx,
+        );
         let mut controller = self.controller.clone();
+        let tab_id = key.tab_id;
         let task = cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move {
-                    match controller.dispatch(AppCommand::ExecuteQueryText { tab_id, text }) {
-                        AppEvent::QueryFinished(_, execution) => Ok(execution),
+                    match controller.dispatch(AppCommand::ExecuteQueryText {
+                        tab_id,
+                        pane_id: key.pane_id,
+                        text,
+                    }) {
+                        AppEvent::QueryFinished(_, _, execution) => Ok(execution),
                         AppEvent::Failed(error) => Err(error),
                         _ => Err(fluxdb_core::UserFacingError {
                             title: tr("app.query.error.execution").to_string(),
@@ -389,7 +412,7 @@ impl NavicatMain {
                     return;
                 };
                 view.update(cx, |this, cx| {
-                    this._query_execute_tasks.remove(&tab_id.0);
+                    this._query_execute_tasks.remove(&key);
                     let tab_still_exists = this
                         .controller
                         .state()
@@ -397,12 +420,19 @@ impl NavicatMain {
                         .iter()
                         .any(|tab| tab.id == tab_id);
                     if tab_still_exists {
-                        this.dispatch(AppCommand::FinishQueryExecution { tab_id, result }, cx);
+                        this.dispatch(
+                            AppCommand::FinishQueryExecution {
+                                tab_id: key.tab_id,
+                                pane_id: key.pane_id,
+                                result,
+                            },
+                            cx,
+                        );
                     }
                 });
             });
         });
-        self._query_execute_tasks.insert(tab_id.0, task);
+        self._query_execute_tasks.insert(key, task);
     }
 
     fn start_query_result_page_refresh(
@@ -410,13 +440,20 @@ impl NavicatMain {
         request: QueryResultRefreshRequest,
         cx: &mut Context<Self>,
     ) {
-        if self._query_execute_tasks.contains_key(&request.tab_id.0) {
+        let key = QueryPaneKey::new(request.tab_id, request.pane_id);
+        if self._query_execute_tasks.contains_key(&key) {
             self.show_message(tr("app.query.error.running").as_ref(), AppMessageKind::Warning, cx);
             return;
         }
 
-        self.query_execution_sources.remove(&request.tab_id);
-        self.dispatch(AppCommand::StartQueryExecution(request.tab_id), cx);
+        self.query_execution_sources.remove(&key);
+        self.dispatch(
+            AppCommand::StartQueryExecution {
+                tab_id: request.tab_id,
+                pane_id: request.pane_id,
+            },
+            cx,
+        );
         let mut controller = self.controller.clone();
         let task = cx.spawn(async move |view, cx| {
             let result = cx
@@ -430,10 +467,11 @@ impl NavicatMain {
                     async move {
                         match controller.dispatch(AppCommand::ExecuteQueryTextWithOptions {
                             tab_id: request.tab_id,
+                            pane_id: request.pane_id,
                             text: sql,
                             options,
                         }) {
-                            AppEvent::QueryFinished(_, execution) => Ok(execution),
+                            AppEvent::QueryFinished(_, _, execution) => Ok(execution),
                             AppEvent::Failed(error) => Err(error),
                             _ => Err(fluxdb_core::UserFacingError {
                                 title: tr("app.query.error.refresh").to_string(),
@@ -451,7 +489,7 @@ impl NavicatMain {
                     return;
                 };
                 view.update(cx, |this, cx| {
-                    this._query_execute_tasks.remove(&request.tab_id.0);
+                    this._query_execute_tasks.remove(&key);
                     let tab_still_exists = this
                         .controller
                         .state()
@@ -462,6 +500,7 @@ impl NavicatMain {
                         this.dispatch(
                             AppCommand::FinishQueryResultPageRefresh {
                                 tab_id: request.tab_id,
+                                pane_id: request.pane_id,
                                 result_index: request.result_index,
                                 page_index: request.page_index,
                                 result,
@@ -472,28 +511,28 @@ impl NavicatMain {
                 });
             });
         });
-        self._query_execute_tasks.insert(request.tab_id.0, task);
+        self._query_execute_tasks.insert(key, task);
     }
 
     fn start_query_selected_execution(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         sql_editor: Entity<editor_component::Editor>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if let Some(statement) = self.selected_complete_statement(tab_id, cx) {
-            self.start_query_statement_execution(tab_id, sql_editor, statement, window, cx);
+        if let Some(statement) = self.selected_complete_statement(key, cx) {
+            self.start_query_statement_execution(key, sql_editor, statement, window, cx);
             return true;
         }
 
-        if let Some(text) = self.selected_sql_text(tab_id, cx) {
-            self.start_query_text_execution(tab_id, text, window, cx);
+        if let Some(text) = self.selected_sql_text(key, cx) {
+            self.start_query_text_execution(key, text, window, cx);
             return true;
         }
 
-        if let Some(statement) = self.current_statement(tab_id, cx) {
-            self.start_query_statement_execution(tab_id, sql_editor, statement, window, cx);
+        if let Some(statement) = self.current_statement(key, cx) {
+            self.start_query_statement_execution(key, sql_editor, statement, window, cx);
             return true;
         }
 
@@ -502,13 +541,13 @@ impl NavicatMain {
 
     fn start_query_explain_execution(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         sql_editor: Entity<editor_component::Editor>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         let _ = &sql_editor;
-        let Some(text) = self.selected_explain_sql_text(tab_id, cx) else {
+        let Some(text) = self.selected_explain_sql_text(key, cx) else {
             return false;
         };
         // `EXPLAIN ANALYZE` 会真正执行 SQL；工具栏的“解释”按钮只做预估计划，
@@ -522,8 +561,8 @@ impl NavicatMain {
             return false;
         }
 
-        self.query_output_tabs.insert(tab_id, QueryOutputTab::Plan);
-        self.start_query_text_execution(tab_id, text, _window, cx);
+        self.query_output_tabs.insert(key, QueryOutputTab::Plan);
+        self.start_query_text_execution(key, text, _window, cx);
         true
     }
 
@@ -532,31 +571,37 @@ impl NavicatMain {
     /// 只置位取消标志交给后台执行线程（PG 会在检查点用 CancelToken 通知服务端），
     /// 不复用 `_query_execute_tasks` 的取消：线程收尾后仍要走 `FinishQueryExecution`，
     /// 结果区才能如实显示「已取消：结果待核实」，而不是把整块结果清空或谎报成功。
-    fn request_query_cancel(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
-        if !self._query_execute_tasks.contains_key(&tab_id.0) {
+    fn request_query_cancel(&mut self, key: QueryPaneKey, cx: &mut Context<Self>) {
+        if !self._query_execute_tasks.contains_key(&key) {
             return;
         }
-        self.dispatch(AppCommand::CancelQueryExecution(tab_id), cx);
+        self.dispatch(
+            AppCommand::CancelQueryExecution {
+                tab_id: key.tab_id,
+                pane_id: key.pane_id,
+            },
+            cx,
+        );
         self.show_message(tr("app.query.toast.stop_requested").as_ref(), AppMessageKind::Info, cx);
     }
 
-    fn start_query_execution(&mut self, tab_id: TabId, window: &mut Window, cx: &mut Context<Self>) {
-        if self._query_execute_tasks.contains_key(&tab_id.0) {
+    fn start_query_execution(&mut self, key: QueryPaneKey, window: &mut Window, cx: &mut Context<Self>) {
+        if self._query_execute_tasks.contains_key(&key) {
             self.show_message(tr("app.query.error.running").as_ref(), AppMessageKind::Warning, cx);
             return;
         }
 
-        if let Some(sql_editor) = self.query_editors.get(&tab_id).cloned()
-            && self.start_query_selected_execution(tab_id, sql_editor, window, cx)
+        if let Some(sql_editor) = self.query_editors.get(&key).cloned()
+            && self.start_query_selected_execution(key, sql_editor, window, cx)
         {
             return;
         }
 
-        let statements = self.query_statement_runs(tab_id, cx);
+        let statements = self.query_statement_runs(key, cx);
 
-        let text = self.query_editor_text(tab_id, cx);
+        let text = self.query_editor_text(key, cx);
         if self.prepare_query_parameter_prompt(
-            tab_id,
+            key,
             &text,
             PendingQueryExecution::All {
                 statements: statements.clone(),
@@ -567,7 +612,7 @@ impl NavicatMain {
             return;
         }
         if self.request_dangerous_query_confirmation(
-            tab_id,
+            key,
             &text,
             PendingQueryExecution::All {
                 statements: statements.clone(),
@@ -577,39 +622,51 @@ impl NavicatMain {
             return;
         }
 
-        self.start_query_all_execution_resolved(tab_id, statements, None, cx);
+        self.start_query_all_execution_resolved(key, statements, None, cx);
     }
 
     fn start_query_all_execution_resolved(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         statements: Vec<SqlStatementRun>,
         text: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        if self._query_execute_tasks.contains_key(&tab_id.0) {
+        if self._query_execute_tasks.contains_key(&key) {
             self.show_message(tr("app.query.error.running").as_ref(), AppMessageKind::Warning, cx);
             return;
         }
 
         self.query_execution_sources
-            .insert(tab_id, statements.clone());
+            .insert(key, statements.clone());
         for statement in &statements {
-            self.set_statement_status(tab_id, statement.id, SqlStatementStatus::Running, cx);
+            self.set_statement_status(key, statement.id, SqlStatementStatus::Running, cx);
         }
 
-        self.dispatch(AppCommand::StartQueryExecution(tab_id), cx);
+        self.dispatch(
+            AppCommand::StartQueryExecution {
+                tab_id: key.tab_id,
+                pane_id: key.pane_id,
+            },
+            cx,
+        );
         let mut controller = self.controller.clone();
+        let tab_id = key.tab_id;
         let task = cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move {
+                    let pane_id = key.pane_id;
                     let event = if let Some(text) = text {
-                        controller.dispatch(AppCommand::ExecuteQueryText { tab_id, text })
+                        controller.dispatch(AppCommand::ExecuteQueryText {
+                            tab_id,
+                            pane_id,
+                            text,
+                        })
                     } else {
-                        controller.dispatch(AppCommand::ExecuteQuery(tab_id))
+                        controller.dispatch(AppCommand::ExecuteQuery { tab_id, pane_id })
                     };
                     match event {
-                        AppEvent::QueryFinished(_, execution) => Ok(execution),
+                        AppEvent::QueryFinished(_, _, execution) => Ok(execution),
                         AppEvent::Failed(error) => Err(error),
                         _ => Err(fluxdb_core::UserFacingError {
                             title: tr("app.query.error.execution").to_string(),
@@ -626,7 +683,7 @@ impl NavicatMain {
                     return;
                 };
                 view.update(cx, |this, cx| {
-                    this._query_execute_tasks.remove(&tab_id.0);
+                    this._query_execute_tasks.remove(&key);
                     {
                         let statuses = match &result {
                             Ok(execution) => statements
@@ -651,7 +708,7 @@ impl NavicatMain {
                                 .collect::<Vec<_>>(),
                         };
                         for (statement_id, status) in statuses {
-                            this.set_statement_status(tab_id, statement_id, status, cx);
+                            this.set_statement_status(key, statement_id, status, cx);
                         }
                     }
                     let tab_still_exists = this
@@ -662,14 +719,18 @@ impl NavicatMain {
                         .any(|tab| tab.id == tab_id);
                     if tab_still_exists {
                         this.dispatch(
-                            AppCommand::FinishQueryExecution { tab_id, result },
+                            AppCommand::FinishQueryExecution {
+                                tab_id: key.tab_id,
+                                pane_id: key.pane_id,
+                                result,
+                            },
                             cx,
                         );
                     }
                 });
             });
         });
-        self._query_execute_tasks.insert(tab_id.0, task);
+        self._query_execute_tasks.insert(key, task);
     }
 
     fn table_info_highlighted_column(&self, tab_id: TabId) -> Option<String> {
@@ -724,6 +785,7 @@ impl NavicatMain {
         let mut delegate = DataPageTableDelegate::from_page_with_rule(
             cx.entity().downgrade(),
             tab_id,
+            DATA_EDITOR_PANE,
             Arc::new(page.clone()),
             self.data_sort_rules.get(&tab_id).map(Vec::as_slice),
             self.visible_table_fields.get(&tab_id),
@@ -755,7 +817,7 @@ impl NavicatMain {
 
     fn request_dangerous_query_confirmation(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         text: &str,
         execution: PendingQueryExecution,
         cx: &mut Context<Self>,
@@ -767,7 +829,7 @@ impl NavicatMain {
             return false;
         }
         self.pending_dangerous_query = Some(PendingDangerousQuery {
-            tab_id,
+            key,
             text: text.to_string(),
             execution,
         });
@@ -787,22 +849,22 @@ impl NavicatMain {
         match pending.execution {
             PendingQueryExecution::All { statements } => {
                 self.start_query_all_execution_resolved(
-                    pending.tab_id,
+                    pending.key,
                     statements,
                     Some(pending.text),
                     cx,
                 );
             }
             PendingQueryExecution::Text => {
-                self.start_query_text_execution_resolved(pending.tab_id, pending.text, cx);
+                self.start_query_text_execution_resolved(pending.key, pending.text, cx);
             }
             PendingQueryExecution::Statement { statement } => {
-                let Some(sql_editor) = self.query_editors.get(&pending.tab_id).cloned() else {
+                let Some(sql_editor) = self.query_editors.get(&pending.key).cloned() else {
                     self.show_message(tr("app.query.error.editor_not_ready").as_ref(), AppMessageKind::Warning, cx);
                     return;
                 };
                 self.start_query_statement_execution_resolved(
-                    pending.tab_id,
+                    pending.key,
                     sql_editor,
                     statement,
                     pending.text,

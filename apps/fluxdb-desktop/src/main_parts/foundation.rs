@@ -630,6 +630,8 @@ actions!(
         CloseCurrentTab,
         ToggleConnectionBrowser,
         ExecuteOrApply,
+        SplitQueryPaneColumns,
+        SplitQueryPaneRows,
         OpenDataSearch,
         OpenQueryHistoryQuickSearch,
         QueryHistoryQuickSearchPrevious,

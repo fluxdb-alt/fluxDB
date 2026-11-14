@@ -77,11 +77,13 @@ fn sql_editor_edit_journey(cx: &mut TestAppContext, repair: bool) {
     let original = "SELECT '中文';\nSELEC 1;\nSELECT 3;";
     controller.dispatch(AppCommand::UpdateQueryText {
         tab_id,
+        pane_id: fluxdb_app::QueryPaneId(1),
         text: original.into(),
     });
     if repair {
         controller.dispatch(AppCommand::FinishQueryExecution {
             tab_id,
+            pane_id: fluxdb_app::QueryPaneId(1),
             result: Ok(fluxdb_core::QueryExecutionResult {
                 summaries: vec![fluxdb_core::QueryExecutionSummary {
                     // 模拟执行器追加默认 LIMIT 后的实际 SQL；来源快照仍指向编辑器原文。
@@ -141,14 +143,14 @@ fn sql_editor_edit_journey(cx: &mut TestAppContext, repair: bool) {
         cx.update(|_, cx| {
             view.update(cx, |app, _| {
                 app.query_execution_sources
-                    .insert(tab_id, vec![statements[1].clone()]);
+                    .insert(fluxdb_app::QueryPaneKey::new(tab_id, fluxdb_app::QueryPaneId(1)), vec![statements[1].clone()]);
             });
         });
     }
     cx.update(|window, cx| {
         window.draw(cx).clear(cx);
     });
-    let editor = cx.update(|_, cx| view.read(cx).query_editors[&tab_id].clone());
+    let editor = cx.update(|_, cx| view.read(cx).query_editors[&fluxdb_app::QueryPaneKey::new(tab_id, fluxdb_app::QueryPaneId(1))].clone());
     if !repair {
         // 初始选区属于场景准备；被断言的修改、发送和撤销均由真实控件事件驱动。
         cx.update(|_, cx| {

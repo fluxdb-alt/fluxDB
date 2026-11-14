@@ -211,7 +211,8 @@ impl NavicatMain {
         let view = cx.entity().downgrade();
         Arc::new(move |tab_id, field, direction, cx| {
             let _ = view.update(cx, |this, cx| {
-                this.apply_data_table_header_sort(tab_id, field, direction, cx);
+                // 排序处理器同时服务数据编辑与查询结果；这里只处理数据编辑的标签维度。
+                this.apply_data_table_header_sort(tab_id.tab_id, field, direction, cx);
             });
         })
     }
@@ -278,6 +279,7 @@ impl NavicatMain {
         let mut delegate = DataPageTableDelegate::from_page_with_rule(
             cx.entity().downgrade(),
             tab_id,
+            DATA_EDITOR_PANE,
             page,
             self.data_sort_rules.get(&tab_id).map(Vec::as_slice),
             self.visible_table_fields.get(&tab_id),

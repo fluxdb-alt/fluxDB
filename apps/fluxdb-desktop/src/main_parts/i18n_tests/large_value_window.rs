@@ -159,7 +159,7 @@ fn large_value_detail_window_loads_chunks_from_content_store(cx: &mut TestAppCon
         };
         (editor.cell_detail_panel.open, editor.cell_detail_panel.active_cell)
     });
-    let windowed = cx.update(|_, cx| view.read(cx).large_value_windows.contains_key(&tab_id));
+    let windowed = cx.update(|_, cx| view.read(cx).large_value_windows.contains_key(&fluxdb_app::QueryPaneKey::new(tab_id, crate::DATA_EDITOR_PANE)));
     assert!(
         cx.debug_bounds("large-value-window").is_some(),
         "大字段必须进入分段只读窗口（panel={opened:?}, window={windowed}）"
@@ -184,7 +184,7 @@ fn large_value_detail_window_loads_chunks_from_content_store(cx: &mut TestAppCon
         let loaded = cx.update(|_, cx| {
             view.read(cx)
                 .large_value_windows
-                .get(&tab_id)
+                .get(&fluxdb_app::QueryPaneKey::new(tab_id, crate::DATA_EDITOR_PANE))
                 .is_some_and(|window| !window.view.chunks.is_empty())
         });
         if loaded {
@@ -200,7 +200,7 @@ fn large_value_detail_window_loads_chunks_from_content_store(cx: &mut TestAppCon
     let before = cx.update(|_, cx| {
         view.read(cx)
             .large_value_windows
-            .get(&tab_id)
+            .get(&fluxdb_app::QueryPaneKey::new(tab_id, crate::DATA_EDITOR_PANE))
             .map(|window| window.view.next_read_offset())
             .unwrap_or(0)
     });
@@ -212,7 +212,7 @@ fn large_value_detail_window_loads_chunks_from_content_store(cx: &mut TestAppCon
         let loading = cx.update(|_, cx| {
             view.read(cx)
                 .large_value_windows
-                .get(&tab_id)
+                .get(&fluxdb_app::QueryPaneKey::new(tab_id, crate::DATA_EDITOR_PANE))
                 .is_some_and(|window| window.view.loading)
         });
         if loading {
@@ -229,7 +229,7 @@ fn large_value_detail_window_loads_chunks_from_content_store(cx: &mut TestAppCon
             let advanced = cx.update(|_, cx| {
                 view.read(cx)
                     .large_value_windows
-                    .get(&tab_id)
+                    .get(&fluxdb_app::QueryPaneKey::new(tab_id, crate::DATA_EDITOR_PANE))
                     .is_some_and(|window| window.view.next_read_offset() > before)
             });
             if advanced {
@@ -244,7 +244,7 @@ fn large_value_detail_window_loads_chunks_from_content_store(cx: &mut TestAppCon
     }
     // 窗口拼接内容必须等于原内容前缀：块来自同一份不可变内容。
     cx.update(|_, cx| {
-        let window = view.read(cx).large_value_windows.get(&tab_id).unwrap();
+        let window = view.read(cx).large_value_windows.get(&fluxdb_app::QueryPaneKey::new(tab_id, crate::DATA_EDITOR_PANE)).unwrap();
         let text = window.view.window_text();
         assert!(
             payload.starts_with(&text),

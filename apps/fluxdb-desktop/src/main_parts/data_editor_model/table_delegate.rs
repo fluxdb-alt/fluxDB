@@ -276,6 +276,7 @@ impl TableDelegate for DataPageTableDelegate {
         let action_column_name = column_name.clone();
         let tooltip_meta = meta.clone();
         let tab_id = self.tab_id;
+        let pane_id = self.pane_id;
         let on_sort = self.on_sort.clone();
         let view = self.view.clone();
         let table_entity = cx.entity();
@@ -362,6 +363,7 @@ impl TableDelegate for DataPageTableDelegate {
                         )
                         .child(data_table_header_sort_popover(
                             tab_id,
+                            pane_id,
                             col_ix,
                             column_name.clone(),
                             sort_icon,
@@ -490,6 +492,7 @@ impl TableDelegate for DataPageTableDelegate {
         };
         let edit_input = self.edit_input.clone();
         let tab_id = self.tab_id;
+        let pane_id = self.pane_id;
         let cells_editable = self.cells_editable;
         let view_for_edit = self.view.clone();
         let view_for_menu = self.view.clone();
@@ -539,6 +542,7 @@ impl TableDelegate for DataPageTableDelegate {
         let editing_input_value = edit_input.read(cx).value().to_string();
         let edit_state = DataCellEditState {
             tab_id,
+            pane_id,
             query_result_page_index: self.query_result_page_index,
             visible_row: row_ix,
             source_row: source_row_ix,
@@ -826,7 +830,7 @@ impl TableDelegate for DataPageTableDelegate {
                                     );
                                 } else {
                                     this.query_result_cell_detail.insert(
-                                        tab_id,
+                                        QueryPaneKey::new(tab_id, pane_id),
                                         QueryResultCellDetail {
                                             row: source_row_ix,
                                             column: source_col_ix,
@@ -909,7 +913,7 @@ impl TableDelegate for DataPageTableDelegate {
                         } else if !cells_editable {
                             let _ = view_for_edit.update(cx, |this, cx| {
                                 this.query_result_cell_detail.insert(
-                                    tab_id,
+                                    QueryPaneKey::new(tab_id, pane_id),
                                     QueryResultCellDetail {
                                         row: source_row_ix,
                                         column: source_col_ix,

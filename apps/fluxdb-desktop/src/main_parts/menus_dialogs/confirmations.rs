@@ -933,6 +933,109 @@ fn dirty_tab_close_modal(
         )
 }
 
+/// 关闭有内容的查询分屏：丢弃 / 移到新标签 / 取消。
+///
+/// 分屏只是布局，文本仍属于用户；默认动作不给「直接丢」，避免把误点当确认。
+fn close_query_pane_modal(colors: UiColors, cx: &mut Context<NavicatMain>) -> impl IntoElement {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .occlude()
+        .bg(if colors.is_dark {
+            hsla(220. / 360., 0.12, 0.08, 0.54)
+        } else {
+            hsla(210. / 360., 0.20, 0.20, 0.16)
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.cancel_close_query_pane(cx);
+                cx.stop_propagation();
+            }),
+        )
+        .child(
+            div()
+                .w(px(440.))
+                .rounded(colors.radius_lg)
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.panel_bg)
+                .shadow(vec![box_shadow(
+                    px(0.),
+                    px(18.),
+                    px(42.),
+                    px(0.),
+                    hsla(0., 0., 0., if colors.is_dark { 0.42 } else { 0.18 }),
+                )])
+                .overflow_hidden()
+                .text_color(colors.text)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .px_5()
+                        .pt_4()
+                        .pb_3()
+                        .text_size(ui_text_size(17.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(tr("app.query.close_pane_title")),
+                )
+                .child(
+                    div()
+                        .px_5()
+                        .pb_4()
+                        .text_size(ui_text_size(13.))
+                        .text_color(colors.muted)
+                        .child(tr("app.query.close_pane_message")),
+                )
+                .child(div().h(px(1.)).bg(colors.border_soft))
+                .child(
+                    div()
+                        .h(px(58.))
+                        .px_5()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("close-query-pane-cancel")
+                                .debug_selector(|| "close-query-pane-cancel".into())
+                                .label(tr("app.common.cancel"))
+                                .w(px(78.))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.cancel_close_query_pane(cx);
+                                    cx.stop_propagation();
+                                })),
+                        )
+                        .child(
+                            Button::new("close-query-pane-move")
+                                .debug_selector(|| "close-query-pane-move".into())
+                                .label(tr("app.query.close_pane_move"))
+                                .w(px(118.))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.confirm_close_query_pane_move_to_tab(cx);
+                                    cx.stop_propagation();
+                                })),
+                        )
+                        .child(
+                            Button::new("close-query-pane-discard")
+                                .debug_selector(|| "close-query-pane-discard".into())
+                                .label(tr("app.query.close_pane_discard"))
+                                .danger()
+                                .w(px(96.))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.confirm_close_query_pane_discard(cx);
+                                    cx.stop_propagation();
+                                })),
+                        ),
+                ),
+        )
+}
+
 fn apply_data_changes_modal(
     preview: (TabId, usize, usize, String),
     submitting: bool,

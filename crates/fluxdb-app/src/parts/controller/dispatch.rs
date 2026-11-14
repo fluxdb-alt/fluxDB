@@ -1286,16 +1286,76 @@ impl AppController {
             AppCommand::FinishApplyDataChanges { tab_id, result } => {
                 self.finish_apply_data_changes_command(tab_id, result)
             }
-            AppCommand::UpdateQueryText { tab_id, text } => {
+            AppCommand::UpdateQueryText {
+                tab_id,
+                pane_id,
+                text,
+            } => {
+                if let Some(tab) = self.find_tab_mut(tab_id)
+                    && let TabKind::QueryEditor(editor) = &mut tab.kind
+                    && editor.focus_pane(pane_id)
+                {
+                    // 文本属于屏：编辑哪一屏就把焦点移到哪一屏，后续执行/格式化都作用于它。
+                    if let Some(pane) = editor.pane_mut(pane_id) {
+                        pane.text = text;
+                        pane.error = None;
+                    }
+                    tab.dirty = editor.has_unsaved_sql();
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页或分屏不存在"))
+                }
+            }
+            AppCommand::SplitQueryPane {
+                tab_id,
+                pane_id,
+                direction,
+            } => {
                 if let Some(tab) = self.find_tab_mut(tab_id)
                     && let TabKind::QueryEditor(editor) = &mut tab.kind
                 {
-                    editor.text = text;
-                    editor.error = None;
+                    if editor.split_pane(pane_id, direction).is_none() {
+                        return self
+                            .fail(Error::new(ErrorKind::Internal, "查询编辑器分屏不存在"));
+                    }
+                    // 拆分不改动已保存的文本，脏标记只取决于各屏现有内容。
                     tab.dirty = editor.has_unsaved_sql();
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"))
+                }
+            }
+            AppCommand::CloseQueryPane { tab_id, pane_id } => {
+                let outcome = self.find_tab_mut(tab_id).and_then(|tab| match &mut tab.kind {
+                    TabKind::QueryEditor(editor) => {
+                        if editor.pane_count() <= 1 || !editor.close_pane(pane_id) {
+                            return Some(false);
+                        }
+                        tab.dirty = editor.has_unsaved_sql();
+                        Some(true)
+                    }
+                    _ => None,
+                });
+                match outcome {
+                    Some(true) => {
+                        // 关掉的屏若仍在执行，先置位取消标志：没有消费者了，不该再让服务端跑。
+                        self.request_query_cancel(QueryPaneKey::new(tab_id, pane_id));
+                        AppEvent::TabActivated(tab_id)
+                    }
+                    Some(false) => {
+                        self.fail(Error::new(ErrorKind::Internal, "查询编辑器至少保留一屏"))
+                    }
+                    None => self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在")),
+                }
+            }
+            AppCommand::ActivateQueryPane { tab_id, pane_id } => {
+                if let Some(tab) = self.find_tab_mut(tab_id)
+                    && let TabKind::QueryEditor(editor) = &mut tab.kind
+                    && editor.focus_pane(pane_id)
+                {
+                    AppEvent::TabActivated(tab_id)
+                } else {
+                    self.fail(Error::new(ErrorKind::Internal, "查询编辑器分屏不存在"))
                 }
             }
             AppCommand::SetQueryDatabase { tab_id, database } => {
@@ -1604,18 +1664,32 @@ impl AppController {
             }
             AppCommand::RequestQueryCompletions {
                 tab_id,
+                pane_id,
                 request_seq,
                 cursor,
                 explicit,
             } => {
-                let Some(editor) = self.find_tab(tab_id).and_then(|tab| match &tab.kind {
-                    TabKind::QueryEditor(editor) => Some(editor),
+                let Some(snapshot) = self.find_tab(tab_id).and_then(|tab| match &tab.kind {
+                    TabKind::QueryEditor(editor) => {
+                        let pane = editor.pane(pane_id)?;
+                        // 补全引擎只读「连接 + 库/schema + 文本」，按屏构造一份临时快照即可，
+                        // 不把整份查询状态（结果/编辑器）复制进补全调用。
+                        let mut snapshot = QueryEditorState::new(
+                            editor.connection_id,
+                            editor.database.clone(),
+                            editor.schema.clone(),
+                        );
+                        snapshot.active_mut().text = pane.text.clone();
+                        Some(snapshot)
+                    }
                     _ => None,
                 }) else {
                     return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
                 };
-                match self.query_completions(editor, cursor, explicit) {
-                    Ok(result) => AppEvent::QueryCompletionsLoaded(tab_id, request_seq, result),
+                match self.query_completions(&snapshot, cursor, explicit) {
+                    Ok(result) => {
+                        AppEvent::QueryCompletionsLoaded(tab_id, pane_id, request_seq, result)
+                    }
                     Err(error) => self.fail(error),
                 }
             }
@@ -1626,12 +1700,13 @@ impl AppController {
                 Ok(()) => AppEvent::CompletionIndexWarmed(connection_id, database),
                 Err(error) => self.fail(error),
             },
-            AppCommand::FormatQuerySql(tab_id) => {
+            AppCommand::FormatQuerySql { tab_id, pane_id } => {
                 let Some((connection_id, text)) = self.find_tab(tab_id).and_then(|tab| {
                     let TabKind::QueryEditor(editor) = &tab.kind else {
                         return None;
                     };
-                    Some((editor.connection_id, editor.text.clone()))
+                    let pane = editor.pane(pane_id)?;
+                    Some((editor.connection_id, pane.text.clone()))
                 }) else {
                     return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
                 };
@@ -1642,21 +1717,22 @@ impl AppController {
                 let formatted = format_sql_text_for_dialect(&text, kind);
                 if let Some(tab) = self.find_tab_mut(tab_id)
                     && let TabKind::QueryEditor(editor) = &mut tab.kind
+                    && let Some(pane) = editor.pane_mut(pane_id)
                 {
-                    editor.text = formatted;
-                    editor.error = None;
+                    pane.text = formatted;
+                    pane.error = None;
                     tab.dirty = editor.has_unsaved_sql();
                     AppEvent::TabActivated(tab_id)
                 } else {
                     self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"))
                 }
             }
-            AppCommand::CompressQuerySql(tab_id) => {
+            AppCommand::CompressQuerySql { tab_id, pane_id } => {
                 let Some(text) = self.find_tab(tab_id).and_then(|tab| {
                     let TabKind::QueryEditor(editor) = &tab.kind else {
                         return None;
                     };
-                    Some(editor.text.clone())
+                    Some(editor.pane(pane_id)?.text.clone())
                 }) else {
                     return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
                 };
@@ -1664,9 +1740,10 @@ impl AppController {
                 let compressed = compress_sql_text(&text);
                 if let Some(tab) = self.find_tab_mut(tab_id)
                     && let TabKind::QueryEditor(editor) = &mut tab.kind
+                    && let Some(pane) = editor.pane_mut(pane_id)
                 {
-                    editor.text = compressed;
-                    editor.error = None;
+                    pane.text = compressed;
+                    pane.error = None;
                     tab.dirty = editor.has_unsaved_sql();
                     AppEvent::TabActivated(tab_id)
                 } else {
@@ -1690,110 +1767,131 @@ impl AppController {
                     self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"))
                 }
             }
-            AppCommand::StartQueryExecution(tab_id) => {
+            AppCommand::StartQueryExecution { tab_id, pane_id } => {
                 // 每次执行前登记一个全新的取消标志：既重置上一次「停止」的残留置位，
-                // 也让后台执行线程能拿到与「停止」按钮同一个标志。
-                self.register_query_cancel_flag(tab_id);
+                // 也让后台执行线程能拿到与「停止」按钮同一个标志。标志按屏隔离，
+                // 同标签另一屏仍可独立继续执行。
+                self.register_query_cancel_flag(QueryPaneKey::new(tab_id, pane_id));
                 if let Some(tab) = self.find_tab_mut(tab_id)
                     && let TabKind::QueryEditor(editor) = &mut tab.kind
+                    && let Some(pane) = editor.pane_mut(pane_id)
                 {
-                    editor.running = true;
-                    editor.error = None;
+                    pane.running = true;
+                    pane.error = None;
                     AppEvent::TabActivated(tab_id)
                 } else {
-                    self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"))
+                    self.fail(Error::new(ErrorKind::Internal, "查询编辑器分屏不存在"))
                 }
             }
-            AppCommand::CancelQueryExecution(tab_id) => {
-                // 没有登记标志（该标签当前没有在执行的查询）时不报错，只如实记录，避免
+            AppCommand::CancelQueryExecution { tab_id, pane_id } => {
+                // 没有登记标志（该屏当前没有在执行的查询）时不报错，只如实记录，避免
                 // 「停止」按钮在竞态窗口内点两次就弹错误。
-                let had_running_query = self.request_query_cancel(tab_id);
+                let had_running_query =
+                    self.request_query_cancel(QueryPaneKey::new(tab_id, pane_id));
                 tracing::info!(
                     target: "fluxdb_app",
                     tab_id = tab_id.0,
+                    pane_id = pane_id.0,
                     had_running_query,
                     "已请求取消查询执行"
                 );
-                AppEvent::QueryCancelRequested(tab_id)
+                AppEvent::QueryCancelRequested(tab_id, pane_id)
             }
-            AppCommand::ExecuteQuery(tab_id) => {
+            AppCommand::ExecuteQuery { tab_id, pane_id } => {
                 let options = self.default_query_execution_options();
                 let request = self.find_tab(tab_id).and_then(|tab| match &tab.kind {
-                    TabKind::QueryEditor(editor) => Some(QueryRequest {
-                        connection_id: editor.connection_id,
-                        database: editor.database.clone(),
-                        // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
-                        session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
-                        schema: editor.schema.clone(),
-                        text: sql_text_for_execution(
-                            &editor.text,
-                            options.page_size,
-                            self.connection_kind(editor.connection_id)
-                                .unwrap_or(DatabaseKind::MySql),
-                        ),
-                        mode: fluxdb_core::QueryMode::All,
-                        options,
-                    }),
+                    TabKind::QueryEditor(editor) => {
+                        let pane = editor.pane(pane_id)?;
+                        Some(QueryRequest {
+                            connection_id: editor.connection_id,
+                            database: editor.database.clone(),
+                            // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
+                            // 同标签的多屏共享这条会话，屏只隔离文本与结果。
+                            session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
+                            schema: editor.schema.clone(),
+                            text: sql_text_for_execution(
+                                &pane.text,
+                                options.page_size,
+                                self.connection_kind(editor.connection_id)
+                                    .unwrap_or(DatabaseKind::MySql),
+                            ),
+                            mode: fluxdb_core::QueryMode::All,
+                            options,
+                        })
+                    }
                     _ => None,
                 });
 
                 let Some(request) = request else {
-                    return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
+                    return self.fail(Error::new(ErrorKind::Internal, "查询编辑器分屏不存在"));
                 };
+                self.release_previous_query_result_content(tab_id, pane_id);
 
-                let cancel_flag = self.query_cancel_flag(tab_id);
+                let key = QueryPaneKey::new(tab_id, pane_id);
+                let cancel_flag = self.query_cancel_flag(key);
                 let result = self
                     .execute_query_with_cancel(&request, &|| query_cancel_requested(&cancel_flag));
                 // 取消标志只属于本次执行。执行器已经返回后立即回收，不能等 UI 的异步
                 // Finish 命令，否则直接调用 App 层的入口会遗留已置位标志。
-                self.clear_query_cancel_flag(tab_id);
+                self.clear_query_cancel_flag(key);
                 match result {
                     Ok(execution) => {
                         let result_editors = query_result_editors(self, &request, &execution);
                         let active_result_editor = result_editors.keys().next().copied();
                         if let Some(tab) = self.find_tab_mut(tab_id)
                             && let TabKind::QueryEditor(editor) = &mut tab.kind
+                            && let Some(pane) = editor.pane_mut(pane_id)
                         {
-                            editor.running = false;
-                            editor.results = execution.results.clone();
-                            editor.result_editors = result_editors;
-                            editor.active_result_editor = active_result_editor;
-                            editor.summaries = execution.summaries.clone();
-                            editor.error = None;
+                            pane.running = false;
+                            pane.results = execution.results.clone();
+                            pane.result_editors = result_editors;
+                            pane.active_result_editor = active_result_editor;
+                            pane.summaries = execution.summaries.clone();
+                            pane.error = None;
                             tab.dirty = false;
                         }
                         self.record_query_execution_history(&request, &execution);
-                        AppEvent::QueryFinished(tab_id, execution)
+                        AppEvent::QueryFinished(tab_id, pane_id, execution)
                     }
                     Err(error) => {
                         self.record_failed_query_history(&request);
                         let user_error = UserFacingError::from(error);
                         if let Some(tab) = self.find_tab_mut(tab_id)
                             && let TabKind::QueryEditor(editor) = &mut tab.kind
+                            && let Some(pane) = editor.pane_mut(pane_id)
                         {
-                            editor.running = false;
-                            editor.summaries = Vec::new();
-                            editor.result_editors.clear();
-                            editor.active_result_editor = None;
-                            editor.error = Some(user_error.clone());
+                            pane.running = false;
+                            pane.summaries = Vec::new();
+                            pane.result_editors.clear();
+                            pane.active_result_editor = None;
+                            pane.error = Some(user_error.clone());
                         }
                         self.state.last_error = Some(user_error.clone());
                         AppEvent::Failed(user_error)
                     }
                 }
             }
-            AppCommand::ExecuteQueryText { tab_id, text } => {
+            AppCommand::ExecuteQueryText {
+                tab_id,
+                pane_id,
+                text,
+            } => {
                 let options = self.default_query_execution_options();
-                self.execute_query_text_with_options(tab_id, text, options)
+                self.execute_query_text_with_options(tab_id, pane_id, text, options)
             }
             AppCommand::ExecuteQueryTextWithOptions {
                 tab_id,
+                pane_id,
                 text,
                 options,
-            } => self.execute_query_text_with_options(tab_id, text, options),
-            AppCommand::FinishQueryExecution { tab_id, result } => match result {
+            } => self.execute_query_text_with_options(tab_id, pane_id, text, options),
+            AppCommand::FinishQueryExecution {
+                tab_id,
+                pane_id,
+                result,
+            } => match result {
                 Ok(execution) => {
-                    self.clear_query_cancel_flag(tab_id);
+                    self.clear_query_cancel_flag(QueryPaneKey::new(tab_id, pane_id));
                     let history_request = self.find_tab(tab_id).and_then(|tab| {
                         let TabKind::QueryEditor(editor) = &tab.kind else {
                             return None;
@@ -1804,7 +1902,7 @@ impl AppController {
                             // 查询编辑器标签 = 一个独占 PG 会话（设计 §3.3）：事务/临时表/SET 跨多次执行保持。
                             session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
                             schema: editor.schema.clone(),
-                            text: editor.text.clone(),
+                            text: editor.pane(pane_id)?.text.clone(),
                             mode: fluxdb_core::QueryMode::All,
                             options: QueryExecutionOptions::default(),
                         })
@@ -1816,25 +1914,26 @@ impl AppController {
                     let active_result_editor = result_editor.keys().next().copied();
                     if let Some(tab) = self.find_tab_mut(tab_id)
                         && let TabKind::QueryEditor(editor) = &mut tab.kind
+                        && let Some(pane) = editor.pane_mut(pane_id)
                     {
-                        editor.running = false;
-                        editor.results = execution.results.clone();
-                        editor.result_editors = result_editor;
-                        editor.active_result_editor = active_result_editor;
-                        editor.summaries = execution.summaries.clone();
-                        editor.error = None;
+                        pane.running = false;
+                        pane.results = execution.results.clone();
+                        pane.result_editors = result_editor;
+                        pane.active_result_editor = active_result_editor;
+                        pane.summaries = execution.summaries.clone();
+                        pane.error = None;
                         tab.dirty = false;
                     } else {
                         return self
-                            .fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
+                            .fail(Error::new(ErrorKind::Internal, "查询编辑器分屏不存在"));
                     }
                     if let Some(request) = history_request {
                         self.record_query_execution_history(&request, &execution);
                     }
-                    AppEvent::QueryFinished(tab_id, execution)
+                    AppEvent::QueryFinished(tab_id, pane_id, execution)
                 }
                 Err(error) => {
-                    self.clear_query_cancel_flag(tab_id);
+                    self.clear_query_cancel_flag(QueryPaneKey::new(tab_id, pane_id));
                     let history_request = self.find_tab(tab_id).and_then(|tab| {
                         let TabKind::QueryEditor(editor) = &tab.kind else {
                             return None;
@@ -1846,7 +1945,7 @@ impl AppController {
                             session_id: Some(fluxdb_core::QuerySessionId(tab_id.0)),
                             schema: editor.schema.clone(),
                             text: sql_text_for_execution(
-                                &editor.text,
+                                &editor.pane(pane_id)?.text,
                                 Pagination::DEFAULT_LIMIT,
                                 self.connection_kind(editor.connection_id)
                                     .unwrap_or(DatabaseKind::MySql),
@@ -1857,12 +1956,13 @@ impl AppController {
                     });
                     if let Some(tab) = self.find_tab_mut(tab_id)
                         && let TabKind::QueryEditor(editor) = &mut tab.kind
+                        && let Some(pane) = editor.pane_mut(pane_id)
                     {
-                        editor.running = false;
-                        editor.summaries = Vec::new();
-                        editor.result_editors.clear();
-                        editor.active_result_editor = None;
-                        editor.error = Some(error.clone());
+                        pane.running = false;
+                        pane.summaries = Vec::new();
+                        pane.result_editors.clear();
+                        pane.active_result_editor = None;
+                        pane.error = Some(error.clone());
                     }
                     if let Some(request) = history_request {
                         self.record_failed_query_history(&request);
@@ -1873,6 +1973,7 @@ impl AppController {
             },
             AppCommand::FinishQueryResultPageRefresh {
                 tab_id,
+                pane_id,
                 result_index,
                 page_index,
                 result,
@@ -1915,42 +2016,44 @@ impl AppController {
                         query_result_editors(self, &request, &execution).remove(&0);
                     if let Some(tab) = self.find_tab_mut(tab_id)
                         && let TabKind::QueryEditor(editor) = &mut tab.kind
+                        && let Some(pane) = editor.pane_mut(pane_id)
                     {
-                        if page_index >= editor.results.len() {
+                        if page_index >= pane.results.len() {
                             return self.fail(Error::new(ErrorKind::Internal, "结果页不存在"));
                         }
-                        editor.running = false;
-                        editor.results[page_index] = page.clone();
+                        pane.running = false;
+                        pane.results[page_index] = page.clone();
                         if let Some(result_editor) = refreshed_result_editor.as_mut() {
-                            result_editor.cell_detail_panel = editor
+                            result_editor.cell_detail_panel = pane
                                 .result_editors
                                 .get(&page_index)
                                 .map(|editor| editor.cell_detail_panel.clone())
                                 .unwrap_or_default();
                         }
                         if let Some(result_editor) = refreshed_result_editor {
-                            editor.result_editors.insert(page_index, result_editor);
-                            editor.active_result_editor = Some(page_index);
+                            pane.result_editors.insert(page_index, result_editor);
+                            pane.active_result_editor = Some(page_index);
                         } else {
-                            editor.result_editors.remove(&page_index);
-                            if editor.active_result_editor == Some(page_index) {
-                                editor.active_result_editor =
-                                    editor.result_editors.keys().next().copied();
+                            pane.result_editors.remove(&page_index);
+                            if pane.active_result_editor == Some(page_index) {
+                                pane.active_result_editor =
+                                    pane.result_editors.keys().next().copied();
                             }
                         }
                         if let Some(summary_index) =
-                            query_result_summary_index(&editor.summaries, result_index)
+                            query_result_summary_index(&pane.summaries, result_index)
                         {
-                            editor.summaries[summary_index] = summary;
+                            pane.summaries[summary_index] = summary;
                         }
-                        editor.error = None;
+                        pane.error = None;
                         tab.dirty = false;
                     } else {
                         return self
-                            .fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
+                            .fail(Error::new(ErrorKind::Internal, "查询编辑器分屏不存在"));
                     }
                     AppEvent::QueryResultPageRefreshed {
                         tab_id,
+                        pane_id,
                         result_index,
                         page_index,
                         page,
@@ -1959,19 +2062,25 @@ impl AppController {
                 Err(error) => {
                     if let Some(tab) = self.find_tab_mut(tab_id)
                         && let TabKind::QueryEditor(editor) = &mut tab.kind
+                        && let Some(pane) = editor.pane_mut(pane_id)
                     {
-                        editor.running = false;
-                        editor.error = Some(error.clone());
+                        pane.running = false;
+                        pane.error = Some(error.clone());
                     }
                     self.state.last_error = Some(error.clone());
                     AppEvent::Failed(error)
                 }
             },
-            AppCommand::ActivateQueryResultEditor { tab_id, page_index } => {
+            AppCommand::ActivateQueryResultEditor {
+                tab_id,
+                pane_id,
+                page_index,
+            } => {
                 if let Some(tab) = self.find_tab_mut(tab_id)
                     && let TabKind::QueryEditor(editor) = &mut tab.kind
+                    && let Some(pane) = editor.pane_mut(pane_id)
                 {
-                    set_active_query_result_editor(editor, page_index);
+                    set_active_query_result_editor(pane, page_index);
                 }
                 AppEvent::TabActivated(tab_id)
             }
@@ -2174,8 +2283,14 @@ impl AppController {
     fn release_tab_query_sessions(&mut self, tab_ids: &[TabId]) {        // 关标签先置位取消标志（标签关了就不该再让服务端跑下去），再从表里移除；
         // 仍在收尾的执行线程持的是自己的 `Arc`，置位照常生效。
         if let Ok(mut flags) = self.query_cancel_flags.lock() {
-            for tab_id in tab_ids {
-                if let Some(flag) = flags.remove(tab_id) {
+            // 标志按屏登记：一次取出该标签所有屏的条目，逐个置位。
+            let keys: Vec<QueryPaneKey> = flags
+                .keys()
+                .filter(|key| tab_ids.contains(&key.tab_id))
+                .copied()
+                .collect();
+            for key in keys {
+                if let Some(flag) = flags.remove(&key) {
                     flag.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             }
@@ -2247,7 +2362,7 @@ impl AppController {
         let TabKind::QueryEditor(editor) = &tab.kind else {
             return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
         };
-        if editor.running {
+        if editor.panes.iter().any(|pane| pane.running) {
             return self.fail(Error::new(
                 ErrorKind::Query,
                 "查询执行中，请等待完成或停止后再切换数据库",
@@ -2302,7 +2417,7 @@ impl AppController {
         let TabKind::QueryEditor(editor) = &tab.kind else {
             return self.fail(Error::new(ErrorKind::Internal, "查询编辑器标签页不存在"));
         };
-        if editor.running {
+        if editor.panes.iter().any(|pane| pane.running) {
             return self.fail(Error::new(
                 ErrorKind::Query,
                 "查询执行中，请等待完成或停止后再切换 schema",
@@ -2567,11 +2682,14 @@ COMMIT;"
 ///
 /// SQL 文本与脏标记保留，用户仍可对同一段 SQL 换库执行。
 fn clear_query_result_scope(editor: &mut QueryEditorState) {
-    editor.results.clear();
-    editor.result_editors.clear();
-    editor.active_result_editor = None;
-    editor.summaries.clear();
-    editor.error = None;
+    // 库/schema 切换让整个标签的结果失效：所有屏都要清，不能只清聚焦屏。
+    for pane in &mut editor.panes {
+        pane.results.clear();
+        pane.result_editors.clear();
+        pane.active_result_editor = None;
+        pane.summaries.clear();
+        pane.error = None;
+    }
 }
 
 /// 查询取消判定：标志未登记（非编辑器执行/后台任务）视为不可取消，与旧行为一致。

@@ -25,24 +25,26 @@ impl NavicatMain {
             .find(|tab| tab.id == tab_id)
             .and_then(|tab| match &tab.kind {
                 TabKind::QueryEditor(editor) => {
+                    let pane = editor.pane(editor.active_pane)?;
+                    let key = QueryPaneKey::new(tab_id, pane.id);
                     let result_index = self
                         .query_output_tabs
-                        .get(&tab_id)
+                        .get(&key)
                         .and_then(|tab| tab.result_index())
                         .unwrap_or(0);
-                    let page_index = query_result_page_index(editor, result_index)?;
-                    let result_editor = editor.result_editors.get(&page_index).cloned();
+                    let page_index = query_result_page_index(pane, result_index)?;
+                    let result_editor = pane.result_editors.get(&page_index).cloned();
                     let page = result_editor
                         .as_ref()
                         .and_then(|editor| editor.page.clone())
-                        .or_else(|| editor.results.get(page_index).cloned())?;
-                    Some((result_index, page_index, page, result_editor))
+                        .or_else(|| pane.results.get(page_index).cloned())?;
+                    Some((key, result_index, page_index, page, result_editor))
                 }
                 _ => None,
             });
-        if let Some((result_index, page_index, page, result_editor)) = query_result {
+        if let Some((key, result_index, page_index, page, result_editor)) = query_result {
             self.refresh_query_result_table_state(
-                tab_id,
+                key,
                 &page,
                 page_index,
                 result_index,
@@ -437,13 +439,15 @@ impl NavicatMain {
             .active_tab()
             .filter(|tab| match &tab.kind {
                 TabKind::DataEditor(editor) => editor.page.is_some(),
-                TabKind::QueryEditor(editor) => self
-                    .query_output_tabs
-                    .get(&tab.id)
-                    .copied()
-                    .unwrap_or(QueryOutputTab::Result(0))
-                    .result_index()
-                    .is_some_and(|index| query_result_page_index(editor, index).is_some()),
+                TabKind::QueryEditor(editor) => editor.pane(editor.active_pane).is_some_and(|pane| {
+                    let key = QueryPaneKey::new(tab.id, pane.id);
+                    self.query_output_tabs
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(QueryOutputTab::Result(0))
+                        .result_index()
+                        .is_some_and(|index| query_result_page_index(pane, index).is_some())
+                }),
                 _ => false,
             })
             .map(|tab| tab.id)

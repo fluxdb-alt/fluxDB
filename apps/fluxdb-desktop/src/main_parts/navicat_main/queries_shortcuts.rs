@@ -50,7 +50,7 @@ impl NavicatMain {
 
     fn format_query_editor_sql(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         sql_editor: Entity<editor_component::Editor>,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -70,7 +70,7 @@ impl NavicatMain {
         if text.trim().is_empty() {
             return false;
         }
-        let formatted = format_sql_text_for_dialect(&text, self.query_editor_database_kind(tab_id));
+        let formatted = format_sql_text_for_dialect(&text, self.query_editor_database_kind(key.tab_id));
         sql_editor.update(cx, |editor, editor_cx| {
             editor.replace_text_range(range, &formatted, editor_cx);
         });
@@ -79,7 +79,7 @@ impl NavicatMain {
 
     fn compress_query_editor_sql(
         &mut self,
-        _tab_id: TabId,
+        _key: QueryPaneKey,
         sql_editor: Entity<editor_component::Editor>,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -104,6 +104,174 @@ impl NavicatMain {
             editor.replace_text_range(range, &compressed, editor_cx);
         });
         true
+    }
+
+    /// 分屏关闭请求：空屏直接关；有文本/结果时先弹确认，避免误丢 SQL。
+    ///
+    /// 最后一屏不是可关闭对象：关闭按钮此时不渲染，这里再守一道。
+    fn request_close_query_pane(&mut self, key: QueryPaneKey, cx: &mut Context<Self>) {
+        let Some(pane) = self.controller.state().tabs.iter().find(|tab| tab.id == key.tab_id).and_then(|tab| match &tab.kind {
+            TabKind::QueryEditor(editor) if editor.pane_count() > 1 => editor.pane(key.pane_id),
+            _ => None,
+        }) else {
+            return;
+        };
+        let is_empty = pane.text.trim().is_empty()
+            && pane.results.is_empty()
+            && pane.error.is_none();
+        if is_empty {
+            self.close_query_pane_now(key, cx);
+            return;
+        }
+        self.pending_close_query_pane = Some(key);
+        cx.notify();
+    }
+
+    fn close_query_pane_now(&mut self, key: QueryPaneKey, cx: &mut Context<Self>) {
+        self.dispatch(
+            AppCommand::CloseQueryPane {
+                tab_id: key.tab_id,
+                pane_id: key.pane_id,
+            },
+            cx,
+        );
+        self.forget_query_pane(key);
+        cx.notify();
+    }
+
+    /// 清掉已关闭分屏在各宿主映射里的残留；否则同 ID 的旧结果/编辑器会在下次拆分时冒出来。
+    fn forget_query_pane(&mut self, key: QueryPaneKey) {
+        self.query_pane_compact.remove(&key);
+        // 正在编辑的单元格/时间分区属于该屏；屏没了就结束编辑态，别让下一帧去写已删除的行。
+        if self
+            .data_cell_editing
+            .is_some_and(|edit| edit.tab_id == key.tab_id && edit.pane_id == key.pane_id)
+        {
+            self.data_cell_editing = None;
+        }
+        if self.temporal_part_editing.is_some_and(|edit| {
+            edit.target == TemporalEditTarget::CellDetail(key)
+                || matches!(
+                    edit.target,
+                    TemporalEditTarget::DataCell(cell)
+                        if cell.tab_id == key.tab_id && cell.pane_id == key.pane_id
+                )
+        }) {
+            self.temporal_part_editing = None;
+        }
+        self.query_editors.remove(&key);
+        self.query_statement_statuses.remove(&key);
+        self.query_execution_sources.remove(&key);
+        self._query_editor_subscriptions.remove(&key);
+        self._query_execute_tasks.remove(&key);
+        self.query_find_inputs.remove(&key);
+        self.query_replace_inputs.remove(&key);
+        self._query_find_input_subscriptions.remove(&key);
+        self._query_replace_input_subscriptions.remove(&key);
+        self.query_output_tabs.remove(&key);
+        self.query_plan_selected_nodes.remove(&key);
+        self.query_plan_view_modes.remove(&key);
+        self.collapsed_query_outputs.remove(&key);
+        self.query_output_heights.remove(&key);
+        self.query_output_widths.remove(&key);
+        self.query_result_cell_detail.remove(&key);
+        self.large_value_windows.remove(&key);
+        self.query_result_table_states.remove(&key);
+        self._query_result_table_width_subscriptions.remove(&key);
+        self._cell_content_chunk_tasks
+            .retain(|(owner, _), _| *owner != key);
+        self._cell_content_save_tasks
+            .retain(|(owner, _, _), _| *owner != key);
+        self.query_result_sort_rules.retain(|rule_key, _| {
+            rule_key.tab_id != key.tab_id || rule_key.pane_id != key.pane_id
+        });
+        self.query_result_display_pages
+            .retain(|page_key, _| page_key.tab_id != key.tab_id || page_key.pane_id != key.pane_id);
+        if self
+            .pending_query_parameters
+            .as_ref()
+            .is_some_and(|pending| pending.key == key)
+        {
+            self.pending_query_parameters = None;
+        }
+        if self
+            .pending_dangerous_query
+            .as_ref()
+            .is_some_and(|pending| pending.key == key)
+        {
+            self.pending_dangerous_query = None;
+        }
+        if self
+            .query_output_resize_start
+            .is_some_and(|start| start.key == key)
+        {
+            self.query_output_resize_start = None;
+        }
+        if self.pending_close_query_pane == Some(key) {
+            self.pending_close_query_pane = None;
+        }
+    }
+
+    fn confirm_close_query_pane_discard(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self.pending_close_query_pane.take() else {
+            return;
+        };
+        self.close_query_pane_now(key, cx);
+    }
+
+    /// 保内容不保布局：把本屏 SQL 放进一个新的查询标签，再关掉本屏。
+    fn confirm_close_query_pane_move_to_tab(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self.pending_close_query_pane.take() else {
+            return;
+        };
+        let Some((connection_id, database, schema, text)) = self
+            .controller
+            .state()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == key.tab_id)
+            .and_then(|tab| match &tab.kind {
+                TabKind::QueryEditor(editor) => editor.pane(key.pane_id).map(|pane| {
+                    (
+                        editor.connection_id,
+                        editor.database.clone(),
+                        editor.schema.clone(),
+                        pane.text.clone(),
+                    )
+                }),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        let event = self.dispatch(
+            AppCommand::OpenQueryEditorInDatabase {
+                connection_id,
+                database,
+                schema,
+            },
+            cx,
+        );
+        let (AppEvent::TabOpened(new_tab_id) | AppEvent::TabActivated(new_tab_id)) = event else {
+            // 新标签没开成：保留原屏，别为了“移动”把唯一副本弄丢。
+            self.pending_close_query_pane = Some(key);
+            return;
+        };
+        let new_pane_id = self.query_pane_key(new_tab_id).pane_id;
+        self.dispatch(
+            AppCommand::UpdateQueryText {
+                tab_id: new_tab_id,
+                pane_id: new_pane_id,
+                text,
+            },
+            cx,
+        );
+        self.close_query_pane_now(key, cx);
+    }
+
+    fn cancel_close_query_pane(&mut self, cx: &mut Context<Self>) {
+        self.pending_close_query_pane = None;
+        cx.notify();
     }
 
     fn first_connection_id(&self) -> Option<fluxdb_core::ConnectionId> {
@@ -458,7 +626,14 @@ impl NavicatMain {
         });
         let tab_id = if let Some((tab_id, TabKind::QueryEditor(editor))) = active_query {
             let text = append_sql_history_text(&editor.text, &entry.text);
-            self.dispatch(AppCommand::UpdateQueryText { tab_id, text }, cx);
+            self.dispatch(
+                AppCommand::UpdateQueryText {
+                    tab_id,
+                    pane_id: editor.active_pane,
+                    text,
+                },
+                cx,
+            );
             tab_id
         } else {
             let target = self
@@ -491,9 +666,11 @@ impl NavicatMain {
             let Some(tab_id) = self.controller.state().active_tab else {
                 return;
             };
+            let pane_id = self.query_pane_key(tab_id).pane_id;
             self.dispatch(
                 AppCommand::UpdateQueryText {
                     tab_id,
+                    pane_id,
                     text: entry.text,
                 },
                 cx,
@@ -524,7 +701,7 @@ impl NavicatMain {
             TabKind::QueryEditor(editor) => {
                 let table = self
                     .query_editors
-                    .get(&tab.id)
+                    .get(&QueryPaneKey::new(tab.id, editor.active_pane))
                     .and_then(|sql_editor| {
                         // 新编辑器：依据光标偏移取光标所在语句文本。
                         let text = sql_editor.read(cx).text();
@@ -656,6 +833,43 @@ impl NavicatMain {
         cx.notify();
     }
 
+    /// 分屏快捷键：只拆当前聚焦屏，新屏成为后续执行目标。
+    fn split_query_pane_columns(
+        &mut self,
+        _: &SplitQueryPaneColumns,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.split_active_query_pane(QuerySplitDirection::Columns, cx);
+    }
+
+    fn split_query_pane_rows(
+        &mut self,
+        _: &SplitQueryPaneRows,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.split_active_query_pane(QuerySplitDirection::Rows, cx);
+    }
+
+    fn split_active_query_pane(
+        &mut self,
+        direction: QuerySplitDirection,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(key) = self.controller.state().active_tab.map(|tab_id| self.query_pane_key(tab_id)) else {
+            return;
+        };
+        self.dispatch(
+            AppCommand::SplitQueryPane {
+                tab_id: key.tab_id,
+                pane_id: key.pane_id,
+                direction,
+            },
+            cx,
+        );
+    }
+
     fn execute_or_apply(
         &mut self,
         _: &ExecuteOrApply,
@@ -668,11 +882,12 @@ impl NavicatMain {
 
         match tab.kind {
             TabKind::QueryEditor(editor) if !editor.text.trim().is_empty() => {
-                let Some(sql_editor) = self.query_editors.get(&tab.id).cloned() else {
+                let key = QueryPaneKey::new(tab.id, editor.active_pane);
+                let Some(sql_editor) = self.query_editors.get(&key).cloned() else {
                     self.show_message(tr("app.query.error.editor_not_ready").as_ref(), AppMessageKind::Warning, cx);
                     return;
                 };
-                if !self.start_query_selected_execution(tab.id, sql_editor, window, cx) {
+                if !self.start_query_selected_execution(key, sql_editor, window, cx) {
                     self.show_message(
                         tr("app.query.error.select_sql_first").as_ref(),
                         AppMessageKind::Warning,
@@ -1068,8 +1283,8 @@ impl NavicatMain {
             return;
         }
 
-        if let Some(tab_id) = self.controller.state().active_tab
-            && let Some(editor) = self.query_editors.get(&tab_id).cloned()
+        if let Some(key) = self.controller.state().active_tab.map(|tab_id| self.query_pane_key(tab_id))
+            && let Some(editor) = self.query_editors.get(&key).cloned()
             && editor.read(cx).completion_visible()
         {
             editor.update(cx, |editor, cx| editor.hide_completion(cx));
@@ -1077,8 +1292,8 @@ impl NavicatMain {
             return;
         }
 
-        if let Some(tab_id) = self.controller.state().active_tab
-            && let Some(editor) = self.query_editors.get(&tab_id).cloned()
+        if let Some(key) = self.controller.state().active_tab.map(|tab_id| self.query_pane_key(tab_id))
+            && let Some(editor) = self.query_editors.get(&key).cloned()
             && editor.read(cx).find_open()
         {
             editor.update(cx, |editor, cx| editor.close_find(cx));
@@ -1269,7 +1484,7 @@ impl NavicatMain {
                 self.request_data_editor_refresh(tab.id, cx);
             }
             TabKind::QueryEditor(editor) if !editor.text.trim().is_empty() => {
-                self.start_query_execution(tab.id, window, cx);
+                self.start_query_execution(QueryPaneKey::new(tab.id, editor.active_pane), window, cx);
             }
             _ => {}
         }

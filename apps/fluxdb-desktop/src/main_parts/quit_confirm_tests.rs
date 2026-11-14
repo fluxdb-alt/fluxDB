@@ -99,6 +99,7 @@ mod quit_confirm_tests {
                 app.dispatch(
                     fluxdb_app::AppCommand::UpdateQueryText {
                         tab_id,
+                        pane_id: fluxdb_app::QueryPaneId(1),
                         text: "select 1".into(),
                     },
                     cx,

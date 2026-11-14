@@ -5,7 +5,7 @@ impl NavicatMain {
     /// 同一窗口重复渲染不会重复发起读取。
     fn ensure_large_value_window(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         row: usize,
         column: usize,
         large: &fluxdb_core::LargeCellValue,
@@ -13,7 +13,7 @@ impl NavicatMain {
     ) -> LargeValueWindows {
         let stale = self
             .large_value_windows
-            .get(&tab_id)
+            .get(&key)
             .is_none_or(|window| {
                 window.row != row
                     || window.column != column
@@ -22,17 +22,17 @@ impl NavicatMain {
         if stale {
             let view = fluxdb_app::LargeValueView::new(large);
             self.large_value_windows.insert(
-                tab_id,
+                key,
                 LargeValueWindows {
                     row,
                     column,
                     view,
                 },
             );
-            self.spawn_cell_content_chunk(tab_id, row, column, 0, cx);
+            self.spawn_cell_content_chunk(key, row, column, 0, cx);
         }
         self.large_value_windows
-            .get(&tab_id)
+            .get(&key)
             .cloned()
             .unwrap_or_else(|| LargeValueWindows {
                 row,
@@ -42,33 +42,34 @@ impl NavicatMain {
     }
 
     /// 详情面板关闭或换到普通单元格时丢弃窗口，别让「读取更多」读到上一格。
-    fn drop_large_value_window(&mut self, tab_id: TabId) {
-        self.large_value_windows.remove(&tab_id);
+    fn drop_large_value_window(&mut self, key: QueryPaneKey) {
+        self.large_value_windows.remove(&key);
     }
 
     /// 后台读一块。同一单元格只保留一个在途任务，连点不会并发读同一窗口。
     fn spawn_cell_content_chunk(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         row: usize,
         column: usize,
         offset: u64,
         cx: &mut Context<Self>,
     ) {
-        let Some(window) = self.large_value_windows.get_mut(&tab_id) else {
+        let Some(window) = self.large_value_windows.get_mut(&key) else {
             return;
         };
         let content_id = window.view.content_id.clone();
         // 去重按内容引用而不是单元格：同一格换了内容（重新加载结果）时旧任务的结果必须丢弃。
-        let key = (tab_id, content_id.clone());
-        if self._cell_content_chunk_tasks.contains_key(&key) {
+        let tab_id = key.tab_id;
+        let task_key = (key, content_id.clone());
+        if self._cell_content_chunk_tasks.contains_key(&task_key) {
             return;
         }
         let kind = window.view.kind;
         window.view.loading = true;
         window.view.error = None;
         let mut controller = self.controller.clone();
-        let task_key = key.clone();
+        let remove_key = task_key.clone();
         let task = cx.spawn(async move |view, cx| {
             let requested = content_id.clone();
             let result = cx
@@ -88,11 +89,11 @@ impl NavicatMain {
                     return;
                 };
                 view.update(cx, |this, cx| {
-                    this._cell_content_chunk_tasks.remove(&task_key);
+                    this._cell_content_chunk_tasks.remove(&remove_key);
                     // 窗口已换内容：结果属于旧引用，丢弃。
                     let current = this
                         .large_value_windows
-                        .get(&tab_id)
+                        .get(&key)
                         .is_some_and(|window| window.view.content_id == requested);
                     match &result {
                         _ if !current => {}
@@ -100,12 +101,12 @@ impl NavicatMain {
                             this.apply_app_event(&result, cx);
                         }
                         AppEvent::Failed(error) => {
-                            this.set_large_value_error(tab_id, row, column, &error.message);
+                            this.set_large_value_error(key, row, column, &error.message);
                             this.show_message(error.message.clone(), AppMessageKind::Error, cx);
                         }
                         _ => {
                             this.set_large_value_error(
-                                tab_id,
+                                key,
                                 row,
                                 column,
                                 tr("app.cell_detail.large_load_failed").as_ref(),
@@ -116,13 +117,19 @@ impl NavicatMain {
                 });
             });
         });
-        self._cell_content_chunk_tasks.insert(key, task);
+        self._cell_content_chunk_tasks.insert(task_key, task);
     }
 
-    fn set_large_value_error(&mut self, tab_id: TabId, row: usize, column: usize, message: &str) {
+    fn set_large_value_error(
+        &mut self,
+        key: QueryPaneKey,
+        row: usize,
+        column: usize,
+        message: &str,
+    ) {
         if let Some(window) = self
             .large_value_windows
-            .get_mut(&tab_id)
+            .get_mut(&key)
             .filter(|window| window.row == row && window.column == column)
         {
             window.view.loading = false;
@@ -131,8 +138,8 @@ impl NavicatMain {
     }
 
     /// 「读取更多」：接着窗口末尾读，读完（空块）就停。
-    fn load_next_large_value_chunk(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
-        let Some(window) = self.large_value_windows.get(&tab_id) else {
+    fn load_next_large_value_chunk(&mut self, key: QueryPaneKey, cx: &mut Context<Self>) {
+        let Some(window) = self.large_value_windows.get(&key) else {
             return;
         };
         if window.view.loading || window.view.is_complete() {
@@ -143,28 +150,30 @@ impl NavicatMain {
             window.column,
             window.view.next_read_offset(),
         );
-        self.spawn_cell_content_chunk(tab_id, row, column, offset, cx);
+        self.spawn_cell_content_chunk(key, row, column, offset, cx);
     }
 
     /// 把完整内容流式写到用户选定位置；所选路径只用于写文件，不进日志与事件。
-    fn save_large_value_to_file(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
-        let Some(window) = self.large_value_windows.get(&tab_id) else {
+    fn save_large_value_to_file(&mut self, key: QueryPaneKey, cx: &mut Context<Self>) {
+        let tab_id = key.tab_id;
+        let Some(window) = self.large_value_windows.get(&key) else {
             return;
         };
         if self
             ._cell_content_save_tasks
-            .contains_key(&(tab_id, window.row, window.column))
+            .contains_key(&(key, window.row, window.column))
         {
             return;
         }
-        let key = (tab_id, window.row, window.column);
+        let (row, column) = (window.row, window.column);
+        let task_key = (key, row, column);
         let content_id = window.view.content_id.clone();
         let extension = match window.view.kind {
             fluxdb_core::LargeValueKind::Json => "json",
             fluxdb_core::LargeValueKind::Binary => "bin",
             fluxdb_core::LargeValueKind::Text => "txt",
         };
-        let suggested = format!("cell-{}-{}-{}.{extension}", tab_id.0, key.1 + 1, key.2 + 1);
+        let suggested = format!("cell-{}-{}-{}.{extension}", tab_id.0, row + 1, column + 1);
         let receiver = cx.prompt_for_new_path(&default_data_export_directory(), Some(&suggested));
         let mut controller = self.controller.clone();
         let task = cx.spawn(async move |view, cx| {
@@ -177,7 +186,7 @@ impl NavicatMain {
                             return;
                         };
                         view.update(cx, |this, cx| {
-                            this._cell_content_save_tasks.remove(&key);
+                            this._cell_content_save_tasks.remove(&task_key);
                             cx.notify();
                         });
                     });
@@ -189,7 +198,7 @@ impl NavicatMain {
                             return;
                         };
                         view.update(cx, |this, cx| {
-                            this._cell_content_save_tasks.remove(&key);
+                            this._cell_content_save_tasks.remove(&task_key);
                             this.show_message(
                                 tr("app.cell_detail.large_save_choose_failed")
                                     .replace("%{error}", &error.to_string()),
@@ -207,7 +216,7 @@ impl NavicatMain {
                             return;
                         };
                         view.update(cx, |this, cx| {
-                            this._cell_content_save_tasks.remove(&key);
+                            this._cell_content_save_tasks.remove(&task_key);
                             this.show_message(
                                 tr("app.cell_detail.large_save_choose_failed")
                                     .replace("%{error}", &error.to_string()),
@@ -234,7 +243,7 @@ impl NavicatMain {
                     return;
                 };
                 view.update(cx, |this, cx| {
-                    this._cell_content_save_tasks.remove(&key);
+                    this._cell_content_save_tasks.remove(&task_key);
                     this.apply_app_event(&result, cx);
                     if let AppEvent::Failed(error) = &result {
                         this.show_message(error.message.clone(), AppMessageKind::Error, cx);
@@ -243,7 +252,7 @@ impl NavicatMain {
                 });
             });
         });
-        self._cell_content_save_tasks.insert(key, task);
+        self._cell_content_save_tasks.insert(task_key, task);
     }
 }
 

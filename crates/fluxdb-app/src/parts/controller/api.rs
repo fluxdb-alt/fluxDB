@@ -22,7 +22,7 @@ impl AppController {
 
     /// 为标签登记一个新的查询取消标志（每次执行前调用），同时清掉已关闭标签的旧标志，
     /// 避免长会话里标志表随历史标签单调增长。
-    fn register_query_cancel_flag(&mut self, tab_id: TabId) {
+    fn register_query_cancel_flag(&mut self, key: QueryPaneKey) {
         if let Ok(mut flags) = self.query_cancel_flags.lock() {
             let open_tabs = self
                 .state
@@ -30,27 +30,27 @@ impl AppController {
                 .iter()
                 .map(|tab| tab.id)
                 .collect::<BTreeSet<_>>();
-            flags.retain(|tab_id, _| open_tabs.contains(tab_id));
+            flags.retain(|key, _| open_tabs.contains(&key.tab_id));
             flags.insert(
-                tab_id,
+                key,
                 Arc::new(std::sync::atomic::AtomicBool::new(false)),
             );
         }
     }
 
-    /// 取标签当前的取消标志；没有登记过（例如后台任务、测试直接派发执行）时返回 `None`，
+    /// 取某屏当前的取消标志；没有登记过（例如后台任务、测试直接派发执行）时返回 `None`，
     /// 调用方按「不可取消」处理，与旧行为一致。
-    fn query_cancel_flag(&self, tab_id: TabId) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+    fn query_cancel_flag(&self, key: QueryPaneKey) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         self.query_cancel_flags
             .lock()
             .ok()
-            .and_then(|flags| flags.get(&tab_id).cloned())
+            .and_then(|flags| flags.get(&key).cloned())
     }
 
-    /// 置位标签的取消标志：执行线程会在下一次检查点（每 100ms）发送服务端取消。
+    /// 置位某屏的取消标志：执行线程会在下一次检查点（每 100ms）发送服务端取消。
     /// 返回是否确有在执行的查询（无标志 = 没有进行中的执行）。
-    fn request_query_cancel(&self, tab_id: TabId) -> bool {
-        let Some(flag) = self.query_cancel_flag(tab_id) else {
+    fn request_query_cancel(&self, key: QueryPaneKey) -> bool {
+        let Some(flag) = self.query_cancel_flag(key) else {
             return false;
         };
         flag.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -60,9 +60,9 @@ impl AppController {
     /// 查询完成后移除本次执行的取消标志，避免已经置位的旧标志污染后续不经过
     /// `StartQueryExecution` 的执行入口。后台执行线程已经持有自己的 `Arc`，移除映射
     /// 不会影响它正在进行的收尾。
-    fn clear_query_cancel_flag(&self, tab_id: TabId) {
+    fn clear_query_cancel_flag(&self, key: QueryPaneKey) {
         if let Ok(mut flags) = self.query_cancel_flags.lock() {
-            flags.remove(&tab_id);
+            flags.remove(&key);
         }
     }
 
@@ -580,20 +580,8 @@ impl AppController {
         latest_request: Arc<std::sync::atomic::AtomicU64>,
         request_id: u64,
     ) -> fluxdb_core::Result<QueryCompletionResult> {
-        let editor = QueryEditorState {
-            connection_id,
-            database,
-            schema,
-            text,
-            origin: None,
-            saved_fingerprint: None,
-            running: false,
-            results: Vec::new(),
-            result_editors: BTreeMap::new(),
-            active_result_editor: None,
-            summaries: Vec::new(),
-            error: None,
-        };
+        let mut editor = QueryEditorState::new(connection_id, database, schema);
+        editor.active_mut().text = text;
         let should_cancel = || latest_request.load(std::sync::atomic::Ordering::Acquire) != request_id;
         self.query_completions_with_cancel(&editor, cursor, explicit, &should_cancel)
     }

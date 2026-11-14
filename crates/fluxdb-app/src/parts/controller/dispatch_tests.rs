@@ -242,7 +242,7 @@ mod controller_dispatch_tests {
             let mode = std::env::var(CHILD_MODE).unwrap();
             let is_query = matches!(mode.as_str(), "default" | "explicit");
             if is_query {
-                controller.dispatch(AppCommand::StartQueryExecution(tab_id));
+                controller.dispatch(AppCommand::StartQueryExecution { tab_id, pane_id: QueryPaneId(1) });
             }
             let object = ObjectPath {
                 connection_id: ConnectionId(1),
@@ -254,10 +254,12 @@ mod controller_dispatch_tests {
             let command = match mode.as_str() {
                 "default" => AppCommand::ExecuteQueryText {
                     tab_id,
+                    pane_id: QueryPaneId(1),
                     text: "SELECT 1".into(),
                 },
                 "explicit" => AppCommand::ExecuteQueryTextWithOptions {
                     tab_id,
+                    pane_id: QueryPaneId(1),
                     text: "SELECT 1".into(),
                     options: QueryExecutionOptions::default(),
                 },
@@ -394,6 +396,7 @@ mod controller_dispatch_tests {
         };
         controller.dispatch(AppCommand::UpdateQueryText {
             tab_id,
+            pane_id: QueryPaneId(1),
             text: "SELECT 1".into(),
         });
         // 直接塞入结果，避免依赖真实 PG 连接；这里只验证作用域切换的状态迁移。
@@ -494,7 +497,7 @@ mod controller_dispatch_tests {
         else {
             panic!("query tab");
         };
-        controller.dispatch(AppCommand::StartQueryExecution(tab_id));
+        controller.dispatch(AppCommand::StartQueryExecution { tab_id, pane_id: QueryPaneId(1) });
         let event = controller.dispatch(AppCommand::SetQueryDatabase {
             tab_id,
             database: Some("other".into()),
@@ -507,5 +510,133 @@ mod controller_dispatch_tests {
             panic!("query editor");
         };
         assert!(editor.database.is_none());
+    }
+
+    #[test]
+    fn query_panes_split_independently_and_keep_own_text() {
+        let mut controller = AppController::new();
+        controller.dispatch(AppCommand::ReplaceConnections(vec![
+            sqlite_draft("split-panes").into_config(ConnectionId(1)),
+        ]));
+        let AppEvent::TabOpened(tab_id) =
+            controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)))
+        else {
+            panic!("query tab");
+        };
+        let first_pane = QueryPaneId(1);
+        assert!(matches!(
+            controller.dispatch(AppCommand::SplitQueryPane {
+                tab_id,
+                pane_id: first_pane,
+                direction: QuerySplitDirection::Columns,
+            }),
+            AppEvent::TabActivated(id) if id == tab_id
+        ));
+        let second_pane = {
+            let Some(tab) = controller.find_tab(tab_id) else {
+                panic!("query tab");
+            };
+            let TabKind::QueryEditor(editor) = &tab.kind else {
+                panic!("query editor");
+            };
+            assert_eq!(editor.pane_count(), 2);
+            assert_ne!(editor.active_pane, first_pane);
+            assert!(matches!(
+                &editor.layout,
+                QueryPaneLayout::Split { direction: QuerySplitDirection::Columns, .. }
+            ));
+            editor.active_pane
+        };
+        // 任意一屏都能继续拆分，不限制为两屏。
+        controller.dispatch(AppCommand::SplitQueryPane {
+            tab_id,
+            pane_id: second_pane,
+            direction: QuerySplitDirection::Rows,
+        });
+        let third_pane = {
+            let Some(tab) = controller.find_tab(tab_id) else {
+                panic!("query tab");
+            };
+            let TabKind::QueryEditor(editor) = &tab.kind else {
+                panic!("query editor");
+            };
+            assert_eq!(editor.pane_count(), 3);
+            editor.active_pane
+        };
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id,
+            pane_id: first_pane,
+            text: "SELECT 1".into(),
+        });
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id,
+            pane_id: third_pane,
+            text: "SELECT 3".into(),
+        });
+        let Some(tab) = controller.find_tab(tab_id) else {
+            panic!("query tab");
+        };
+        let TabKind::QueryEditor(editor) = &tab.kind else {
+            panic!("query editor");
+        };
+        assert_eq!(editor.pane(first_pane).unwrap().text, "SELECT 1");
+        assert_eq!(editor.pane(second_pane).unwrap().text, "");
+        assert_eq!(editor.pane(third_pane).unwrap().text, "SELECT 3");
+        assert!(editor.active_pane == third_pane);
+    }
+
+    #[test]
+    fn query_pane_close_keeps_sibling_and_last_pane_is_protected() {
+        let mut controller = AppController::new();
+        controller.dispatch(AppCommand::ReplaceConnections(vec![
+            sqlite_draft("close-panes").into_config(ConnectionId(1)),
+        ]));
+        let AppEvent::TabOpened(tab_id) =
+            controller.dispatch(AppCommand::OpenQueryEditor(ConnectionId(1)))
+        else {
+            panic!("query tab");
+        };
+        controller.dispatch(AppCommand::SplitQueryPane {
+            tab_id,
+            pane_id: QueryPaneId(1),
+            direction: QuerySplitDirection::Rows,
+        });
+        let second_pane = QueryPaneId(2);
+        controller.dispatch(AppCommand::UpdateQueryText {
+            tab_id,
+            pane_id: second_pane,
+            text: "SELECT 2".into(),
+        });
+
+        assert!(matches!(
+            controller.dispatch(AppCommand::CloseQueryPane {
+                tab_id,
+                pane_id: QueryPaneId(1),
+            }),
+            AppEvent::TabActivated(id) if id == tab_id
+        ));
+        let Some(tab) = controller.find_tab(tab_id) else {
+            panic!("query tab");
+        };
+        let TabKind::QueryEditor(editor) = &tab.kind else {
+            panic!("query editor");
+        };
+        assert_eq!(editor.pane_count(), 1);
+        assert_eq!(editor.pane(second_pane).unwrap().text, "SELECT 2");
+        assert_eq!(editor.layout, QueryPaneLayout::Leaf(second_pane));
+        // 最后一屏关闭必须失败，标签页本身留给 ⌘W 处理。
+        assert!(matches!(
+            controller.dispatch(AppCommand::CloseQueryPane {
+                tab_id,
+                pane_id: second_pane,
+            }),
+            AppEvent::Failed(_)
+        ));
+        assert_eq!(
+            controller
+                .find_tab(tab_id)
+                .map(|tab| matches!(tab.kind, TabKind::QueryEditor(_))),
+            Some(true)
+        );
     }
 }

@@ -247,6 +247,8 @@ impl Render for NavicatMain {
             .on_action(cx.listener(Self::close_current_tab))
             .on_action(cx.listener(Self::toggle_connection_browser))
             .on_action(cx.listener(Self::execute_or_apply))
+            .on_action(cx.listener(Self::split_query_pane_columns))
+            .on_action(cx.listener(Self::split_query_pane_rows))
             .on_action(cx.listener(Self::open_data_search))
             .on_action(cx.listener(Self::open_query_history_quick_search))
             .on_action(cx.listener(Self::query_history_quick_search_previous))
@@ -288,7 +290,10 @@ impl Render for NavicatMain {
                     this.close_context_menus(cx);
                     let mut changed = false;
                     if let Some(tab_id) = this.controller.state().active_tab
-                        && let Some(editor) = this.query_editors.get(&tab_id).cloned()
+                        && let Some(editor) = this
+                            .query_editors
+                            .get(&this.query_pane_key(tab_id))
+                            .cloned()
                         && editor.read(cx).completion_visible()
                     {
                         editor.update(cx, |editor, cx| editor.hide_completion(cx));
@@ -597,6 +602,9 @@ impl Render for NavicatMain {
             })
             .when_some(state.pending_dirty_tab_close, |this, tab_id| {
                 this.child(dirty_tab_close_modal(tab_id, &state, colors, cx))
+            })
+            .when(self.pending_close_query_pane.is_some(), |this| {
+                this.child(close_query_pane_modal(colors, cx))
             })
             .when(
                 self.pending_mongo_document_switch.is_some()
@@ -1127,19 +1135,22 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
             submitting: false,
             error: editor.error.clone(),
         }),
-        TabKind::QueryEditor(editor) => TabKind::QueryEditor(QueryEditorState {
-            connection_id: editor.connection_id,
-            database: editor.database.clone(),
-            schema: editor.schema.clone(),
-            text: String::new(),
-            origin: None,
-            saved_fingerprint: None,
-            running: editor.running,
-            results: Vec::new(),
-            result_editors: BTreeMap::new(),
-            active_result_editor: None,
-            summaries: Vec::new(),
-            error: editor.error.clone(),
+        TabKind::QueryEditor(editor) => TabKind::QueryEditor({
+            // 快照只带连接作用域与运行态，不带文本、结果与编辑历史。
+            let mut snapshot = QueryEditorState::new(
+                editor.connection_id,
+                editor.database.clone(),
+                editor.schema.clone(),
+            );
+            let active = snapshot.active_mut();
+            active.running = editor.running;
+            active.error = editor.error.clone();
+            // 标签条只靠快照显示分屏数；文本/结果仍不进入快照。
+            for _ in 1..editor.pane_count() {
+                let target = snapshot.active_pane;
+                snapshot.split_pane(target, QuerySplitDirection::Columns);
+            }
+            snapshot
         }),
         TabKind::RedisWorkbench(workbench) => TabKind::RedisWorkbench(RedisWorkbenchState {
             connection_id: workbench.connection_id,

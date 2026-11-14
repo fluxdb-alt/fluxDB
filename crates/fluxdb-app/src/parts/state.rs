@@ -2137,21 +2137,341 @@ pub enum CellDetailMode {
     Edit,
 }
 
+/// 查询编辑器分屏中的单屏 ID。单调递增，屏关闭后不复用。
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct QueryPaneId(pub u64);
+
+/// 「标签页 + 屏」复合键：桌面端按屏保存编辑器实体、结果视图与拖拽尺寸时使用。
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct QueryPaneKey {
+    pub tab_id: TabId,
+    pub pane_id: QueryPaneId,
+}
+
+impl QueryPaneKey {
+    pub fn new(tab_id: TabId, pane_id: QueryPaneId) -> Self {
+        Self { tab_id, pane_id }
+    }
+}
+
+/// 分屏方向。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuerySplitDirection {
+    /// 左右分屏（新屏在右）。
+    Columns,
+    /// 上下分屏（新屏在下）。
+    Rows,
+}
+
+/// 单屏的编辑与结果状态。
+///
+/// 文本、执行态、结果与结果编辑器都属于屏；连接、库、会话仍属于标签页。
 #[derive(Clone, Debug, PartialEq)]
-pub struct QueryEditorState {
-    pub connection_id: ConnectionId,
-    pub database: Option<String>,
-    /// 编辑器当前 schema 作用域（PG）；MySQL/TiDB/Redis 恒为 None。
-    pub schema: Option<String>,
+pub struct QueryPaneState {
+    pub id: QueryPaneId,
     pub text: String,
-    pub origin: Option<QueryOrigin>,
-    pub saved_fingerprint: Option<QueryFingerprint>,
     pub running: bool,
     pub results: Vec<DataPage>,
     pub result_editors: BTreeMap<usize, DataEditorState>,
     pub active_result_editor: Option<usize>,
     pub summaries: Vec<QueryExecutionSummary>,
     pub error: Option<UserFacingError>,
+}
+
+impl QueryPaneState {
+    pub fn new(id: QueryPaneId) -> Self {
+        Self {
+            id,
+            text: String::new(),
+            running: false,
+            results: Vec::new(),
+            result_editors: BTreeMap::new(),
+            active_result_editor: None,
+            summaries: Vec::new(),
+            error: None,
+        }
+    }
+}
+
+/// 分屏布局树。只有叶子持有屏内容，内部节点只描述方向与层级。
+#[derive(Clone, Debug, PartialEq)]
+pub enum QueryPaneLayout {
+    Leaf(QueryPaneId),
+    Split {
+        /// 稳定节点 ID：用于分栏尺寸的记忆键，拆分/关闭兄弟屏时不改变。
+        node_id: u64,
+        direction: QuerySplitDirection,
+        first: Box<QueryPaneLayout>,
+        second: Box<QueryPaneLayout>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueryEditorState {
+    pub connection_id: ConnectionId,
+    pub database: Option<String>,
+    /// 编辑器当前 schema 作用域（PG）；MySQL/TiDB/Redis 恒为 None。
+    pub schema: Option<String>,
+    pub origin: Option<QueryOrigin>,
+    pub saved_fingerprint: Option<QueryFingerprint>,
+    /// 至少保留一屏；屏内容按 `active` 字段切换。
+    pub panes: Vec<QueryPaneState>,
+    /// 当前聚焦屏：工具栏执行、快捷键与「活动结果」都作用于此。
+    pub active_pane: QueryPaneId,
+    pub layout: QueryPaneLayout,
+    next_pane_id: u64,
+    next_layout_node_id: u64,
+}
+
+impl QueryEditorState {
+    pub fn new(connection_id: ConnectionId, database: Option<String>, schema: Option<String>) -> Self {
+        let pane_id = QueryPaneId(1);
+        Self {
+            connection_id,
+            database,
+            schema,
+            origin: None,
+            saved_fingerprint: None,
+            panes: vec![QueryPaneState::new(pane_id)],
+            active_pane: pane_id,
+            layout: QueryPaneLayout::Leaf(pane_id),
+            next_pane_id: 2,
+            next_layout_node_id: 1,
+        }
+    }
+
+    /// 当前聚焦屏。构造与关闭逻辑保证 `panes` 非空。
+    pub fn active(&self) -> &QueryPaneState {
+        self.pane(self.active_pane)
+            .unwrap_or_else(|| self.panes.first().expect("查询编辑器至少保留一屏"))
+    }
+
+    pub fn active_mut(&mut self) -> &mut QueryPaneState {
+        let id = self.active_pane;
+        if self.pane(id).is_none()
+            && let Some(first) = self.panes.first()
+        {
+            self.active_pane = first.id;
+        }
+        let id = self.active_pane;
+        self.pane_mut(id).expect("查询编辑器至少保留一屏")
+    }
+
+    pub fn pane(&self, id: QueryPaneId) -> Option<&QueryPaneState> {
+        self.panes.iter().find(|pane| pane.id == id)
+    }
+
+    pub fn pane_mut(&mut self, id: QueryPaneId) -> Option<&mut QueryPaneState> {
+        self.panes.iter_mut().find(|pane| pane.id == id)
+    }
+
+    pub fn pane_count(&self) -> usize {
+        self.panes.len()
+    }
+
+    /// 按布局树的从左到右 / 从上到下顺序返回屏 ID，用于界面编号。
+    pub fn pane_ids_in_layout_order(&self) -> Vec<QueryPaneId> {
+        fn collect(layout: &QueryPaneLayout, out: &mut Vec<QueryPaneId>) {
+            match layout {
+                QueryPaneLayout::Leaf(id) => out.push(*id),
+                QueryPaneLayout::Split { first, second, .. } => {
+                    collect(first, out);
+                    collect(second, out);
+                }
+            }
+        }
+        let mut ids = Vec::with_capacity(self.panes.len());
+        collect(&self.layout, &mut ids);
+        ids
+    }
+
+    pub fn focus_pane(&mut self, id: QueryPaneId) -> bool {
+        if self.pane(id).is_none() {
+            return false;
+        }
+        self.active_pane = id;
+        true
+    }
+
+    /// 在 `target` 旁拆出一屏，新屏成为聚焦屏。返回新屏 ID。
+    pub fn split_pane(&mut self, target: QueryPaneId, direction: QuerySplitDirection) -> Option<QueryPaneId> {
+        self.pane(target)?;
+        let pane_id = QueryPaneId(self.next_pane_id);
+        self.next_pane_id += 1;
+        let node_id = self.next_layout_node_id;
+        self.next_layout_node_id += 1;
+        self.panes.push(QueryPaneState::new(pane_id));
+        let (layout, replaced) = split_layout(
+            &self.layout,
+            target,
+            node_id,
+            direction,
+            pane_id,
+        );
+        if !replaced {
+            // 布局与屏集合必须一致；理论上不可达，回滚动作保持状态自洽。
+            self.panes.retain(|pane| pane.id != pane_id);
+            return None;
+        }
+        self.layout = layout;
+        self.active_pane = pane_id;
+        Some(pane_id)
+    }
+
+    /// 关闭一屏，由兄弟子树顶替位置。只剩一屏时返回 false。
+    pub fn close_pane(&mut self, target: QueryPaneId) -> bool {
+        if self.panes.len() <= 1 || self.pane(target).is_none() {
+            return false;
+        }
+        let (layout, removed) = remove_layout(&self.layout, target);
+        if !removed {
+            return false;
+        }
+        self.layout = layout;
+        self.panes.retain(|pane| pane.id != target);
+        if self.active_pane == target {
+            self.active_pane = self
+                .pane_ids_in_layout_order()
+                .first()
+                .copied()
+                .unwrap_or_else(|| self.panes[0].id);
+        }
+        true
+    }
+
+    pub fn has_unsaved_sql(&self) -> bool {
+        let active_saved = match (&self.origin, self.saved_fingerprint) {
+            (Some(_), Some(saved)) => {
+                saved == QueryFingerprint::for_text(&self.active().text)
+            }
+            _ => false,
+        };
+        if !active_saved {
+            return self.panes.iter().any(|pane| !pane.text.trim().is_empty());
+        }
+        // 已保存的只有聚焦屏这一份文本；其它屏的非空内容同样算未保存。
+        self.panes
+            .iter()
+            .any(|pane| pane.id != self.active_pane && !pane.text.trim().is_empty())
+    }
+}
+
+/// 字段访问统一落到当前聚焦屏：旧的单编辑器代码路径因此仍然有效。
+impl std::ops::Deref for QueryEditorState {
+    type Target = QueryPaneState;
+
+    fn deref(&self) -> &Self::Target {
+        self.active()
+    }
+}
+
+impl std::ops::DerefMut for QueryEditorState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.active_mut()
+    }
+}
+
+fn split_layout(
+    layout: &QueryPaneLayout,
+    target: QueryPaneId,
+    node_id: u64,
+    direction: QuerySplitDirection,
+    new_pane: QueryPaneId,
+) -> (QueryPaneLayout, bool) {
+    match layout {
+        QueryPaneLayout::Leaf(id) if *id == target => (
+            QueryPaneLayout::Split {
+                node_id,
+                direction,
+                first: Box::new(QueryPaneLayout::Leaf(*id)),
+                // 新屏固定在右 / 下侧，与「在聚焦屏右侧拆分」的入口一致。
+                second: Box::new(QueryPaneLayout::Leaf(new_pane)),
+            },
+            true,
+        ),
+        QueryPaneLayout::Leaf(_) => (layout.clone(), false),
+        QueryPaneLayout::Split {
+            node_id: split_node,
+            direction: split_direction,
+            first,
+            second,
+        } => {
+            let (new_first, found) = split_layout(first, target, node_id, direction, new_pane);
+            if found {
+                return (
+                    QueryPaneLayout::Split {
+                        node_id: *split_node,
+                        direction: *split_direction,
+                        first: Box::new(new_first),
+                        second: second.clone(),
+                    },
+                    true,
+                );
+            }
+            let (new_second, found) = split_layout(second, target, node_id, direction, new_pane);
+            (
+                QueryPaneLayout::Split {
+                    node_id: *split_node,
+                    direction: *split_direction,
+                    first: first.clone(),
+                    second: Box::new(new_second),
+                },
+                found,
+            )
+        }
+    }
+}
+
+/// 删除叶子并让兄弟子树顶替父节点；返回新布局与是否删除成功。
+fn remove_layout(layout: &QueryPaneLayout, target: QueryPaneId) -> (QueryPaneLayout, bool) {
+    match layout {
+        QueryPaneLayout::Leaf(id) => {
+            if *id == target {
+                // 调用方保证不会删除最后一屏；返回原叶子由上层改用兄弟节点。
+                (layout.clone(), true)
+            } else {
+                (layout.clone(), false)
+            }
+        }
+        QueryPaneLayout::Split {
+            node_id,
+            direction,
+            first,
+            second,
+        } => {
+            let (new_first, removed) = remove_layout(first, target);
+            if removed {
+                if matches!(first.as_ref(), QueryPaneLayout::Leaf(id) if *id == target) {
+                    return (second.as_ref().clone(), true);
+                }
+                return (
+                    QueryPaneLayout::Split {
+                        node_id: *node_id,
+                        direction: *direction,
+                        first: Box::new(new_first),
+                        second: second.clone(),
+                    },
+                    true,
+                );
+            }
+            let (new_second, removed) = remove_layout(second, target);
+            if removed {
+                if matches!(second.as_ref(), QueryPaneLayout::Leaf(id) if *id == target) {
+                    return (first.as_ref().clone(), true);
+                }
+                return (
+                    QueryPaneLayout::Split {
+                        node_id: *node_id,
+                        direction: *direction,
+                        first: first.clone(),
+                        second: Box::new(new_second),
+                    },
+                    true,
+                );
+            }
+            (layout.clone(), false)
+        }
+    }
 }
 
 /// Redis 命令执行器（Workbench）面板状态。
@@ -2244,16 +2564,6 @@ pub struct RedisPubSubState {
     pub connection_id: ConnectionId,
     /// 目标逻辑数据库编号（0-15）。
     pub database: u32,
-}
-
-impl QueryEditorState {
-    pub fn has_unsaved_sql(&self) -> bool {
-        match (&self.origin, self.saved_fingerprint) {
-            (None, _) => !self.text.trim().is_empty(),
-            (Some(_), Some(saved)) => saved != QueryFingerprint::for_text(&self.text),
-            (Some(_), None) => !self.text.trim().is_empty(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2406,7 +2716,8 @@ pub struct AppController {
     /// 后轮询，「停止」按钮经 `CancelQueryExecution` 置位。必须放在共享 `Arc` 里而不是
     /// `AppState`：UI 线程与后台执行线程各持一份 `AppController` 副本，只有共享 `Arc`
     /// 才能让两边看到同一个标志。
-    query_cancel_flags: Arc<Mutex<BTreeMap<TabId, Arc<std::sync::atomic::AtomicBool>>>>,
+    /// 按「标签页 + 屏」登记取消标志：同一标签里两屏可同时执行、互不覆盖。
+    query_cancel_flags: Arc<Mutex<BTreeMap<QueryPaneKey, Arc<std::sync::atomic::AtomicBool>>>>,
     /// ER 元数据共享缓存（字段按需 + 关系索引 + 连接修订）。UI 线程与后台执行线程
     /// 各持一份 `AppController` 副本，`Arc<Mutex>` 让两边共享同一缓存与并发协调。
     /// 见 parts/er_catalog.rs。

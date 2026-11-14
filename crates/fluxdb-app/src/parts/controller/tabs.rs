@@ -32,20 +32,7 @@ impl AppController {
         self.push_tab(TabState {
             id: tab_id,
             title: "无标题 - 查询".to_string(),
-            kind: TabKind::QueryEditor(QueryEditorState {
-                connection_id,
-                database,
-                schema,
-                text: String::new(),
-                origin: None,
-                saved_fingerprint: None,
-                running: false,
-                results: Vec::new(),
-                result_editors: BTreeMap::new(),
-                active_result_editor: None,
-                summaries: Vec::new(),
-                error: None,
-            }),
+            kind: TabKind::QueryEditor(QueryEditorState::new(connection_id, database, schema)),
             dirty: false,
         });
         AppEvent::TabOpened(tab_id)
@@ -447,6 +434,7 @@ fn active_query_result_editor_mut(editor: &mut QueryEditorState) -> Option<&mut 
     editor.result_editors.get_mut(&page_index)
 }
 
-fn set_active_query_result_editor(editor: &mut QueryEditorState, page_index: Option<usize>) {
-    editor.active_result_editor = page_index.filter(|page_index| editor.result_editors.contains_key(page_index));
+fn set_active_query_result_editor(pane: &mut QueryPaneState, page_index: Option<usize>) {
+    pane.active_result_editor =
+        page_index.filter(|page_index| pane.result_editors.contains_key(page_index));
 }

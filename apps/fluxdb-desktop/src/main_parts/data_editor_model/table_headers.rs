@@ -82,6 +82,7 @@ fn data_table_column_attr_label(meta: &DataTableColumnMeta) -> String {
 
 fn data_table_header_sort_popover(
     tab_id: TabId,
+    pane_id: QueryPaneId,
     col_ix: usize,
     column_name: String,
     sort_icon: &'static str,
@@ -115,7 +116,7 @@ fn data_table_header_sort_popover(
                         let popover = popover.clone();
                         move |_, window, cx| {
                             on_sort(
-                                tab_id,
+                                QueryPaneKey::new(tab_id, pane_id),
                                 column_name.clone(),
                                 Some(DataTableSortDirection::Ascending),
                                 cx,
@@ -140,7 +141,7 @@ fn data_table_header_sort_popover(
                         let popover = popover.clone();
                         move |_, window, cx| {
                             on_sort(
-                                tab_id,
+                                QueryPaneKey::new(tab_id, pane_id),
                                 column_name.clone(),
                                 Some(DataTableSortDirection::Descending),
                                 cx,
@@ -160,7 +161,12 @@ fn data_table_header_sort_popover(
                             let on_sort = on_sort.clone();
                             let popover = popover.clone();
                             move |_, window, cx| {
-                                on_sort(tab_id, column_name.clone(), None, cx);
+                                on_sort(
+                                    QueryPaneKey::new(tab_id, pane_id),
+                                    column_name.clone(),
+                                    None,
+                                    cx,
+                                );
                                 popover.update(cx, |state, cx| {
                                     state.dismiss(window, cx);
                                 });

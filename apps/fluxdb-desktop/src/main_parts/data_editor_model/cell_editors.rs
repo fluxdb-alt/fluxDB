@@ -251,7 +251,7 @@ fn cell_detail_temporal_editor(
     edit_input: Entity<InputState>,
     part_input: Entity<InputState>,
     part_editing: Option<TemporalPartEditState>,
-    tab_id: TabId,
+    key: QueryPaneKey,
     view: WeakEntity<NavicatMain>,
     nullable: bool,
     is_dark: bool,
@@ -262,9 +262,9 @@ fn cell_detail_temporal_editor(
         edit_input,
         part_input,
         part_editing.filter(|editing| {
-            matches!(editing.target, TemporalEditTarget::CellDetail(active) if active == tab_id)
+            matches!(editing.target, TemporalEditTarget::CellDetail(active) if active == key)
         }),
-        TemporalEditTarget::CellDetail(tab_id),
+        TemporalEditTarget::CellDetail(key),
         view,
         nullable,
         is_dark,

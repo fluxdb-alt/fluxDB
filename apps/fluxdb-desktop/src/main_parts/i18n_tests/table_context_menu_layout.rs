@@ -343,6 +343,7 @@ fn long_column_comment_wraps_inside_header_tooltip(cx: &mut TestAppContext) {
         let delegate = DataPageTableDelegate::from_page_with_rule(
             app.downgrade(),
             TabId(1),
+            crate::DATA_EDITOR_PANE,
             page,
             None,
             None,

@@ -203,6 +203,10 @@ fn tab_view_with_context(
         _ => None,
     };
     let is_table_tab = table_name.is_some();
+    let pane_count = match &tab.kind {
+        TabKind::QueryEditor(editor) => editor.pane_count(),
+        _ => 1,
+    };
     let title = tab_title(tab, show_database_context);
     let title_tooltip = title.clone();
     let dragged_tab = DraggedTab {
@@ -283,6 +287,24 @@ fn tab_view_with_context(
             )
         })
         .child(tab_icon(tab, active, colors))
+        .when(pane_count > 1, |this| {
+            // 分屏数直接标在标签上：用户不切回该标签也能看出它还开着几屏。
+            this.child(
+                div()
+                    .flex_none()
+                    .h(px(16.))
+                    .px_1()
+                    .rounded(colors.radius)
+                    .bg(colors.panel_alt)
+                    .border_1()
+                    .border_color(colors.border_soft)
+                    .flex()
+                    .items_center()
+                    .text_size(ui_text_size(10.))
+                    .text_color(colors.muted)
+                    .child(pane_count.to_string()),
+            )
+        })
         .child(
             div()
                 .id(("tab-title", tab_id.0))

@@ -289,7 +289,7 @@ fn mysql_sql_completion_candidates_appear(cx: &mut TestAppContext) {
     let editor = cx.update(|_, cx| {
         view.read(cx)
             .query_editors
-            .get(&tab_id)
+            .get(&fluxdb_app::QueryPaneKey::new(tab_id, fluxdb_app::QueryPaneId(1)))
             .expect("query editor")
             .clone()
     });
@@ -303,6 +303,7 @@ fn mysql_sql_completion_candidates_appear(cx: &mut TestAppContext) {
                 app.dispatch(
                     AppCommand::UpdateQueryText {
                         tab_id,
+                        pane_id: fluxdb_app::QueryPaneId(1),
                         text: text.clone(),
                     },
                     cx,

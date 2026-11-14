@@ -238,9 +238,10 @@ impl NavicatMain {
             .as_ref()
             .or(auto_edit.as_ref());
         if let Some(edit) = edit {
+            let key = self.query_pane_key(TabId(edit.tab_id));
             let current = self
                 .query_editors
-                .get(&TabId(edit.tab_id))
+                .get(&key)
                 .map(|editor| editor.read(cx).buffer.snapshot());
             if !current
                 .as_ref()

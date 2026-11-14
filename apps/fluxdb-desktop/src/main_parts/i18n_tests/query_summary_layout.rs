@@ -49,6 +49,7 @@ fn query_summary_columns_align_and_stay_readable_when_narrow(cx: &mut TestAppCon
     };
     controller.dispatch(AppCommand::FinishQueryExecution {
         tab_id,
+        pane_id: fluxdb_app::QueryPaneId(1),
         result: Ok(QueryExecutionResult {
             summaries: vec![QueryExecutionSummary {
                 sql: "db.orders.createIndex({ customer_id: 1, created_at: -1 })".into(),
@@ -175,6 +176,7 @@ fn query_summary_rows_scroll_when_they_overflow_the_output_panel(cx: &mut TestAp
     };
     controller.dispatch(AppCommand::FinishQueryExecution {
         tab_id,
+        pane_id: fluxdb_app::QueryPaneId(1),
         result: Ok(QueryExecutionResult {
             summaries: (0..ROWS)
                 .map(|index| QueryExecutionSummary {

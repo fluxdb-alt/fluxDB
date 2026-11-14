@@ -54,16 +54,17 @@ impl NavicatMain {
                     schema: query.schema.clone(),
                     ..Default::default()
                 };
+                let key = QueryPaneKey::new(tab.id, query.active_pane);
                 let text = self
                     .query_editors
-                    .get(&tab.id)
+                    .get(&key)
                     .map(|e| e.read(cx).buffer.snapshot())
                     .unwrap_or_else(|| {
                         fluxdb_editor_core::EditorBuffer::new_from(&query.text).snapshot()
                     });
                 let selection = self
                     .query_editors
-                    .get(&tab.id)
+                    .get(&key)
                     .map(|e| e.read(cx).selection_range())
                     .unwrap_or_else(|| fluxdb_editor_core::Range::new(0, 0));
                 page.kind = PageContextKind::SqlEditor;
@@ -72,7 +73,7 @@ impl NavicatMain {
                 let database_kind = self.query_editor_database_kind(tab.id);
                 let output = self
                     .query_output_tabs
-                    .get(&tab.id)
+                    .get(&key)
                     .copied()
                     .filter(|output| query_output_tab_exists(*output, query, database_kind))
                     .unwrap_or_else(|| {

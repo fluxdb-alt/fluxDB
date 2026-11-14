@@ -870,7 +870,8 @@ struct NavicatMain {
     _mongo_drop_index_tasks: BTreeMap<u64, Task<()>>,
     /// 补全字段的抽样任务：每个集合标签页只跑一次，失败不重试（补全降级为仅运算符）。
     _mongo_field_sample_tasks: BTreeMap<u64, Task<()>>,
-    _query_execute_tasks: BTreeMap<u64, Task<()>>,
+    /// 执行任务按屏区分：同一标签的两屏可以各自跑自己的语句。
+    _query_execute_tasks: BTreeMap<QueryPaneKey, Task<()>>,
     /// Redis Workbench 命令的后台执行任务，按标签页 id 去重：同一标签页执行中再次触发
     /// （Run / 重跑 / 历史「运行此条」）时直接提示，不并发发起第二条网络请求。
     _redis_workbench_tasks: BTreeMap<u64, Task<()>>,
@@ -909,9 +910,9 @@ struct NavicatMain {
     _cell_binary_download_tasks: BTreeMap<(TabId, usize, usize), Task<()>>,
     _cell_text_load_tasks: BTreeMap<(TabId, usize, usize), Task<()>>,
     /// 大字段分段读取任务，按单元格去重：连点「读取更多」不并发读同一窗口。
-    _cell_content_chunk_tasks: BTreeMap<(TabId, String), Task<()>>,
+    _cell_content_chunk_tasks: BTreeMap<(QueryPaneKey, String), Task<()>>,
     /// 大字段流式保存任务，按单元格去重。
-    _cell_content_save_tasks: BTreeMap<(TabId, usize, usize), Task<()>>,
+    _cell_content_save_tasks: BTreeMap<(QueryPaneKey, usize, usize), Task<()>>,
     _data_export_tasks: BTreeMap<u64, Task<()>>,
     _data_export_cancel_flags: BTreeMap<u64, Arc<AtomicBool>>,
     _backup_tasks: BTreeMap<u64, Task<()>>,
@@ -1054,6 +1055,10 @@ struct NavicatMain {
     expanded_databases: BTreeMap<String, bool>,
     expanded_object_groups: BTreeMap<String, bool>,
     data_table_states: BTreeMap<TabId, Entity<TableState<DataPageTableDelegate>>>,
+    /// 查询结果的表格实体按屏隔离：同一标签的不同屏各自排序/编辑/滚动。
+    query_result_table_states:
+        BTreeMap<QueryPaneKey, Entity<TableState<DataPageTableDelegate>>>,
+    _query_result_table_width_subscriptions: BTreeMap<QueryPaneKey, Subscription>,
     data_table_column_widths: BTreeMap<DataTableWidthKey, BTreeMap<String, Pixels>>,
     _data_table_width_subscriptions: BTreeMap<TabId, Subscription>,
     create_table_inputs: BTreeMap<CreateTableInputKey, Entity<InputState>>,
@@ -1080,7 +1085,7 @@ struct NavicatMain {
     data_export_object_selects:
         BTreeMap<DataExportObjectSelectKey, Entity<SelectState<SearchableVec<String>>>>,
     _data_export_object_select_subscriptions: BTreeMap<DataExportObjectSelectKey, Subscription>,
-    query_editors: BTreeMap<TabId, Entity<editor_component::Editor>>,
+    query_editors: BTreeMap<QueryPaneKey, Entity<editor_component::Editor>>,
     /// 查询工具栏的数据库/ schema 下拉（同一时刻只显示一个查询标签，状态可共用）。
     query_database_select: Entity<SelectState<SearchableVec<QueryScopeItem>>>,
     _query_database_select_subscription: Subscription,
@@ -1089,23 +1094,23 @@ struct NavicatMain {
     _query_schema_select_subscription: Subscription,
     query_schema_items: Vec<QueryScopeItem>,
     /// 查询页语句执行状态仓库（按 tab 缓存；与 SqlAdapter 共享，供装饰还原行背景）。
-    query_statement_statuses: BTreeMap<TabId, sql_editor_adapter::SqlStatusStore>,
+    query_statement_statuses: BTreeMap<QueryPaneKey, sql_editor_adapter::SqlStatusStore>,
     /// 最近一次从编辑器发起的执行语句快照，与结果摘要同序。
     /// 仅用于失败修复定位，不能用于执行或刷新 SQL。
-    query_execution_sources: BTreeMap<TabId, Vec<SqlStatementRun>>,
+    query_execution_sources: BTreeMap<QueryPaneKey, Vec<SqlStatementRun>>,
     query_save_targets: BTreeMap<TabId, QuerySaveTarget>,
     saved_queries: Vec<SavedQuery>,
     /// 启动后是否已完成持久化历史/保存查询的一次性异步恢复（防重复触发）。
     persisted_history_loaded: bool,
-    _query_editor_subscriptions: BTreeMap<TabId, Subscription>,
+    _query_editor_subscriptions: BTreeMap<QueryPaneKey, Subscription>,
     /// 查询页查找/替换输入框（按 tab 缓存；宿主渲染 find 面板用）。
     #[allow(dead_code)]
     // 查找面板（table_state::query_find_state 等）尚未接入宿主渲染，保留字段。
-    query_find_inputs: BTreeMap<TabId, Entity<InputState>>,
+    query_find_inputs: BTreeMap<QueryPaneKey, Entity<InputState>>,
     #[allow(dead_code)] // 同上，替换输入框随查找面板一并预留。
-    query_replace_inputs: BTreeMap<TabId, Entity<InputState>>,
-    _query_find_input_subscriptions: BTreeMap<TabId, Subscription>,
-    _query_replace_input_subscriptions: BTreeMap<TabId, Subscription>,
+    query_replace_inputs: BTreeMap<QueryPaneKey, Entity<InputState>>,
+    _query_find_input_subscriptions: BTreeMap<QueryPaneKey, Subscription>,
+    _query_replace_input_subscriptions: BTreeMap<QueryPaneKey, Subscription>,
     /// workbench 命令编辑器（按 tab 缓存）。
     /// 迁移到通用 `editor_component::Editor` 后，命令输入、补全、执行全部经本实体。
     /// `pub(crate)`：供 crate 根作用域读取，用于事件订阅与生命周期管理。
@@ -1124,12 +1129,16 @@ struct NavicatMain {
     // 注：Workbench 历史持久化已移除，只保留当前会话态；后期恢复历史时在此
     // 新增「按连接 + DB 分组」的会话历史与持久化入口，不复用 SQL 历史。
     workbench_panel_resize_start: Option<WorkbenchPanelResizeStart>,
-    query_output_tabs: BTreeMap<TabId, QueryOutputTab>,
+    query_output_tabs: BTreeMap<QueryPaneKey, QueryOutputTab>,
+    /// 待确认关闭的查询分屏：非空内容不直接丢弃，等用户选择丢弃/移到新标签。
+    pending_close_query_pane: Option<QueryPaneKey>,
+    /// 单个分屏是否已窄到放不下次要工具栏按钮；由 prepaint 测量，跨过阈值才更新。
+    query_pane_compact: BTreeMap<QueryPaneKey, bool>,
     /// 执行计划页签当前选中的节点下标（按标签页记住）。
-    query_plan_selected_nodes: BTreeMap<TabId, usize>,
+    query_plan_selected_nodes: BTreeMap<QueryPaneKey, usize>,
     /// 执行计划的展示模式：图形树 / 原始结果表格。
-    query_plan_view_modes: BTreeMap<TabId, QueryPlanViewMode>,
-    collapsed_query_outputs: BTreeSet<TabId>,
+    query_plan_view_modes: BTreeMap<QueryPaneKey, QueryPlanViewMode>,
+    collapsed_query_outputs: BTreeSet<QueryPaneKey>,
     results_placement: ResultsPlacement,
     query_result_display_pages: BTreeMap<QueryResultDisplayKey, SortedQueryResultPage>,
     settings_panel_section: SettingsPanelSection,
@@ -1156,13 +1165,13 @@ struct NavicatMain {
     backup_pg_client_missing: bool,
     /// 备份对话框打开时的预检结果：MySQL/TiDB 连接但本机缺少 mysqldump/mariadb-dump。
     backup_mysql_client_missing: bool,
-    query_output_heights: BTreeMap<TabId, f32>,
-    query_output_widths: BTreeMap<TabId, f32>,
+    query_output_heights: BTreeMap<QueryPaneKey, f32>,
+    query_output_widths: BTreeMap<QueryPaneKey, f32>,
     query_output_resize_start: Option<QueryOutputResizeStart>,
     query_result_sort_rules: BTreeMap<QueryResultSortKey, Vec<DataSortRule>>,
-    query_result_cell_detail: BTreeMap<TabId, QueryResultCellDetail>,
+    query_result_cell_detail: BTreeMap<QueryPaneKey, QueryResultCellDetail>,
     /// 详情面板打开中的大字段分段窗口（键 = 标签页）。
-    large_value_windows: BTreeMap<TabId, LargeValueWindows>,
+    large_value_windows: BTreeMap<QueryPaneKey, LargeValueWindows>,
     data_change_sql_preview_tabs: BTreeSet<TabId>,
     data_filter_panels: BTreeSet<TabId>,
     data_filter_rules: BTreeMap<TabId, Vec<DataFilterRule>>,

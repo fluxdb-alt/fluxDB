@@ -968,7 +968,24 @@ pub enum AppCommand {
 
     UpdateQueryText {
         tab_id: TabId,
+        pane_id: QueryPaneId,
         text: String,
+    },
+    /// 在指定屏旁拆出一屏（新屏固定在右 / 下侧），并把焦点移到新屏。
+    SplitQueryPane {
+        tab_id: TabId,
+        pane_id: QueryPaneId,
+        direction: QuerySplitDirection,
+    },
+    /// 关闭一屏；只剩一屏时忽略。
+    CloseQueryPane {
+        tab_id: TabId,
+        pane_id: QueryPaneId,
+    },
+    /// 切换聚焦屏：后续执行、快捷键与结果操作都作用于此。
+    ActivateQueryPane {
+        tab_id: TabId,
+        pane_id: QueryPaneId,
     },
     /// 切换查询标签的目标数据库。数据库真正切换时才重建查询会话并清空旧结果。
     SetQueryDatabase {
@@ -982,6 +999,7 @@ pub enum AppCommand {
     },
     RequestQueryCompletions {
         tab_id: TabId,
+        pane_id: QueryPaneId,
         request_seq: u64,
         cursor: usize,
         explicit: bool,
@@ -990,29 +1008,47 @@ pub enum AppCommand {
         connection_id: ConnectionId,
         database: Option<String>,
     },
-    FormatQuerySql(TabId),
-    CompressQuerySql(TabId),
+    FormatQuerySql {
+        tab_id: TabId,
+        pane_id: QueryPaneId,
+    },
+    CompressQuerySql {
+        tab_id: TabId,
+        pane_id: QueryPaneId,
+    },
     MarkQuerySaved {
         tab_id: TabId,
         title: String,
         origin: QueryOrigin,
     },
-    StartQueryExecution(TabId),
-    /// 请求停止当前标签正在执行的查询（工具栏「停止」）。置位该标签的取消标志，
+    StartQueryExecution {
+        tab_id: TabId,
+        pane_id: QueryPaneId,
+    },
+    /// 请求停止某屏正在执行的查询（工具栏「停止」）。置位该屏的取消标志，
     /// 执行线程在下一次检查点向服务端发送取消（PG CancelToken），不会强杀执行线程。
-    CancelQueryExecution(TabId),
-    ExecuteQuery(TabId),
+    CancelQueryExecution {
+        tab_id: TabId,
+        pane_id: QueryPaneId,
+    },
+    ExecuteQuery {
+        tab_id: TabId,
+        pane_id: QueryPaneId,
+    },
     ExecuteQueryText {
         tab_id: TabId,
+        pane_id: QueryPaneId,
         text: String,
     },
     ExecuteQueryTextWithOptions {
         tab_id: TabId,
+        pane_id: QueryPaneId,
         text: String,
         options: QueryExecutionOptions,
     },
     FinishQueryExecution {
         tab_id: TabId,
+        pane_id: QueryPaneId,
         result: std::result::Result<QueryExecutionResult, UserFacingError>,
     },
     UpdateRedisWorkbenchText {
@@ -1068,12 +1104,14 @@ pub enum AppCommand {
     },
     FinishQueryResultPageRefresh {
         tab_id: TabId,
+        pane_id: QueryPaneId,
         result_index: usize,
         page_index: usize,
         result: std::result::Result<QueryExecutionResult, UserFacingError>,
     },
     ActivateQueryResultEditor {
         tab_id: TabId,
+        pane_id: QueryPaneId,
         page_index: Option<usize>,
     },
     LoadUserAdminUsers(TabId),
