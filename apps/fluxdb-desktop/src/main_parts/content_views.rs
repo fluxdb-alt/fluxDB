@@ -1077,10 +1077,16 @@ fn data_editor_content(
             .get(cell.column)?
             .large_value()?
             .clone();
-        Some(this.ensure_large_value_window(tab_id, cell.row, cell.column, &large, cx))
+        Some(this.ensure_large_value_window(
+            QueryPaneKey::new(tab_id, DATA_EDITOR_PANE),
+            cell.row,
+            cell.column,
+            &large,
+            cx,
+        ))
     }).flatten();
     if large_value_window.is_none() {
-        this.drop_large_value_window(tab_id);
+        this.drop_large_value_window(QueryPaneKey::new(tab_id, DATA_EDITOR_PANE));
     }
     let cell_detail_drawer = editor.cell_detail_panel.open.then(|| {
         sync_input_value(
@@ -1284,13 +1290,9 @@ fn data_editor_content(
 /// `Editor::render()` 根元素（参考 zed）。宿主这里只保留布局定位 + 配色，
 /// 以及 SQL 专属的 `ExecuteQueryShortcut` 绑定（按祖先链从内层 Editor 冒泡到此处）。
 fn sql_editor_panel(
-    _tab_id: TabId,
     editor: gpui::Entity<editor_component::Editor>,
     colors: UiColors,
-    window: &mut Window,
-    _cx: &mut Context<NavicatMain>,
 ) -> impl IntoElement {
-    let _ = window;
     div()
         .id(("sql-editor", editor.entity_id()))
         .flex_1()
@@ -1320,17 +1322,8 @@ fn query_editor_content(
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let sql_editor = this.query_editor_state(tab_id, editor, window, cx);
-    // 新建连接弹框打开时，焦点属于弹框输入框；不要在延迟回调里抢回 SQL 编辑器焦点。
-    if this.new_connection_kind.is_none() && !sql_editor.read(cx).is_focused(window) {
-        // 这里不能直接在 render 里抢焦点；等本帧挂树完成后再聚焦，才能稳定点亮光标。
-        let sql_editor = sql_editor.clone();
-        cx.defer_in(window, move |this, window, cx| {
-            if this.new_connection_kind.is_none() {
-                sql_editor.update(cx, |editor, _cx| editor.focus(window));
-            }
-        });
-    }
+    let key = QueryPaneKey::new(tab_id, editor.active_pane);
+    let sql_editor = this.query_editor_state(key, editor, window, cx);
     let connection = connection_name(this.controller.state(), editor.connection_id);
     let accent = this
         .controller
@@ -1342,16 +1335,124 @@ fn query_editor_content(
         .map(connection_color_rgba)
         .unwrap_or_else(|| connection_color_rgba(DEFAULT_CONNECTION_COLOR));
     let output_placement = this.results_placement;
+    // 工具栏属于标签页：执行、格式化只作用于聚焦屏，分屏按钮在它右侧。
+    let toolbar = query_toolbar(
+        this,
+        tab_id,
+        editor,
+        sql_editor,
+        connection,
+        accent,
+        output_placement,
+        colors,
+        window,
+        cx,
+    );
+    div()
+        .flex_1()
+        .min_h(px(0.))
+        .bg(colors.panel_bg)
+        .flex()
+        .flex_col()
+        .child(toolbar)
+        .child(query_pane_layout_view(
+            tab_id,
+            editor,
+            &editor.layout,
+            this,
+            window,
+            colors,
+            cx,
+        ))
+}
+
+/// 按分屏树渲染：叶子是一屏的编辑区 + 结果区，内部节点是可拖动的分栏。
+fn query_pane_layout_view(
+    tab_id: TabId,
+    editor: &QueryEditorState,
+    layout: &QueryPaneLayout,
+    this: &mut NavicatMain,
+    window: &mut Window,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    match layout {
+        QueryPaneLayout::Leaf(pane_id) => {
+            let key = QueryPaneKey::new(tab_id, *pane_id);
+            let Some(pane) = editor.pane(*pane_id) else {
+                return div();
+            };
+            query_pane_view(key, pane, editor, this, window, colors, cx)
+        }
+        QueryPaneLayout::Split {
+            node_id,
+            direction,
+            first,
+            second,
+        } => {
+            let first = query_pane_layout_view(tab_id, editor, first, this, window, colors, cx);
+            let second = query_pane_layout_view(tab_id, editor, second, this, window, colors, cx);
+            let split_id = SharedString::from(format!("query-pane-split:{}:{node_id}", tab_id.0));
+            let group = match direction {
+                QuerySplitDirection::Columns => gpui_component::h_resizable(split_id),
+                QuerySplitDirection::Rows => gpui_component::v_resizable(split_id),
+            };
+            div().flex_1().min_h(px(0.)).min_w(px(0.)).child(
+                group
+                    .child(
+                        gpui_component::resizable_panel()
+                            .min_w(px(120.))
+                            .min_h(px(0.))
+                            .child(first),
+                    )
+                    .child(
+                        gpui_component::resizable_panel()
+                            .min_w(px(120.))
+                            .min_h(px(0.))
+                            .child(second),
+                    ),
+            )
+        }
+    }
+}
+
+/// 单屏工作区：编辑器 + 该屏自己的结果区。
+fn query_pane_view(
+    key: QueryPaneKey,
+    pane: &QueryPaneState,
+    editor: &QueryEditorState,
+    this: &mut NavicatMain,
+    window: &mut Window,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let sql_editor = this.query_editor_state(key, editor, window, cx);
+    let pane_view = cx.entity().downgrade();
+    // 新建连接弹框打开时，焦点属于弹框输入框；不要在延迟回调里抢回 SQL 编辑器焦点。
+    // 多屏时只有聚焦屏抢焦点，否则每次重绘都会把光标挪到别的屏。
+    if key.pane_id == editor.active_pane
+        && this.new_connection_kind.is_none()
+        && !sql_editor.read(cx).is_focused(window)
+    {
+        // 这里不能直接在 render 里抢焦点；等本帧挂树完成后再聚焦，才能稳定点亮光标。
+        let sql_editor = sql_editor.clone();
+        cx.defer_in(window, move |this, window, cx| {
+            if this.new_connection_kind.is_none() {
+                sql_editor.update(cx, |editor, _cx| editor.focus(window));
+            }
+        });
+    }
+    let output_placement = this.results_placement;
     let workspace = match output_placement {
         ResultsPlacement::Bottom => div()
             .flex_1()
             .min_h(px(0.))
             .flex()
             .flex_col()
-            .child(sql_editor_panel(tab_id, sql_editor.clone(), colors, window, cx))
+            .child(sql_editor_panel(sql_editor.clone(), colors))
             .child(query_output_panel(
-                tab_id,
-                editor,
+                key,
+                pane,
                 output_placement,
                 this,
                 window,
@@ -1370,11 +1471,11 @@ fn query_editor_content(
                     .h_full()
                     .flex()
                     .flex_col()
-                    .child(sql_editor_panel(tab_id, sql_editor.clone(), colors, window, cx)),
+                    .child(sql_editor_panel(sql_editor.clone(), colors)),
             )
             .child(query_output_panel(
-                tab_id,
-                editor,
+                key,
+                pane,
                 output_placement,
                 this,
                 window,
@@ -1385,34 +1486,145 @@ fn query_editor_content(
 
     div()
         .flex_1()
+        .min_w(px(0.))
+        .min_h(px(0.))
         .bg(colors.panel_bg)
         .flex()
         .flex_col()
+        // 分屏后每屏可用宽度不同：实测后只记录「是否过窄」的翻转，避免每帧写状态。
+        .on_children_prepainted(move |bounds, _, cx| {
+            let Some(bounds) = bounds.first() else {
+                return;
+            };
+            let compact = bounds.size.width < px(560.);
+            let _ = pane_view.update(cx, |this, cx| {
+                if this.query_pane_compact.get(&key).copied() != Some(compact) {
+                    this.query_pane_compact.insert(key, compact);
+                    cx.notify();
+                }
+            });
+        })
+        // 点进任一屏即把执行目标切到它：工具栏与快捷键才能跟着走。
         .on_mouse_down(MouseButton::Left, {
             let sql_editor = sql_editor.clone();
-            move |_, _, cx| {
+            cx.listener(move |this, _, _, cx| {
+                if this.active_query_pane_key(key.tab_id) != Some(key) {
+                    this.dispatch(
+                        AppCommand::ActivateQueryPane {
+                            tab_id: key.tab_id,
+                            pane_id: key.pane_id,
+                        },
+                        cx,
+                    );
+                }
                 sql_editor.update(cx, |editor, cx| editor.hide_completion(cx));
-            }
+            })
         })
-        .on_mouse_down(MouseButton::Right, {
-            let sql_editor = sql_editor.clone();
-            move |_, _, cx| {
-                sql_editor.update(cx, |editor, cx| editor.hide_completion(cx));
-            }
+        // 只有多屏时才显示屏头：单屏不该多出一条没有信息量的栏。
+        .when(editor.pane_count() > 1, |this_div| {
+            this_div
+                .child(query_pane_header(key, pane, editor, this, colors, cx))
+                .child(div().h(px(1.)).flex_none().bg(colors.border))
         })
-        .child(query_toolbar(
-            this,
-            tab_id,
-            editor,
-            sql_editor.clone(),
-            connection,
-            accent,
-            output_placement,
-            colors,
-            window,
-            cx,
-        ))
         .child(workspace)
+}
+
+/// 多屏时的屏头：编号 + 只执行本屏 + 关闭本屏。
+fn query_pane_header(
+    key: QueryPaneKey,
+    pane: &QueryPaneState,
+    editor: &QueryEditorState,
+    this: &NavicatMain,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let _ = (pane, this);
+    let index = editor
+        .pane_ids_in_layout_order()
+        .iter()
+        .position(|pane_id| *pane_id == key.pane_id)
+        .map(|index| index + 1)
+        .unwrap_or(1);
+    let is_active = key.pane_id == editor.active_pane;
+    let can_close = editor.pane_count() > 1;
+    div()
+        .debug_selector(move || format!("query-pane-header:{}-{}", key.tab_id.0, key.pane_id.0))
+        .flex_none()
+        .h(px(26.))
+        .px_2()
+        .flex()
+        .items_center()
+        .gap_2()
+        .bg(if is_active {
+            colors.panel_alt
+        } else {
+            colors.panel_bg
+        })
+        .border_b_1()
+        .border_color(colors.border)
+        .child(
+            div()
+                .text_size(ui_text_size(11.5))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(if is_active { colors.text } else { colors.muted })
+                .child(tr("app.query.pane_label").replace("%{index}", &index.to_string())),
+        )
+        .child(div().flex_1())
+        .child(
+            div()
+                .id(format!("query-pane-run-{}", key.pane_id.0))
+                .debug_selector(move || format!("query-pane-run-{}", key.pane_id.0))
+                .size(px(20.))
+                .rounded(colors.radius * 0.5)
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .justify_center()
+                .hover(move |style| style.bg(colors.hover))
+                .tooltip(move |window, cx| {
+                    Tooltip::new(tr("app.query.toolbar.run")).build(window, cx)
+                })
+                .child(app_icon(AppIcon::Play, 12., colors.muted))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, window, cx| {
+                        this.dispatch(
+                            AppCommand::ActivateQueryPane {
+                                tab_id: key.tab_id,
+                                pane_id: key.pane_id,
+                            },
+                            cx,
+                        );
+                        this.start_query_execution(key, window, cx);
+                        cx.stop_propagation();
+                    }),
+                ),
+        )
+        .when(can_close, |this| {
+            this.child(
+                div()
+                    .id(format!("query-pane-close-{}", key.pane_id.0))
+                    .debug_selector(move || format!("query-pane-close-{}", key.pane_id.0))
+                    .size(px(20.))
+                    .rounded(colors.radius * 0.5)
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .hover(move |style| style.bg(colors.hover))
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(tr("app.query.close_pane")).build(window, cx)
+                    })
+                    .child(app_icon(AppIcon::Close, 12., colors.muted))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.request_close_query_pane(key, cx);
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+        })
 }
 
 /// Redis Workbench 面板：命令输入 + 执行按钮 + 结果列表。
@@ -2441,7 +2653,14 @@ fn redis_workbench_results(
                     }
                 }))
                 .into_any_element();
-            query_output_error_state(tab_id, error, Some(retry), cx, colors).into_any_element()
+            query_output_error_state(
+                QueryPaneKey::new(tab_id, DATA_EDITOR_PANE),
+                error,
+                Some(retry),
+                cx,
+                colors,
+            )
+            .into_any_element()
         } else {
             redis_workbench_empty_state(colors).into_any_element()
         }
@@ -3269,58 +3488,63 @@ fn command_bulk_display(bulk: &CommandBulk) -> String {
 }
 
 fn query_output_panel(
-    tab_id: TabId,
-    editor: &QueryEditorState,
+    key: QueryPaneKey,
+    pane: &QueryPaneState,
     placement: ResultsPlacement,
     this: &mut NavicatMain,
     window: &mut Window,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let has_output = !editor.results.is_empty() || !editor.summaries.is_empty();
-    let has_error = editor.error.is_some();
-    if !has_output && !editor.running && !has_error {
+    let tab_id = key.tab_id;
+    let has_output = !pane.results.is_empty() || !pane.summaries.is_empty();
+    let has_error = pane.error.is_some();
+    if !has_output && !pane.running && !has_error {
         return div();
     }
 
-    if (has_output || has_error) && this.collapsed_query_outputs.contains(&tab_id) {
-        return collapsed_query_output_button(tab_id, placement, colors, cx);
+    if (has_output || has_error) && this.collapsed_query_outputs.contains(&key) {
+        return collapsed_query_output_button(key, placement, colors, cx);
     }
 
     let database_kind = this.query_editor_database_kind(tab_id);
     let selected = this
         .query_output_tabs
-        .get(&tab_id)
+        .get(&key)
         .copied()
-        .filter(|tab| query_output_tab_exists(*tab, editor, database_kind))
+        .filter(|tab| query_output_tab_exists(*tab, pane, database_kind))
         .unwrap_or_else(|| {
-            if query_result_entry_count(editor) > 0 {
+            if query_result_entry_count(pane) > 0 {
                 QueryOutputTab::Result(0)
             } else {
                 QueryOutputTab::Summary
             }
         });
     let size = match placement {
-        ResultsPlacement::Bottom => query_output_height(tab_id, this, window),
-        ResultsPlacement::Right => query_output_width(tab_id, this, window),
+        ResultsPlacement::Bottom => query_output_height(key, this, window),
+        ResultsPlacement::Right => query_output_width(key, this, window),
     };
-    let body = if let Some(error) = editor.error.as_ref() {
-        let retry = Button::new(("retry-query-output", tab_id.0))
+    let body = if let Some(error) = pane.error.as_ref() {
+        // 每个屏各有自己的重试按钮，元素 id 必须带屏号，否则同标签两屏会撞 id。
+        let retry = Button::new(format!(
+            "retry-query-output-{}-{}",
+            key.tab_id.0, key.pane_id.0
+        ))
             .label(tr("app.common.retry"))
             .small()
             .outline()
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.start_query_execution(tab_id, window, cx);
+                this.start_query_execution(key, window, cx);
             }))
             .into_any_element();
-        query_output_error_state(tab_id, error, Some(retry), cx, colors).into_any_element()
+        query_output_error_state(key, error, Some(retry), cx, colors).into_any_element()
     } else if !has_output {
         query_output_empty_state(colors).into_any_element()
     } else {
         match selected {
             QueryOutputTab::Result(index) => query_result_view(
-                tab_id,
-                editor,
+                key,
+                pane,
                 index,
                 this,
                 window,
@@ -3329,11 +3553,11 @@ fn query_output_panel(
             )
             .into_any_element(),
             QueryOutputTab::Summary => {
-                query_execution_summary_view(tab_id, &editor.summaries, colors, cx)
+                query_execution_summary_view(key, &pane.summaries, colors, cx)
                     .into_any_element()
             }
             QueryOutputTab::Plan => {
-                query_plan_view(tab_id, editor, this, colors, cx).into_any_element()
+                query_plan_view(key, pane, this, colors, cx).into_any_element()
             }
         }
     };
@@ -3345,8 +3569,8 @@ fn query_output_panel(
         .flex()
         .flex_col()
         .child(query_output_tabs(
-            tab_id,
-            editor,
+            key,
+            pane,
             database_kind,
             selected,
             colors,
@@ -3361,7 +3585,7 @@ fn query_output_panel(
                 .flex()
                 .flex_col()
                 .child(body)
-                .when(editor.running, |this| this.child(query_output_loading_overlay(colors))),
+                .when(pane.running, |this| this.child(query_output_loading_overlay(colors))),
         );
     let panel = div()
         .flex_none()
@@ -3373,13 +3597,13 @@ fn query_output_panel(
             .h(px(size))
             .border_t_1()
             .flex_col()
-            .child(query_output_resize_handle(tab_id, placement, size, colors, cx))
+            .child(query_output_resize_handle(key, placement, size, colors, cx))
             .child(content),
         ResultsPlacement::Right => panel
             .w(px(size))
             .h_full()
             .border_l_1()
-            .child(query_output_resize_handle(tab_id, placement, size, colors, cx))
+            .child(query_output_resize_handle(key, placement, size, colors, cx))
             .child(content),
     }
 }
@@ -3417,16 +3641,16 @@ fn query_split_height(window: &Window) -> f32 {
 
 /// 结果区高度：默认占分栏 `RESULT_DEFAULT_SPLIT_RATIO`，
 /// 再夹到 [split/6, 0.80·split]（min 相对编辑器 20%，max 占分栏 80%）。
-fn query_output_height(tab_id: TabId, this: &NavicatMain, window: &Window) -> f32 {
+fn query_output_height(key: QueryPaneKey, this: &NavicatMain, window: &Window) -> f32 {
     let split = query_split_height(window);
     let default_height = split * RESULT_DEFAULT_SPLIT_RATIO;
-    let raw = this.query_output_heights.get(&tab_id).copied().unwrap_or(default_height);
+    let raw = this.query_output_heights.get(&key).copied().unwrap_or(default_height);
     query_output_clamp_height(raw, split)
 }
-fn query_output_width(tab_id: TabId, this: &NavicatMain, window: &Window) -> f32 {
+fn query_output_width(key: QueryPaneKey, this: &NavicatMain, window: &Window) -> f32 {
     let max_width = query_output_max_width(window);
     this.query_output_widths
-        .get(&tab_id)
+        .get(&key)
         .copied()
         .unwrap_or(QUERY_OUTPUT_DEFAULT_WIDTH)
         .clamp(QUERY_OUTPUT_MIN_WIDTH, max_width)
@@ -3437,7 +3661,7 @@ fn query_output_max_width(window: &Window) -> f32 {
 }
 
 fn query_output_resize_handle(
-    tab_id: TabId,
+    key: QueryPaneKey,
     placement: ResultsPlacement,
     size: f32,
     colors: UiColors,
@@ -3452,7 +3676,7 @@ fn query_output_resize_handle(
             MouseButton::Left,
             cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                 this.query_output_resize_start = Some(QueryOutputResizeStart {
-                    tab_id,
+                    key,
                     placement,
                     x: f32::from(event.position.x),
                     y: f32::from(event.position.y),
@@ -3470,7 +3694,7 @@ fn query_output_resize_handle(
                 let Some(start) = this.query_output_resize_start else {
                     return;
                 };
-                if start.tab_id != tab_id {
+                if start.key != key {
                     return;
                 }
                 match start.placement {
@@ -3478,13 +3702,13 @@ fn query_output_resize_handle(
                         let delta = start.y - f32::from(event.event.position.y);
                         let split = query_split_height(window);
                         let height = query_output_clamp_height(start.size + delta, split);
-                        this.query_output_heights.insert(tab_id, height);
+                        this.query_output_heights.insert(key, height);
                     }
                     ResultsPlacement::Right => {
                         let delta = start.x - f32::from(event.event.position.x);
                         let width = (start.size + delta)
                             .clamp(QUERY_OUTPUT_MIN_WIDTH, query_output_max_width(window));
-                        this.query_output_widths.insert(tab_id, width);
+                        this.query_output_widths.insert(key, width);
                     }
                 }
                 cx.notify();
@@ -3496,7 +3720,7 @@ fn query_output_resize_handle(
             cx.listener(move |this, _: &MouseUpEvent, _, cx| {
                 if this
                     .query_output_resize_start
-                    .is_some_and(|start| start.tab_id == tab_id)
+                    .is_some_and(|start| start.key == key)
                 {
                     this.query_output_resize_start = None;
                     cx.stop_propagation();
@@ -3510,7 +3734,7 @@ fn query_output_resize_handle(
 }
 
 fn collapsed_query_output_button(
-    tab_id: TabId,
+    key: QueryPaneKey,
     placement: ResultsPlacement,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
@@ -3543,7 +3767,7 @@ fn collapsed_query_output_button(
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, _, cx| {
-                this.collapsed_query_outputs.remove(&tab_id);
+                this.collapsed_query_outputs.remove(&key);
                 cx.notify();
                 cx.stop_propagation();
             }),
@@ -3556,14 +3780,14 @@ fn collapsed_query_output_button(
 
 fn query_output_tab_exists(
     tab: QueryOutputTab,
-    editor: &QueryEditorState,
+    pane: &QueryPaneState,
     database_kind: DatabaseKind,
 ) -> bool {
     match tab {
-        QueryOutputTab::Result(index) => index < query_result_entry_count(editor),
-        QueryOutputTab::Summary => !editor.summaries.is_empty() || editor.error.is_some(),
+        QueryOutputTab::Result(index) => index < query_result_entry_count(pane),
+        QueryOutputTab::Summary => !pane.summaries.is_empty() || pane.error.is_some(),
         // 只有当前结果能解析成计划时才出现；否则宁可回退到原始结果表格。
-        QueryOutputTab::Plan => editor
+        QueryOutputTab::Plan => pane
             .results
             .last()
             .is_some_and(|page| fluxdb_app::query_plan_from_page(database_kind, page).is_some()),
@@ -3572,15 +3796,16 @@ fn query_output_tab_exists(
 
 fn data_cell_edit_should_commit_before_query_output_tab_change(
     current: Option<DataCellEditState>,
-    tab_id: TabId,
+    key: QueryPaneKey,
     selected: bool,
 ) -> bool {
-    !selected && current.is_some_and(|editing| editing.tab_id == tab_id)
+    !selected
+        && current.is_some_and(|editing| editing.tab_id == key.tab_id && editing.pane_id == key.pane_id)
 }
 
 fn query_output_tabs(
-    tab_id: TabId,
-    editor: &QueryEditorState,
+    key: QueryPaneKey,
+    pane: &QueryPaneState,
     database_kind: DatabaseKind,
     selected: QueryOutputTab,
     colors: UiColors,
@@ -3588,7 +3813,7 @@ fn query_output_tabs(
 ) -> Div {
     let refresh_sql = selected
         .result_index()
-        .and_then(|index| query_result_sql(editor, index));
+        .and_then(|index| query_result_sql(pane, index));
     let tabs = div()
         .h(px(34.))
         .flex_none()
@@ -3602,7 +3827,10 @@ fn query_output_tabs(
 
     // 结果页签可能很多：页签区单独横向滚动，右侧操作按钮固定可见。
     let mut tab_strip = div()
-        .id(("query-output-tab-strip", tab_id.0))
+        .id(format!(
+            "query-output-tab-strip-{}-{}",
+            key.tab_id.0, key.pane_id.0
+        ))
         .h_full()
         .flex_1()
         .min_w(px(0.))
@@ -3611,10 +3839,10 @@ fn query_output_tabs(
         .gap_2()
         .overflow_x_scroll();
 
-    for index in 0..query_result_entry_count(editor) {
+    for index in 0..query_result_entry_count(pane) {
         tab_strip = tab_strip.child(
             query_output_tab_button(
-                tab_id,
+                key,
                 QueryOutputTab::Result(index),
                 tr("app.query.result_tab").replace("%{index}", &(index + 1).to_string()),
                 None,
@@ -3628,7 +3856,7 @@ fn query_output_tabs(
 
     tab_strip = tab_strip.child(
         query_output_tab_button(
-            tab_id,
+            key,
             QueryOutputTab::Summary,
             tr("app.query.summary_tab").to_string(),
             Some(AppIcon::List),
@@ -3639,10 +3867,10 @@ fn query_output_tabs(
         .flex_none(),
     );
 
-    if query_output_tab_exists(QueryOutputTab::Plan, editor, database_kind) {
+    if query_output_tab_exists(QueryOutputTab::Plan, pane, database_kind) {
         tab_strip = tab_strip.child(
             query_output_tab_button(
-                tab_id,
+                key,
                 QueryOutputTab::Plan,
                 tr("app.query.plan.tab").to_string(),
                 Some(AppIcon::FileSearch),
@@ -3655,28 +3883,28 @@ fn query_output_tabs(
     }
 
     let refresh = query_output_toolbar_button(
-        tab_id,
+        key,
         tr("app.common.refresh"),
         AppIcon::Refresh,
         colors,
         cx,
-        move |this, tab_id, window, cx| {
+        move |this, key, window, cx| {
             if let Some(sql) = refresh_sql.clone() {
-                this.start_query_text_execution(tab_id, sql, window, cx);
+                this.start_query_text_execution(key, sql, window, cx);
             } else {
-                this.start_query_execution(tab_id, window, cx);
+                this.start_query_execution(key, window, cx);
             }
         },
     )
     .flex_none();
     let collapse = query_output_toolbar_button(
-        tab_id,
+        key,
         tr("app.query.collapse_results"),
         AppIcon::ChevronDown,
         colors,
         cx,
-        |this, tab_id, _, cx| {
-            this.collapsed_query_outputs.insert(tab_id);
+        |this, key, _, cx| {
+            this.collapsed_query_outputs.insert(key);
             cx.notify();
         },
     )
@@ -3686,8 +3914,8 @@ fn query_output_tabs(
         .when(
             selected
                 .result_index()
-                .and_then(|index| query_result_page_index(editor, index))
-                .is_some_and(|page_index| editor.result_editors.contains_key(&page_index)),
+                .and_then(|index| query_result_page_index(pane, index))
+                .is_some_and(|page_index| pane.result_editors.contains_key(&page_index)),
             |this| this.child(div().flex_none().child(query_result_editable_badge(colors))),
         )
         .child(refresh)
@@ -3711,7 +3939,7 @@ fn query_result_editable_badge(colors: UiColors) -> Div {
 }
 
 fn query_output_tab_button(
-    tab_id: TabId,
+    key: QueryPaneKey,
     tab: QueryOutputTab,
     label: String,
     icon: Option<AppIcon>,
@@ -3725,7 +3953,9 @@ fn query_output_tab_button(
         QueryOutputTab::Plan => "query-output-tab:plan".to_string(),
     };
     div()
-        .debug_selector(move || debug_name.clone())
+        .debug_selector(move || {
+            format!("{debug_name}:{}-{}", key.tab_id.0, key.pane_id.0)
+        })
         .h(px(26.))
         .px_2()
         .rounded(colors.radius_lg)
@@ -3763,49 +3993,55 @@ fn query_output_tab_button(
                 }
                 if data_cell_edit_should_commit_before_query_output_tab_change(
                     this.data_cell_editing,
-                    tab_id,
+                    key,
                     selected,
                 ) && !this.commit_data_cell_edit_with_refresh(false, cx)
                 {
                     cx.stop_propagation();
                     return;
                 }
-                this.query_output_tabs.insert(tab_id, tab);
+                this.query_output_tabs.insert(key, tab);
                 let page_index = tab.result_index().and_then(|index| {
                     this.controller
                         .state()
                         .tabs
                         .iter()
-                        .find(|state_tab| state_tab.id == tab_id)
+                        .find(|state_tab| state_tab.id == key.tab_id)
                         .and_then(|state_tab| match &state_tab.kind {
-                            TabKind::QueryEditor(editor) => query_result_page_index(editor, index),
+                            TabKind::QueryEditor(editor) => {
+                                editor.pane(key.pane_id).and_then(|pane| query_result_page_index(pane, index))
+                            }
                             _ => None,
                         })
                 });
                 this.dispatch(
-                    AppCommand::ActivateQueryResultEditor { tab_id, page_index },
+                    AppCommand::ActivateQueryResultEditor {
+                        tab_id: key.tab_id,
+                        pane_id: key.pane_id,
+                        page_index,
+                    },
                     cx,
                 );
                 if let Some(statement) = tab
                     .result_index()
                     .and_then(|index| query_result_statement_ordinal_for_tab(
                         this.controller.state(),
-                        tab_id,
+                        key,
                         index,
                     ))
                     .and_then(|ordinal| {
                         // 新编辑器：依据全文切分语句并按 ordinal 取目标语句。
-                        this.query_editors.get(&tab_id).and_then(|editor| {
+                        this.query_editors.get(&key).and_then(|editor| {
                             let text = editor.read(cx).text();
                             sql_editor_adapter::build_statement_runs(
                                 &text,
-                                this.query_editor_database_kind(tab_id),
+                                this.query_editor_database_kind(key.tab_id),
                             )
                                 .get(ordinal)
                                 .cloned()
                         })
                     })
-                    && let Some(sql_editor) = this.query_editors.get(&tab_id).cloned()
+                    && let Some(sql_editor) = this.query_editors.get(&key).cloned()
                 {
                     sql_editor.update(cx, |editor, cx| {
                         editor.reveal_offset(statement.range.start, cx);
@@ -3818,12 +4054,14 @@ fn query_output_tab_button(
 }
 
 fn query_output_toolbar_button(
-    tab_id: TabId,
+    key: QueryPaneKey,
     label: impl Into<SharedString>,
     icon: AppIcon,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
-    action: impl Fn(&mut NavicatMain, TabId, &mut Window, &mut Context<NavicatMain>) + Clone + 'static,
+    action: impl Fn(&mut NavicatMain, QueryPaneKey, &mut Window, &mut Context<NavicatMain>)
+        + Clone
+        + 'static,
 ) -> Div {
     let label = label.into();
     div()
@@ -3846,7 +4084,7 @@ fn query_output_toolbar_button(
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, window, cx| {
-                action(this, tab_id, window, cx);
+                action(this, key, window, cx);
                 cx.stop_propagation();
             }),
         )
@@ -3866,7 +4104,7 @@ fn query_output_empty_state(colors: UiColors) -> Div {
 /// 查询 / Redis 输出面板的错误态：常驻 gpui-component `Alert`（不参与自动消失），
 /// 顶部对齐放在面板里；`retry` 由调用方自备（面板自带运行按钮时可以不传）。
 fn query_output_error_state(
-    tab_id: TabId,
+    key: QueryPaneKey,
     error: &fluxdb_core::UserFacingError,
     retry: Option<gpui::AnyElement>,
     cx: &App,
@@ -3874,7 +4112,9 @@ fn query_output_error_state(
 ) -> Div {
     div().flex_1().min_h(px(0.)).child(
         div().overflow_y_scrollbar().p_6().child(page_error_alert(
-            gpui::ElementId::Name(format!("query-output-error-{}", tab_id.0).into()),
+            gpui::ElementId::Name(
+                format!("query-output-error-{}-{}", key.tab_id.0, key.pane_id.0).into(),
+            ),
             &error.title,
             &error.message,
             error.detail.as_deref(),
@@ -3932,8 +4172,8 @@ fn query_result_summary_has_result_tab(summary: &QueryExecutionSummary) -> bool 
     summary.kind == fluxdb_core::QueryStatementKind::ResultSet || !summary.success
 }
 
-fn query_result_entry_count(editor: &QueryEditorState) -> usize {
-    query_execution_result_entry_count(editor.results.len(), &editor.summaries)
+fn query_result_entry_count(pane: &QueryPaneState) -> usize {
+    query_execution_result_entry_count(pane.results.len(), &pane.summaries)
 }
 
 fn query_execution_result_entry_count(
@@ -3952,11 +4192,11 @@ fn query_execution_result_entry_count(
 }
 
 fn query_result_entry<'a>(
-    editor: &'a QueryEditorState,
+    pane: &'a QueryPaneState,
     result_index: usize,
 ) -> Option<QueryResultEntry<'a>> {
-    if editor.summaries.is_empty() {
-        return editor.results.get(result_index).map(|page| QueryResultEntry::Page {
+    if pane.summaries.is_empty() {
+        return pane.results.get(result_index).map(|page| QueryResultEntry::Page {
             page,
             page_index: result_index,
         });
@@ -3964,7 +4204,7 @@ fn query_result_entry<'a>(
 
     let mut entry_index = 0usize;
     let mut page_index = 0usize;
-    for summary in &editor.summaries {
+    for summary in &pane.summaries {
         if !query_result_summary_has_result_tab(summary) {
             continue;
         }
@@ -3977,7 +4217,7 @@ fn query_result_entry<'a>(
             continue;
         }
 
-        let Some(page) = editor.results.get(page_index) else {
+        let Some(page) = pane.results.get(page_index) else {
             continue;
         };
         if entry_index == result_index {
@@ -3987,26 +4227,26 @@ fn query_result_entry<'a>(
         page_index += 1;
     }
 
-    editor.results.get(page_index).map(|page| QueryResultEntry::Page {
+    pane.results.get(page_index).map(|page| QueryResultEntry::Page {
         page,
         page_index,
     })
 }
 
-fn query_result_page_index(editor: &QueryEditorState, result_index: usize) -> Option<usize> {
-    match query_result_entry(editor, result_index)? {
+fn query_result_page_index(pane: &QueryPaneState, result_index: usize) -> Option<usize> {
+    match query_result_entry(pane, result_index)? {
         QueryResultEntry::Page { page_index, .. } => Some(page_index),
         QueryResultEntry::Failure { .. } => None,
     }
 }
 
-fn query_result_summary_index(editor: &QueryEditorState, result_index: usize) -> Option<usize> {
-    if editor.summaries.is_empty() {
+fn query_result_summary_index(pane: &QueryPaneState, result_index: usize) -> Option<usize> {
+    if pane.summaries.is_empty() {
         return Some(result_index);
     }
 
     let mut entry_index = 0usize;
-    for (summary_index, summary) in editor.summaries.iter().enumerate() {
+    for (summary_index, summary) in pane.summaries.iter().enumerate() {
         if !query_result_summary_has_result_tab(summary) {
             continue;
         }
@@ -4020,26 +4260,28 @@ fn query_result_summary_index(editor: &QueryEditorState, result_index: usize) ->
 
 fn query_result_statement_ordinal_for_tab(
     state: &AppState,
-    tab_id: TabId,
+    key: QueryPaneKey,
     result_index: usize,
 ) -> Option<usize> {
     state
         .tabs
         .iter()
-        .find(|tab| tab.id == tab_id)
+        .find(|tab| tab.id == key.tab_id)
         .and_then(|tab| match &tab.kind {
-            TabKind::QueryEditor(editor) => query_result_summary_index(editor, result_index),
+            TabKind::QueryEditor(editor) => editor
+                .pane(key.pane_id)
+                .and_then(|pane| query_result_summary_index(pane, result_index)),
             _ => None,
         })
 }
 
-fn query_result_sql(editor: &QueryEditorState, result_index: usize) -> Option<String> {
-    if editor.summaries.is_empty() {
+fn query_result_sql(pane: &QueryPaneState, result_index: usize) -> Option<String> {
+    if pane.summaries.is_empty() {
         return None;
     }
 
     let mut entry_index = 0usize;
-    for summary in &editor.summaries {
+    for summary in &pane.summaries {
         if !query_result_summary_has_result_tab(summary) {
             continue;
         }
@@ -4054,24 +4296,25 @@ fn query_result_sql(editor: &QueryEditorState, result_index: usize) -> Option<St
 }
 
 fn query_result_view(
-    tab_id: TabId,
-    editor: &QueryEditorState,
+    key: QueryPaneKey,
+    pane: &QueryPaneState,
     result_index: usize,
     this: &mut NavicatMain,
     window: &mut Window,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let Some(entry) = query_result_entry(editor, result_index) else {
+    let tab_id = key.tab_id;
+    let Some(entry) = query_result_entry(pane, result_index) else {
         return query_output_empty_state(colors);
     };
     let (page, page_index) = match entry {
         QueryResultEntry::Page { page, page_index } => (page, page_index),
         QueryResultEntry::Failure { summary } => {
-            return query_result_error_state(tab_id, result_index, summary, this, colors, cx);
+            return query_result_error_state(key, result_index, summary, this, colors, cx);
         }
     };
-    let result_editor = editor.result_editors.get(&page_index);
+    let result_editor = pane.result_editors.get(&page_index);
     let result_page = result_editor
         .and_then(|editor| editor.page.as_ref())
         .unwrap_or(page);
@@ -4079,12 +4322,13 @@ fn query_result_view(
         .query_result_sort_rules
         .get(&QueryResultSortKey {
             tab_id,
+            pane_id: key.pane_id,
             result_index,
         })
         .cloned()
         .unwrap_or_default();
     let sorted_page =
-        this.query_result_display_page(tab_id, result_index, page_index, result_page, &sort_rules, false);
+        this.query_result_display_page(key, result_index, page_index, result_page, &sort_rules, false);
     let page = &sorted_page.page;
     let search_open = this.data_search_panels.contains(&tab_id);
     if search_open {
@@ -4138,7 +4382,7 @@ fn query_result_view(
 
     let readonly_detail = result_editor
         .is_none()
-        .then(|| this.query_result_cell_detail.get(&tab_id).copied())
+        .then(|| this.query_result_cell_detail.get(&key).copied())
         .flatten();
     let editable_detail_open = result_editor.is_some_and(|editor| editor.cell_detail_panel.open);
     let detail_height = if readonly_detail
@@ -4155,7 +4399,7 @@ fn query_result_view(
     };
     let readonly_panel = readonly_detail.and_then(|detail| {
         query_result_cell_detail_panel(
-            tab_id,
+            key,
             result_page,
             detail,
             detail_height,
@@ -4165,7 +4409,7 @@ fn query_result_view(
         )
     });
     let table_state = this.query_result_table_state_from_sorted_page(
-        tab_id,
+        key,
         sorted_page.page.clone(),
         page_index,
         &sort_rules,
@@ -4203,10 +4447,10 @@ fn query_result_view(
                 .get(cell.column)?
                 .large_value()?
                 .clone();
-            Some(this.ensure_large_value_window(tab_id, cell.row, cell.column, &large, cx))
+            Some(this.ensure_large_value_window(key, cell.row, cell.column, &large, cx))
         });
     if large_value_window.is_none() && readonly_detail.is_none() {
-        this.drop_large_value_window(tab_id);
+        this.drop_large_value_window(key);
     }
     let cell_detail_drawer = result_editor
         .filter(|editor| editor.cell_detail_panel.open)
@@ -4241,7 +4485,7 @@ fn query_result_view(
     };
     let data_search_input = this.data_search_input.clone();
     let data_page_input = this.data_page_input.clone();
-    let pagination_sql = query_result_sql(editor, result_index).unwrap_or_default();
+    let pagination_sql = query_result_sql(pane, result_index).unwrap_or_default();
     div()
         .relative()
         .size_full()
@@ -4305,7 +4549,7 @@ fn query_result_view(
                     tab_id,
                     count,
                     change_sql_preview_open,
-                    editor.running,
+                    pane.running,
                     colors,
                     cx,
                 )
@@ -4318,7 +4562,7 @@ fn query_result_view(
         .when(page_footer_height > 0., |this| {
             this.child(
                 query_result_page_footer(
-                    tab_id,
+                    key,
                     result_index,
                     page_index,
                     page,
@@ -4337,7 +4581,7 @@ fn query_result_view(
 }
 
 fn query_result_page_footer(
-    tab_id: TabId,
+    key: QueryPaneKey,
     result_index: usize,
     page_index: usize,
     page: &DataPage,
@@ -4398,7 +4642,8 @@ fn query_result_page_footer(
                                 this.sync_data_page_input_value(0, page_size, window, cx);
                                 this.start_query_result_page_refresh(
                                     QueryResultRefreshRequest {
-                                        tab_id,
+                                        tab_id: key.tab_id,
+                                        pane_id: key.pane_id,
                                         result_index,
                                         page_index,
                                         sql: sql.clone(),
@@ -4434,7 +4679,8 @@ fn query_result_page_footer(
                                 );
                                 this.start_query_result_page_refresh(
                                     QueryResultRefreshRequest {
-                                        tab_id,
+                                        tab_id: key.tab_id,
+                                        pane_id: key.pane_id,
                                         result_index,
                                         page_index,
                                         sql: sql.clone(),
@@ -4468,7 +4714,8 @@ fn query_result_page_footer(
                                 this.sync_data_page_input_value(next_offset, page_size, window, cx);
                                 this.start_query_result_page_refresh(
                                     QueryResultRefreshRequest {
-                                        tab_id,
+                                        tab_id: key.tab_id,
+                                        pane_id: key.pane_id,
                                         result_index,
                                         page_index,
                                         sql: sql.clone(),
@@ -4523,13 +4770,14 @@ fn query_result_page_button(
 }
 
 fn query_result_error_state(
-    tab_id: TabId,
+    key: QueryPaneKey,
     result_index: usize,
     summary: &QueryExecutionSummary,
     this: &NavicatMain,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
+    let tab_id = key.tab_id;
     let copy_text = query_result_error_copy_text(summary);
     let summary_for_ai = summary.clone();
     let ai_busy = this.ai_chat.loading || this.ai_chat.running.is_some()
@@ -4537,7 +4785,11 @@ fn query_result_error_state(
     let (variant, icon_name, accent) = app_message_style(AppMessageKind::Error, cx);
     let alert = Alert::new(
         gpui::ElementId::Name(
-            format!("query-result-error-{}-{}", tab_id.0, result_index).into(),
+            format!(
+                "query-result-error-{}-{}-{}",
+                key.tab_id.0, key.pane_id.0, result_index
+            )
+            .into(),
         ),
         localize_backend_error_text(&summary.message),
     )
@@ -4587,20 +4839,28 @@ fn query_result_error_state(
         .child(
             query_error_action_button(
                 gpui::ElementId::Name(
-                    format!("retry-query-result-{}-{}", tab_id.0, result_index).into(),
+                    format!(
+                        "retry-query-result-{}-{}-{}",
+                        key.tab_id.0, key.pane_id.0, result_index
+                    )
+                    .into(),
                 ),
                 tr("app.common.retry"),
                 AppIcon::Refresh,
                 colors,
             )
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.start_query_execution(tab_id, window, cx);
+                this.start_query_execution(key, window, cx);
             })),
         )
         .child(
             query_error_action_button(
                 gpui::ElementId::Name(
-                    format!("copy-query-result-error-{}-{}", tab_id.0, result_index).into(),
+                    format!(
+                        "copy-query-result-error-{}-{}-{}",
+                        key.tab_id.0, key.pane_id.0, result_index
+                    )
+                    .into(),
                 ),
                 tr("app.query.copy_error"),
                 AppIcon::Copy,
@@ -4618,7 +4878,11 @@ fn query_result_error_state(
         .child(
             query_error_action_button(
                 gpui::ElementId::Name(
-                    format!("ai-fix-query-result-error-{}-{}", tab_id.0, result_index).into(),
+                    format!(
+                        "ai-fix-query-result-error-{}-{}-{}",
+                        key.tab_id.0, key.pane_id.0, result_index
+                    )
+                    .into(),
                 ),
                 tr("app.query.fix_with_ai"),
                 AppIcon::Bot,
@@ -4758,7 +5022,7 @@ fn query_result_change_footer(
 }
 
 fn query_result_cell_detail_panel(
-    tab_id: TabId,
+    key: QueryPaneKey,
     page: &DataPage,
     detail: QueryResultCellDetail,
     height: f32,
@@ -4766,6 +5030,7 @@ fn query_result_cell_detail_panel(
     this: &mut NavicatMain,
     cx: &mut Context<NavicatMain>,
 ) -> Option<Div> {
+    let tab_id = key.tab_id;
     let column = page.columns.get(detail.column)?;
     let value = page.rows.get(detail.row)?.values.get(detail.column)?.clone();
     let large = value.large_value().cloned();
@@ -4793,7 +5058,7 @@ fn query_result_cell_detail_panel(
     };
     // 大字段窗口先就绪：标题行与正文都按同一份窗口状态渲染。
     let large_window = large.as_ref().map(|large| {
-        this.ensure_large_value_window(tab_id, detail.row, detail.column, large, cx)
+        this.ensure_large_value_window(key, detail.row, detail.column, large, cx)
     });
 
     Some(
@@ -4868,8 +5133,8 @@ fn query_result_cell_detail_panel(
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _, cx| {
-                                            this.query_result_cell_detail.remove(&tab_id);
-                                            this.large_value_windows.remove(&tab_id);
+                                            this.query_result_cell_detail.remove(&key);
+                                            this.large_value_windows.remove(&key);
                                             cx.notify();
                                             cx.stop_propagation();
                                         }),
@@ -4878,7 +5143,7 @@ fn query_result_cell_detail_panel(
                     ),
             )
             .child(query_result_cell_detail_value_header(
-                tab_id,
+                key,
                 value_text,
                 large_window.as_ref(),
                 colors,
@@ -4893,7 +5158,7 @@ fn query_result_cell_detail_panel(
 }
 
 fn query_result_cell_detail_value_header(
-    tab_id: TabId,
+    key: QueryPaneKey,
     value_text: Option<String>,
     large_window: Option<&LargeValueWindows>,
     colors: UiColors,
@@ -4945,7 +5210,7 @@ fn query_result_cell_detail_value_header(
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {
-                            this.save_large_value_to_file(tab_id, cx);
+                            this.save_large_value_to_file(key, cx);
                             cx.stop_propagation();
                         }),
                     ),
@@ -4971,7 +5236,7 @@ fn query_result_cell_detail_value_header(
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _, cx| {
-                                    this.load_next_large_value_chunk(tab_id, cx);
+                                    this.load_next_large_value_chunk(key, cx);
                                     cx.notify();
                                     cx.stop_propagation();
                                 }),
@@ -5065,13 +5330,16 @@ fn compare_query_result_cells(
 }
 
 fn query_execution_summary_view(
-    tab_id: TabId,
+    key: QueryPaneKey,
     summaries: &[QueryExecutionSummary],
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let mut table = div()
-        .id(("query-execution-summary-table", tab_id.0))
+        .id(format!(
+            "query-execution-summary-table-{}-{}",
+            key.tab_id.0, key.pane_id.0
+        ))
         .debug_selector(|| "query-summary-table".into())
         .w_full()
         .min_w(px(QUERY_SUMMARY_TABLE_MIN_WIDTH))
@@ -5104,7 +5372,10 @@ fn query_execution_summary_view(
                 .flex_1()
                 .min_h(px(0.))
                 .min_w(px(0.))
-                .id(("query-execution-summary-scroll", tab_id.0))
+                .id(format!(
+                    "query-execution-summary-scroll-{}-{}",
+                    key.tab_id.0, key.pane_id.0
+                ))
                 .debug_selector(|| "query-summary-scroll".into())
                 // `overflow_scrollbar()` 把本元素当作滚动区里的 flex 子项，默认交叉轴
                 // 拉伸会让表格高度恒等于视口，纵向 scroll_max 为 0、行多了只被裁掉。

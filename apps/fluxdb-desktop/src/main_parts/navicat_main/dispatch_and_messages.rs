@@ -673,10 +673,13 @@ impl NavicatMain {
                 chunk,
             } => {
                 // 只写回仍指向同一单元格的窗口：后台期间用户可能已经切走。
-                if let Some(window) = self
+                // 事件只带标签，按标签内的屏查找；在途任务已按内容引用校验，不会串屏。
+                if let Some((_, window)) = self
                     .large_value_windows
-                    .get_mut(tab_id)
-                    .filter(|window| window.row == *row && window.column == *column)
+                    .iter_mut()
+                    .find(|(key, window)| {
+                        key.tab_id == *tab_id && window.row == *row && window.column == *column
+                    })
                 {
                     window.view.loading = false;
                     window.view.push_chunk(chunk.clone());
@@ -828,17 +831,16 @@ impl NavicatMain {
                     self.refresh_data_table_state(*tab_id, &page, cx);
                 }
             }
-            AppEvent::QueryFinished(tab_id, execution) => {
-                self.query_result_sort_rules
-                    .retain(|key, _| key.tab_id != *tab_id);
-                self.clear_query_result_display_pages_for_tab(*tab_id);
-                if let Some(page) = execution.results.first() {
-                    self.refresh_data_table_state(*tab_id, page, cx);
-                }
-                self.collapsed_query_outputs.remove(tab_id);
+            AppEvent::QueryFinished(tab_id, pane_id, execution) => {
+                let key = QueryPaneKey::new(*tab_id, *pane_id);
+                self.query_result_sort_rules.retain(|rule_key, _| {
+                    !(rule_key.tab_id == key.tab_id && rule_key.pane_id == key.pane_id)
+                });
+                self.clear_query_result_display_pages_for_result(key, 0);
+                self.collapsed_query_outputs.remove(&key);
                 // 解释请求可能在结果返回前就把页签切到计划；结果一到就改回「结果 1」
                 // 会让用户点了解释却看不到计划。只有能解析出计划时才保留该页签。
-                let keep_plan = self.query_output_tabs.get(tab_id)
+                let keep_plan = self.query_output_tabs.get(&key)
                     == Some(&QueryOutputTab::Plan)
                     && execution.results.last().is_some_and(|page| {
                         fluxdb_app::query_plan_from_page(
@@ -848,7 +850,7 @@ impl NavicatMain {
                         .is_some()
                     });
                 self.query_output_tabs.insert(
-                    *tab_id,
+                    key,
                     if keep_plan {
                         QueryOutputTab::Plan
                     } else if query_execution_result_entry_count(
@@ -864,12 +866,14 @@ impl NavicatMain {
             }
             AppEvent::QueryResultPageRefreshed {
                 tab_id,
+                pane_id,
                 result_index,
                 page_index,
                 page,
             } => {
+                let key = QueryPaneKey::new(*tab_id, *pane_id);
                 self.query_output_tabs
-                    .insert(*tab_id, QueryOutputTab::Result(*result_index));
+                    .insert(key, QueryOutputTab::Result(*result_index));
                 let result_editor = self
                     .controller
                     .state()
@@ -877,9 +881,9 @@ impl NavicatMain {
                     .iter()
                     .find(|tab| tab.id == *tab_id)
                     .and_then(|tab| match &tab.kind {
-                        TabKind::QueryEditor(editor) => {
-                            editor.result_editors.get(page_index).cloned()
-                        }
+                        TabKind::QueryEditor(editor) => editor
+                            .pane(*pane_id)
+                            .and_then(|pane| pane.result_editors.get(page_index).cloned()),
                         _ => None,
                     });
                 let display_page = result_editor
@@ -887,7 +891,7 @@ impl NavicatMain {
                     .and_then(|editor| editor.page.clone())
                     .unwrap_or_else(|| page.clone());
                 self.refresh_query_result_table_state(
-                    *tab_id,
+                    key,
                     &display_page,
                     *page_index,
                     *result_index,
@@ -895,12 +899,12 @@ impl NavicatMain {
                     cx,
                 );
             }
-            AppEvent::QueryCompletionsLoaded(_tab_id, _request_seq, _result) => {
+            AppEvent::QueryCompletionsLoaded(_tab_id, _pane_id, _request_seq, _result) => {
                 // 新编辑器改由内部 provider 异步驱动补全，宿主不再分发 QueryCompletionsLoaded 事件；
                 // 补全结果由编辑器内部请求与注入处理。此处仅保留分支以编译。
             }
             AppEvent::TabActivated(tab_id) => {
-                self.sync_query_editor_text(*tab_id, cx);
+                self.sync_query_editor_text(*tab_id, None, cx);
                 self.start_completion_index_warmup_for_tab(*tab_id, cx);
                 // 激活标签切换时让 Redis 历史抽屉跟随当前 scope（connection_id + database），
                 // 切换 / 关闭后不残留旧连接、旧库的历史数据。
@@ -925,17 +929,22 @@ impl NavicatMain {
                 self._data_table_width_subscriptions.remove(tab_id);
                 self.data_table_column_widths
                     .retain(|key, _| key.tab_id != *tab_id);
-                self.query_editors.remove(tab_id);
+                // 查询相关状态按屏（QueryPaneKey）存放，关标签时按所属标签整批回收。
+                let owned_by_tab = |key: &QueryPaneKey| key.tab_id == *tab_id;
+                self.query_editors.retain(|key, _| !owned_by_tab(key));
                 // 关标签即丢弃分段窗口；内容引用由控制器按归属释放。
-                self.large_value_windows.remove(tab_id);
+                self.large_value_windows.retain(|key, _| !owned_by_tab(key));
                 self._cell_content_chunk_tasks
-                    .retain(|(owner, _), _| owner != tab_id);
+                    .retain(|(owner, _), _| !owned_by_tab(owner));
                 self._cell_content_save_tasks
-                    .retain(|(owner, _, _), _| owner != tab_id);
-                self.query_statement_statuses.remove(tab_id);
-                self.query_execution_sources.remove(tab_id);
+                    .retain(|(owner, _, _), _| !owned_by_tab(owner));
+                self.query_statement_statuses
+                    .retain(|key, _| !owned_by_tab(key));
+                self.query_execution_sources
+                    .retain(|key, _| !owned_by_tab(key));
                 self.query_save_targets.remove(tab_id);
-                self._query_editor_subscriptions.remove(tab_id);
+                self._query_editor_subscriptions
+                    .retain(|key, _| !owned_by_tab(key));
                 self.redis_workbench_inputs.remove(tab_id);
                 self._redis_workbench_input_subscriptions.remove(tab_id);
                 self.mongo_workbench_inputs.remove(tab_id);
@@ -956,23 +965,41 @@ impl NavicatMain {
                 {
                     self.pending_dangerous_redis_command = None;
                 }
-                self._query_execute_tasks.remove(&tab_id.0);
+                self._query_execute_tasks
+                    .retain(|key, _| !owned_by_tab(key));
                 self._query_completion_tasks
                     .retain(|(task_tab_id, _), _| task_tab_id != tab_id);
-                self.query_output_tabs.remove(tab_id);
-                self.query_plan_selected_nodes.remove(tab_id);
-                self.query_plan_view_modes.remove(tab_id);
-                self.collapsed_query_outputs.remove(tab_id);
-                self.query_output_heights.remove(tab_id);
-                self.query_output_widths.remove(tab_id);
+                self.query_output_tabs
+                    .retain(|key, _| !owned_by_tab(key));
+                self.query_plan_selected_nodes
+                    .retain(|key, _| !owned_by_tab(key));
+                self.query_plan_view_modes
+                    .retain(|key, _| !owned_by_tab(key));
+                self.collapsed_query_outputs
+                    .retain(|key| !owned_by_tab(key));
+                self.query_output_heights
+                    .retain(|key, _| !owned_by_tab(key));
+                self.query_output_widths
+                    .retain(|key, _| !owned_by_tab(key));
                 self.query_result_sort_rules
                     .retain(|key, _| key.tab_id != *tab_id);
+                self.query_result_table_states
+                    .retain(|key, _| !owned_by_tab(key));
+                self._query_result_table_width_subscriptions
+                    .retain(|key, _| !owned_by_tab(key));
                 self.clear_query_result_display_pages_for_tab(*tab_id);
                 if self
                     .query_output_resize_start
-                    .is_some_and(|start| start.tab_id == *tab_id)
+                    .is_some_and(|start| start.key.tab_id == *tab_id)
                 {
                     self.query_output_resize_start = None;
+                }
+                self.query_pane_compact.retain(|key, _| !owned_by_tab(key));
+                if self
+                    .pending_close_query_pane
+                    .is_some_and(|key| key.tab_id == *tab_id)
+                {
+                    self.pending_close_query_pane = None;
                 }
                 self.data_change_sql_preview_tabs.remove(tab_id);
                 self._data_load_tasks.remove(&tab_id.0);

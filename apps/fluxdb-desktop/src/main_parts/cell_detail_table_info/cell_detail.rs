@@ -11,6 +11,8 @@ fn cell_detail_panel(
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
+    // 数据页没有分屏，用 0 号屏占位，让分屏表格状态键与查询结果共用同一种形状。
+    let pane_key = QueryPaneKey::new(tab_id, DATA_EDITOR_PANE);
     let Some(active_cell) = editor.cell_detail_panel.active_cell else {
         return div();
     };
@@ -161,7 +163,7 @@ fn cell_detail_panel(
                 ),
         )
         .child(cell_detail_value_header(
-            tab_id,
+            pane_key,
             mode,
             value_text.clone(),
             is_json,
@@ -184,7 +186,7 @@ fn cell_detail_panel(
                     input.clone(),
                     temporal_part_input,
                     temporal_part_editing,
-                    tab_id,
+                    pane_key,
                     cx.entity().downgrade(),
                     column.nullable,
                     colors.is_dark,
@@ -311,7 +313,7 @@ mod cell_detail_drawer_height_tests {
 
 #[allow(clippy::too_many_arguments)]
 fn cell_detail_value_header(
-    tab_id: TabId,
+    pane_key: QueryPaneKey,
     mode: CellDetailMode,
     value_text: String,
     is_json: bool,
@@ -323,6 +325,8 @@ fn cell_detail_value_header(
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
+    // 单元格详情挂在其所属标签上，数据库/标签命令仍按 tab 下发。
+    let tab_id = pane_key.tab_id;
     // 按钮回调要 `'static`，用 `Rc` 共享同一份文本，而不是给每个按钮各复制一遍。
     let value_text = std::rc::Rc::new(value_text);
     let copy_value_text = std::rc::Rc::clone(&value_text);
@@ -383,7 +387,7 @@ fn cell_detail_value_header(
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, _, cx| {
-                                this.save_large_value_to_file(tab_id, cx);
+                                this.save_large_value_to_file(pane_key, cx);
                                 cx.stop_propagation();
                             }),
                         ),
@@ -433,7 +437,7 @@ fn cell_detail_value_header(
                             this.child(button.on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _, cx| {
-                                    this.load_next_large_value_chunk(tab_id, cx);
+                                    this.load_next_large_value_chunk(pane_key, cx);
                                     cx.notify();
                                     cx.stop_propagation();
                                 }),

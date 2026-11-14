@@ -265,7 +265,7 @@
                 .expect("query tab")
         });
         let editor = cx
-            .update(|_, cx| view.read(cx).query_editors.get(&tab_id).cloned())
+            .update(|_, cx| view.read(cx).query_editors.get(&fluxdb_app::QueryPaneKey::new(tab_id, fluxdb_app::QueryPaneId(1))).cloned())
             .expect("SQL editor entity");
         let bounds = cx.debug_bounds("query-editor").expect("SQL editor");
         cx.simulate_click(bounds.center(), Modifiers::default());
@@ -492,7 +492,7 @@
                 .expect("query tab")
         });
         let editor = cx
-            .update(|_, cx| view.read(cx).query_editors.get(&tab_id).cloned())
+            .update(|_, cx| view.read(cx).query_editors.get(&fluxdb_app::QueryPaneKey::new(tab_id, fluxdb_app::QueryPaneId(1))).cloned())
             .expect("SQL editor entity");
         let bounds = cx.debug_bounds("query-editor").expect("SQL editor");
         cx.simulate_click(bounds.center(), Modifiers::default());

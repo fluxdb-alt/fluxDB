@@ -675,7 +675,8 @@ struct SidebarTreeCacheKey {
 
 #[derive(Clone)]
 struct PendingQueryParameterPrompt {
-    tab_id: TabId,
+    /// 参数绑定后只替换发起执行的那一屏，别把相邻屏的文本也改掉。
+    key: QueryPaneKey,
     sql: String,
     execution: PendingQueryExecution,
     parameters: Vec<QueryParameterInput>,
@@ -698,7 +699,7 @@ enum PendingQueryExecution {
 
 #[derive(Clone)]
 struct PendingDangerousQuery {
-    tab_id: TabId,
+    key: QueryPaneKey,
     text: String,
     execution: PendingQueryExecution,
 }
@@ -1693,7 +1694,7 @@ struct CellDetailDrawerResizeStart {
 
 #[derive(Clone, Copy, Debug)]
 struct QueryOutputResizeStart {
-    tab_id: TabId,
+    key: QueryPaneKey,
     placement: ResultsPlacement,
     x: f32,
     y: f32,
@@ -1724,12 +1725,14 @@ struct CreateTableCheckExpressionEditorResizeStart {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct QueryResultSortKey {
     tab_id: TabId,
+    pane_id: QueryPaneId,
     result_index: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct QueryResultDisplayKey {
     tab_id: TabId,
+    pane_id: QueryPaneId,
     result_index: usize,
     page_index: usize,
 }
@@ -1737,6 +1740,7 @@ struct QueryResultDisplayKey {
 #[derive(Clone, Debug)]
 struct QueryResultRefreshRequest {
     tab_id: TabId,
+    pane_id: QueryPaneId,
     result_index: usize,
     page_index: usize,
     sql: String,
@@ -1747,8 +1751,13 @@ struct QueryResultRefreshRequest {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct DataTableWidthKey {
     tab_id: TabId,
+    /// 查询结果屏；数据页（非查询结果）固定为 [`DATA_EDITOR_PANE`]。
+    pane_id: QueryPaneId,
     query_result_page_index: Option<usize>,
 }
+
+/// 数据页没有分屏概念，用 0 号屏占位，让共享的表格状态键保持同一种形状。
+const DATA_EDITOR_PANE: QueryPaneId = QueryPaneId(0);
 
 /// 单列外键的跳转目标：目标表身份 + 目标列。
 ///
@@ -1763,6 +1772,8 @@ struct ForeignKeyTarget {
 struct DataPageTableDelegate {
     view: WeakEntity<NavicatMain>,
     tab_id: TabId,
+    /// 查询结果所属的屏；数据页固定为 [`DATA_EDITOR_PANE`]。
+    pane_id: QueryPaneId,
     columns: Vec<TableColumn>,
     source_column_indexes: Vec<Option<usize>>,
     column_types: Vec<String>,
@@ -1835,7 +1846,7 @@ fn active_query_result_editor_state(editor: &QueryEditorState) -> Option<&DataEd
         .and_then(|page_index| editor.result_editors.get(&page_index))
 }
 
-type DataTableSortHandler = Arc<dyn Fn(TabId, String, Option<DataTableSortDirection>, &mut App)>;
+type DataTableSortHandler = Arc<dyn Fn(QueryPaneKey, String, Option<DataTableSortDirection>, &mut App)>;
 
 #[derive(Clone, Debug)]
 struct DataTableColumnMeta {
@@ -1857,6 +1868,7 @@ struct ColumnChoice {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DataCellEditState {
     tab_id: TabId,
+    pane_id: QueryPaneId,
     query_result_page_index: Option<usize>,
     visible_row: usize,
     source_row: usize,
@@ -1875,7 +1887,7 @@ struct TemporalPartEditState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TemporalEditTarget {
     DataCell(DataCellEditState),
-    CellDetail(TabId),
+    CellDetail(QueryPaneKey),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

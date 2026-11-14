@@ -304,9 +304,11 @@ impl NavicatMain {
             cx,
         );
         if let AppEvent::TabOpened(editor_id) | AppEvent::TabActivated(editor_id) = event {
+            let pane_id = self.query_pane_key(editor_id).pane_id;
             self.dispatch(
                 AppCommand::UpdateQueryText {
                     tab_id: editor_id,
+                    pane_id,
                     text: sql.to_string(),
                 },
                 cx,

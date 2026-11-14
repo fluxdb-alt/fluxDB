@@ -62,6 +62,7 @@ fn query_plan_raw_json_scrolls_when_taller_than_output_panel(cx: &mut TestAppCon
     );
     controller.dispatch(AppCommand::FinishQueryExecution {
         tab_id,
+        pane_id: fluxdb_app::QueryPaneId(1),
         result: Ok(QueryExecutionResult {
             summaries: Vec::new(),
             results: vec![DataPage {

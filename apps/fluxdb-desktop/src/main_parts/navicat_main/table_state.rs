@@ -1,4 +1,25 @@
 impl NavicatMain {
+    /// 当前查询标签的聚焦屏；标签不存在或不是查询编辑器时返回 None。
+    fn active_query_pane_key(&self, tab_id: TabId) -> Option<QueryPaneKey> {
+        self.controller
+            .state()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .and_then(|tab| match &tab.kind {
+                TabKind::QueryEditor(editor) => {
+                    Some(QueryPaneKey::new(tab_id, editor.active_pane))
+                }
+                _ => None,
+            })
+    }
+
+    /// 聚焦屏键的兜底版本：调用方已经确定是查询标签页。
+    fn query_pane_key(&self, tab_id: TabId) -> QueryPaneKey {
+        self.active_query_pane_key(tab_id)
+            .unwrap_or(QueryPaneKey::new(tab_id, QueryPaneId(1)))
+    }
+
     /// 依据宿主当前明暗模式 + 用户所选主题名返回通用编辑器的主题配色。
     ///
     /// 从主题注册表解析所选主题（settings.dark_theme/light_theme）的
@@ -78,6 +99,7 @@ impl NavicatMain {
         let mut delegate = DataPageTableDelegate::from_page_with_rule(
             cx.entity().downgrade(),
             tab_id,
+            DATA_EDITOR_PANE,
             page,
             self.data_sort_rules.get(&tab_id).map(Vec::as_slice),
             self.visible_table_fields.get(&tab_id),
@@ -107,14 +129,18 @@ impl NavicatMain {
                 .col_resizable(true)
                 .col_selectable(false)
         });
-        self.subscribe_data_table_widths(tab_id, &table_state, cx);
+        self.subscribe_data_table_widths(
+            QueryPaneKey::new(tab_id, DATA_EDITOR_PANE),
+            &table_state,
+            cx,
+        );
         self.data_table_states.insert(tab_id, table_state.clone());
         table_state
     }
 
     fn query_result_table_state_from_sorted_page(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         page: Arc<DataPage>,
         page_index: usize,
         sort_rules: &[DataSortRule],
@@ -123,16 +149,18 @@ impl NavicatMain {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<TableState<DataPageTableDelegate>> {
+        let tab_id = key.tab_id;
         let changes = result_editor.and_then(|editor| editor.changes.as_ref());
         let editing_cell = self
             .data_cell_editing
-            .filter(|editing| editing.tab_id == tab_id)
+            .filter(|editing| editing.tab_id == tab_id && editing.pane_id == key.pane_id)
             .filter(|editing| editing.query_result_page_index == Some(page_index));
         let cells_editable = query_result_cells_editable(result_editor.is_some(), sort_rules);
         let column_choices = BTreeMap::new();
         let mut delegate = DataPageTableDelegate::from_page_with_rule(
             cx.entity().downgrade(),
             tab_id,
+            key.pane_id,
             page,
             Some(sort_rules),
             None,
@@ -160,7 +188,7 @@ impl NavicatMain {
         );
         apply_data_table_source_row_indexes(&mut delegate, source_row_indexes);
         self.apply_data_table_column_widths(&mut delegate);
-        if let Some(table_state) = self.data_table_states.get(&tab_id) {
+        if let Some(table_state) = self.query_result_table_states.get(&key) {
             table_state.update(cx, |table, cx| {
                 let old = table.delegate();
                 let columns_changed = !data_table_columns_match(&old.columns, &delegate.columns);
@@ -203,43 +231,47 @@ impl NavicatMain {
                 .col_resizable(true)
                 .col_selectable(false)
         });
-        self.subscribe_data_table_widths(tab_id, &table_state, cx);
-        self.data_table_states.insert(tab_id, table_state.clone());
+        self.subscribe_data_table_widths(key, &table_state, cx);
+        self.query_result_table_states
+            .insert(key, table_state.clone());
         table_state
     }
 
     fn refresh_query_result_table_state(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         page: &DataPage,
         page_index: usize,
         result_index: usize,
         result_editor: Option<&DataEditorState>,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(table_state) = self.data_table_states.get(&tab_id).cloned() else {
+        let tab_id = key.tab_id;
+        let Some(table_state) = self.query_result_table_states.get(&key).cloned() else {
             return false;
         };
         let sort_rules = self
             .query_result_sort_rules
             .get(&QueryResultSortKey {
                 tab_id,
+                pane_id: key.pane_id,
                 result_index,
             })
             .cloned()
             .unwrap_or_default();
         let sorted_page =
-            self.query_result_display_page(tab_id, result_index, page_index, page, &sort_rules, true);
+            self.query_result_display_page(key, result_index, page_index, page, &sort_rules, true);
         let changes = result_editor.and_then(|editor| editor.changes.as_ref());
         let editing_cell = self
             .data_cell_editing
-            .filter(|editing| editing.tab_id == tab_id)
+            .filter(|editing| editing.tab_id == tab_id && editing.pane_id == key.pane_id)
             .filter(|editing| editing.query_result_page_index == Some(page_index));
         let cells_editable = query_result_cells_editable(result_editor.is_some(), &sort_rules);
         let column_choices = BTreeMap::new();
         let mut delegate = DataPageTableDelegate::from_page_with_rule(
             cx.entity().downgrade(),
             tab_id,
+            key.pane_id,
             sorted_page.page.clone(),
             Some(&sort_rules),
             None,
@@ -303,7 +335,7 @@ impl NavicatMain {
 
     fn subscribe_data_table_widths(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         table_state: &Entity<TableState<DataPageTableDelegate>>,
         cx: &mut Context<Self>,
     ) {
@@ -321,6 +353,7 @@ impl NavicatMain {
                 let delegate = table.read(cx).delegate();
                 let key = DataTableWidthKey {
                     tab_id: delegate.tab_id,
+                    pane_id: delegate.pane_id,
                     query_result_page_index: delegate.query_result_page_index,
                 };
                 let widths = delegate
@@ -331,13 +364,20 @@ impl NavicatMain {
                     .collect::<BTreeMap<_, _>>();
                 this.data_table_column_widths.insert(key, widths);
             });
-        self._data_table_width_subscriptions
-            .insert(tab_id, subscription);
+        // 查询结果按屏保存订阅；数据页仍按标签保存。
+        if key.pane_id == DATA_EDITOR_PANE {
+            self._data_table_width_subscriptions
+                .insert(key.tab_id, subscription);
+        } else {
+            self._query_result_table_width_subscriptions
+                .insert(key, subscription);
+        }
     }
 
     fn apply_data_table_column_widths(&self, delegate: &mut DataPageTableDelegate) {
         let key = DataTableWidthKey {
             tab_id: delegate.tab_id,
+            pane_id: delegate.pane_id,
             query_result_page_index: delegate.query_result_page_index,
         };
         let Some(widths) = self.data_table_column_widths.get(&key) else {
@@ -348,15 +388,16 @@ impl NavicatMain {
 
     fn query_result_sort_handler(&self, cx: &mut Context<Self>) -> DataTableSortHandler {
         let view = cx.entity().downgrade();
-        Arc::new(move |tab_id, field, direction, cx| {
+        Arc::new(move |pane_key, field, direction, cx| {
             let _ = view.update(cx, |this, cx| {
                 let result_index = this
                     .query_output_tabs
-                    .get(&tab_id)
+                    .get(&pane_key)
                     .and_then(|tab| tab.result_index())
                     .unwrap_or(0);
                 let key = QueryResultSortKey {
-                    tab_id,
+                    tab_id: pane_key.tab_id,
+                    pane_id: pane_key.pane_id,
                     result_index,
                 };
                 apply_query_result_header_sort(
@@ -365,7 +406,7 @@ impl NavicatMain {
                     field,
                     direction,
                 );
-                this.clear_query_result_display_pages_for_result(tab_id, result_index);
+                this.clear_query_result_display_pages_for_result(pane_key, result_index);
                 cx.notify();
             });
         })
@@ -378,16 +419,19 @@ impl NavicatMain {
 
     fn clear_query_result_display_pages_for_result(
         &mut self,
-        tab_id: TabId,
+        pane_key: QueryPaneKey,
         result_index: usize,
     ) {
-        self.query_result_display_pages
-            .retain(|key, _| key.tab_id != tab_id || key.result_index != result_index);
+        self.query_result_display_pages.retain(|key, _| {
+            key.tab_id != pane_key.tab_id
+                || key.pane_id != pane_key.pane_id
+                || key.result_index != result_index
+        });
     }
 
     fn query_result_display_page(
         &mut self,
-        tab_id: TabId,
+        pane_key: QueryPaneKey,
         result_index: usize,
         page_index: usize,
         page: &DataPage,
@@ -395,7 +439,8 @@ impl NavicatMain {
         refresh_cache: bool,
     ) -> SortedQueryResultPage {
         let key = QueryResultDisplayKey {
-            tab_id,
+            tab_id: pane_key.tab_id,
+            pane_id: pane_key.pane_id,
             result_index,
             page_index,
         };
@@ -413,23 +458,34 @@ impl NavicatMain {
 
     fn query_editor_state(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         editor: &QueryEditorState,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<editor_component::Editor> {
-        if let Some(sql_editor) = self.query_editors.get(&tab_id) {
+        let Some(pane) = editor.pane(key.pane_id) else {
+            // 屏已被关闭：返回一个临时编辑器只为渲染兜底，不写入缓存。
+            return cx.new(|cx| {
+                editor_component::Editor::new(
+                    String::new(),
+                    editor_component::Providers::default(),
+                    None,
+                    window,
+                    cx,
+                )
+            });
+        };
+        if let Some(sql_editor) = self.query_editors.get(&key) {
             let sql_editor = sql_editor.clone();
             let settings = self.controller.state().settings.clone();
             sql_editor.update(cx, |sql_editor, cx| {
                 apply_code_editor_settings(sql_editor, &settings, cx);
-                sql_editor.sync_text_silent(&editor.text, cx);
+                sql_editor.sync_text_silent(&pane.text, cx);
             });
             return sql_editor;
         }
 
-        let tab_id_for_events = tab_id;
-        let initial_text = editor.text.clone();
+        let initial_text = pane.text.clone();
         let settings = self.controller.state().settings.clone();
         // 构造 SQL 接入层：按连接类型选择方言，注入通用编辑器的补全 / 语法 / 执行通道。
         // 切分用的数据库类型单独保留：Oracle / 达梦在 `SqlDialect` 里都归成 PostgreSQL，
@@ -439,7 +495,7 @@ impl NavicatMain {
         // 语句执行状态仓库：宿主与适配器共享，宿主写状态、适配器还原为行背景装饰。
         let status_store: sql_editor_adapter::SqlStatusStore =
             std::sync::Arc::new(std::sync::Mutex::new(sql_editor_adapter::SqlStatementStatusMap::default()));
-        self.query_statement_statuses.insert(tab_id, status_store.clone());
+        self.query_statement_statuses.insert(key, status_store.clone());
         // 注入「已加载到内存」的 schema：表 / 列补全来源。只读已加载状态，无任何数据库调用。
         let schema = loaded_schema_context(
             self.controller.state(),
@@ -601,16 +657,11 @@ impl NavicatMain {
             move |this: &mut NavicatMain, editor, event, window, cx| match event {
                 editor_component::EditorEvent::Changed(change) => {
                     // 增量同步：按 TextChange 就地更新查询模型文本，避免逐按键全文读取。
-                    this.apply_query_incremental_change(
-                        tab_id_for_events,
-                        editor.clone(),
-                        change,
-                        cx,
-                    );
+                    this.apply_query_incremental_change(key, editor.clone(), change, cx);
                 }
                 editor_component::EditorEvent::Execute { range, mode } => {
                     this.start_query_execute_event(
-                        tab_id_for_events,
+                        key,
                         editor.clone(),
                         range.clone(),
                         *mode,
@@ -621,7 +672,7 @@ impl NavicatMain {
                 editor_component::EditorEvent::CodeLensActivated { range, action } => {
                     match action.as_str() {
                         "sql.run" => this.start_query_execute_event(
-                            tab_id_for_events,
+                            key,
                             editor.clone(),
                             range.clone(),
                             fluxdb_editor_core::ExecuteMode::Execute,
@@ -642,30 +693,36 @@ impl NavicatMain {
                 _ => {}
             },
         );
-        self.query_editors.insert(tab_id, sql_editor.clone());
-        self._query_editor_subscriptions.insert(tab_id, subscription);
+        self.query_editors.insert(key, sql_editor.clone());
+        self._query_editor_subscriptions.insert(key, subscription);
         sql_editor
     }
 
-    fn sync_query_editor_text(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
-        let Some(text) = self
-            .controller
-            .state()
-            .tabs
-            .iter()
-            .find(|tab| tab.id == tab_id)
-            .and_then(|tab| match &tab.kind {
-                TabKind::QueryEditor(editor) => Some(editor.text.clone()),
-                _ => None,
-            })
+    /// 把模型文本同步进编辑器实体。传 `None` 时同步该标签的所有屏。
+    fn sync_query_editor_text(&mut self, tab_id: TabId, pane_id: Option<QueryPaneId>, cx: &mut Context<Self>) {
+        let Some(tab) = self.controller.state().tabs.iter().find(|tab| tab.id == tab_id)
         else {
             return;
         };
-
-        if let Some(sql_editor) = self.query_editors.get(&tab_id).cloned() {
-            sql_editor.update(cx, |sql_editor, cx| {
-                sql_editor.sync_text_silent(&text, cx);
-            });
+        let TabKind::QueryEditor(editor) = &tab.kind else {
+            return;
+        };
+        let panes: Vec<(QueryPaneId, String)> = editor
+            .panes
+            .iter()
+            .filter(|pane| pane_id.is_none_or(|id| id == pane.id))
+            .map(|pane| (pane.id, pane.text.clone()))
+            .collect();
+        for (id, text) in panes {
+            if let Some(sql_editor) = self
+                .query_editors
+                .get(&QueryPaneKey::new(tab_id, id))
+                .cloned()
+            {
+                sql_editor.update(cx, |sql_editor, cx| {
+                    sql_editor.sync_text_silent(&text, cx);
+                });
+            }
         }
     }
 
@@ -676,29 +733,31 @@ impl NavicatMain {
     /// 避免对编辑器实体做跨实体全文读取与整文本拷贝。
     fn apply_query_incremental_change(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         _editor: Entity<editor_component::Editor>,
         change: &fluxdb_editor_core::TextChange,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab_text) = self
+        let tab_id = key.tab_id;
+        let Some(pane_text) = self
             .controller
             .state()
             .tabs
             .iter()
             .find(|tab| tab.id == tab_id)
             .and_then(|tab| match &tab.kind {
-                TabKind::QueryEditor(editor) => Some(editor.text.clone()),
+                TabKind::QueryEditor(editor) => editor.pane(key.pane_id).map(|pane| pane.text.clone()),
                 _ => None,
             })
         else {
             return;
         };
         if change.full_document {
-            if tab_text != change.new_text {
+            if pane_text != change.new_text {
                 self.dispatch(
                     AppCommand::UpdateQueryText {
                         tab_id,
+                        pane_id: key.pane_id,
                         text: change.new_text.clone(),
                     },
                     cx,
@@ -706,7 +765,7 @@ impl NavicatMain {
             }
             return;
         }
-        let mut updated = tab_text;
+        let mut updated = pane_text;
         // 内核保证 old_range 落在字符边界；此处与模型文本对齐后就地替换。
         let lo = change.old_range.start.min(updated.len());
         let hi = change.old_range.end.min(updated.len()).max(lo);
@@ -715,6 +774,7 @@ impl NavicatMain {
             self.dispatch(
                 AppCommand::UpdateQueryText {
                     tab_id,
+                    pane_id: key.pane_id,
                     text: updated,
                 },
                 cx,
@@ -912,16 +972,16 @@ impl NavicatMain {
     #[allow(dead_code)] // 查找面板尚未接入宿主渲染，该方法及其两个 apply 一并预留。
     fn query_find_state(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (Entity<InputState>, Entity<InputState>) {
-        let find = self.query_find_inputs.get(&tab_id).cloned();
-        let replace = self.query_replace_inputs.get(&tab_id).cloned();
+        let find = self.query_find_inputs.get(&key).cloned();
+        let replace = self.query_replace_inputs.get(&key).cloned();
         if let (Some(find), Some(replace)) = (find, replace) {
             return (find, replace);
         }
-        let find = if let Some(find) = self.query_find_inputs.get(&tab_id).cloned() {
+        let find = if let Some(find) = self.query_find_inputs.get(&key).cloned() {
             find
         } else {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("app.data.placeholder.find")));
@@ -929,15 +989,15 @@ impl NavicatMain {
                 move |this, input, event: &InputEvent, cx| {
                     if matches!(event, InputEvent::Change) {
                         let value = input.read(cx).value().to_string();
-                        this.apply_query_find_query(tab_id, value, cx);
+                        this.apply_query_find_query(key, value, cx);
                     }
                 }
             });
-            self._query_find_input_subscriptions.insert(tab_id, sub);
-            self.query_find_inputs.insert(tab_id, input.clone());
+            self._query_find_input_subscriptions.insert(key, sub);
+            self.query_find_inputs.insert(key, input.clone());
             input
         };
-        let replace = if let Some(replace) = self.query_replace_inputs.get(&tab_id).cloned() {
+        let replace = if let Some(replace) = self.query_replace_inputs.get(&key).cloned() {
             replace
         } else {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("app.data.placeholder.replace")));
@@ -945,12 +1005,12 @@ impl NavicatMain {
                 move |this, input, event: &InputEvent, cx| {
                     if matches!(event, InputEvent::Change) {
                         let value = input.read(cx).value().to_string();
-                        this.apply_query_replace_text(tab_id, value, cx);
+                        this.apply_query_replace_text(key, value, cx);
                     }
                 }
             });
-            self._query_replace_input_subscriptions.insert(tab_id, sub);
-            self.query_replace_inputs.insert(tab_id, input.clone());
+            self._query_replace_input_subscriptions.insert(key, sub);
+            self.query_replace_inputs.insert(key, input.clone());
             input
         };
         (find, replace)
@@ -958,20 +1018,19 @@ impl NavicatMain {
 
     /// 查找词变更：回写编辑器 find 状态并重算命中。
     #[allow(dead_code)] // 随 query_find_state 一并预留（查找面板未接入渲染）。
-    fn apply_query_find_query(&mut self, tab_id: TabId, query: String, cx: &mut Context<Self>) {
-        if let Some(editor) = self.query_editors.get(&tab_id).cloned() {
+    fn apply_query_find_query(&mut self, key: QueryPaneKey, query: String, cx: &mut Context<Self>) {
+        if let Some(editor) = self.query_editors.get(&key).cloned() {
             editor.update(cx, |editor, cx| editor.set_find_query(&query, cx));
         }
     }
 
     /// 替换词变更：回写编辑器 find 状态。
     #[allow(dead_code)] // 随 query_find_state 一并预留（查找面板未接入渲染）。
-    fn apply_query_replace_text(&mut self, tab_id: TabId, replace: String, cx: &mut Context<Self>) {
-        if let Some(editor) = self.query_editors.get(&tab_id).cloned() {
+    fn apply_query_replace_text(&mut self, key: QueryPaneKey, replace: String, cx: &mut Context<Self>) {
+        if let Some(editor) = self.query_editors.get(&key).cloned() {
             editor.update(cx, |editor, cx| editor.set_find_replace_text(&replace, cx));
         }
     }
-
 }
 
 fn apply_query_result_header_sort(

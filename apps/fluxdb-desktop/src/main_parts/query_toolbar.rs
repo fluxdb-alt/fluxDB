@@ -10,9 +10,13 @@ fn query_toolbar(
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
+    let key = QueryPaneKey::new(tab_id, editor.active_pane);
     let has_text = !editor.text.trim().is_empty();
     let soft_wrap = sql_editor.read(cx).soft_wrap();
-    let can_explain = !editor.running && this.selected_explain_sql_text(tab_id, cx).is_some();
+    let can_explain = !editor.running && this.selected_explain_sql_text(key, cx).is_some();
+    // 分屏后单屏可能被拖得很窄；只保留运行/停止/分屏等主操作，其余按钮让位给文本宽度。
+    let compact = this.query_pane_compact.get(&key).copied().unwrap_or(false);
+    let query_files_loading = this.query_files.loading;
     div()
         .h(px(40.))
         .border_b_1()
@@ -53,8 +57,8 @@ fn query_toolbar(
                         move |this, _, window, cx| {
                             let text = sql_editor.read(cx).text();
                             if !text.trim().is_empty() {
-                                this.dispatch(AppCommand::UpdateQueryText { tab_id, text }, cx);
-                                this.start_query_execution(tab_id, window, cx);
+                                this.dispatch(AppCommand::UpdateQueryText { tab_id, pane_id: key.pane_id, text }, cx);
+                                this.start_query_execution(key, window, cx);
                                 cx.stop_propagation();
                             }
                         }
@@ -75,8 +79,7 @@ fn query_toolbar(
                 cx.listener({
                     let sql_editor = sql_editor.clone();
                     move |this, _, _, cx| {
-                        if has_text && this.format_query_editor_sql(tab_id, sql_editor.clone(), cx)
-                        {
+                        if this.format_query_editor_sql(key, sql_editor.clone(), cx) {
                             cx.stop_propagation();
                         }
                     }
@@ -92,19 +95,17 @@ fn query_toolbar(
                 rgb(0x38bdf8),
                 colors,
             )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener({
-                        let sql_editor = sql_editor.clone();
-                        move |this, _, _, cx| {
-                            if has_text
-                                && this.compress_query_editor_sql(tab_id, sql_editor.clone(), cx)
-                            {
-                                cx.stop_propagation();
-                            }
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener({
+                    let sql_editor = sql_editor.clone();
+                    move |this, _, _, cx| {
+                        if this.compress_query_editor_sql(key, sql_editor.clone(), cx) {
+                            cx.stop_propagation();
                         }
-                    }),
-                ),
+                    }
+                }),
+            ),
         )
         .child(
             query_toolbar_icon_button(
@@ -118,7 +119,7 @@ fn query_toolbar(
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
-                    this.request_query_cancel(tab_id, cx);
+                    this.request_query_cancel(key, cx);
                     cx.stop_propagation();
                 }),
             ),
@@ -136,17 +137,95 @@ fn query_toolbar(
             cx.listener({
                 let sql_editor = sql_editor.clone();
                 move |this, _, window, cx| {
-                    if this.start_query_explain_execution(tab_id, sql_editor.clone(), window, cx) {
+                    if this.start_query_explain_execution(key, sql_editor.clone(), window, cx) {
                         cx.stop_propagation();
                     }
                 }
             }),
         ))
+        .child(
+            query_toolbar_icon_button(
+                tr("app.query.split_columns"),
+                AppIcon::PanelRight,
+                true,
+                false,
+                rgb(0x7b8cff),
+                colors,
+            )
+            .debug_selector(|| "query-split-columns".into())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.dispatch(
+                        AppCommand::SplitQueryPane {
+                            tab_id,
+                            pane_id: key.pane_id,
+                            direction: QuerySplitDirection::Columns,
+                        },
+                        cx,
+                    );
+                    cx.stop_propagation();
+                }),
+            ),
+        )
+        .child(
+            query_toolbar_icon_button(
+                tr("app.query.split_rows"),
+                AppIcon::PanelBottom,
+                true,
+                false,
+                rgb(0x7b8cff),
+                colors,
+            )
+            .debug_selector(|| "query-split-rows".into())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.dispatch(
+                        AppCommand::SplitQueryPane {
+                            tab_id,
+                            pane_id: key.pane_id,
+                            direction: QuerySplitDirection::Rows,
+                        },
+                        cx,
+                    );
+                    cx.stop_propagation();
+                }),
+            ),
+        )
         .child(div().flex_1())
+        .when(!compact, |this| {
+            this.child(query_toolbar_secondary_actions(
+                tab_id,
+                sql_editor,
+                output_placement,
+                soft_wrap,
+                query_files_loading,
+                colors,
+                cx,
+            ))
+        })
+}
+
+/// 次要工具栏动作：空间不足（单屏过窄）时整组隐藏，而不是逐个挤成图标。
+#[allow(clippy::too_many_arguments)]
+fn query_toolbar_secondary_actions(
+    tab_id: TabId,
+    sql_editor: Entity<editor_component::Editor>,
+    output_placement: ResultsPlacement,
+    soft_wrap: bool,
+    query_files_loading: bool,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
         .child(Button::new("query-open-file")
             .debug_selector(||"query-open-file".into())
-            .small().ghost().cursor_pointer().disabled(this.query_files.loading)
-            .loading(this.query_files.loading)
+            .small().ghost().cursor_pointer().disabled(query_files_loading)
+            .loading(query_files_loading)
             .child(app_icon(AppIcon::Folder,16.,colors.muted))
             .tooltip(tr("app.query.toolbar.open_file"))
             .on_click(cx.listener(move|this,_,_,cx|this.choose_local_sql_file(tab_id,cx))))

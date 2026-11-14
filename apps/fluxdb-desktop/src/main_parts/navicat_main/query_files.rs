@@ -59,8 +59,9 @@ impl NavicatMain {
                             });
                             this.apply_app_event(&event,cx);
                             if let AppEvent::TabOpened(id)=event{
-                                this.dispatch(AppCommand::UpdateQueryText{tab_id:id,text:text.clone()},cx);
-                                if let Some(editor)=this.query_editors.get(&id){
+                                let key = this.query_pane_key(id);
+                                this.dispatch(AppCommand::UpdateQueryText{tab_id:id,pane_id:key.pane_id,text:text.clone()},cx);
+                                if let Some(editor)=this.query_editors.get(&key){
                                     editor.update(cx,|editor,cx|editor.sync_text_silent(&text,cx));
                                 }
                                 this.query_save_targets.insert(id,QuerySaveTarget::Local(path.clone()));

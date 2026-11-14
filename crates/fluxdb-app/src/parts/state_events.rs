@@ -341,9 +341,9 @@ pub enum AppEvent {
     },
     /// 大字段完整内容已流式保存到用户选定路径。
     CellContentSaved { tab_id: TabId, bytes: u64 },
-    QueryCompletionsLoaded(TabId, u64, QueryCompletionResult),
+    QueryCompletionsLoaded(TabId, QueryPaneId, u64, QueryCompletionResult),
     CompletionIndexWarmed(ConnectionId, Option<String>),
-    QueryFinished(TabId, QueryExecutionResult),
+    QueryFinished(TabId, QueryPaneId, QueryExecutionResult),
     /// Redis Workbench 后台执行完成：一次运行按「一条命令一条记录」产出多条结果。
     /// 失败也用本事件回传，让实际执行的命令文本随结果一起回到主线程写历史。
     RedisWorkbenchCommandsRan {
@@ -373,6 +373,7 @@ pub enum AppEvent {
     },
     QueryResultPageRefreshed {
         tab_id: TabId,
+        pane_id: QueryPaneId,
         result_index: usize,
         page_index: usize,
         page: DataPage,
@@ -382,8 +383,8 @@ pub enum AppEvent {
     DesignTableLoaded(std::result::Result<CreateTableState, UserFacingError>),
     DesignTableDetailsLoaded(fluxdb_core::TableDesignMetadata),
     TabClosed(TabId),
-    /// 已置位某标签的查询取消标志（可能仍在等语句收尾）；UI 据此提示「已请求停止」。
-    QueryCancelRequested(TabId),
+    /// 已置位某屏的查询取消标志（可能仍在等语句收尾）；UI 据此提示「已请求停止」。
+    QueryCancelRequested(TabId, QueryPaneId),
     TabCloseRequested(TabId),
     TabCloseCancelled(TabId),
     TabActivated(TabId),

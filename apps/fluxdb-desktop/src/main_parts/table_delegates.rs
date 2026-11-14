@@ -2,6 +2,7 @@ impl DataPageTableDelegate {
     fn from_page_with_rule(
         view: WeakEntity<NavicatMain>,
         tab_id: TabId,
+        pane_id: QueryPaneId,
         page: Arc<DataPage>,
         sort_rules: Option<&[DataSortRule]>,
         visible_fields: Option<&BTreeSet<String>>,
@@ -172,6 +173,7 @@ impl DataPageTableDelegate {
         Self {
             view,
             tab_id,
+            pane_id,
             columns,
             source_column_indexes,
             column_types,

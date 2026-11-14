@@ -66,6 +66,8 @@ pub(crate) enum ShortcutAction {
     CloseCurrentTab,
     ToggleConnectionBrowser,
     ExecuteOrApply,
+    SplitQueryPaneColumns,
+    SplitQueryPaneRows,
     OpenDataSearch,
     OpenQueryHistoryQuickSearch,
     QuickOpenTable,
@@ -176,6 +178,26 @@ pub(crate) const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         other: "ctrl-enter",
         action: ShortcutAction::ExecuteOrApply,
         context: None,
+    },
+    ShortcutDefinition {
+        id: "query.split_columns",
+        title: "Split query pane left / right",
+        detail: "Split the current query pane into left and right panes",
+        icon: AppIcon::PanelRight,
+        macos: "cmd-\\",
+        other: "ctrl-\\",
+        action: ShortcutAction::SplitQueryPaneColumns,
+        context: Some("NavicatMain"),
+    },
+    ShortcutDefinition {
+        id: "query.split_rows",
+        title: "Split query pane top / bottom",
+        detail: "Split the current query pane into top and bottom panes",
+        icon: AppIcon::PanelBottom,
+        macos: "shift-cmd-\\",
+        other: "ctrl-shift-\\",
+        action: ShortcutAction::SplitQueryPaneRows,
+        context: Some("NavicatMain"),
     },
     ShortcutDefinition {
         id: "query.search_data",
@@ -294,6 +316,12 @@ pub(crate) fn bind_shortcut(
         }
         ShortcutAction::ExecuteOrApply => {
             cx.bind_keys([KeyBinding::new(spec, ExecuteOrApply, context)])
+        }
+        ShortcutAction::SplitQueryPaneColumns => {
+            cx.bind_keys([KeyBinding::new(spec, SplitQueryPaneColumns, context)])
+        }
+        ShortcutAction::SplitQueryPaneRows => {
+            cx.bind_keys([KeyBinding::new(spec, SplitQueryPaneRows, context)])
         }
         ShortcutAction::OpenDataSearch => {
             cx.bind_keys([KeyBinding::new(spec, OpenDataSearch, context)])

@@ -1,7 +1,7 @@
 impl NavicatMain {
     fn prepare_query_parameter_prompt(
         &mut self,
-        tab_id: TabId,
+        key: QueryPaneKey,
         sql: &str,
         execution: PendingQueryExecution,
         window: &mut Window,
@@ -37,7 +37,7 @@ impl NavicatMain {
         }
 
         self.pending_query_parameters = Some(PendingQueryParameterPrompt {
-            tab_id,
+            key,
             sql: sql.to_string(),
             execution,
             parameters,
@@ -89,13 +89,13 @@ impl NavicatMain {
         };
         let sql = bind_query_parameters(&pending.sql, &values);
         // 绑定后的 SQL 仍要按该页连接的方言重新切分语句。
-        let kind = self.query_editor_database_kind(pending.tab_id);
+        let kind = self.query_editor_database_kind(pending.key.tab_id);
 
         match pending.execution {
             PendingQueryExecution::All { statements } => {
                 let statements = self
                     .query_editors
-                    .get(&pending.tab_id)
+                    .get(&pending.key)
                     .cloned()
                     .map(|editor| {
                         let statements = editor.update(cx, |editor, cx| {
@@ -106,7 +106,8 @@ impl NavicatMain {
                         });
                         self.dispatch(
                             AppCommand::UpdateQueryText {
-                                tab_id: pending.tab_id,
+                                tab_id: pending.key.tab_id,
+                                pane_id: pending.key.pane_id,
                                 text: sql.clone(),
                             },
                             cx,
@@ -115,7 +116,7 @@ impl NavicatMain {
                     })
                     .unwrap_or(statements);
                 if self.request_dangerous_query_confirmation(
-                    pending.tab_id,
+                    pending.key,
                     &sql,
                     PendingQueryExecution::All {
                         statements: statements.clone(),
@@ -124,10 +125,10 @@ impl NavicatMain {
                 ) {
                     return;
                 }
-                self.start_query_all_execution_resolved(pending.tab_id, statements, Some(sql), cx);
+                self.start_query_all_execution_resolved(pending.key, statements, Some(sql), cx);
             }
             PendingQueryExecution::Text => {
-                if let Some(sql_editor) = self.query_editors.get(&pending.tab_id).cloned() {
+                if let Some(sql_editor) = self.query_editors.get(&pending.key).cloned() {
                     let replaced = sql_editor.update(cx, |editor, cx| {
                         // 新编辑器：依据选区/全文/光标语句判定参数替换落点并写入。
                         let text = editor.text();
@@ -160,7 +161,8 @@ impl NavicatMain {
                         let text = sql_editor.read(cx).text();
                         self.dispatch(
                             AppCommand::UpdateQueryText {
-                                tab_id: pending.tab_id,
+                                tab_id: pending.key.tab_id,
+                                pane_id: pending.key.pane_id,
                                 text,
                             },
                             cx,
@@ -168,17 +170,17 @@ impl NavicatMain {
                     }
                 }
                 if self.request_dangerous_query_confirmation(
-                    pending.tab_id,
+                    pending.key,
                     &sql,
                     PendingQueryExecution::Text,
                     cx,
                 ) {
                     return;
                 }
-                self.start_query_text_execution_resolved(pending.tab_id, sql, cx);
+                self.start_query_text_execution_resolved(pending.key, sql, cx);
             }
             PendingQueryExecution::Statement { statement } => {
-                let Some(sql_editor) = self.query_editors.get(&pending.tab_id).cloned() else {
+                let Some(sql_editor) = self.query_editors.get(&pending.key).cloned() else {
                     self.show_message(tr("app.query.error.editor_not_ready").as_ref(), AppMessageKind::Warning, cx);
                     cx.notify();
                     return;
@@ -226,13 +228,14 @@ impl NavicatMain {
                 let text = sql_editor.read(cx).text();
                 self.dispatch(
                     AppCommand::UpdateQueryText {
-                        tab_id: pending.tab_id,
+                        tab_id: pending.key.tab_id,
+                        pane_id: pending.key.pane_id,
                         text,
                     },
                     cx,
                 );
                 if self.request_dangerous_query_confirmation(
-                    pending.tab_id,
+                    pending.key,
                     &sql,
                     PendingQueryExecution::Statement {
                         statement: statement.clone(),
@@ -242,7 +245,7 @@ impl NavicatMain {
                     return;
                 }
                 self.start_query_statement_execution_resolved(
-                    pending.tab_id,
+                    pending.key,
                     sql_editor,
                     statement,
                     sql,

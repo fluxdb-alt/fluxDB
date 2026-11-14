@@ -207,11 +207,13 @@ impl NavicatMain {
         });
         self.apply_app_event(&event, cx);
         if let AppEvent::TabOpened(tab_id) = event {
+            let key = self.query_pane_key(tab_id);
             self.dispatch(AppCommand::UpdateQueryText {
                 tab_id,
+                pane_id: key.pane_id,
                 text: query.text.clone(),
             }, cx);
-            if let Some(editor) = self.query_editors.get(&tab_id) {
+            if let Some(editor) = self.query_editors.get(&key) {
                 editor.update(cx, |editor, cx| editor.sync_text_silent(&query.text, cx));
             }
             self.query_save_targets
@@ -305,7 +307,8 @@ impl NavicatMain {
         cx: &mut Context<Self>,
     ) -> Option<(TabId, ConnectionId, Option<String>, Option<String>, String)> {
         let tab_id = self.controller.state().active_tab?;
-        if let Some(sql_editor) = self.query_editors.get(&tab_id).cloned() {
+        let key = self.query_pane_key(tab_id);
+        if let Some(sql_editor) = self.query_editors.get(&key).cloned() {
             let text = sql_editor.read(cx).text();
             let current = self
                 .controller
@@ -318,7 +321,14 @@ impl NavicatMain {
                     _ => None,
                 });
             if current != Some(text.as_str()) {
-                self.dispatch(AppCommand::UpdateQueryText { tab_id, text }, cx);
+                self.dispatch(
+                    AppCommand::UpdateQueryText {
+                        tab_id,
+                        pane_id: key.pane_id,
+                        text,
+                    },
+                    cx,
+                );
             }
         }
 

@@ -224,9 +224,10 @@ fn run_sql(
     };
     match controller.dispatch(fluxdb_app::AppCommand::ExecuteQueryText {
         tab_id,
+        pane_id: fluxdb_app::QueryPaneId(1),
         text: text.to_string(),
     }) {
-        fluxdb_app::AppEvent::QueryFinished(_, execution) => Ok(execution),
+        fluxdb_app::AppEvent::QueryFinished(_, _, execution) => Ok(execution),
         fluxdb_app::AppEvent::Failed(error) => Err(format!("执行失败: {}\n{text}", error.message)),
         event => Err(format!("unexpected execution event: {event:?}")),
     }

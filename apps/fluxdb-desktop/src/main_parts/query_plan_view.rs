@@ -4,14 +4,14 @@
 // 解析失败时页签根本不出现，用户仍能看到原始结果，因此本文件只处理“已有计划”的情况。
 
 fn query_plan_view(
-    tab_id: TabId,
-    editor: &QueryEditorState,
+    key: QueryPaneKey,
+    pane: &QueryPaneState,
     this: &mut NavicatMain,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let database_kind = this.query_editor_database_kind(tab_id);
-    let Some(page) = editor.results.last() else {
+    let database_kind = this.query_editor_database_kind(key.tab_id);
+    let Some(page) = pane.results.last() else {
         return query_output_empty_state(colors);
     };
     let Some(plan) = fluxdb_app::query_plan_from_page(database_kind, page) else {
@@ -20,12 +20,12 @@ fn query_plan_view(
 
     let mode = this
         .query_plan_view_modes
-        .get(&tab_id)
+        .get(&key)
         .copied()
         .unwrap_or_default();
     let selected = this
         .query_plan_selected_nodes
-        .get(&tab_id)
+        .get(&key)
         .copied()
         .filter(|id| *id < plan.nodes.len())
         .unwrap_or(plan.root);
@@ -36,12 +36,10 @@ fn query_plan_view(
             .min_h(px(0.))
             .min_w(px(0.))
             .flex()
-            .child(query_plan_tree(
-                tab_id, &plan, selected, colors, cx,
-            ))
-            .child(query_plan_inspector(tab_id, &plan, selected, colors, cx))
+            .child(query_plan_tree(key, &plan, selected, colors, cx))
+            .child(query_plan_inspector(key, &plan, selected, colors, cx))
             .into_any_element(),
-        QueryPlanViewMode::Table => query_plan_raw_table(tab_id, page, colors),
+        QueryPlanViewMode::Table => query_plan_raw_table(key, page, colors),
     };
 
     div()
@@ -50,12 +48,12 @@ fn query_plan_view(
         .min_w(px(0.))
         .flex()
         .flex_col()
-        .child(query_plan_toolbar(tab_id, &plan, mode, colors, cx))
+        .child(query_plan_toolbar(key, &plan, mode, colors, cx))
         .child(body)
 }
 
 fn query_plan_toolbar(
-    tab_id: TabId,
+    key: QueryPaneKey,
     plan: &fluxdb_app::QueryPlan,
     mode: QueryPlanViewMode,
     colors: UiColors,
@@ -120,7 +118,7 @@ fn query_plan_toolbar(
         .child(tr("app.query.plan.estimate_only").to_string());
 
     let actual = div()
-        .id(("query-plan-actual", tab_id.0))
+        .id(format!("query-plan-actual-{}-{}", key.tab_id.0, key.pane_id.0))
         .h(px(24.))
         .px_2()
         .flex()
@@ -140,7 +138,7 @@ fn query_plan_toolbar(
     ] {
         let active = mode == view;
         toggles = toggles.child(plan_view_toggle(
-            tab_id, view, label, active, colors, cx,
+            key, view, label, active, colors, cx,
         ));
     }
 
@@ -182,7 +180,7 @@ fn plan_summary_item(
 }
 
 fn plan_view_toggle(
-    tab_id: TabId,
+    key: QueryPaneKey,
     view: QueryPlanViewMode,
     label: String,
     active: bool,
@@ -219,7 +217,7 @@ fn plan_view_toggle(
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, _, cx| {
-                this.query_plan_view_modes.insert(tab_id, view);
+                this.query_plan_view_modes.insert(key, view);
                 cx.notify();
                 cx.stop_propagation();
             }),
@@ -227,7 +225,7 @@ fn plan_view_toggle(
 }
 
 fn query_plan_tree(
-    tab_id: TabId,
+    key: QueryPaneKey,
     plan: &fluxdb_app::QueryPlan,
     selected: usize,
     colors: UiColors,
@@ -237,7 +235,10 @@ fn query_plan_tree(
         .flex_1()
         .min_w(px(0.))
         .min_h(px(0.))
-        .id(("query-plan-tree-scroll", tab_id.0))
+        .id(format!(
+            "query-plan-tree-scroll-{}-{}",
+            key.tab_id.0, key.pane_id.0
+        ))
         // 父容器是 flex 行，默认交叉轴拉伸让高度跟随视口，内容超出才有滚动范围。
         .overflow_scrollbar()
         .p_4()
@@ -248,14 +249,14 @@ fn query_plan_tree(
                 .gap_2()
                 .min_w(px(420.))
                 .child(plan_branch(
-                    tab_id, plan, plan.root, selected, colors, cx,
+                    key, plan, plan.root, selected, colors, cx,
                 )),
         )
         .into_any_element()
 }
 
 fn plan_branch(
-    tab_id: TabId,
+    key: QueryPaneKey,
     plan: &fluxdb_app::QueryPlan,
     node_id: usize,
     selected: usize,
@@ -270,7 +271,7 @@ fn plan_branch(
         .flex_col()
         .gap_2()
         .child(plan_node_card(
-            tab_id, plan, node, selected, colors, cx,
+            key, plan, node, selected, colors, cx,
         ));
     if !node.children.is_empty() {
         let mut children = div()
@@ -283,7 +284,7 @@ fn plan_branch(
             .border_color(colors.border);
         for child in &node.children {
             children = children.child(plan_branch(
-                tab_id, plan, *child, selected, colors, cx,
+                key, plan, *child, selected, colors, cx,
             ));
         }
         branch = branch.child(children);
@@ -292,7 +293,7 @@ fn plan_branch(
 }
 
 fn plan_node_card(
-    tab_id: TabId,
+    key: QueryPaneKey,
     plan: &fluxdb_app::QueryPlan,
     node: &fluxdb_app::PlanNode,
     selected: usize,
@@ -399,7 +400,7 @@ fn plan_node_card(
     card.on_mouse_down(
         MouseButton::Left,
         cx.listener(move |this, _, _, cx| {
-            this.query_plan_selected_nodes.insert(tab_id, node_id);
+            this.query_plan_selected_nodes.insert(key, node_id);
             cx.notify();
             cx.stop_propagation();
         }),
@@ -454,7 +455,7 @@ fn plan_issue_badge(issue: fluxdb_app::PlanIssue, colors: UiColors) -> Div {
 }
 
 fn query_plan_inspector(
-    tab_id: TabId,
+    key: QueryPaneKey,
     plan: &fluxdb_app::QueryPlan,
     selected: usize,
     colors: UiColors,
@@ -647,7 +648,10 @@ fn query_plan_inspector(
             div()
                 .flex_1()
                 .min_h(px(0.))
-                .id(("query-plan-inspector-scroll", tab_id.0))
+                .id(format!(
+                    "query-plan-inspector-scroll-{}-{}",
+                    key.tab_id.0, key.pane_id.0
+                ))
                 .overflow_y_scrollbar()
                 .child(body),
         )
@@ -800,7 +804,7 @@ fn plan_advice_box(advice: &PlanAdvice, colors: UiColors) -> Div {
         )
 }
 
-fn query_plan_raw_table(tab_id: TabId, page: &DataPage, colors: UiColors) -> AnyElement {
+fn query_plan_raw_table(key: QueryPaneKey, page: &DataPage, colors: UiColors) -> AnyElement {
     // MySQL / PostgreSQL 的结构化 EXPLAIN 只有一列 JSON；直接当表格画会变成
     // 一列窄文本、无高亮且难以阅读。复用 JSON 组件的只读预览（高亮 + 折叠）。
     if let Some(source) = single_json_cell(page) {
@@ -814,7 +818,10 @@ fn query_plan_raw_table(tab_id: TabId, page: &DataPage, colors: UiColors) -> Any
             .flex_1()
             .min_h(px(0.))
             .min_w(px(0.))
-            .id(("query-plan-raw-scroll", tab_id.0))
+            .id(format!(
+                "query-plan-raw-scroll-{}-{}",
+                key.tab_id.0, key.pane_id.0
+            ))
             .debug_selector(|| "query-plan-raw-scroll".into())
             // 父级是 flex 列：不取消交叉轴拉伸，滚动包装层高度会跟着视口走、
             // 内容没有可滚动范围。这与执行摘要表格的处理保持一致。
@@ -857,7 +864,10 @@ fn query_plan_raw_table(tab_id: TabId, page: &DataPage, colors: UiColors) -> Any
         .flex_1()
         .min_h(px(0.))
         .min_w(px(0.))
-        .id(("query-plan-raw-scroll", tab_id.0))
+        .id(format!(
+            "query-plan-raw-scroll-{}-{}",
+            key.tab_id.0, key.pane_id.0
+        ))
         .debug_selector(|| "query-plan-raw-scroll".into())
         .self_start()
         .overflow_scrollbar()

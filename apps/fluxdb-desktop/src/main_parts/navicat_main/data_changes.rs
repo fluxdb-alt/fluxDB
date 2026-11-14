@@ -157,16 +157,18 @@ impl NavicatMain {
             .find(|tab| tab.id == tab_id)
             .and_then(|tab| match &tab.kind {
                 TabKind::QueryEditor(editor) => {
+                    let pane = editor.pane(editor.active_pane)?;
                     let result_index = self
                         .query_output_tabs
-                        .get(&tab_id)
+                        .get(&QueryPaneKey::new(tab_id, pane.id))
                         .and_then(|tab| tab.result_index())
                         .unwrap_or(0);
-                    let page_index = query_result_page_index(editor, result_index)?;
-                    let sql = query_result_sql(editor, result_index)?;
-                    let page = editor.results.get(page_index)?;
+                    let page_index = query_result_page_index(pane, result_index)?;
+                    let sql = query_result_sql(pane, result_index)?;
+                    let page = pane.results.get(page_index)?;
                     Some(QueryResultRefreshRequest {
                         tab_id,
+                        pane_id: pane.id,
                         result_index,
                         page_index,
                         sql,

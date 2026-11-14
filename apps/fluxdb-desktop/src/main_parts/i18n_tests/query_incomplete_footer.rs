@@ -49,6 +49,7 @@ fn first_incomplete_query_page_shows_footer_reason(cx: &mut TestAppContext) {
     // 通过真实查询完成回桥发布一个首页不完整页，不直接调用页脚布局函数。
     controller.dispatch(AppCommand::FinishQueryExecution {
         tab_id,
+        pane_id: fluxdb_app::QueryPaneId(1),
         result: Ok(QueryExecutionResult {
             summaries: Vec::new(),
             results: vec![DataPage {

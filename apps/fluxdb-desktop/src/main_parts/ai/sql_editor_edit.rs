@@ -33,7 +33,8 @@ impl NavicatMain {
         if query.running {
             return None;
         }
-        let editor = self.query_editors.get(&tab_id)?;
+        let key = QueryPaneKey::new(tab_id, query.active_pane);
+        let editor = self.query_editors.get(&key)?;
         let snapshot = editor.read(cx).buffer.snapshot();
         let range = editor.read(cx).selection_range().sorted();
         if range.start >= range.end {
@@ -108,25 +109,26 @@ impl NavicatMain {
                 return;
             }
         };
-        let Some(editor) = self.query_editors.get(&tab_id) else {
+        let key = self.query_pane_key(tab_id);
+        let Some(editor) = self.query_editors.get(&key) else {
             return;
         };
         let snapshot = editor.read(cx).buffer.snapshot();
         let selected = editor.read(cx).selection_range().sorted();
-        let current_statements = self.query_statement_runs(tab_id, cx);
+        let current_statements = self.query_statement_runs(key, cx);
         let mut range_is_selection = false;
         let mut range = if let Some(failure) = failure.as_ref() {
             // 优先按执行时记录的语句身份定位。连接器展示的 SQL 可能已追加 LIMIT、
             // 去掉注释或替换参数，不能再用它和编辑器原文做逐字匹配。
             let source_range = query_result_statement_ordinal_for_tab(
                 self.controller.state(),
-                tab_id,
+                key,
                 failure.result_index,
             )
             .and_then(|summary_index| {
                 query_execution_source_range(
                     self.query_execution_sources
-                        .get(&tab_id)
+                        .get(&key)
                         .map(Vec::as_slice),
                     summary_index,
                     &current_statements,
@@ -248,7 +250,8 @@ impl NavicatMain {
                 }),
                 _ => None,
             });
-        let result = match (target, self.query_editors.get(&tab_id).cloned()) {
+        let key = self.query_pane_key(tab_id);
+        let result = match (target, self.query_editors.get(&key).cloned()) {
             (Some(target), Some(editor)) => editor.update(cx, |editor, cx| {
                 request.apply(&editor.buffer.snapshot(), &target, |range, sql| {
                     // 复用一次编辑事务与 Changed → AppCommand 增量同步，不保存也不运行。
