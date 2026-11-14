@@ -705,6 +705,11 @@ impl NavicatMain {
                     self.er_relationship_errors.remove(&tab_id);
                     self.sync_er_local_relationship_edges(tab_id);
                 }
+                self.refresh_logical_relationships_for_scope(
+                    &scope_key,
+                    |rows| *rows = relationships.clone(),
+                    cx,
+                );
             }
             AppEvent::ErRelationshipChanged {
                 scope_key,
@@ -726,6 +731,18 @@ impl NavicatMain {
                     self.er_relationship_errors.remove(&tab_id);
                     self.sync_er_local_relationship_edges(tab_id);
                 }
+                self.refresh_logical_relationships_for_scope(
+                    &scope_key,
+                    |rows| {
+                        if let Some(existing) = rows.iter_mut().find(|row| row.id == relationship.id) {
+                            *existing = relationship.clone();
+                        } else {
+                            rows.push(relationship.clone());
+                            rows.sort_by(|a, b| a.role.cmp(&b.role).then_with(|| a.id.cmp(&b.id)));
+                        }
+                    },
+                    cx,
+                );
             }
             AppEvent::ErRelationshipDeleted { scope_key, id } => {
                 let tab_ids = self
@@ -740,6 +757,11 @@ impl NavicatMain {
                     self.er_relationship_errors.remove(&tab_id);
                     self.sync_er_local_relationship_edges(tab_id);
                 }
+                self.refresh_logical_relationships_for_scope(
+                    &scope_key,
+                    |rows| rows.retain(|row| row.id != *id),
+                    cx,
+                );
             }
             AppEvent::DataLoaded(tab_id, page) => {
                 if self.is_redis_data_tab(*tab_id) {
@@ -785,6 +807,8 @@ impl NavicatMain {
                     self.tab_order.push(*tab_id);
                 }
                 self.start_data_page_load_if_needed(*tab_id, cx);
+                self.start_foreign_keys_prefetch(*tab_id, cx);
+                self.start_logical_relationships_prefetch(*tab_id, cx);
                 self.start_completion_index_warmup_for_tab(*tab_id, cx);
                 self.start_mongo_load_if_needed(*tab_id, cx);
             }
@@ -963,6 +987,37 @@ impl NavicatMain {
                 self._cell_binary_download_tasks
                     .retain(|(task_tab_id, _, _), _| task_tab_id != tab_id);
                 self.data_filter_panels.remove(tab_id);
+                self.data_relation_panels.remove(tab_id);
+                self.data_relation_edges.remove(tab_id);
+                self.data_logical_relationships.remove(tab_id);
+                self.data_relation_loading.remove(tab_id);
+                self.data_relation_failed.remove(tab_id);
+                self._data_relation_tasks.remove(tab_id);
+                self._data_logical_relationship_tasks.remove(tab_id);
+                self.data_relation_expanded
+                    .retain(|(task_tab_id, _)| task_tab_id != tab_id);
+                self.data_relation_previews
+                    .retain(|(task_tab_id, _), _| task_tab_id != tab_id);
+                self._data_relation_preview_tasks
+                    .retain(|(task_tab_id, _), _| task_tab_id != tab_id);
+                self.data_view_modes.remove(tab_id);
+                self.data_form_inputs
+                    .retain(|(task_tab_id, _), _| task_tab_id != tab_id);
+                self._data_form_input_subscriptions
+                    .retain(|(task_tab_id, _), _| task_tab_id != tab_id);
+                self.data_form_synced_row.remove(tab_id);
+                self.data_form_synced_texts
+                    .retain(|(task_tab_id, _), _| task_tab_id != tab_id);
+                self.data_form_footers.remove(tab_id);
+                self.data_form_choice_menus
+                    .retain(|(menu_tab, _)| menu_tab != tab_id);
+                self.data_relation_panel_widths.remove(tab_id);
+                if self
+                    .data_relation_panel_resize_start
+                    .is_some_and(|start| start.tab_id == *tab_id)
+                {
+                    self.data_relation_panel_resize_start = None;
+                }
                 self.data_filter_rules.remove(tab_id);
                 self.data_sort_rules.remove(tab_id);
                 self.data_filter_draft_rules.remove(tab_id);

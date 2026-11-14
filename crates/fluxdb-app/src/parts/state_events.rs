@@ -140,6 +140,12 @@ pub enum AppEvent {
         scope_key: String,
         relationships: Vec<ErRelationship>,
     },
+    /// 关系面板展开预览结果；`key` 与请求一致，`result` 失败时面板显示失败态。
+    RelationRowsLoaded {
+        tab_id: TabId,
+        key: String,
+        result: fluxdb_core::Result<DataPage>,
+    },
     BackupPrepared(BackupRequest),
     BackupCompleted(BackupManifest),
     RestorePrepared {

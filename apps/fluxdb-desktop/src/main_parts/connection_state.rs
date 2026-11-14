@@ -52,6 +52,17 @@ impl Render for ErRelationshipResizeDrag {
     }
 }
 
+/// 数据页右侧关系面板的宽度拖拽；与 ER 面板、连接栏各自独立，
+/// 避免同类型 `on_drag_move` 互相抢占。
+#[derive(Clone)]
+struct DataRelationPanelResizeDrag;
+
+impl Render for DataRelationPanelResizeDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
 #[derive(Clone)]
 struct DataFilterPanelResizeDrag;
 

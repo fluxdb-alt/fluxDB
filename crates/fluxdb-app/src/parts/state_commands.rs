@@ -116,6 +116,17 @@ pub enum AppCommand {
     LoadErRelationships {
         scope_key: String,
     },
+    /// 关系面板展开预览：按等值条件读取目标表的少量行。
+    ///
+    /// UI 只给目标表、字段与值（`FilterSpec`），SQL 仍由连接器参数化构造，
+    /// 避免桌面端拼 SQL；`key` 原样回传，用于把结果放回对应面板条目。
+    LoadRelationRows {
+        tab_id: TabId,
+        key: String,
+        object: ObjectPath,
+        filters: Vec<FilterSpec>,
+        limit: u64,
+    },
     CreateErRelationship {
         scope_key: String,
         relationship: ErRelationship,

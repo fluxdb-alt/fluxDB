@@ -96,6 +96,7 @@ impl NavicatMain {
             self.redis_data_table_width(tab_id, window),
             self.data_table_sort_handler(cx),
         );
+        self.apply_foreign_key_targets_to_delegate(tab_id, &mut delegate);
         if !delegate.redis_page {
             self.apply_data_table_column_widths(&mut delegate);
         }

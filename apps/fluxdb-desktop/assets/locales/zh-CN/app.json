@@ -2585,7 +2585,10 @@
       "export": "导出",
       "generate": "数据生成",
       "field_filter": "字段筛选",
-      "table_info": "表属性"
+      "table_info": "表属性",
+      "relations": "关系",
+      "view_grid": "表格",
+      "view_form": "表单"
     },
     "toast": {
       "rows_copied": "已复制 %{count} 行",
@@ -2690,6 +2693,49 @@
     "search": {
       "label": "查找数据:",
       "next": "下一个"
+    },
+    "relations": {
+      "title": "关系",
+      "select_row": "选择一行后查看外键关系",
+      "current_row": "当前行",
+      "parents": "引用（父行）",
+      "children": "被引用（子行）",
+      "loading": "正在读取关系…",
+      "load_failed": "关系读取失败，请重试",
+      "empty": "没有可导航的关联关系",
+      "null_value": "含 NULL，无法定位目标行",
+      "logical": "ER 设计关联",
+      "parent_count": "%{count} 条外键",
+      "child_count": "%{count} 张子表",
+      "logical_count": "%{count} 条",
+      "er": "ER 关系",
+      "er_physical": "物理",
+      "er_logical": "设计",
+      "er_parent_tag": "父表",
+      "er_child_tag": "子表",
+      "er_current_tag": "当前表",
+      "preview_loading": "正在加载预览…",
+      "preview_failed": "预览加载失败",
+      "preview_empty": "没有匹配的行",
+      "preview_count": "共 %{count} 条",
+      "row_count": "%{count} 行",
+      "open_table": "在表格中打开"
+    },
+    "form": {
+      "empty": "当前页没有可显示的数据行",
+      "position": "第 %{index} / %{total} 条",
+      "previous": "上一条",
+      "next": "下一条",
+      "pk": "主键",
+      "type_nullable": "%{type} · 可空",
+      "null_placeholder": "NULL",
+      "open_related": "打开 %{table}",
+      "save": "保存",
+      "revert": "还原",
+      "hint": "按 Enter 提交字段，切行或保存前自动提交",
+      "record_title": "%{table} 记录 #%{pk}",
+      "all_fields": "全部字段 · 单条记录视图",
+      "ref_null": "NULL — 无可跳转的引用行"
     }
   },
   "query": {

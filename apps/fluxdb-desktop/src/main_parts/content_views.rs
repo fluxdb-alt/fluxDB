@@ -793,6 +793,8 @@ fn data_editor_content(
                 field_filter_open,
                 None,
                 None,
+                None,
+                None,
                 show_table_tools,
                 colors,
                 cx,
@@ -873,16 +875,17 @@ fn data_editor_content(
     let visible_field_names = this.visible_fields_for_page(tab_id, page);
     let field_count = Some((visible_field_names.len(), all_field_names.len()));
     let table_state = this.data_table_state(tab_id, page, window, cx);
-    let (search_matches, active_search_match, selected_source_row) = {
+    let (search_matches, active_search_match, selected_display_row, selected_source_row) = {
         let table = table_state.read(cx);
         let delegate = table.delegate();
+        let display_row = delegate
+            .selected_row
+            .or_else(|| delegate.selected_cell.map(|(row, _)| row));
         (
             delegate.search_matches.clone(),
             delegate.active_search_match,
-            delegate
-                .selected_row
-                .or_else(|| delegate.selected_cell.map(|(row, _)| row))
-                .and_then(|row| delegate.source_row_indexes.get(row).copied()),
+            display_row,
+            display_row.and_then(|row| delegate.source_row_indexes.get(row).copied()),
         )
     };
     let search_highlight_all = this.data_search_highlight_all_tabs.contains(&tab_id);
@@ -920,6 +923,8 @@ fn data_editor_content(
             search_open,
             field_filter_open,
             field_count,
+            Some(this.data_view_mode(tab_id)),
+            Some(this.data_relation_panels.contains(&tab_id)),
             Some(editor.table_info.open),
             show_table_tools,
             colors,
@@ -1115,7 +1120,22 @@ fn data_editor_content(
             cx,
         )
     });
-    let table_area = data_table_area(
+    let form_mode = this.data_view_mode(tab_id) == DataViewMode::Form && !is_redis_editor;
+    let table_area = if form_mode {
+        data_form_view(
+            this,
+            tab_id,
+            &editor.object,
+            page,
+            selected_display_row,
+            selected_source_row,
+            filter_text.as_str(),
+            colors,
+            window,
+            cx,
+        )
+    } else {
+        data_table_area(
         &table_state,
         // 提交与各类加载都会离开 UI 线程，共用同一层遮罩提示，避免用户以为界面失去响应。
         // 已有数据时的重新加载（筛选、翻页、刷新、AI 查询）同样只盖表格区域，
@@ -1146,28 +1166,54 @@ fn data_editor_content(
         footer,
         colors,
         cx,
-    );
-    let content = content.child(if editor.table_info.open {
+        )
+    };
+    let relations_panel = this.data_relation_panels.contains(&tab_id).then(|| {
+        let edges = this.data_relation_edges.get(&tab_id).cloned();
+        let logical_relationships = this.data_logical_relationships.get(&tab_id).cloned();
+        let width = this.data_relation_panel_width(tab_id);
+        data_relations_panel(
+            tab_id,
+            &editor.object,
+            page,
+            DataRelationsPanelData {
+                // 面板读的是编辑器原始页；排序仍在委托内部重排，这里必须用源行下标。
+                selected_row: selected_source_row,
+                edges: edges.as_deref(),
+                logical_relationships: logical_relationships.as_deref(),
+                previews: &this.data_relation_previews,
+                expanded: &this.data_relation_expanded,
+                loading: this.data_relation_loading.contains(&tab_id),
+                failed: this.data_relation_failed.contains(&tab_id),
+            },
+            width,
+            colors,
+            cx,
+        )
+    });
+    let mut data_row = div()
+        .flex_1()
+        .min_h(px(0.))
+        .flex()
+        .overflow_hidden()
+        .child(table_area);
+    if let Some(panel) = relations_panel {
+        data_row = data_row.child(panel);
+    }
+    if editor.table_info.open {
         // DDL 页签用底层编辑器渲染，需要宿主当前主题派生的编辑器配色（见 table_info_ddl_text）。
         let editor_theme = this.editor_theme_for(cx);
-        div()
-            .flex_1()
-            .min_h(px(0.))
-            .flex()
-            .overflow_hidden()
-            .child(table_area)
-            .child(table_info_panel(
-                tab_id,
-                editor,
-                page,
-                editor_theme,
-                window,
-                colors,
-                cx,
-            ))
-    } else {
-        table_area
-    });
+        data_row = data_row.child(table_info_panel(
+            tab_id,
+            editor,
+            page,
+            editor_theme,
+            window,
+            colors,
+            cx,
+        ));
+    }
+    let content = content.child(data_row);
     let content = if field_filter_open {
         content.child(field_filter_popover_layer(
             tab_id,
@@ -5981,6 +6027,8 @@ fn data_editor_toolbar(
     search_open: bool,
     field_filter_open: bool,
     field_count: Option<(usize, usize)>,
+    view_mode: Option<DataViewMode>,
+    relations_open: Option<bool>,
     table_info_open: Option<bool>,
     show_table_tools: bool,
     colors: UiColors,
@@ -6140,6 +6188,22 @@ fn data_editor_toolbar(
                             }),
                         ),
                 ))
+                .when(show_table_tools, |this| this.when_some(view_mode, |this, mode| {
+                    this.child(data_editor_view_switch(tab_id, mode, colors, cx))
+                }))
+                .when(show_table_tools, |this| this.when_some(relations_open, |this, active| {
+                    this.child(
+                        data_editor_action_state(tr("app.data.toolbar.relations"), active, colors)
+                            .id(("relations-toggle", tab_id.0))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.toggle_data_relation_panel(tab_id, cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                    )
+                }))
                 .when(show_table_tools, |this| this.when_some(table_info_open, |this, active| {
                     this.child(
                         data_editor_action_state(tr("app.data.toolbar.table_info"), active, colors)
@@ -6194,6 +6258,75 @@ fn data_editor_action_state(
             rgb(0xe8f2ff)
         })
     })
+}
+
+/// 表格 / 表单切换：分段控件，状态只影响布局，不改变筛选、排序与改动集。
+fn data_editor_view_switch(
+    tab_id: TabId,
+    current: DataViewMode,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    div()
+        .h(px(28.))
+        .rounded(colors.radius_lg)
+        .border_1()
+        .border_color(colors.border)
+        .bg(colors.panel_alt)
+        .flex()
+        .items_center()
+        .overflow_hidden()
+        .child(data_editor_view_switch_item(
+            tab_id,
+            DataViewMode::Grid,
+            current,
+            tr("app.data.toolbar.view_grid"),
+            colors,
+            cx,
+        ))
+        .child(data_editor_view_switch_item(
+            tab_id,
+            DataViewMode::Form,
+            current,
+            tr("app.data.toolbar.view_form"),
+            colors,
+            cx,
+        ))
+}
+
+fn data_editor_view_switch_item(
+    tab_id: TabId,
+    mode: DataViewMode,
+    current: DataViewMode,
+    label: SharedString,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let active = mode == current;
+    div()
+        .h_full()
+        .px_3()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(ui_text_size(12.))
+        .font_weight(if active {
+            gpui::FontWeight::SEMIBOLD
+        } else {
+            gpui::FontWeight::NORMAL
+        })
+        .text_color(if active { colors.text } else { colors.muted })
+        .bg(if active { colors.panel_bg } else { colors.panel_alt })
+        .cursor_pointer()
+        .hover(move |style| style.bg(colors.hover))
+        .child(label)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                this.set_data_view_mode(tab_id, mode, cx);
+                cx.stop_propagation();
+            }),
+        )
 }
 
 #[cfg(test)]
