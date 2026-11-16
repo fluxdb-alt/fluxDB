@@ -19,6 +19,18 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 
 ## Latest changes
 
+### v0.1.19
+
+- **Query result export and select-all**: data pages and query results select every cell with `⌘A` / `Ctrl+A` and copy it as TSV. The query result toolbar gains an export that reuses the SQL actually executed and lets you edit it, with field selection and TXT / CSV / JSON / XML output, reading the full SQL in batches with cancellation.
+- **Test data generator**: pick from 40+ generators per column and configure their parameters, with foreign-key columns drawing from a parent-table value pool. Set rows (up to 200,000), seed, data language, NULL rate, unique-conflict policy and append or truncate-then-write, with data, SQL and task-log previews.
+- **Query editor split panes**: split a tab horizontally or vertically any number of times, each pane with its own editor, run action and results; closing a pane with content offers to discard it or move it to a new tab.
+- **Foreign-key navigation and form view**: a "Table | Form" switch on data pages, equality jumps from foreign-key cells and the right-hand relations panel, inline previews and an ER mini-map.
+- **Faster finding and switching**: a unified command palette (`⇧⌘P`), a Ctrl+Tab tab drawer, a searchable tab switcher (`⇧⌘E`), numbered tab access (`⌥1`–`⌥9`) and table shortcut groups that bind one key to several tables.
+- **Table sizes in the sidebar**: MySQL / MariaDB / TiDB, PostgreSQL / KingbaseES and SQL Server show table sizes, hidden when the sidebar is narrower than 220 px.
+- **Improvements and fixes**: the built-in Flux Amber theme; fixed SQL history loss at startup, history skipping digit-prefixed table names, and history quick search leaking across databases.
+
+[Full release notes](./release-notes/v0.1.19/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.18
 
 - **Server panels**: a connection's context menu opens a "Server" tab with overview, sessions and lock waits for MySQL / MariaDB / TiDB, PostgreSQL / KingbaseES, SQL Server, Oracle and Dameng; Redis adds clients and slow log, and MongoDB adds current operations and an in-session trend. Queries, sessions and clients can be terminated after confirmation, read-only connections are blocked at three layers, and panels refresh manually or every 5 seconds.
@@ -28,16 +40,6 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 - **Improvements and fixes**: centralized SQLite migrations with `VACUUM INTO` backups and fail-closed version checks, unified SQLite / SQL Server / TiDB value and read-only semantics, numeric Redis database sorting, and exact negative DECIMAL rendering on SQL Server.
 
 [Full release notes](./release-notes/v0.1.18/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
-
-### v0.1.17
-
-- **Structure compare and data transfer**: new connection context-menu entries for structure compare/sync and cross-connection data transfer. Tables are paired by `schema.name` and reported as missing, extra, modified or identical with side-by-side DDL, then the selected tables can be created, dropped or recreated. Transfer supports append and truncate-then-write, creates a missing target table, and reads/writes in pages with cancellation.
-- **Task center**: collects backup, restore, SQL file execution, table and MongoDB import/export, structure sync and data transfer, with unified status, progress and logs, cancellation, and persisted history.
-- **Visual query plans**: the toolbar "Explain" action parses MySQL / MariaDB / TiDB, PostgreSQL / KingbaseES and SQLite plan output into a node tree and inspector, flagging full table scans, filesorts and missing indexes, and falls back to the raw result when parsing fails.
-- **Connection form improvements**: high-frequency fields stay under "Connection info", MySQL-family charset/collation/URL parameters move to "Advanced", and SQLite hides the empty network tab. MySQL / MariaDB / TiDB gain SOCKS5 and HTTP CONNECT proxies combinable with TLS, and PostgreSQL reuses the shared proxy dialer.
-- **Fixes**: corrected legacy MySQL TLS-mode migration, kept compatible filter values when switching fields, added missing backup/restore cancel strings, and fixed KingbaseES completion compatibility and a nested `block_on` in export pagination.
-
-[Full release notes](./release-notes/v0.1.17/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
 
 ## Why FluxDB
 

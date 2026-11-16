@@ -17,6 +17,18 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 
 ## 最近更新
 
+### v0.1.19
+
+- **查询结果导出与全选复制**：数据页和查询结果页支持 `⌘A` / `Ctrl+A` 全选当前页单元格并按 TSV 复制；查询结果工具栏新增导出，条件沿用实际执行的 SQL 且可编辑，支持字段选择与 TXT / CSV / JSON / XML，按全量 SQL 分批读取、可取消。
+- **测试数据生成**：按列选择 40+ 生成器并配置参数，外键读取父表取值池，支持行数（上限 20 万）、随机种子、数据语言、NULL 比例、唯一冲突策略与追加 / 清空后写入，提供数据、SQL 与任务日志预览。
+- **查询编辑器分屏**：标签内可任意左右 / 上下分屏，每屏独立编辑、运行与结果；关闭有内容的分屏可选择丢弃或移到新标签。
+- **外键导航与表单视图**：数据页新增「表格 | 表单」切换，外键单元格和右侧关系面板可等值跳转，面板含内联预览与 ER 迷你图。
+- **查找与切换增强**：新增统一命令面板（`⇧⌘P`）、标签抽屉切换（`Ctrl+Tab`）、可搜索标签切换器（`⇧⌘E`）、标签编号直达（`⌥1`–`⌥9`）与一个快捷键绑定多张表的表快捷组。
+- **侧边栏表大小**：MySQL / MariaDB / TiDB、PostgreSQL / KingbaseES 与 SQL Server 在侧边栏显示表占用大小，宽度不足 220px 时自动隐藏。
+- **改进与修复**：新增 Flux Amber 内置主题；修复启动时 SQL 历史丢失、数字开头表名漏记历史与历史快捷搜索跨库的问题。
+
+[完整更新说明](./release-notes/v0.1.19/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.18
 
 - **服务器面板**：连接右键菜单新增「服务器」页签，MySQL / MariaDB / TiDB、PostgreSQL / KingbaseES、SQL Server、Oracle 与达梦提供概览、会话与锁等待；Redis 提供客户端与慢日志，MongoDB 提供当前操作与会话内性能趋势。查询、会话和客户端可在二次确认后终止，只读连接三层拦截，面板支持手动或每 5 秒自动刷新。
@@ -26,16 +38,6 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 - **改进与修复**：集中式 SQLite 迁移（`VACUUM INTO` 备份、更高版本失败关闭）；统一 SQLite / SQL Server / TiDB 的值类型与只读语义；Redis 数据库按数值排序；SQL Server 负 DECIMAL 精确渲染。
 
 [完整更新说明](./release-notes/v0.1.18/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
-
-### v0.1.17
-
-- **结构对比与数据传输**：连接右键菜单新增「结构对比与同步」「跨连接数据传输」；对比按 `schema.name` 配对基础表，展示缺失 / 多出 / 结构不同 / 一致与两端 DDL，可按勾选新建、删除或重建；传输支持追加与清空后写入，目标表不存在时自动建表，分页读写、可取消。
-- **任务中心**：汇总备份、恢复、SQL 文件、表与 Mongo 导入导出、结构同步、数据传输等后台任务，统一展示状态、进度与日志，支持取消并持久化历史记录。
-- **可视化执行计划**：工具栏「解释」解析 MySQL / MariaDB / TiDB、PostgreSQL / KingbaseES 与 SQLite 的计划输出，生成节点树与检查器，标记全表扫描、文件排序与无索引；无法解析时回退原始结果。
-- **新建连接优化**：高频字段留在「连接信息」，MySQL 系字符集 / 排序规则 / URL 参数移入「高级」，SQLite 隐藏空的网络页签；MySQL / MariaDB / TiDB 新增 SOCKS5 与 HTTP CONNECT 代理，可与 TLS 组合，PostgreSQL 复用共享代理拨号。
-- **修复**：修正 MySQL 旧档案 TLS 模式迁移误判；筛选切换字段时按新列类型保留兼容值；补齐备份 / 恢复取消任务文案；修复 Kingbase 补全兼容性与导出分页嵌套 `block_on`。
-
-[完整更新说明](./release-notes/v0.1.17/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
 
 ## 为什么选择 FluxDB
 
