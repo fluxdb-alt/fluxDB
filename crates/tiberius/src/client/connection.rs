@@ -120,7 +120,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         TokenStream::new(self).flush_done().await
     }
 
+    // 仅集成认证登录流程调用；本仓库未启用 integrated-auth 特性，放行死代码告警。
     #[cfg(any(windows, feature = "integrated-auth-gssapi"))]
+    #[allow(dead_code)]
     /// Flush the incoming token stream until receiving `SSPI` token.
     async fn flush_sspi(&mut self) -> crate::Result<TokenSspi> {
         TokenStream::new(self).flush_sspi().await

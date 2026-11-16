@@ -6,10 +6,11 @@ edition = "2024"
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
-tracing = "0.1"
 vte = "0.14"
 
-# 原生客户端子进程进程组信号（取消时整树终止），Unix 平台使用。
+# 原生客户端子进程进程组信号（取消时整树终止），Unix 平台使用；
+# tracing 仅在 Unix 分支记录终止失败日志。
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.28", default-features = false, features = ["signal"] }
+tracing = "0.1"
 

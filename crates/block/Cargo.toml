@@ -1,0 +1,28 @@
+# 从 crates.io 的 block 0.1.6 复制而来（MIT），仅做两处调整：
+# 1. `Class` 由无变体枚举改为零大小结构体，消除 `static` 类型不可构造触发的
+#    uninhabited-static 未来不兼容警告（rust-lang/rust#74840）。
+# 2. `missing_abi` 属于历史写法，本仓库不维护该上游 crate 的现代化改造，直接放行。
+# 上游仓库（http://github.com/SSheldon/rust-block）已无新版本，故通过根
+# Cargo.toml 的 [patch.crates-io] 指向本目录。
+[package]
+name = "block"
+version = "0.1.6"
+authors = ["Steven Sheldon"]
+
+description = "Rust interface for Apple's C language extension of blocks."
+keywords = ["blocks", "osx", "ios", "objective-c"]
+readme = "README.md"
+repository = "http://github.com/SSheldon/rust-block"
+documentation = "http://ssheldon.github.io/rust-objc/block/"
+license = "MIT"
+
+exclude = [
+  ".gitignore",
+  ".travis.yml",
+  "travis_install.sh",
+  "travis_test.sh",
+  "tests-ios/**",
+]
+
+[lints.rust]
+missing_abi = "allow"

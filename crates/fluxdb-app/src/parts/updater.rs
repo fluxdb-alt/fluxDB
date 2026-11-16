@@ -799,6 +799,7 @@ fn find_app_bundle(directory: &std::path::Path) -> Option<std::path::PathBuf> {
         .find(|path| path.is_dir() && path.extension().is_some_and(|ext| ext == "app"))
 }
 
+#[cfg(unix)]
 fn unique_install_dir(
     cache_dir: &std::path::Path,
 ) -> Result<std::path::PathBuf, UpdateError> {
@@ -852,18 +853,6 @@ fn spawn_install_script(
             )
         })?;
     Ok(())
-}
-
-#[cfg(not(unix))]
-fn spawn_install_script(
-    _script: &std::path::Path,
-    _args: &[String],
-    _log_path: &std::path::Path,
-) -> Result<(), UpdateError> {
-    Err(UpdateError::new(
-        UpdateErrorKind::UnsupportedPlatform,
-        "当前平台不支持脚本安装器",
-    ))
 }
 
 #[cfg(test)]

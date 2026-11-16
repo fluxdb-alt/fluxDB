@@ -12,7 +12,9 @@ impl AsRef<[u8]> for TokenSspi {
 }
 
 impl TokenSspi {
+    // 仅集成认证登录流程调用；本仓库未启用 integrated-auth 特性，放行死代码告警。
     #[cfg(any(windows, all(unix, feature = "integrated-auth-gssapi")))]
+    #[allow(dead_code)]
     pub fn new(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }

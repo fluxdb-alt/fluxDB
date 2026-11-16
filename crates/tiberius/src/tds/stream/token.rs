@@ -75,7 +75,9 @@ where
         }
     }
 
+    // 仅集成认证登录流程调用；本仓库未启用 integrated-auth 特性，放行死代码告警。
     #[cfg(any(windows, feature = "integrated-auth-gssapi"))]
+    #[allow(dead_code)]
     pub(crate) async fn flush_sspi(self) -> crate::Result<TokenSspi> {
         let mut stream = self.try_unfold();
         let mut last_error = None;
