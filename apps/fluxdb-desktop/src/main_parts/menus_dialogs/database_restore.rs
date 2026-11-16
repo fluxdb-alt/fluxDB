@@ -1490,12 +1490,12 @@ impl NavicatMain {
             return;
         };
         let input = modal.source_input.clone();
-        let source_value = modal.source_input.read(cx).value().to_string();
-        let backup_dir = self.controller.state().settings.backup_dir.trim().to_string();
         #[cfg(target_os = "macos")]
         {
             // 起始目录优先级：设置的备份目录 > 当前已填文件所在目录。
             // 仅 macOS 的原生选择面板支持指定起始目录；其他平台走下面的 gpui 选择框。
+            let source_value = modal.source_input.read(cx).value().to_string();
+            let backup_dir = self.controller.state().settings.backup_dir.trim().to_string();
             let start_dir = if !backup_dir.is_empty() {
                 backup_dir
             } else {
