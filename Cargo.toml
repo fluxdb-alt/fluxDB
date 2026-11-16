@@ -9,10 +9,14 @@ members = [
     "crates/fluxdb-i18n",
     "crates/fluxdb-storage",
 ]
-# Vendored third-party DM driver: keep it out of workspace fmt/clippy/test gates.
 # Vendored third-party drivers: keep them out of workspace fmt/clippy/test gates.
-exclude = ["crates/dm-pure", "crates/tiberius"]
+exclude = ["crates/block", "crates/dm-pure", "crates/tiberius"]
 resolver = "3"
+
+# block 0.1.6 已停止更新，源码里的 uninhabited static 会在新版 Rust 上产生
+# future-incompat 警告；指向仓库内副本以保持构建零警告。
+[patch.crates-io]
+block = { path = "crates/block" }
 
 # 开发构建的优化档位：GPUI 应用每帧都在跑布局（taffy）与文字排版，依赖全量以
 # opt-level 0 编译时，一屏十几个展开的文档卡片就能把单帧拖到 100ms 以上（实测

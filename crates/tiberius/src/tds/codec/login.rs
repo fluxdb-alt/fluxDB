@@ -187,7 +187,9 @@ impl<'a> LoginMessage<'a> {
         }
     }
 
+    // 仅集成认证登录流程调用；本仓库未启用 integrated-auth 特性，放行死代码告警。
     #[cfg(any(all(unix, feature = "integrated-auth-gssapi"), windows))]
+    #[allow(dead_code)]
     pub fn integrated_security(&mut self, bytes: Option<Vec<u8>>) {
         if bytes.is_some() {
             self.option_flags_2.insert(OptionFlag2::IntegratedSecurity);

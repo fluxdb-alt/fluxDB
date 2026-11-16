@@ -1492,17 +1492,18 @@ impl NavicatMain {
         let input = modal.source_input.clone();
         let source_value = modal.source_input.read(cx).value().to_string();
         let backup_dir = self.controller.state().settings.backup_dir.trim().to_string();
-        // 起始目录优先级：设置的备份目录 > 当前已填文件所在目录。
-        let start_dir = if !backup_dir.is_empty() {
-            backup_dir
-        } else {
-            Path::new(&source_value)
-                .parent()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        };
         #[cfg(target_os = "macos")]
         {
+            // 起始目录优先级：设置的备份目录 > 当前已填文件所在目录。
+            // 仅 macOS 的原生选择面板支持指定起始目录；其他平台走下面的 gpui 选择框。
+            let start_dir = if !backup_dir.is_empty() {
+                backup_dir
+            } else {
+                Path::new(&source_value)
+                    .parent()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            };
             self._file_picker_task = Some(cx.spawn_in(window, async move |view, cx| {
                 let selected = native_open_backup_panel(&start_dir);
                 let _ = cx.update(|window, cx| {

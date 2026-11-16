@@ -62,7 +62,9 @@ impl Context {
         self.spn = Some(format!("MSSQLSvc/{}:{}", host.as_ref(), port));
     }
 
+    // 仅集成认证登录流程调用；本仓库未启用 integrated-auth 特性，放行死代码告警。
     #[cfg(any(windows, all(unix, feature = "integrated-auth-gssapi")))]
+    #[allow(dead_code)]
     pub fn spn(&self) -> &str {
         self.spn.as_deref().unwrap_or("")
     }
