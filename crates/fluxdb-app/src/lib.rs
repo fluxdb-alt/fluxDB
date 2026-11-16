@@ -193,6 +193,7 @@ include!("parts/ai_mcp_install.rs");
 include!("parts/ai_mcp_clients.rs");
 include!("parts/ai_scripted.rs");
 include!("parts/backup_restore.rs");
+include!("parts/data_generation.rs");
 
 include!("parts/ai_conversation.rs");
 include!("parts/ai_conversation_provider.rs");

@@ -639,4 +639,28 @@ mod controller_dispatch_tests {
             Some(true)
         );
     }
+    /// 外键池命令必须走数据库任务路由；连接缺失时按列返回错误而不是整体失败。
+    #[test]
+    fn generation_reference_pool_command_is_routed() {
+        let mut controller = AppController::new();
+        let event = controller.dispatch(AppCommand::LoadGenerationReferencePools {
+            connection_id: ConnectionId(404),
+            references: vec![(
+                "parent_id".to_string(),
+                fluxdb_core::GenerationReference {
+                    database: None,
+                    schema: None,
+                    table: "parent".into(),
+                    column: "id".into(),
+                    label: "parent.id".into(),
+                },
+            )],
+        });
+        let AppEvent::GenerationReferencePoolsLoaded { pools, .. } = event else {
+            panic!("命令应被路由到外键池读取，实际 {event:?}");
+        };
+        assert_eq!(pools.len(), 1);
+        assert!(pools[0].1.is_err(), "连接不存在时应返回该列的错误");
+    }
+
 }

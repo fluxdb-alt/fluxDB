@@ -405,6 +405,9 @@ impl NavicatMain {
             TableMenuAction::ImportData => {
                 self.open_table_import_wizard(object_path, window, cx);
             }
+            TableMenuAction::GenerateData => {
+                self.open_data_generation_wizard(object_path, window, cx);
+            }
             TableMenuAction::ExportData => {
                 self.open_table_data_export_from_object(object_path, cx);
             }

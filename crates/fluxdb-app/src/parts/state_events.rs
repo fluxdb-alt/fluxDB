@@ -366,6 +366,25 @@ pub enum AppEvent {
         object: ObjectPath,
         report: fluxdb_core::TableImportReport,
     },
+    /// 测试数据生成源（列/唯一约束/外键）读取完成；Err 为读取失败。
+    GenerationSourceLoaded {
+        object: ObjectPath,
+        result: std::result::Result<DataGenerationSource, UserFacingError>,
+    },
+    /// 生成并写入完成；warnings 已合并生成与外键池读取的告警。
+    TableDataGenerated {
+        object: ObjectPath,
+        report: fluxdb_core::GenerationReport,
+    },
+    /// 外键列取值池读取完成；单列失败只影响该列，Err 为面向用户的失败说明。
+    GenerationReferencePoolsLoaded {
+        connection_id: ConnectionId,
+        /// 与请求同序：(列名, 取值池)。
+        pools: Vec<(
+            String,
+            std::result::Result<Vec<fluxdb_core::GenerationValue>, String>,
+        )>,
+    },
     CreateTableReferenceColumnsLoaded {
         tab_id: TabId,
         foreign_key_id: u64,

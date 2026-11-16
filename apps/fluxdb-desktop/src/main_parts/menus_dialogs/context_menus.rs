@@ -443,6 +443,15 @@ fn table_context_menu(
             colors,
             cx,
         ))
+        .child(table_menu_item(
+            tr("app.context.generate_data").to_string(),
+            AppIcon::Wand,
+            false,
+            Some(TableMenuAction::GenerateData),
+            &menu,
+            colors,
+            cx,
+        ))
         .child(table_menu_submenu_item(
             tr("app.context.manage_groups").to_string(),
             AppIcon::FolderInput,
