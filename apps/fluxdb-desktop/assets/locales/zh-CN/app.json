@@ -3052,6 +3052,16 @@
   },
   "data_export": {
     "title": "导出数据",
+    "query_title": "导出查询结果",
+    "query_result": "查询结果",
+    "query_source": "来源",
+    "query_result_detail": "当前查询结果，共 %{columns} 列",
+    "query_sql": "导出 SQL",
+    "query_sql_hint": "导出会直接执行上面的 SQL；修改条件后点击刷新可重新估算行数。",
+    "query_sql_empty": "导出 SQL 不能为空",
+    "query_no_result": "当前查询没有结果集，无法导出",
+    "query_scope_hint": "查询结果导出按 SQL 全量执行，不受表格分页影响。",
+    "scope_query": "查询 SQL",
     "load_first": "请先加载表数据",
     "open_failed": "打开表数据失败",
     "loading_fields": "正在加载表字段，加载完成后打开导出",
@@ -3802,7 +3812,9 @@
     "tab_switcher": "切换标签页",
     "tab_switcher_detail": "搜索并切换到当前工作区的标签页",
     "copy_data": "复制数据",
-    "copy_data_detail": "复制当前选中的表格数据"
+    "copy_data_detail": "复制当前选中的表格数据",
+    "select_all_data": "全选数据",
+    "select_all_data_detail": "选中当前表数据页或查询结果页的全部单元格"
   },
   "settings": {
     "reset_defaults": "恢复默认设置",

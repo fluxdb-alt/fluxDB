@@ -3882,6 +3882,29 @@ fn query_output_tabs(
         );
     }
 
+    // 查询结果导出：条件就是该结果实际执行的 SQL，弹框内可再编辑。
+    let export = selected.result_index().and_then(|index| {
+        // 失败页签没有结果集，也没有可导出的列。
+        query_result_page_index(pane, index)?;
+        let sql = query_result_sql(pane, index)?;
+        // 执行器可能按默认上限追加/封顶 LIMIT；导出时还原用户原文：
+        // 用户没写 LIMIT 就不带，写了就保留（统一转成不带分号的语句）。
+        let sql = fluxdb_app::original_sql_for_executed_statement(&pane.text, &sql, database_kind)
+            .unwrap_or(sql);
+        Some(
+            query_output_toolbar_button(
+                key,
+                tr("app.data_export.export"),
+                AppIcon::Save,
+                colors,
+                cx,
+                move |this, key, window, cx| {
+                    this.open_query_result_export(key, index, sql.clone(), window, cx);
+                },
+            )
+            .flex_none(),
+        )
+    });
     let refresh = query_output_toolbar_button(
         key,
         tr("app.common.refresh"),
@@ -3918,6 +3941,7 @@ fn query_output_tabs(
                 .is_some_and(|page_index| pane.result_editors.contains_key(&page_index)),
             |this| this.child(div().flex_none().child(query_result_editable_badge(colors))),
         )
+        .when_some(export, |this, export| this.child(export))
         .child(refresh)
         .child(collapse)
 }

@@ -137,6 +137,32 @@ impl DataPageTableDelegate {
         self.selection_anchor = Some(DataTableSelectionAnchor::Row { row: anchor_row });
     }
 
+    /// 选中当前页所有可见单元格（⌘A / Ctrl+A）。
+    ///
+    /// 只覆盖当前分页；跨页全量请用导出。空页或没有可见数据列时清空选区。
+    fn select_all_cells(&mut self) {
+        let last_row = self.page.rows.len().saturating_sub(1);
+        let last_col = self
+            .source_column_indexes
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(col, index)| (col > 0 && index.is_some()).then_some(col));
+
+        self.selected_row = None;
+        self.selected_rows.clear();
+        let (Some(last_col), false) = (last_col, self.page.rows.is_empty()) else {
+            self.selected_cell = None;
+            self.selected_cells.clear();
+            self.selection_anchor = None;
+            return;
+        };
+
+        self.selected_cells = data_table_cell_range(0, 1, last_row, last_col);
+        self.selected_cell = Some((last_row, last_col));
+        self.selection_anchor = Some(DataTableSelectionAnchor::Cell { row: 0, col: 1 });
+    }
+
     fn selection_copy_label(&self) -> Option<String> {
         let rows = self.selected_row_count();
         if rows > 1 {
@@ -175,21 +201,28 @@ impl DataPageTableDelegate {
     fn selection_contains_truncated(&self) -> bool {
         let cells = self.effective_selected_cells();
         let rows = self.effective_selected_rows();
-        self.page.rows.iter().enumerate().any(|(row_ix, row)| {
-            if !rows.contains(&row_ix) && !cells.iter().any(|(cell_row, _)| *cell_row == row_ix) {
-                return false;
-            }
-            self.source_column_indexes.iter().enumerate().any(|(col_ix, index)| {
-                if col_ix == 0 {
-                    return false;
-                }
-                let selected = rows.contains(&row_ix) || cells.contains(&(row_ix, col_ix));
-                selected
-                    && index
+        // 整行选中检查该行全部可见列；单元格选中只检查被选中的格子。
+        // 全选会产生 rows×cols 个单元格，这里按 O(选中数) 遍历，避免逐行扫描整个选区。
+        let row_has_truncated = |row_ix: usize| {
+            self.page.rows.get(row_ix).is_some_and(|row| {
+                self.source_column_indexes
+                    .iter()
+                    .skip(1)
+                    .filter_map(|index| index.and_then(|source| row.values.get(source)))
+                    .any(fluxdb_core::CellValue::is_truncated)
+            })
+        };
+        rows.iter().any(|row_ix| row_has_truncated(*row_ix))
+            || cells.iter().any(|(row_ix, col_ix)| {
+                self.page.rows.get(*row_ix).is_some_and(|row| {
+                    self.source_column_indexes
+                        .get(*col_ix)
+                        .copied()
+                        .flatten()
                         .and_then(|source| row.values.get(source))
                         .is_some_and(fluxdb_core::CellValue::is_truncated)
+                })
             })
-        })
     }
 
     fn selection_export(&self) -> Option<DataTableSelectionExport> {

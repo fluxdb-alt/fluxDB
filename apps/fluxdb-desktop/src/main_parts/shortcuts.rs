@@ -76,6 +76,7 @@ pub(crate) enum ShortcutAction {
     PreviousTab,
     OpenTabSwitcher,
     CopyDataSelection,
+    SelectAllDataCells,
 }
 
 pub(crate) const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
@@ -239,6 +240,16 @@ pub(crate) const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         action: ShortcutAction::CopyDataSelection,
         context: Some("NavicatMain"),
     },
+    ShortcutDefinition {
+        id: "query.select_all_data",
+        title: "Select all data",
+        detail: "Select all cells on the current data or query result page",
+        icon: AppIcon::Table,
+        macos: "cmd-a",
+        other: "ctrl-a",
+        action: ShortcutAction::SelectAllDataCells,
+        context: Some("NavicatMain"),
+    },
 ];
 
 pub(crate) fn default_shortcut(definition: &ShortcutDefinition) -> &'static str {
@@ -344,6 +355,9 @@ pub(crate) fn bind_shortcut(
         }
         ShortcutAction::CopyDataSelection => {
             cx.bind_keys([KeyBinding::new(spec, CopyDataSelection, context)])
+        }
+        ShortcutAction::SelectAllDataCells => {
+            cx.bind_keys([KeyBinding::new(spec, SelectAllDataCells, context)])
         }
     }
 }

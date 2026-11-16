@@ -964,6 +964,30 @@ impl NavicatMain {
         self.copy_data_table_selection(tab_id, cx);
     }
 
+    /// 表格/结果页全选当前页所有可见单元格，随后可直接 ⌘C 复制为 TSV。
+    fn select_all_data_cells(
+        &mut self,
+        _: &SelectAllDataCells,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // 焦点在输入框或 SQL 编辑器时，⌘A 属于文本编辑，不抢表格选区。
+        if self.copy_data_selection_should_defer_to_focused_editor(window, cx) {
+            return;
+        }
+        let Some(tab_id) = self.controller.state().active_tab else {
+            return;
+        };
+        let Some(table_state) = self.active_data_table_state(tab_id) else {
+            return;
+        };
+        table_state.update(cx, |table, cx| {
+            table.delegate_mut().select_all_cells();
+            table.refresh(cx);
+        });
+        cx.notify();
+    }
+
     fn copy_data_selection_should_defer_to_focused_editor(
         &self,
         window: &Window,
@@ -1002,6 +1026,18 @@ impl NavicatMain {
                 .query_editors
                 .values()
                 .any(|editor| editor.read(cx).focus_handle.is_focused(window))
+            || self
+                .mongo_workbench_inputs
+                .values()
+                .any(|editor| editor.read(cx).focus_handle.is_focused(window))
+            || self
+                .redis_workbench_inputs
+                .values()
+                .any(|editor| editor.read(cx).focus_handle.is_focused(window))
+            || self
+                .query_result_export_editor
+                .as_ref()
+                .is_some_and(|editor| editor.read(cx).focus_handle.is_focused(window))
     }
 
     fn delete_connection_shortcut(

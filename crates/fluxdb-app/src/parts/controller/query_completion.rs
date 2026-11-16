@@ -273,6 +273,46 @@ impl AppController {
         Ok(execution)
     }
 
+    /// 查询结果导出用的单页执行。
+    ///
+    /// 与编辑器执行不同：不追加默认 LIMIT、不切分多语句，由调用方用
+    /// `page_offset` / `page_size` 翻页；`read_only` 阻止导出过程中执行写语句。
+    pub fn execute_query_text_page_for_export(
+        &self,
+        connection_id: ConnectionId,
+        database: Option<String>,
+        schema: Option<String>,
+        text: String,
+        page_offset: u64,
+        page_size: u64,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> fluxdb_core::Result<QueryExecutionResult> {
+        let request = QueryRequest {
+            connection_id,
+            database,
+            schema,
+            session_id: None,
+            text,
+            mode: fluxdb_core::QueryMode::Selection,
+            options: fluxdb_core::QueryExecutionOptions {
+                continue_on_error: false,
+                split_statements: false,
+                page_offset,
+                page_size,
+                read_only: true,
+                explain_only: false,
+            },
+        };
+        let rollback_snapshots = self.query_history_rollback_snapshots(&request)?;
+        let config = self
+            .connection_config(request.connection_id)
+            .ok_or_else(|| Error::new(ErrorKind::Connection, "连接不存在"))?;
+        let mut execution =
+            execute_query_for_connection_with_progress(config, &request, &mut |_| {}, should_cancel)?;
+        execution.rollback_snapshots = rollback_snapshots;
+        Ok(execution)
+    }
+
     fn query_completions(
         &self,
         editor: &QueryEditorState,

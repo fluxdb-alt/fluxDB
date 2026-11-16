@@ -1002,6 +1002,11 @@ impl TableDataExportFormat {
     fn all() -> &'static [Self] {
         &[Self::Sql, Self::Txt, Self::Csv, Self::Json, Self::Xml]
     }
+
+    /// 查询结果导出不提供 SQL INSERT：结果 SQL 没有可写入的目标表名。
+    fn query_result_all() -> &'static [Self] {
+        &[Self::Txt, Self::Csv, Self::Json, Self::Xml]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1032,6 +1037,21 @@ struct TableDataExportForm {
     filters: Vec<FilterSpec>,
     custom_filter_rules: Vec<DataFilterRule>,
     custom_sort_rules: Vec<DataSortRule>,
+    active_tab: TableDataExportTab,
+}
+
+/// 查询结果导出表单：条件就是当前结果的 SQL，允许在弹框里编辑。
+#[derive(Clone, Debug, PartialEq)]
+struct QueryResultExportForm {
+    connection_id: ConnectionId,
+    database: Option<String>,
+    schema: Option<String>,
+    sql: String,
+    /// 打开导出时的结果列，仅用于字段选择与日志里的字段数。
+    columns: Vec<TableDataExportColumn>,
+    /// 选中的结果列下标；结果列允许重名，不能用列名做键。
+    selected_fields: BTreeSet<usize>,
+    format: TableDataExportFormat,
     active_tab: TableDataExportTab,
 }
 

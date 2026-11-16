@@ -3052,6 +3052,16 @@
   },
   "data_export": {
     "title": "Export data",
+    "query_title": "Export query result",
+    "query_result": "Query result",
+    "query_source": "Source",
+    "query_result_detail": "Current query result with %{columns} columns",
+    "query_sql": "Export SQL",
+    "query_sql_hint": "Export runs the SQL above. Edit it and refresh to re-estimate the row count.",
+    "query_sql_empty": "Export SQL cannot be empty",
+    "query_no_result": "The current query has no result set to export",
+    "query_scope_hint": "Query result export runs the full SQL and is not limited by the grid page.",
+    "scope_query": "Query SQL",
     "load_first": "Load table data first",
     "open_failed": "Could not open table data",
     "loading_fields": "Loading table fields; the export dialog will open when ready",
@@ -3802,7 +3812,9 @@
     "tab_switcher": "Switch tab",
     "tab_switcher_detail": "Search and switch to a tab in the current workspace",
     "copy_data": "Copy data",
-    "copy_data_detail": "Copy the selected table data"
+    "copy_data_detail": "Copy the selected table data",
+    "select_all_data": "Select all data",
+    "select_all_data_detail": "Select every cell on the current data page or query result"
   },
   "settings": {
     "reset_defaults": "Restore defaults",

@@ -914,10 +914,25 @@ impl NavicatMain {
         }
     }
 
+    /// 当前标签页正在展示的数据表格：表数据页或查询结果页。
+    fn active_data_table_state(
+        &self,
+        tab_id: TabId,
+    ) -> Option<Entity<TableState<DataPageTableDelegate>>> {
+        let tab = self.controller.state().tabs.iter().find(|tab| tab.id == tab_id)?;
+        match &tab.kind {
+            TabKind::DataEditor(_) => self.data_table_states.get(&tab_id).cloned(),
+            TabKind::QueryEditor(_) => self
+                .query_result_table_states
+                .get(&self.query_pane_key(tab_id))
+                .cloned(),
+            _ => None,
+        }
+    }
+
     /// 选区里是否有只加载了预览的单元格（复制/导出前统一拦一次）。
     fn selection_has_truncated_cells(&self, tab_id: TabId, cx: &App) -> bool {
-        self.data_table_states
-            .get(&tab_id)
+        self.active_data_table_state(tab_id)
             .is_some_and(|table| table.read(cx).delegate().selection_contains_truncated())
     }
 
@@ -926,8 +941,7 @@ impl NavicatMain {
         tab_id: TabId,
         cx: &App,
     ) -> Option<DataTableSelectionExport> {
-        self.data_table_states
-            .get(&tab_id)
+        self.active_data_table_state(tab_id)
             .and_then(|table_state| table_state.read(cx).delegate().selection_export())
     }
 
