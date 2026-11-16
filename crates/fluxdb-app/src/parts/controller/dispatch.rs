@@ -84,6 +84,9 @@ impl AppController {
             | AppCommand::ProbeRestore(_)
             | AppCommand::RunRestore { .. }
             | AppCommand::ImportTableData { .. }
+            | AppCommand::LoadGenerationSource { .. }
+            | AppCommand::LoadGenerationReferencePools { .. }
+            | AppCommand::GenerateTableData { .. }
             | AppCommand::ImportMongoDocuments { .. }) => {
                 self.dispatch_database_task(command, &AtomicBool::new(false), &mut |_| {})
             }

@@ -11,7 +11,8 @@ use std::{
 };
 
 /// 单批写入行数上限，避免单条 INSERT 参数过多；行数本身不再设硬上限。
-const TABLE_IMPORT_BATCH_ROWS: usize = 500;
+const TABLE_IMPORT_BATCH_ROWS: usize = fluxdb_core::TABLE_IMPORT_DEFAULT_BATCH_ROWS;
+
 /// 预览最多读取的行数。
 const TABLE_IMPORT_PREVIEW_ROWS: usize = 50;
 
@@ -307,11 +308,12 @@ fn import_relational(
     }
 
     let total_rows = parsed.rows.len();
-    let total_batches = total_rows.div_ceil(TABLE_IMPORT_BATCH_ROWS);
+    let batch_rows = request.options.rows_per_batch();
+    let total_batches = total_rows.div_ceil(batch_rows);
     let mut imported_rows = 0u64;
-    for (batch_index, chunk) in parsed.rows.chunks(TABLE_IMPORT_BATCH_ROWS).enumerate() {
+    for (batch_index, chunk) in parsed.rows.chunks(batch_rows).enumerate() {
         check_cancel(cancel)?;
-        let written = (batch_index * TABLE_IMPORT_BATCH_ROWS + chunk.len()).min(total_rows);
+        let written = (batch_index * batch_rows + chunk.len()).min(total_rows);
         progress(TableImportProgress {
             stage: "写入".into(),
             message: format!(
@@ -422,7 +424,7 @@ fn preview_cell_text(value: &CellValue) -> String {
     }
 }
 
-/// 构造单批 INSERT；批大小受 `TABLE_IMPORT_BATCH_ROWS` 约束，避免参数过多。
+/// 构造单批 INSERT；批大小由 `TableImportOptions::rows_per_batch` 控制，避免参数过多。
 fn build_import_batch_sql(
     kind: DatabaseKind,
     table: &str,
@@ -1484,6 +1486,7 @@ mod table_import_tests {
     fn trims_values_and_maps_empty_to_null() {
         let options = fluxdb_core::TableImportOptions {
             trim_whitespace: true,
+            batch_rows: 0,
             empty_as_null: true,
             ..fluxdb_core::TableImportOptions::new()
         };

@@ -19,6 +19,9 @@ impl TableImportMode {
     }
 }
 
+/// 默认每批写入行数：与历史行为一致，避免参数绑定数量失控。
+pub const TABLE_IMPORT_DEFAULT_BATCH_ROWS: usize = 500;
+
 /// 文件解析选项；留空字段表示使用该格式的默认值。
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TableImportOptions {
@@ -36,6 +39,8 @@ pub struct TableImportOptions {
     pub empty_as_null: bool,
     /// 导入模式，默认追加。
     pub mode: TableImportMode,
+    /// 每批写入行数；0 使用默认值 500。批越大参数越多，需低于目标库上限。
+    pub batch_rows: usize,
 }
 
 impl TableImportOptions {
@@ -53,6 +58,15 @@ impl TableImportOptions {
             .first()
             .copied()
             .unwrap_or(b'\t')
+    }
+
+    /// 实际使用的每批行数；0 或未设置时回退到默认 500。
+    pub fn rows_per_batch(&self) -> usize {
+        if self.batch_rows == 0 {
+            TABLE_IMPORT_DEFAULT_BATCH_ROWS
+        } else {
+            self.batch_rows
+        }
     }
 
     pub fn quote_byte(&self) -> u8 {

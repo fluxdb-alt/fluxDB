@@ -999,6 +999,13 @@ struct NavicatMain {
     pending_data_export: Option<TableDataExportForm>,
     pending_data_import: Option<TableDataImportForm>,
     _data_import_task: Option<Task<()>>,
+    /// 测试数据生成弹窗；生成写入复用导入管线。
+    pending_data_generation: Option<TableDataGenerationForm>,
+    /// 生成器选择浮层（搜索 + 滚动），与弹窗同生命周期。
+    data_generation_picker: Option<DataGenerationPicker>,
+    _data_generation_task: Option<Task<()>>,
+    _data_generation_load_task: Option<Task<()>>,
+    _data_generation_pool_task: Option<Task<()>>,
     /// 结构对比 / 数据传输弹框；`None` 表示未打开。
     compare_transfer: Option<CompareTransferState>,
     compare_transfer_inputs: CompareTransferInputs,

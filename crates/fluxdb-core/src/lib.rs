@@ -35,6 +35,7 @@ include!("parts/table_metadata.rs");
 include!("parts/user_admin.rs");
 include!("parts/changes.rs");
 include!("parts/table_import.rs");
+include!("parts/data_generation.rs");
 include!("parts/write_value.rs");
 include!("parts/mongo.rs");
 include!("parts/mongo_import.rs");

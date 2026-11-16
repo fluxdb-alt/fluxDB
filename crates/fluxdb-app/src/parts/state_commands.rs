@@ -180,6 +180,24 @@ pub enum AppCommand {
         options: fluxdb_core::TableImportOptions,
         column_mapping: Vec<fluxdb_core::TableImportColumnMapping>,
     },
+    /// 读取测试数据生成所需的列、唯一约束与外键关系（不写数据库）。
+    LoadGenerationSource {
+        object: ObjectPath,
+    },
+    /// 读取外键列可用的父表取值池；预览与生成共用，避免预览回退成随机整数。
+    LoadGenerationReferencePools {
+        connection_id: ConnectionId,
+        /// 列名 → 外键引用目标。
+        references: Vec<(String, fluxdb_core::GenerationReference)>,
+    },
+    /// 按列配置生成数据并写入目标表；外键池由控制器按 spec 中的引用目标读取。
+    GenerateTableData {
+        object: ObjectPath,
+        spec: fluxdb_core::GenerationSpec,
+        mode: fluxdb_core::TableImportMode,
+        /// 每批写入行数；0 使用导入管线默认值。
+        batch_rows: usize,
+    },
     DropTable {
         object: ObjectPath,
         foreign_key_check: ForeignKeyCheckMode,

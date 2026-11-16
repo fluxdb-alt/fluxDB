@@ -187,6 +187,8 @@ enum TableMenuAction {
     Rename,
     CopyTable,
     ImportData,
+    /// 打开测试数据生成弹窗（按列选择生成器，写入仍走导入管线）。
+    GenerateData,
     ExportData,
     ExportDatabase,
     CopyStructure,

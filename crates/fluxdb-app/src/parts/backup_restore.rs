@@ -43,6 +43,46 @@ impl AppController {
                     });
                 })
                 .map(|report| AppEvent::TableDataImported { object, report }),
+            AppCommand::LoadGenerationSource { object } => Ok(match self
+                .load_data_generation_source(&object)
+            {
+                Ok(source) => AppEvent::GenerationSourceLoaded {
+                    object,
+                    result: Ok(source),
+                },
+                Err(error) => AppEvent::GenerationSourceLoaded {
+                    object,
+                    result: Err(error.into()),
+                },
+            }),
+            AppCommand::LoadGenerationReferencePools {
+                connection_id,
+                references,
+            } => Ok(AppEvent::GenerationReferencePoolsLoaded {
+                connection_id,
+                pools: references
+                    .into_iter()
+                    .map(|(column, reference)| {
+                        let pool = self
+                            .load_generation_reference_pool(connection_id, &reference)
+                            .map_err(|error| error.message);
+                        (column, pool)
+                    })
+                    .collect(),
+            }),
+            AppCommand::GenerateTableData {
+                object,
+                spec,
+                mode,
+                batch_rows,
+            } => self
+                .generate_table_data(&object, spec, mode, batch_rows, cancel, &mut |event| {
+                    progress(DatabaseTaskProgress {
+                        stage: event.stage,
+                        message: event.message,
+                    });
+                })
+                .map(|report| AppEvent::TableDataGenerated { object, report }),
             AppCommand::ImportMongoDocuments {
                 object,
                 source,

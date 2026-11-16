@@ -6418,7 +6418,16 @@ fn data_editor_toolbar(
                         cx.stop_propagation();
                     }),
                 )))
-                .when(show_table_tools, |this| this.child(data_editor_action(tr("app.data.toolbar.generate"), colors))),
+                .when(show_table_tools, |this| this.child(
+                    data_editor_action(tr("app.data.toolbar.generate"), colors)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                this.open_data_generation_wizard_for_tab(tab_id, window, cx);
+                                cx.stop_propagation();
+                            }),
+                        ),
+                )),
         )
         .child(
             div()

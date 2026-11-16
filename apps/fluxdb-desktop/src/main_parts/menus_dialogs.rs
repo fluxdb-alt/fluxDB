@@ -17,6 +17,7 @@ include!("menus_dialogs/query_parameters.rs");
 include!("menus_dialogs/query_scope.rs");
 include!("menus_dialogs/sql_file_execution.rs");
 include!("menus_dialogs/data_import.rs");
+include!("menus_dialogs/data_generation.rs");
 include!("menus_dialogs/data_export.rs");
 include!("menus_dialogs/compare_transfer.rs");
 include!("menus_dialogs/compare_transfer/ui.rs");

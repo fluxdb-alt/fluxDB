@@ -804,6 +804,15 @@ impl Render for NavicatMain {
                     .unwrap_or(DatabaseKind::Postgres);
                 this.child(table_data_import_modal(form, kind, colors, cx))
             })
+            .when_some(self.pending_data_generation.clone(), |this, form| {
+                this.child(table_data_generation_modal(
+                    form,
+                    self.data_generation_picker.clone(),
+                    colors,
+                    window,
+                    cx,
+                ))
+            })
             .when_some(self.pending_rename_table.clone(), |this, form| {
                 this.child(table_name_form_modal(
                     TableNameForm::Rename(form.clone()),
