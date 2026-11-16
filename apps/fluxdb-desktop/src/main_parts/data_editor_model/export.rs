@@ -112,6 +112,8 @@ struct TableDataExportWriter {
     format: TableDataExportFormat,
     object: ObjectPath,
     fields: Vec<String>,
+    /// 查询结果导出按列下标取值：结果列允许重名，不能再用列名匹配。
+    source_indexes: Option<Vec<usize>>,
     wrote_rows: bool,
     /// 方言：SQL INSERT 字面量/标识符按此渲染（PG 双引号 + `'\x..'::bytea`）。
     db_kind: DatabaseKind,
@@ -125,12 +127,43 @@ impl TableDataExportWriter {
         fields: Vec<String>,
         db_kind: DatabaseKind,
     ) -> io::Result<Self> {
+        Self::create_with_source_indexes(path, format, object, fields, None, db_kind)
+    }
+
+    /// 按列下标导出（查询结果）：`fields` 与 `source_indexes` 一一对应。
+    fn create_indexed(
+        path: &Path,
+        format: TableDataExportFormat,
+        object: ObjectPath,
+        fields: Vec<String>,
+        source_indexes: Vec<usize>,
+        db_kind: DatabaseKind,
+    ) -> io::Result<Self> {
+        Self::create_with_source_indexes(
+            path,
+            format,
+            object,
+            fields,
+            Some(source_indexes),
+            db_kind,
+        )
+    }
+
+    fn create_with_source_indexes(
+        path: &Path,
+        format: TableDataExportFormat,
+        object: ObjectPath,
+        fields: Vec<String>,
+        source_indexes: Option<Vec<usize>>,
+        db_kind: DatabaseKind,
+    ) -> io::Result<Self> {
         let file = fs::File::create(path)?;
         let mut export = Self {
             writer: BufWriter::new(file),
             format,
             object,
             fields,
+            source_indexes,
             wrote_rows: false,
             db_kind,
         };
@@ -173,16 +206,33 @@ impl TableDataExportWriter {
     }
 
     fn write_page(&mut self, page: &DataPage) -> io::Result<u64> {
-        let indexes = self
-            .fields
-            .iter()
-            .filter_map(|field| {
-                page.columns
-                    .iter()
-                    .position(|column| column.name == *field)
-                    .map(|index| (field.clone(), index))
-            })
-            .collect::<Vec<_>>();
+        let indexes = match &self.source_indexes {
+            Some(source_indexes) => source_indexes
+                .iter()
+                .enumerate()
+                .filter_map(|(field_index, source_index)| {
+                    page.columns.get(*source_index).map(|_| {
+                        (
+                            self.fields
+                                .get(field_index)
+                                .cloned()
+                                .unwrap_or_else(|| source_index.to_string()),
+                            *source_index,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>(),
+            None => self
+                .fields
+                .iter()
+                .filter_map(|field| {
+                    page.columns
+                        .iter()
+                        .position(|column| column.name == *field)
+                        .map(|index| (field.clone(), index))
+                })
+                .collect::<Vec<_>>(),
+        };
         let mut written = 0;
         for row in &page.rows {
             let fields = indexes
@@ -294,6 +344,25 @@ fn reject_truncated_fields(fields: &[RowFieldSnapshot]) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// 结果列允许重名（如 `SELECT a.id, b.id`）：按出现顺序追加 `_2`、`_3` 生成唯一表头。
+///
+/// 只保证导出列内部唯一，不改写查询结果本身；`id_2` 已存在时继续递增后缀。
+fn unique_data_export_labels<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut used = std::collections::HashSet::new();
+    names
+        .into_iter()
+        .map(|name| {
+            let mut label = name.to_string();
+            let mut suffix = 2;
+            while !used.insert(label.clone()) {
+                label = format!("{name}_{suffix}");
+                suffix += 1;
+            }
+            label
+        })
+        .collect()
 }
 
 fn write_data_row_export<W: Write>(
@@ -456,4 +525,89 @@ fn xml_escape(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+#[cfg(test)]
+mod unique_data_export_labels_tests {
+    use super::unique_data_export_labels;
+
+    #[test]
+    fn deduplicates_duplicate_column_names() {
+        assert_eq!(
+            unique_data_export_labels(["id", "name", "id", "id"]),
+            vec!["id", "name", "id_2", "id_3"]
+        );
+    }
+
+    #[test]
+    fn skips_suffix_already_taken_by_real_column() {
+        assert_eq!(
+            unique_data_export_labels(["id", "id_2", "id"]),
+            vec!["id", "id_2", "id_3"]
+        );
+    }
+}
+
+#[cfg(test)]
+mod indexed_data_export_tests {
+    use super::*;
+
+    #[test]
+    fn writes_selected_duplicate_columns_by_position() {
+        let path = std::env::temp_dir().join(format!(
+            "fluxdb-export-test-{}-{}.csv",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        let page = DataPage {
+            columns: vec![
+                GdbColumn {
+                    name: "id".to_string(),
+                    type_name: None,
+                    nullable: false,
+                    primary_key: false,
+                    comment: None,
+                },
+                GdbColumn {
+                    name: "id".to_string(),
+                    type_name: None,
+                    nullable: false,
+                    primary_key: false,
+                    comment: None,
+                },
+            ],
+            rows: vec![Row {
+                values: vec![CellValue::I64(1), CellValue::I64(2)],
+            }],
+            offset: 0,
+            limit: 10,
+            has_more: false,
+            incomplete: None,
+        };
+        let object = ObjectPath {
+            connection_id: ConnectionId(1),
+            database: None,
+            schema: None,
+            name: "query-result".to_string(),
+            kind: ObjectKind::Table,
+        };
+        let mut writer = TableDataExportWriter::create_indexed(
+            &path,
+            TableDataExportFormat::Csv,
+            object,
+            vec!["id".to_string(), "id_2".to_string()],
+            vec![0, 1],
+            DatabaseKind::MySql,
+        )
+        .expect("create export writer");
+        assert_eq!(writer.write_page(&page).expect("write page"), 1);
+        writer.finish().expect("finish export");
+        let text = std::fs::read_to_string(&path).expect("read exported csv");
+        let _ = std::fs::remove_file(&path);
+        assert!(text.contains("id,id_2"), "header: {text}");
+        assert!(text.contains("1,2"), "row: {text}");
+    }
 }

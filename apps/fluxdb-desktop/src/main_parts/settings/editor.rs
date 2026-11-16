@@ -95,6 +95,10 @@ fn shortcut_text(definition: &ShortcutDefinition) -> (SharedString, SharedString
             tr("app.shortcuts.copy_data"),
             tr("app.shortcuts.copy_data_detail"),
         ),
+        "query.select_all_data" => (
+            tr("app.shortcuts.select_all_data"),
+            tr("app.shortcuts.select_all_data_detail"),
+        ),
         _ => (definition.title.into(), definition.detail.into()),
     }
 }

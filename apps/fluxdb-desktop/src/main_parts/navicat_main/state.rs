@@ -997,6 +997,10 @@ struct NavicatMain {
     // 恢复弹框挂载状态:UI 实体 + 配置快照,运行时数据在 RestoreModal::runtime(Rc 共享)。
     restore_modal: Option<RestoreModal>,
     pending_data_export: Option<TableDataExportForm>,
+    /// 查询结果导出弹框；条件 SQL 用独立编辑器，避免改写查询标签内容。
+    pending_query_result_export: Option<QueryResultExportForm>,
+    query_result_export_editor: Option<Entity<editor_component::Editor>>,
+    _query_result_export_editor_subscription: Option<Subscription>,
     pending_data_import: Option<TableDataImportForm>,
     _data_import_task: Option<Task<()>>,
     /// 测试数据生成弹窗；生成写入复用导入管线。

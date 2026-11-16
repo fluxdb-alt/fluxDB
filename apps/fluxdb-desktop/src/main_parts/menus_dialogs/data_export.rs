@@ -64,6 +64,7 @@ impl NavicatMain {
         cx.notify();
     }
 
+
     fn table_data_export_source(
         &self,
         tab_id: TabId,
@@ -457,17 +458,41 @@ impl NavicatMain {
             AppMessageKind::Success,
             cx,
         );
-        self.spawn_table_data_export_task(task_id, receiver, form, fields, cx);
+        self.spawn_data_export_task(
+            task_id,
+            receiver,
+            DataExportJob::Table {
+                form,
+                fields,
+            },
+            cx,
+        );
         cx.notify();
     }
 
     fn create_table_data_export_task(&mut self, form: &TableDataExportForm, field_count: usize) -> u64 {
+        self.create_data_export_task(
+            form.object.name.clone(),
+            form.format,
+            field_count,
+            table_data_export_scope_label(form.scope).to_string(),
+        )
+    }
+
+    /// 表导出与查询结果导出共用任务记录；`scope` 是日志里的范围说明（表范围 / SQL）。
+    fn create_data_export_task(
+        &mut self,
+        table_name: String,
+        format: TableDataExportFormat,
+        field_count: usize,
+        scope: String,
+    ) -> u64 {
         let task_id = self.next_data_export_task_id();
         self.data_export_tasks.push(TableDataExportTaskState {
             id: task_id,
-            table_name: form.object.name.clone(),
+            table_name,
             path: PathBuf::new(),
-            format: form.format,
+            format,
             field_count,
             exported_rows: 0,
             batch_count: 0,
@@ -479,10 +504,7 @@ impl NavicatMain {
                 elapsed_ms: 0,
                 message: tr("app.data_export.preparing")
                     .replace("%{fields}", &field_count.to_string())
-                    .replace(
-                        "%{scope}",
-                        &table_data_export_scope_label(form.scope),
-                    ),
+                    .replace("%{scope}", &scope),
             }],
             error: None,
             cancel_requested: false,
@@ -491,22 +513,22 @@ impl NavicatMain {
         task_id
     }
 
-    fn spawn_table_data_export_task(
+    fn spawn_data_export_task(
         &mut self,
         task_id: u64,
         receiver: futures::channel::oneshot::Receiver<anyhow::Result<Option<PathBuf>>>,
-        form: TableDataExportForm,
-        fields: Vec<String>,
+        job: DataExportJob,
         cx: &mut Context<Self>,
     ) {
         let cancel_flag = Arc::new(AtomicBool::new(false));
         self._data_export_cancel_flags
             .insert(task_id, cancel_flag.clone());
         let controller = self.controller.clone();
+        let format = job.format();
         let task = cx.spawn(async move |view, cx| {
             let selected = receiver.await;
             let path = match selected {
-                Ok(Ok(Some(path))) => Some(safe_table_data_export_path(path, form.format)),
+                Ok(Ok(Some(path))) => Some(safe_table_data_export_path(path, format)),
                 Ok(Ok(None)) => None,
                 Ok(Err(error)) => {
                     table_data_export_finish_on_ui(
@@ -540,7 +562,23 @@ impl NavicatMain {
                 .background_spawn({
                     let path = path.clone();
                     async move {
-                        run_table_data_export(controller, form, fields, path, cancel_flag, sender)
+                        match job {
+                            DataExportJob::Table { form, fields } => run_table_data_export(
+                                controller,
+                                form,
+                                fields,
+                                path,
+                                cancel_flag,
+                                sender,
+                            ),
+                            DataExportJob::Query(form) => run_query_result_export(
+                                controller,
+                                form,
+                                path,
+                                cancel_flag,
+                                sender,
+                            ),
+                        }
                     }
                 })
                 .fuse();
@@ -636,6 +674,7 @@ impl NavicatMain {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TableDataExportModalClose {
     Form,
+    QueryForm,
     Log,
 }
 
@@ -643,7 +682,27 @@ impl TableDataExportModalClose {
     fn close(self, this: &mut NavicatMain, cx: &mut Context<NavicatMain>) {
         match self {
             Self::Form => this.cancel_table_data_export_modal(cx),
+            Self::QueryForm => this.cancel_query_result_export_modal(cx),
             Self::Log => this.close_table_data_export_log_modal(cx),
+        }
+    }
+}
+
+/// 后台导出任务：整表导出走 connectors 的分页导出，查询结果按 SQL 重新分页执行。
+#[derive(Clone, Debug)]
+enum DataExportJob {
+    Table {
+        form: TableDataExportForm,
+        fields: Vec<String>,
+    },
+    Query(QueryResultExportForm),
+}
+
+impl DataExportJob {
+    fn format(&self) -> TableDataExportFormat {
+        match self {
+            Self::Table { form, .. } => form.format,
+            Self::Query(form) => form.format,
         }
     }
 }
@@ -776,6 +835,11 @@ fn run_table_data_export(
     }
 }
 
+/// 查询结果导出：按编辑后的 SQL 分批执行，写盘语义与整表导出一致
+/// （`.partial` 临时文件、成功 rename、取消/失败删除）。
+///
+/// ponytail: 连接器按 offset 客户端跳行，重复执行整条 SQL 使总代价 O(n²)；
+/// 先保证正确与内存有界，等大结果集导出成为瓶颈再做流式分页。
 /// 导出临时文件路径：最终路径加 `.partial` 后缀，成功后才改名落盘。
 fn table_data_export_temp_path(path: &Path) -> PathBuf {
     let mut temp = path.as_os_str().to_os_string();
@@ -1006,7 +1070,13 @@ fn table_data_export_modal(
             ),
             TableDataExportTab::Log => data_export_empty_log_body(colors),
         })
-        .child(data_export_modal_footer(can_export, None, colors, cx));
+        .child(data_export_modal_footer(
+            can_export,
+            None,
+            DataExportFooterTarget::Table,
+            colors,
+            cx,
+        ));
     data_export_modal_shell(panel, TableDataExportModalClose::Form, colors, cx).when(
         custom_conditions_open,
         |this| {
@@ -1047,6 +1117,7 @@ fn table_data_export_log_modal(
         .child(data_export_modal_footer(
             false,
             Some((task_id, finished, cancel_requested)),
+            DataExportFooterTarget::Table,
             colors,
             cx,
         ));
@@ -1172,9 +1243,9 @@ fn data_export_tabs(
         .items_center()
         .border_b_1()
         .border_color(colors.border_soft)
-        .child(data_export_tab_button(tr("app.data_export.tab.general"), active == TableDataExportTab::General || active == TableDataExportTab::Fields, TableDataExportTab::General, task_id, colors, cx))
-        .child(data_export_tab_button(tr("app.data_export.tab.conditions"), active == TableDataExportTab::Conditions, TableDataExportTab::Conditions, task_id, colors, cx))
-        .child(data_export_tab_button(tr("app.data_export.tab.log"), active == TableDataExportTab::Log, TableDataExportTab::Log, task_id, colors, cx))
+        .child(data_export_tab_button(tr("app.data_export.tab.general"), active == TableDataExportTab::General || active == TableDataExportTab::Fields, TableDataExportTab::General, task_id, colors, cx, |this, tab, cx| this.select_table_data_export_tab(tab, cx)))
+        .child(data_export_tab_button(tr("app.data_export.tab.conditions"), active == TableDataExportTab::Conditions, TableDataExportTab::Conditions, task_id, colors, cx, |this, tab, cx| this.select_table_data_export_tab(tab, cx)))
+        .child(data_export_tab_button(tr("app.data_export.tab.log"), active == TableDataExportTab::Log, TableDataExportTab::Log, task_id, colors, cx, |this, tab, cx| this.select_table_data_export_tab(tab, cx)))
 }
 
 fn data_export_tab_button(
@@ -1184,6 +1255,7 @@ fn data_export_tab_button(
     task_id: Option<u64>,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
+    on_select: impl Fn(&mut NavicatMain, TableDataExportTab, &mut Context<NavicatMain>) + 'static,
 ) -> Div {
     let label = label.into();
     div()
@@ -1204,7 +1276,7 @@ fn data_export_tab_button(
                 if let Some(task_id) = task_id {
                     this.show_table_data_export_task_log(task_id, cx);
                 } else {
-                    this.select_table_data_export_tab(tab, cx);
+                    on_select(this, tab, cx);
                 }
                 cx.stop_propagation();
             }),
@@ -1235,7 +1307,13 @@ fn data_export_general_body(
             colors,
             cx,
         ))
-        .child(data_export_format_grid(form.format, colors, cx))
+        .child(data_export_format_grid(
+            form.format,
+            TableDataExportFormat::all(),
+            colors,
+            cx,
+            |this, format, cx| this.set_table_data_export_format(format, cx),
+        ))
         .child(data_export_fields_picker(form, colors, cx).flex_1().min_h(px(0.)))
 }
 
@@ -1346,8 +1424,12 @@ fn data_export_object_select_box(
 
 fn data_export_format_grid(
     active: TableDataExportFormat,
+    formats: &'static [TableDataExportFormat],
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
+    on_select: impl Fn(&mut NavicatMain, TableDataExportFormat, &mut Context<NavicatMain>)
+        + Clone
+        + 'static,
 ) -> Div {
     let grid = div()
         .flex()
@@ -1355,12 +1437,13 @@ fn data_export_format_grid(
         .gap_3()
         .child(data_export_form_row_label(tr("app.data_export.format"), colors));
     let mut row = div().flex_1().min_w(px(0.)).flex().gap_2();
-    for format in TableDataExportFormat::all() {
+    for format in formats {
         let format_value = *format;
+        let on_select = on_select.clone();
         row = row.child(data_export_choice_chip(format.label(), active == format_value, colors).on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, _, cx| {
-                this.set_table_data_export_format(format_value, cx);
+                on_select(this, format_value, cx);
                 cx.stop_propagation();
             }),
         ));
@@ -2131,9 +2214,17 @@ fn data_export_log_row(entry: &TableDataExportLogEntry, colors: UiColors) -> Div
         .child(div().flex_1().min_w(px(0.)).overflow_hidden().child(entry.message.clone()))
 }
 
+/// 导出弹框底部按钮归属：表导出与查询结果导出共用布局，动作不同。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DataExportFooterTarget {
+    Table,
+    Query,
+}
+
 fn data_export_modal_footer(
     can_export: bool,
     task: Option<(u64, bool, bool)>,
+    target: DataExportFooterTarget,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -2185,9 +2276,16 @@ fn data_export_modal_footer(
         .child(
             Button::new("data-export-close")
                 .label(tr("app.common.close"))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.cancel_table_data_export_modal(cx);
-                    this.data_export_log_task = None;
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    match target {
+                        DataExportFooterTarget::Table => {
+                            this.cancel_table_data_export_modal(cx);
+                            this.data_export_log_task = None;
+                        }
+                        DataExportFooterTarget::Query => {
+                            this.cancel_query_result_export_modal(cx);
+                        }
+                    }
                     cx.stop_propagation();
                 })),
         )
@@ -2196,8 +2294,11 @@ fn data_export_modal_footer(
                 Button::new("data-export-confirm")
                     .label(tr("app.data_export.export"))
                     .disabled(!can_export)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.confirm_table_data_export(cx);
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        match target {
+                            DataExportFooterTarget::Table => this.confirm_table_data_export(cx),
+                            DataExportFooterTarget::Query => this.confirm_query_result_export(cx),
+                        }
                         cx.stop_propagation();
                     })),
             )

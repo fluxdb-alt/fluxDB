@@ -660,6 +660,7 @@ actions!(
         TableShortcutPickerConfirm,
         TableShortcutPickerCancel,
         CopyDataSelection,
+        SelectAllDataCells,
         CopyFooterSqlSelection,
         DeleteConnectionShortcut,
         CancelDeleteConnection,

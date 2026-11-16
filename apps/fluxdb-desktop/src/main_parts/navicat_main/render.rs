@@ -281,6 +281,7 @@ impl Render for NavicatMain {
             .on_action(cx.listener(Self::activate_tab_slot_action))
             .on_action(cx.listener(Self::open_table_shortcut_action))
             .on_action(cx.listener(Self::copy_data_selection))
+            .on_action(cx.listener(Self::select_all_data_cells))
             .on_action(cx.listener(Self::copy_footer_sql_selection))
             .on_action(cx.listener(Self::delete_connection_shortcut))
             .on_action(cx.listener(Self::cancel_dialog))
@@ -789,6 +790,15 @@ impl Render for NavicatMain {
                     self.data_filter_value_search_loading_until.is_some(),
                     self.data_filter_value_draft.as_ref(),
                     window,
+                    colors,
+                    cx,
+                ))
+            })
+            .when_some(self.pending_query_result_export.clone(), |this, form| {
+                this.child(query_result_export_modal(
+                    form,
+                    self.query_result_export_editor.clone(),
+                    self.data_export_preview.clone(),
                     colors,
                     cx,
                 ))

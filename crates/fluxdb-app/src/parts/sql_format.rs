@@ -460,6 +460,121 @@ pub fn sql_text_statement_ranges(sql: &str) -> Vec<std::ops::Range<usize>> {
     ranges
 }
 
+/// 从编辑器全文里找回与已执行语句对应的原始语句。
+///
+/// 执行时会去掉注释、归一化双引号字符串，并按需要追加/封顶默认行数上限；
+/// 导出必须还原用户原文，否则用户没写 LIMIT 也会被导出条件带上默认 LIMIT。
+/// 优先整句相等；其次容忍末尾追加的上限；最后比较顶层 LIMIT/TOP/FETCH 之前的主体，
+/// 覆盖「用户写了 LIMIT 但被执行器封顶改写」的情况。找不到时返回 None。
+pub fn original_sql_for_executed_statement(
+    sql_text: &str,
+    executed_sql: &str,
+    db_kind: DatabaseKind,
+) -> Option<String> {
+    let executed = normalize_sql_for_origin_match(executed_sql, db_kind);
+    if executed.is_empty() {
+        return None;
+    }
+    for range in sql_text_statement_ranges(sql_text) {
+        let candidate = sql_text[range].trim().trim_end_matches(';').trim_end();
+        let normalized = normalize_sql_for_origin_match(candidate, db_kind);
+        if normalized.is_empty() {
+            continue;
+        }
+        if normalized == executed || executed_extends_only_by_row_limit(&executed, &normalized) {
+            return Some(candidate.to_string());
+        }
+        // SQL Server 默认上限插在 SELECT 后面（`SELECT TOP 100 ...`），不是追加在末尾。
+        if strip_top_row_limit(&executed).is_some_and(|without_top| without_top == normalized) {
+            return Some(candidate.to_string());
+        }
+        let candidate_body = sql_body_before_row_limit(&normalized);
+        let executed_body = sql_body_before_row_limit(&executed);
+        if candidate_body == executed_body && candidate_body != normalized {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
+fn normalize_sql_for_origin_match(sql: &str, db_kind: DatabaseKind) -> String {
+    let normalized = if matches!(
+        db_kind,
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb | DatabaseKind::Sqlite
+    ) {
+        normalize_double_quoted_sql_strings(sql)
+    } else {
+        sql.to_string()
+    };
+    strip_sql_comments(&normalized, db_kind)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_end_matches(';')
+        .trim()
+        .to_string()
+}
+
+/// 执行文本是否只是原始语句后面追加了行数上限/锁定子句。
+fn executed_extends_only_by_row_limit(executed: &str, original: &str) -> bool {
+    let Some(rest) = executed.strip_prefix(original) else {
+        return false;
+    };
+    let rest = rest.trim_start().to_ascii_lowercase();
+    rest.is_empty()
+        || ["limit ", "fetch ", "offset ", "for "]
+            .iter()
+            .any(|prefix| rest.starts_with(prefix))
+}
+
+/// 去掉 SQL Server 顶层 `TOP n` 行数上限（支持 `TOP (n)`、`PERCENT`、`WITH TIES`）。
+///
+/// 执行器把默认上限插在 `SELECT` 之后，原文里没有 TOP 时由这里还原后比较。
+fn strip_top_row_limit(sql: &str) -> Option<String> {
+    let offset = find_top_level_sql_keyword(sql, "top")?;
+    let mut tail = sql[offset + 3..].trim_start();
+    if let Some(inner) = tail.strip_prefix('(') {
+        let close = inner.find(')')?;
+        let digits = inner[..close].trim();
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        tail = inner[close + 1..].trim_start();
+    } else {
+        let digits = tail
+            .find(|ch: char| !ch.is_ascii_digit())
+            .unwrap_or(tail.len());
+        if digits == 0 {
+            return None;
+        }
+        tail = tail[digits..].trim_start();
+    }
+    for keyword in ["percent", "with ties"] {
+        if tail
+            .get(..keyword.len())
+            .is_some_and(|value| value.eq_ignore_ascii_case(keyword))
+        {
+            tail = tail[keyword.len()..].trim_start();
+        }
+    }
+    let mut stripped = String::new();
+    stripped.push_str(sql[..offset].trim_end());
+    stripped.push(' ');
+    stripped.push_str(tail);
+    Some(stripped.trim().to_string())
+}
+
+/// 去掉顶层行数上限及其后内容，用于比较「被默认上限改写」前后的同一主体。
+fn sql_body_before_row_limit(sql: &str) -> &str {
+    let mut earliest = sql.len();
+    for keyword in ["limit", "top", "fetch"] {
+        if let Some(offset) = find_top_level_sql_keyword(sql, keyword) {
+            earliest = earliest.min(offset);
+        }
+    }
+    sql[..earliest].trim_end()
+}
+
 fn trim_sql_statement_range(sql: &str, range: &mut std::ops::Range<usize>) {
     while range.start < range.end
         && sql[range.start..range.end]
@@ -1747,3 +1862,70 @@ mod cte_row_limit_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod original_sql_for_executed_statement_tests {
+    use super::original_sql_for_executed_statement;
+    use fluxdb_core::DatabaseKind;
+
+    #[test]
+    fn removes_appended_default_limit() {
+        let text = "SELECT * FROM users";
+        let executed = "SELECT * FROM users LIMIT 100";
+        assert_eq!(
+            original_sql_for_executed_statement(text, executed, DatabaseKind::MySql).as_deref(),
+            Some(text)
+        );
+    }
+
+    #[test]
+    fn keeps_user_limit_even_when_executor_capped_it() {
+        let text = "SELECT * FROM users LIMIT 5000";
+        let executed = "SELECT * FROM users LIMIT 100";
+        assert_eq!(
+            original_sql_for_executed_statement(text, executed, DatabaseKind::MySql).as_deref(),
+            Some(text)
+        );
+    }
+
+    #[test]
+    fn picks_matching_statement_from_multi_statement_editor() {
+        let text = "SELECT 1;\nSELECT * FROM users ORDER BY id;";
+        let executed = "SELECT * FROM users ORDER BY id LIMIT 100";
+        assert_eq!(
+            original_sql_for_executed_statement(text, executed, DatabaseKind::Postgres).as_deref(),
+            Some("SELECT * FROM users ORDER BY id")
+        );
+    }
+
+    #[test]
+    fn removes_sqlserver_injected_top() {
+        let text = "SELECT [id] FROM [dbo].[orders]";
+        let executed = "SELECT TOP 100 [id] FROM [dbo].[orders]";
+        assert_eq!(
+            original_sql_for_executed_statement(text, executed, DatabaseKind::SqlServer).as_deref(),
+            Some(text)
+        );
+    }
+
+    #[test]
+    fn removes_sqlserver_injected_top_with_percent() {
+        let text = "SELECT * FROM [dbo].[orders]";
+        let executed = "SELECT TOP (10) PERCENT * FROM [dbo].[orders]";
+        assert_eq!(
+            original_sql_for_executed_statement(text, executed, DatabaseKind::SqlServer).as_deref(),
+            Some(text)
+        );
+    }
+
+    #[test]
+    fn does_not_match_different_statement_with_shared_prefix() {
+        let text = "SELECT * FROM users;\nSELECT * FROM users WHERE id = 1;";
+        let executed = "SELECT * FROM users WHERE id = 1 LIMIT 100";
+        assert_eq!(
+            original_sql_for_executed_statement(text, executed, DatabaseKind::Postgres).as_deref(),
+            Some("SELECT * FROM users WHERE id = 1")
+        );
+    }
+}
+
