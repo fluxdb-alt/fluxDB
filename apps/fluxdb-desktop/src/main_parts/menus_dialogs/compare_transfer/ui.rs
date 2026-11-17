@@ -162,6 +162,10 @@ fn compare_structure_body(
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let target_name = compare_transfer_target_name(state, connections);
+    let source_has_schema =
+        compare_transfer_connection_has_schema(connections, Some(state.source_connection_id));
+    let target_has_schema =
+        compare_transfer_connection_has_schema(connections, state.target_connection_id);
     // 左栏只放“连接与范围”，右侧整块留给结果；输入与结果分区后不必在同一个
     // 纵向流里同时找表单按钮和差异列表。
     let rail = compare_transfer_rail(colors)
@@ -178,12 +182,14 @@ fn compare_structure_body(
                     tr("app.compare_transfer.database_placeholder"),
                     colors,
                 ))
-                .child(compare_transfer_stack_field(
-                    tr("app.compare_transfer.schema"),
-                    &inputs.source_schema,
-                    tr("app.compare_transfer.schema_placeholder"),
-                    colors,
-                )),
+                .when(source_has_schema, |this| {
+                    this.child(compare_transfer_stack_field(
+                        tr("app.compare_transfer.schema"),
+                        &inputs.source_schema,
+                        tr("app.compare_transfer.schema_placeholder"),
+                        colors,
+                    ))
+                }),
         )
         .child(
             compare_transfer_card(colors)
@@ -204,12 +210,14 @@ fn compare_structure_body(
                     tr("app.compare_transfer.database_placeholder"),
                     colors,
                 ))
-                .child(compare_transfer_stack_field(
-                    tr("app.compare_transfer.schema"),
-                    &inputs.target_schema,
-                    tr("app.compare_transfer.schema_placeholder"),
-                    colors,
-                )),
+                .when(target_has_schema, |this| {
+                    this.child(compare_transfer_stack_field(
+                        tr("app.compare_transfer.schema"),
+                        &inputs.target_schema,
+                        tr("app.compare_transfer.schema_placeholder"),
+                        colors,
+                    ))
+                }),
         )
         // 主操作固定在左栏底部，滚动结果列表时按钮位置不漂移。
         .child(div().flex_1())
@@ -253,7 +261,18 @@ fn compare_structure_body(
         .flex_col()
         .gap_3()
         .p_4();
-    if let Some(result) = &state.compare {
+    if state.compare_running {
+        // 对比中优先展示加载状态，避免旧结果让人误以为是本次对比的输出。
+        workspace = workspace.child(compare_transfer_loading_state(colors));
+        if !state.transfer_log.is_empty() {
+            workspace = workspace.child(
+                div()
+                    .flex_none()
+                    .h(px(150.))
+                    .child(compare_transfer_log(state, colors)),
+            );
+        }
+    } else if let Some(result) = &state.compare {
         workspace = workspace
             .child(compare_transfer_summary(result, state, colors, cx))
             .child(compare_transfer_result_list(result, state, colors, cx))
@@ -307,6 +326,56 @@ fn compare_transfer_empty_state(colors: UiColors) -> Div {
                 .text_color(colors.muted)
                 .child(tr("app.compare_transfer.empty_title")),
         )
+}
+
+/// 对比进行中的占位状态：与空态同尺寸，中心显示转圈和「对比中…」。
+fn compare_transfer_loading_state(colors: UiColors) -> Div {
+    div()
+        .flex_1()
+        .min_h(px(120.))
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_1()
+        .rounded(colors.radius)
+        .border_1()
+        .border_color(colors.border_soft)
+        .bg(colors.panel_alt)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(ui_text_size(13.))
+                .text_color(colors.muted)
+                .child(loading_spinner_with_color(16., colors.muted))
+                .child(tr("app.compare_transfer.comparing")),
+        )
+}
+
+/// 连接是否有独立的 schema 维度。MySQL 家族与 SQLite 的库即 schema，
+/// 再展示 schema 选择框只会让用户以为存在两层对象。
+fn compare_transfer_connection_has_schema(
+    connections: &[ConnectionConfig],
+    connection_id: Option<ConnectionId>,
+) -> bool {
+    connection_id
+        .and_then(|id| {
+            connections
+                .iter()
+                .find(|connection| connection.id == id)
+        })
+        .is_some_and(|connection| {
+            matches!(
+                connection.kind,
+                DatabaseKind::Postgres
+                    | DatabaseKind::Kingbase
+                    | DatabaseKind::SqlServer
+                    | DatabaseKind::Oracle
+                    | DatabaseKind::Dameng
+            )
+        })
 }
 
 fn compare_transfer_target_name(
@@ -809,6 +878,10 @@ fn compare_data_transfer_body(
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let target_name = compare_transfer_target_name(state, connections);
+    let source_has_schema =
+        compare_transfer_connection_has_schema(connections, Some(state.source_connection_id));
+    let target_has_schema =
+        compare_transfer_connection_has_schema(connections, state.target_connection_id);
     // 与结构对比共用左栏表单节奏：源表跟源端、目标表跟目标端，避免表名和连接分家。
     let rail = compare_transfer_rail(colors)
         .child(
@@ -824,12 +897,14 @@ fn compare_data_transfer_body(
                     tr("app.compare_transfer.database_placeholder"),
                     colors,
                 ))
-                .child(compare_transfer_stack_field(
-                    tr("app.compare_transfer.schema"),
-                    &inputs.source_schema,
-                    tr("app.compare_transfer.schema_placeholder"),
-                    colors,
-                ))
+                .when(source_has_schema, |this| {
+                    this.child(compare_transfer_stack_field(
+                        tr("app.compare_transfer.schema"),
+                        &inputs.source_schema,
+                        tr("app.compare_transfer.schema_placeholder"),
+                        colors,
+                    ))
+                })
                 .child(compare_transfer_stack_field(
                     tr("app.compare_transfer.source_table"),
                     &inputs.source_table,
@@ -856,12 +931,14 @@ fn compare_data_transfer_body(
                     tr("app.compare_transfer.database_placeholder"),
                     colors,
                 ))
-                .child(compare_transfer_stack_field(
-                    tr("app.compare_transfer.schema"),
-                    &inputs.target_schema,
-                    tr("app.compare_transfer.schema_placeholder"),
-                    colors,
-                ))
+                .when(target_has_schema, |this| {
+                    this.child(compare_transfer_stack_field(
+                        tr("app.compare_transfer.schema"),
+                        &inputs.target_schema,
+                        tr("app.compare_transfer.schema_placeholder"),
+                        colors,
+                    ))
+                })
                 .child(compare_transfer_stack_field(
                     tr("app.compare_transfer.target_table"),
                     &inputs.target_table,
