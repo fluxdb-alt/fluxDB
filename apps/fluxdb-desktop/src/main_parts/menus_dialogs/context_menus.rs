@@ -886,6 +886,7 @@ fn data_cell_context_menu(
     let menu_for_null = menu.clone();
     let menu_for_delete = menu.clone();
     let menu_for_copy_selection = menu.clone();
+    let menu_for_copy_selection_with_header = menu.clone();
     let menu_for_export_selection = menu.clone();
     let menu_for_copy = menu.clone();
     let menu_for_copy_field = menu.clone();
@@ -997,6 +998,28 @@ fn data_cell_context_menu(
                             cx.stop_propagation();
                         }),
                     ),
+            )
+        })
+        .when(menu.selection_copy_label.is_some(), |this| {
+            this.child(
+                data_cell_action_menu_item(
+                    tr("app.data.selection.copy_with_header").to_string(),
+                    AppIcon::Copy,
+                    true,
+                    &menu,
+                    colors,
+                    cx,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        this.copy_data_table_selection_with_header(
+                            menu_for_copy_selection_with_header.tab_id,
+                            cx,
+                        );
+                        cx.stop_propagation();
+                    }),
+                ),
             )
         })
         .when_some(menu.selection_export_label.clone(), |this, label| {

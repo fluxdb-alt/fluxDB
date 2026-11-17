@@ -957,6 +957,43 @@ impl NavicatMain {
         let Some(export) = self.data_table_selection_export(tab_id, cx) else {
             return false;
         };
+        self.write_data_table_selection_clipboard(export, cx);
+        true
+    }
+
+    /// ⌘⇧C / Ctrl+Shift+C：复制选区并在首行附带列名。
+    ///
+    /// 与普通复制共用同一套截断校验和提示，只有文本差一行表头。
+    fn copy_data_table_selection_with_header(
+        &mut self,
+        tab_id: TabId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.selection_has_truncated_cells(tab_id, cx) {
+            self.show_message(
+                tr("app.cell_detail.large_copy_disabled"),
+                AppMessageKind::Warning,
+                cx,
+            );
+            return false;
+        }
+        let Some(export) = self.active_data_table_state(tab_id).and_then(|table_state| {
+            table_state
+                .read(cx)
+                .delegate()
+                .selection_export_with_header()
+        }) else {
+            return false;
+        };
+        self.write_data_table_selection_clipboard(export, cx);
+        true
+    }
+
+    fn write_data_table_selection_clipboard(
+        &mut self,
+        export: DataTableSelectionExport,
+        cx: &mut Context<Self>,
+    ) {
         cx.write_to_clipboard(ClipboardItem::new_string(export.text));
         self.data_cell_context_menu = None;
         self.data_row_context_menu = None;
@@ -965,7 +1002,6 @@ impl NavicatMain {
             DataTableSelectionKind::Cells => tr("app.data.toast.cells_copied").replace("%{count}", &export.cells.to_string()),
         };
         self.show_message(message, AppMessageKind::Success, cx);
-        true
     }
 
     fn export_data_table_selection(&mut self, tab_id: TabId, cx: &mut Context<Self>) -> bool {
@@ -1443,11 +1479,11 @@ fn collection_context_menu_height(read_only: bool) -> f32 {
 
 fn data_cell_context_menu_height(menu: &DataCellContextMenu) -> f32 {
     // data_cell_context_menu：基础 10 个菜单项 + 4 个分隔符；
-    // 选中复制/选中导出各追加 1 项，任一存在时追加 1 个分隔符。
+    // 选中复制（含带列名复制共 2 项）/选中导出各追加，任一存在时追加 1 个分隔符。
     let mut items = 10.;
     let mut separators = 4.;
     if menu.selection_copy_label.is_some() {
-        items += 1.;
+        items += 2.;
         separators += 1.;
     }
     if menu.selection_export_label.is_some() {

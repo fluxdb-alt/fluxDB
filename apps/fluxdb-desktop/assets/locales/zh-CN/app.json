@@ -2808,6 +2808,7 @@
     "selection": {
       "copy_rows": "复制选中 %{rows} 行 (TSV)",
       "copy_cells": "复制选中 %{cells} 个单元格 (TSV)",
+      "copy_with_header": "复制选区（含列名）",
       "export_current_row": "导出当前行 (TSV)",
       "export_rows": "导出选中 %{rows} 行 (TSV)",
       "export_current_cell": "导出当前单元格 (TSV)",

@@ -257,6 +257,54 @@ impl DataPageTableDelegate {
             cells: cells.len(),
         })
     }
+
+    /// 带列名的选区导出（⌘⇧C / Ctrl+Shift+C）：粘到空白表时不必手工补表头。
+    ///
+    /// 数据部分与 [`Self::selection_export`] 完全一致，只在首行追加列名；
+    /// 单元格选区只输出被选中列的列名，不会带出未选中的列。
+    fn selection_export_with_header(&self) -> Option<DataTableSelectionExport> {
+        let mut export = self.selection_export()?;
+        let header = match export.kind {
+            DataTableSelectionKind::Rows => data_table_header_text(
+                &self.page,
+                self.source_column_indexes.iter().skip(1).filter_map(|index| *index),
+            ),
+            DataTableSelectionKind::Cells => {
+                let columns = self
+                    .effective_selected_cells()
+                    .iter()
+                    .map(|(_, col)| *col)
+                    .collect::<BTreeSet<_>>();
+                data_table_header_text(
+                    &self.page,
+                    columns
+                        .into_iter()
+                        .filter_map(|col| self.source_column_indexes.get(col).copied().flatten()),
+                )
+            }
+        };
+        if !header.is_empty() {
+            export.text = format!("{header}\n{}", export.text);
+        }
+        Some(export)
+    }
+}
+
+/// 选区首行的列名文本，列顺序与 `sources` 一致。
+///
+/// 缺列元数据时保留一个空单元格，避免表头与数据的列错位。
+fn data_table_header_text(page: &DataPage, sources: impl Iterator<Item = usize>) -> String {
+    sources
+        .map(|source| {
+            let name = page
+                .columns
+                .get(source)
+                .map(|column| column.name.as_str())
+                .unwrap_or("");
+            data_table_tsv_cell(name)
+        })
+        .collect::<Vec<_>>()
+        .join("\t")
 }
 
 fn data_table_rows_tsv(
@@ -346,4 +394,44 @@ fn data_table_cell_range(
     rows.iter()
         .flat_map(|row| cols.iter().map(move |col| (*row, *col)))
         .collect()
+}
+
+#[cfg(test)]
+mod selection_header_tests {
+    use super::*;
+
+    fn page_with_columns(names: &[&str]) -> DataPage {
+        DataPage {
+            columns: names
+                .iter()
+                .map(|name| GdbColumn {
+                    name: (*name).to_string(),
+                    type_name: None,
+                    nullable: false,
+                    primary_key: false,
+                    comment: None,
+                })
+                .collect(),
+            rows: Vec::new(),
+            offset: 0,
+            limit: 10,
+            has_more: false,
+            incomplete: None,
+        }
+    }
+
+    #[test]
+    fn header_follows_requested_column_order() {
+        let page = page_with_columns(&["row_no", "id", "name"]);
+        assert_eq!(
+            data_table_header_text(&page, [1, 2].into_iter()),
+            "id\tname"
+        );
+    }
+
+    #[test]
+    fn header_keeps_position_when_column_metadata_missing() {
+        let page = page_with_columns(&["id"]);
+        assert_eq!(data_table_header_text(&page, [0, 5].into_iter()), "id\t");
+    }
 }
