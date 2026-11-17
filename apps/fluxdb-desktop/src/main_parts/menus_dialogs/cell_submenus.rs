@@ -10,12 +10,12 @@ fn data_cell_filter_submenu(
     window: &Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    // "筛选"前有 6 个基础菜单项（选中复制/导出各追加 1 项）+ 3 个分隔符（任一选中项存在再 +1）；
-    // 子菜单 7 项 + 1 分隔符，贴底时向上收回。
+    // "筛选"前有 6 个基础菜单项（选中复制含带列名复制共 2 项、选中导出 1 项）+ 3 个分隔符
+    // （任一选中项存在再 +1）；子菜单 7 项 + 1 分隔符，贴底时向上收回。
     let has_selection = menu_for_eq.selection_copy_label.is_some()
         || menu_for_eq.selection_export_label.is_some();
     let items_before = 6.
-        + i32::from(menu_for_eq.selection_copy_label.is_some()) as f32
+        + 2. * i32::from(menu_for_eq.selection_copy_label.is_some()) as f32
         + i32::from(menu_for_eq.selection_export_label.is_some()) as f32;
     let separators_before = 3. + i32::from(has_selection) as f32;
     let desired_top = f32::from(context_submenu_top(items_before, separators_before));
@@ -144,12 +144,12 @@ fn data_cell_sort_submenu(
     window: &Window,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    // "排序"前有 7 个基础菜单项（含"筛选"，选中复制/导出各追加 1 项）+ 4 个分隔符（任一选中项存在再 +1）；
-    // 子菜单 3 项，贴底时向上收回。
+    // "排序"前有 7 个基础菜单项（含"筛选"，选中复制含带列名复制共 2 项、选中导出 1 项）
+    // + 4 个分隔符（任一选中项存在再 +1）；子菜单 3 项，贴底时向上收回。
     let has_selection = menu_for_asc.selection_copy_label.is_some()
         || menu_for_asc.selection_export_label.is_some();
     let items_before = 7.
-        + i32::from(menu_for_asc.selection_copy_label.is_some()) as f32
+        + 2. * i32::from(menu_for_asc.selection_copy_label.is_some()) as f32
         + i32::from(menu_for_asc.selection_export_label.is_some()) as f32;
     let separators_before = 4. + i32::from(has_selection) as f32;
     let desired_top = f32::from(context_submenu_top(items_before, separators_before));

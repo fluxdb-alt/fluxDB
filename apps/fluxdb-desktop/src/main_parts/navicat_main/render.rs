@@ -281,6 +281,7 @@ impl Render for NavicatMain {
             .on_action(cx.listener(Self::activate_tab_slot_action))
             .on_action(cx.listener(Self::open_table_shortcut_action))
             .on_action(cx.listener(Self::copy_data_selection))
+            .on_action(cx.listener(Self::copy_data_selection_with_header))
             .on_action(cx.listener(Self::select_all_data_cells))
             .on_action(cx.listener(Self::copy_footer_sql_selection))
             .on_action(cx.listener(Self::delete_connection_shortcut))

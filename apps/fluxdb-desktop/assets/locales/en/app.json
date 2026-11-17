@@ -2808,6 +2808,7 @@
     "selection": {
       "copy_rows": "Copy %{rows} selected rows (TSV)",
       "copy_cells": "Copy %{cells} selected cells (TSV)",
+      "copy_with_header": "Copy selection with column names",
       "export_current_row": "Export current row (TSV)",
       "export_rows": "Export %{rows} selected rows (TSV)",
       "export_current_cell": "Export current cell (TSV)",

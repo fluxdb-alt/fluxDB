@@ -964,6 +964,23 @@ impl NavicatMain {
         self.copy_data_table_selection(tab_id, cx);
     }
 
+    /// 复制表格选区，并在首行附带列名（⌘⇧C / Ctrl+Shift+C）。
+    fn copy_data_selection_with_header(
+        &mut self,
+        _: &CopyDataSelectionWithHeader,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // 焦点在输入框或 SQL 编辑器时，快捷键属于文本编辑，不抢表格选区。
+        if self.copy_data_selection_should_defer_to_focused_editor(window, cx) {
+            return;
+        }
+        let Some(tab_id) = self.controller.state().active_tab else {
+            return;
+        };
+        self.copy_data_table_selection_with_header(tab_id, cx);
+    }
+
     /// 表格/结果页全选当前页所有可见单元格，随后可直接 ⌘C 复制为 TSV。
     fn select_all_data_cells(
         &mut self,
