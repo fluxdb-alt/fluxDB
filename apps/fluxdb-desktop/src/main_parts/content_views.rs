@@ -650,7 +650,10 @@ fn database_kind_badge(kind: DatabaseKind, colors: UiColors) -> impl IntoElement
     div()
         .size(px(30.))
         .rounded(colors.radius_lg)
-        .bg(rgb(0x24272d))
+        // 与侧边栏一致：品牌 logo 留白各异，用主题色底板统一轮廓。
+        .bg(colors.panel_alt)
+        .border_1()
+        .border_color(colors.border_soft)
         .flex()
         .items_center()
         .justify_center()

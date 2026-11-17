@@ -738,7 +738,20 @@ fn kind_rail_row(
             this.cursor_pointer()
                 .hover(move |style| style.bg(colors.hover))
         })
-        .child(img(database_kind_icon_path(kind)).size(px(17.)))
+        // 与侧边栏/最近连接一致：主题色底板统一品牌 logo 轮廓。
+        .child(
+            div()
+                .size(px(22.))
+                .flex_none()
+                .rounded(colors.radius)
+                .bg(colors.panel_alt)
+                .border_1()
+                .border_color(colors.border_soft)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(img(database_kind_icon_path(kind)).size(px(15.))),
+        )
         .child(div().flex_1().min_w(px(0.)).truncate().child(label))
         .when(!disabled, |this| {
             this.on_mouse_down(

@@ -43,11 +43,14 @@ fn new_query_scope_modal(
                     div()
                         .size(px(22.))
                         .rounded(colors.radius)
-                        .bg(rgb(0x24272d))
+                        // 与侧边栏一致：主题色底板统一品牌 logo 轮廓。
+                        .bg(colors.panel_alt)
+                        .border_1()
+                        .border_color(colors.border_soft)
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(img(database_kind_icon_path(connection.config.kind)).size(px(14.))),
+                        .child(img(database_kind_icon_path(connection.config.kind)).size(px(15.))),
                 )
                 .child(
                     div()
