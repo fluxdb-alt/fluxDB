@@ -1048,11 +1048,14 @@ fn connection_tree(
             div()
                 .size(px(TREE_ICON_COL_WIDTH))
                 .rounded(colors.radius)
-                .bg(rgb(0x24272d))
+                // 品牌 logo 自带留白差异大，用主题色底板统一轮廓，避免透底后大小参差。
+                .bg(colors.panel_alt)
+                .border_1()
+                .border_color(colors.border_soft)
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(img(database_kind_icon_path(connection.config.kind)).size(px(13.))),
+                .child(img(database_kind_icon_path(connection.config.kind)).size(px(15.))),
         )
         .child(
             div()
