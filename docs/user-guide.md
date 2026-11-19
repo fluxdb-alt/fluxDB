@@ -383,7 +383,7 @@ DM8 当前不提供触发器设计页签，新建表时只能配置表、列、�
 - Redis 逻辑库单击打开键浏览器，双击打开 Redis Workbench。
 - 节点前的箭头展开或收起；连接未打开时，展开会先建立连接。
 - 连接名称前的色块是创建连接时选择的颜色，用于区分环境。
-- 展开“表”分组后，表名右侧显示占用大小；侧边栏宽度不足 220px、大小未知或为 0 时不显示。MySQL / MariaDB / TiDB 取数据与索引长度，PostgreSQL / KingbaseES 按 `pg_class.relpages` 估算，SQL Server 取 `sys.partitions.used_page_count`。该数值用于识别大表，统计未更新时可能滞后。
+- 展开“表”分组后，表名右侧显示占用大小；侧边栏宽度不足 220px、大小未知或为 0 时不显示。MySQL / MariaDB / TiDB 取数据与索引长度，PostgreSQL / KingbaseES 按 `pg_class.relpages` 估算，SQL Server 取 `sys.dm_db_partition_stats.used_page_count`（账号缺少 VIEW DATABASE PERFORMANCE STATE 权限时不显示大小）。该数值用于识别大表，统计未更新时可能滞后。
 - 标题栏右侧依次是“新建分组”“刷新”“添加连接”三个按钮，刷新只重新加载连接树，不跟随当前标签页。
 
 “搜索表”输入框按名称过滤已加载的表、视图、函数、存储过程和集合。未连接或尚未展开的连接不会出现在结果中，搜索前先展开目标连接。
