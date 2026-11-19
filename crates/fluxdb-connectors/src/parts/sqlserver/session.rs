@@ -420,6 +420,10 @@ fn sqlserver_driver_error(error: tiberius::error::Error) -> Error {
         tiberius::error::Error::Io { .. } | tiberius::error::Error::Tls(_) => ErrorKind::Connection,
         tiberius::error::Error::Server(token) if token.code() == 18456 => ErrorKind::Authentication,
         tiberius::error::Error::Server(token) if token.code() == 229 => ErrorKind::Permission,
+        // 262/297：系统视图/DMV 权限不足（如低权限账号读取 sys.dm_db_partition_stats）。
+        tiberius::error::Error::Server(token) if matches!(token.code(), 262 | 297) => {
+            ErrorKind::Permission
+        }
         tiberius::error::Error::Routing { .. } => ErrorKind::Connection,
         _ => ErrorKind::Query,
     };
