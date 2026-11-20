@@ -36,7 +36,7 @@ pub fn load_er_tables_in_background(
         name: String::new(),
         kind: ObjectKind::Schema,
     };
-    let summaries = if database_kind_uses_schemas(config.kind) {
+    let summaries = if config.kind.uses_schemas() {
         let mut all = Vec::new();
         let database_path = ObjectPath {
             kind: ObjectKind::Database,
@@ -114,7 +114,7 @@ pub fn load_er_relations_from_db_with(
     // 当前账号有权访问（可见）的表身份集合：目录已按权限过滤，这里回填同一口径，
     // 用于剔除外键指向「无权访问的表」的悬空边，避免经 ER 导出/计数泄露被隐藏的表名。
     let mut visible_refs: BTreeSet<ErTableRef> = BTreeSet::new();
-    if database_kind_uses_schemas(config.kind) {
+    if config.kind.uses_schemas() {
         let root = ObjectPath {
             connection_id: config.id,
             database: Some(database.clone()),
@@ -165,7 +165,7 @@ pub fn load_er_relations_from_db_with(
     }
 
     let mut edges = Vec::new();
-    if database_kind_uses_schemas(config.kind) {
+    if config.kind.uses_schemas() {
         // 按 schema 分组后走批量外键接口：Oracle 一次登录读完整组，避免逐表 N+1；
         // 未覆盖批量的方言（PG）由 trait 默认实现逐表回退，结果不变。
         let mut by_schema: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -324,7 +324,7 @@ fn load_er_columns_for_tables_from_db(
     // 按 display 名（与 ErTableNode.name 对齐：PG schema.table，其余裸名）分组列。
     let mut by_display: BTreeMap<String, Vec<ErColumn>> = BTreeMap::new();
     for col in columns {
-        let display = if database_kind_uses_schemas(config.kind) {
+        let display = if config.kind.uses_schemas() {
             match (&col.schema, col.table.as_str()) {
                 (Some(s), name) => format!("{s}.{name}"),
                 (None, name) => name.to_string(),
@@ -354,7 +354,7 @@ pub fn load_er_graph_in_background(
 ) -> fluxdb_core::Result<ErGraphData> {
     let mut tables = load_er_tables_in_background(config, database, schema)?;
     // 查询用裸表名（PG 展示名 `schema.table` 拆出裸名；其余即裸名）。
-    let bare_query: Vec<String> = if database_kind_uses_schemas(config.kind) {
+    let bare_query: Vec<String> = if config.kind.uses_schemas() {
         tables
             .iter()
             .map(|t| {
@@ -379,20 +379,6 @@ pub fn load_er_graph_in_background(
         edges,
         relation_status: ErLoadStatus::Loaded,
     })
-}
-
-/// 这些数据库的对象树是 database → schema → table 两层；ER 必须逐 schema 读取，
-/// 否则同库跨 schema 的同名表会被合并成一个节点。
-fn database_kind_uses_schemas(kind: DatabaseKind) -> bool {
-    // Oracle 的 schema 就是对象 Owner，也必须逐 Owner 读取，否则同名表会被合并。
-    matches!(
-        kind,
-        DatabaseKind::Postgres
-            | DatabaseKind::Kingbase
-            | DatabaseKind::Dameng
-            | DatabaseKind::SqlServer
-            | DatabaseKind::Oracle
-    )
 }
 
 fn default_schema_for_kind(kind: DatabaseKind) -> &'static str {

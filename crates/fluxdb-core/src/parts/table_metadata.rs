@@ -118,6 +118,37 @@ pub struct TableStructure {
     pub comment: Option<String>,
 }
 
+/// 索引的附加属性：结构同步判断「索引是否真的变了」以及重建时保留语义。
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct IndexAttributes {
+    /// 索引方法/类型：MySQL `BTREE`/`FULLTEXT`/`SPATIAL`、PG `btree`/`gin`、
+    /// SQL Server `CLUSTERED`/`NONCLUSTERED`、Oracle `NORMAL`/`BITMAP`。
+    /// 方言未读取时为 `None`，比对方视为「未知」而不是「没有方法」。
+    pub index_type: Option<String>,
+    /// 部分索引谓词（PG partial index）；`None` 表示全表索引。
+    pub predicate: Option<String>,
+    /// 键项含表达式（函数索引）。此类索引无法按列名安全重建，结构同步跳过。
+    pub has_expression: bool,
+}
+
+/// 外键的引用动作。仅记录方言确实读取到的部分：
+/// Oracle/达梦没有 ON UPDATE 动作，`on_update` 恒为 `None`。
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ForeignKeyActions {
+    pub on_delete: Option<String>,
+    pub on_update: Option<String>,
+}
+
+/// 生成列定义：表达式原文 + 存储方式。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GeneratedColumn {
+    /// 计算表达式原文（目录输出，可能带方言函数）。
+    pub expression: String,
+    /// 是否物化存储：MySQL/SQLite 有 VIRTUAL/STORED 之分；PG 只有 STORED，
+    /// 方言不区分时留 `None`，按目标库默认方式建列。
+    pub stored: Option<bool>,
+}
+
 /// 打开设计表所需的完整、一致的元数据快照。
 ///
 /// 各连接器可覆盖 `Connector::load_table_design_metadata`，在一条连接内复用同一次
@@ -128,6 +159,26 @@ pub struct TableDesignMetadata {
     pub indexes: Vec<IndexInfo>,
     pub foreign_keys: Vec<ForeignKeyInfo>,
     pub triggers: Vec<TriggerInfo>,
+    /// 列默认表达式原文：键为列名（与 `columns.name` 一致）。
+    ///
+    /// 结构同步需要它判断 DEFAULT 差异；方言未提供时留空，调用方应跳过默认值比对，
+    /// 不能把「未读取」当成「没有默认值」。
+    pub column_defaults: BTreeMap<String, String>,
+    /// 自增 / identity 列名（保留原始大小写）。跨方言建表据此生成等价语法；
+    /// 未读取时为空集合，调用方不得推断。
+    pub auto_increment_columns: BTreeSet<String>,
+    /// 生成列：列名 → 表达式与存储方式。未出现在此表的列不是生成列。
+    pub generated_columns: BTreeMap<String, GeneratedColumn>,
+    /// 索引附加属性：索引名 → 方法/谓词/表达式标记。缺项视为未读取。
+    pub index_attributes: BTreeMap<String, IndexAttributes>,
+    /// 外键引用动作：约束名 → 动作。缺项视为未读取。
+    pub foreign_key_actions: BTreeMap<String, ForeignKeyActions>,
+    /// CHECK 约束。只有 `checks_loaded` 为真时才可参与比对。
+    pub checks: Vec<CheckMeta>,
+    /// 方言是否读取了 CHECK 约束；false 时禁止推断「目标端没有检查约束」。
+    pub checks_loaded: bool,
+    /// 表注释。方言不提供时为 `None`。
+    pub table_comment: Option<String>,
     pub ddl: String,
     /// 首屏是否已包含索引/外键/触发器。慢方言可先返回 false，再由后台补齐。
     pub details_loaded: bool,

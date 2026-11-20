@@ -481,15 +481,157 @@ fn sqlserver_load_table_design_metadata(
     } else {
         sqlserver_render_table_ddl(&schema, &path.name, &columns, &indexes, &foreign_keys)
     };
+    let table_comment = sqlserver_load_table_comment(&mut client, &schema, &path.name)?;
+    let column_defaults = columns
+        .iter()
+        .filter_map(|column| {
+            column
+                .default_expr
+                .as_ref()
+                .map(|expr| (column.name.clone(), expr.clone()))
+        })
+        .collect();
+    let auto_increment_columns = columns
+        .iter()
+        .filter(|column| column.identity)
+        .map(|column| column.name.clone())
+        .collect();
+    let (foreign_key_actions, checks) = if include_details {
+        (
+            sqlserver_load_foreign_key_actions(&mut client, &schema, &path.name)?,
+            sqlserver_load_checks(&mut client, &schema, &path.name)?,
+        )
+    } else {
+        (BTreeMap::new(), Vec::new())
+    };
+    let index_attributes = indexes
+        .iter()
+        .map(|index| {
+            (
+                index.name.clone(),
+                fluxdb_core::IndexAttributes {
+                    index_type: index.index_type.clone(),
+                    predicate: None,
+                    has_expression: false,
+                },
+            )
+        })
+        .collect();
     sqlserver_block_on(sqlserver_close(client));
     Ok(fluxdb_core::TableDesignMetadata {
         columns: sqlserver_completion_columns(path, columns),
         indexes,
         foreign_keys,
         triggers,
+        column_defaults,
+        auto_increment_columns,
+        // 计算列表达式在本加载器里没有读取，留空即「未读取」。
+        generated_columns: BTreeMap::new(),
+        index_attributes,
+        foreign_key_actions,
+        checks,
+        checks_loaded: include_details,
+        table_comment,
         ddl,
         details_loaded: include_details,
     })
+}
+
+fn sqlserver_load_foreign_key_actions(
+    client: &mut SqlServerClient,
+    schema: &str,
+    table: &str,
+) -> fluxdb_core::Result<BTreeMap<String, fluxdb_core::ForeignKeyActions>> {
+    let batch = sqlserver_block_on(sqlserver_run_query(
+        client,
+        "SELECT fk.name, fk.delete_referential_action_desc, fk.update_referential_action_desc \
+         FROM sys.foreign_keys fk \
+         JOIN sys.tables t ON t.object_id = fk.parent_object_id \
+         JOIN sys.schemas s ON s.schema_id = t.schema_id \
+         WHERE s.name = @P1 AND t.name = @P2",
+        &[
+            fluxdb_core::SqlParameter::Text(schema.to_string()),
+            fluxdb_core::SqlParameter::Text(table.to_string()),
+        ],
+    ))?;
+    let rows = sqlserver_first_rows(&batch, "SQL Server 外键动作返回类型异常")?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let name = row.values.first().and_then(cell_text)?;
+            // `NO_ACTION` 之类的下划线写法统一成 SQL 关键字 `NO ACTION`。
+            let action = |value: Option<String>| {
+                value
+                    .map(|text| text.replace('_', " ").to_ascii_uppercase())
+                    .filter(|text| !text.is_empty())
+            };
+            Some((
+                name,
+                fluxdb_core::ForeignKeyActions {
+                    on_delete: action(row.values.get(1).and_then(cell_text)),
+                    on_update: action(row.values.get(2).and_then(cell_text)),
+                },
+            ))
+        })
+        .collect())
+}
+
+fn sqlserver_load_checks(
+    client: &mut SqlServerClient,
+    schema: &str,
+    table: &str,
+) -> fluxdb_core::Result<Vec<fluxdb_core::CheckMeta>> {
+    let batch = sqlserver_block_on(sqlserver_run_query(
+        client,
+        "SELECT cc.name, cc.definition \
+         FROM sys.check_constraints cc \
+         JOIN sys.tables t ON t.object_id = cc.parent_object_id \
+         JOIN sys.schemas s ON s.schema_id = t.schema_id \
+         WHERE s.name = @P1 AND t.name = @P2 \
+         ORDER BY cc.name",
+        &[
+            fluxdb_core::SqlParameter::Text(schema.to_string()),
+            fluxdb_core::SqlParameter::Text(table.to_string()),
+        ],
+    ))?;
+    let rows = sqlserver_first_rows(&batch, "SQL Server CHECK 约束返回类型异常")?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            Some(fluxdb_core::CheckMeta {
+                name: row.values.first().and_then(cell_text)?,
+                expression: row.values.get(1).and_then(cell_text)?,
+                definition: String::new(),
+            })
+        })
+        .collect())
+}
+
+fn sqlserver_load_table_comment(
+    client: &mut SqlServerClient,
+    schema: &str,
+    table: &str,
+) -> fluxdb_core::Result<Option<String>> {
+    let batch = sqlserver_block_on(sqlserver_run_query(
+        client,
+        "SELECT CAST(ep.value AS nvarchar(max)) \
+         FROM sys.objects o \
+         JOIN sys.schemas s ON s.schema_id = o.schema_id \
+         LEFT JOIN sys.extended_properties ep \
+           ON ep.class = 1 AND ep.major_id = o.object_id AND ep.minor_id = 0 \
+          AND ep.name = 'MS_Description' \
+         WHERE s.name = @P1 AND o.name = @P2 AND o.type = 'U'",
+        &[
+            fluxdb_core::SqlParameter::Text(schema.to_string()),
+            fluxdb_core::SqlParameter::Text(table.to_string()),
+        ],
+    ))?;
+    let rows = sqlserver_first_rows(&batch, "SQL Server 表注释返回类型异常")?;
+    Ok(rows
+        .into_iter()
+        .next()
+        .and_then(|row| row.values.first().and_then(cell_text))
+        .filter(|comment| !comment.trim().is_empty()))
 }
 
 fn sqlserver_completion_tables(

@@ -4,7 +4,9 @@
 
 #[gpui::test]
 fn task_center_renders_rows_and_detail_drawer(cx: &mut TestAppContext) {
-    use crate::{TaskCenterKind, TaskCenterRowKey, TaskCenterStatus};
+    use crate::{
+        BackupMode, BackupTaskState, TabKind, TaskCenterKind, TaskCenterRowKey, TaskCenterStatus,
+    };
 
     let _guard = locale_guard();
     let temp = tempfile::tempdir().expect("isolated profile");
@@ -158,4 +160,48 @@ fn task_center_renders_rows_and_detail_drawer(cx: &mut TestAppContext) {
             .is_empty(),
         "deleted record must be removed from storage"
     );
+
+    // 「定位」：运行中的备份任务回到对应库的备份列表 tab，并收起任务中心。
+    cx.update(|window, cx| {
+        view.update(cx, |this, cx| {
+            this.backup_tasks.push(BackupTaskState {
+                id: 9001,
+                connection_id: fluxdb_core::ConnectionId(42),
+                database: Some("shop".into()),
+                mode: BackupMode::Auto,
+                output_path: std::path::PathBuf::new(),
+                stage: "Backing up".into(),
+                started_at: std::time::Instant::now(),
+                finished_at: None,
+                logs: Vec::new(),
+                skipped: Vec::new(),
+                error: None,
+                cancel_requested: false,
+                canceled: false,
+            });
+            this.task_center.open = true;
+            this.task_center.selected =
+                Some(TaskCenterRowKey::live(TaskCenterKind::Backup, 9001));
+            cx.notify();
+        });
+        window.draw(cx).clear(cx);
+    });
+    let locate = cx
+        .debug_bounds("task-center-locate-task")
+        .expect("locate button for running backup task");
+    cx.simulate_click(locate.center(), Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let app = view.read(cx);
+        assert!(
+            app.controller.state().tabs.iter().any(|tab| matches!(
+                &tab.kind,
+                TabKind::BackupList(list) if list.connection_id == fluxdb_core::ConnectionId(42)
+                    && list.database == "shop"
+            )),
+            "locate opens the backup tab for the task database"
+        );
+        assert!(!app.task_center.open, "locate closes the task center");
+        window.draw(cx).clear(cx);
+    });
 }

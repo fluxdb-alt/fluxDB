@@ -39,6 +39,22 @@ impl DatabaseKind {
         matches!(self, DatabaseKind::Postgres | DatabaseKind::Kingbase)
     }
 
+    /// 对象树是否为 database → schema → table 两层。
+    ///
+    /// MySQL 家族的 database 与 schema 同义，SQLite 单库也没有 schema 维度；
+    /// 界面不应为这些类型展示 Schema 选择器，查询也不该再按 schema 过滤。
+    pub fn uses_schemas(self) -> bool {
+        // Oracle 的 schema 就是对象 Owner，同样属于需要显式 schema 的类型。
+        matches!(
+            self,
+            DatabaseKind::Postgres
+                | DatabaseKind::Kingbase
+                | DatabaseKind::Dameng
+                | DatabaseKind::SqlServer
+                | DatabaseKind::Oracle
+        )
+    }
+
     /// 是否支持连接级「服务器状态」面板。
     ///
     /// 这些数据库都实现了会话/锁等待/状态的只读读取与终止入口；

@@ -914,6 +914,30 @@ async fn sqlite_columns(
         .collect::<fluxdb_core::Result<Vec<_>>>()?)
 }
 
+/// 读取列默认表达式（`PRAGMA table_info.dflt_value`）；无默认值的列不出现在结果里。
+async fn sqlite_load_column_defaults(
+    connection: &mut sqlx::SqliteConnection,
+    database: &str,
+    table: &str,
+) -> fluxdb_core::Result<BTreeMap<String, String>> {
+    let rows = sqlx::query(&format!(
+        "PRAGMA {}.table_info({})",
+        fluxdb_core::SqliteDialect.quote_identifier(database),
+        sqlite_quote_string(table)
+    ))
+    .fetch_all(connection)
+    .await
+    .map_err(sqlite_error)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let name: String = row.try_get("name").ok()?;
+            let default: Option<String> = row.try_get("dflt_value").ok()?;
+            default.map(|value| (name, value))
+        })
+        .collect())
+}
+
 fn sqlite_indexes(
     config: &ConnectionConfig,
     path: &ObjectPath,
@@ -926,17 +950,24 @@ fn sqlite_indexes(
     runtime.block_on(async {
         let mut connection = sqlite_connect(config).await?;
         let database = sqlite_database_for_path(path);
-        let indexes = sqlite_load_indexes(&mut connection, database, &path.name).await?;
+        let (indexes, _) = sqlite_load_indexes(&mut connection, database, &path.name).await?;
         connection.close().await.map_err(sqlite_error)?;
         Ok(indexes)
     })
 }
 
+/// 索引行 → `IndexInfo` + 结构同步附加属性。
+///
+/// 表达式索引在 `index_info` 里列名为 NULL：用 `index_xinfo` 的顺序占位无法还原表达式，
+/// 标记 `has_expression` 让结构同步跳过，避免生成不完整索引。
 async fn sqlite_load_indexes(
     connection: &mut sqlx::SqliteConnection,
     database: &str,
     table: &str,
-) -> fluxdb_core::Result<Vec<IndexInfo>> {
+) -> fluxdb_core::Result<(
+    Vec<IndexInfo>,
+    BTreeMap<String, fluxdb_core::IndexAttributes>,
+)> {
     let sql = format!(
         "PRAGMA {}.index_list({})",
         fluxdb_core::SqliteDialect.quote_identifier(database),
@@ -947,6 +978,7 @@ async fn sqlite_load_indexes(
         .await
         .map_err(sqlite_error)?;
     let mut indexes = Vec::with_capacity(rows.len());
+    let mut attributes = BTreeMap::new();
     for row in rows {
         let name: String = row.try_get("name").map_err(sqlite_error)?;
         let unique: i64 = row.try_get("unique").map_err(sqlite_error)?;
@@ -961,10 +993,26 @@ async fn sqlite_load_indexes(
             .fetch_all(&mut *connection)
             .await
             .map_err(sqlite_error)?;
-        let columns = info_rows
-            .into_iter()
-            .map(|row| row.try_get("name").map_err(sqlite_error))
-            .collect::<fluxdb_core::Result<Vec<String>>>()?;
+        let mut columns = Vec::with_capacity(info_rows.len());
+        let mut has_expression = false;
+        for info_row in info_rows {
+            match info_row.try_get::<Option<String>, _>("name") {
+                Ok(Some(column)) => columns.push(column),
+                // 表达式索引没有列名，无法按名重建。
+                Ok(None) => has_expression = true,
+                Err(error) => return Err(sqlite_error(error)),
+            }
+        }
+        // origin（c/u/pk）不是访问方法，且部分索引的 predicate 无法从 PRAGMA 还原；
+        // 结构同步据此不做索引类型 / predicate 比对，避免生成丢掉 WHERE 的 DROP+CREATE。
+        attributes.insert(
+            name.clone(),
+            fluxdb_core::IndexAttributes {
+                index_type: None,
+                predicate: None,
+                has_expression,
+            },
+        );
         indexes.push(IndexInfo {
             name,
             columns,
@@ -974,7 +1022,7 @@ async fn sqlite_load_indexes(
             comment: None,
         });
     }
-    Ok(indexes)
+    Ok((indexes, attributes))
 }
 
 fn sqlite_foreign_keys(
@@ -1035,7 +1083,10 @@ async fn sqlite_load_foreign_keys(
     connection: &mut sqlx::SqliteConnection,
     database: &str,
     table: &str,
-) -> fluxdb_core::Result<Vec<ForeignKeyInfo>> {
+) -> fluxdb_core::Result<(
+    Vec<ForeignKeyInfo>,
+    BTreeMap<String, fluxdb_core::ForeignKeyActions>,
+)> {
     let sql = format!(
         "PRAGMA {}.foreign_key_list({})",
         fluxdb_core::SqliteDialect.quote_identifier(database),
@@ -1045,20 +1096,29 @@ async fn sqlite_load_foreign_keys(
         .fetch_all(&mut *connection)
         .await
         .map_err(sqlite_error)?;
-    rows.into_iter()
-        .map(|row| {
-            let id: i64 = row.try_get("id").map_err(sqlite_error)?;
-            Ok(ForeignKeyInfo {
-                name: format!("fk_{id}"),
-                column: row.try_get("from").map_err(sqlite_error)?,
-                ref_schema: None,
-                ref_table: row.try_get("table").map_err(sqlite_error)?,
-                ref_column: row.try_get("to").map_err(sqlite_error)?,
-                columns: Vec::new(),
-                ref_columns: Vec::new(),
-            })
-        })
-        .collect()
+    let mut keys = Vec::with_capacity(rows.len());
+    let mut actions = BTreeMap::new();
+    for row in rows {
+        let id: i64 = row.try_get("id").map_err(sqlite_error)?;
+        let name = format!("fk_{id}");
+        actions.insert(
+            name.clone(),
+            fluxdb_core::ForeignKeyActions {
+                on_delete: row.try_get("on_delete").ok(),
+                on_update: row.try_get("on_update").ok(),
+            },
+        );
+        keys.push(ForeignKeyInfo {
+            name,
+            column: row.try_get("from").map_err(sqlite_error)?,
+            ref_schema: None,
+            ref_table: row.try_get("table").map_err(sqlite_error)?,
+            ref_column: row.try_get("to").map_err(sqlite_error)?,
+            columns: Vec::new(),
+            ref_columns: Vec::new(),
+        });
+    }
+    Ok((keys, actions))
 }
 
 fn sqlite_triggers(
@@ -1159,10 +1219,13 @@ fn sqlite_load_table_design_metadata(
         let mut connection = sqlite_connect(config).await?;
         let database = sqlite_database_for_path(path);
         let columns = sqlite_columns(&mut connection, database, &path.name).await?;
-        let indexes = sqlite_load_indexes(&mut connection, database, &path.name).await?;
-        let foreign_keys =
+        let (indexes, index_attributes) =
+            sqlite_load_indexes(&mut connection, database, &path.name).await?;
+        let (foreign_keys, foreign_key_actions) =
             sqlite_load_foreign_keys(&mut connection, database, &path.name).await?;
         let triggers = sqlite_load_triggers(&mut connection, database, &path.name).await?;
+        let column_defaults =
+            sqlite_load_column_defaults(&mut connection, database, &path.name).await?;
         let ddl = sqlite_load_table_ddl(&mut connection, database, &path.name).await?;
         connection.close().await.map_err(sqlite_error)?;
         Ok(fluxdb_core::TableDesignMetadata {
@@ -1170,6 +1233,17 @@ fn sqlite_load_table_design_metadata(
             indexes,
             foreign_keys,
             triggers,
+            column_defaults,
+            // SQLite 的自增由 INTEGER PRIMARY KEY 隐式承担，没有独立属性可读。
+            auto_increment_columns: Default::default(),
+            // 生成列表达式没有稳定的目录来源（PRAGMA table_xinfo 只给 hidden 标记）。
+            generated_columns: Default::default(),
+            index_attributes,
+            foreign_key_actions,
+            checks: Vec::new(),
+            // SQLite 没有 check 约束目录；CHECK 只存在于建表 SQL 文本里，不做推断。
+            checks_loaded: false,
+            table_comment: None,
             ddl,
             details_loaded: true,
         })

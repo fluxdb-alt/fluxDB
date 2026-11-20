@@ -1010,12 +1010,27 @@ struct NavicatMain {
     _data_generation_task: Option<Task<()>>,
     _data_generation_load_task: Option<Task<()>>,
     _data_generation_pool_task: Option<Task<()>>,
-    /// 结构对比 / 数据传输弹框；`None` 表示未打开。
-    compare_transfer: Option<CompareTransferState>,
-    compare_transfer_inputs: CompareTransferInputs,
-    _compare_transfer_task: Option<Task<()>>,
-    _compare_transfer_source_options_task: Option<Task<()>>,
-    _compare_transfer_target_options_task: Option<Task<()>>,
+    /// 结构同步 / 数据同步向导；`None` 表示未打开。
+    sync_wizard: Option<SyncWizardState>,
+    sync_inputs: SyncInputs,
+    _sync_source_options_task: Option<Task<()>>,
+    _sync_target_options_task: Option<Task<()>>,
+    _sync_tables_task: Option<Task<()>>,
+    _sync_target_tables_task: Option<Task<()>>,
+    /// 表配对下拉行；与向导同生命周期，进入第二步时按当前选择重建。
+    sync_pair_rows: Vec<SyncPairRow>,
+    _sync_pair_subscriptions: Vec<Subscription>,
+    /// 单表字段映射弹框；`None` 表示未打开。
+    sync_field_map: Option<SyncFieldMapState>,
+    _sync_field_map_task: Option<Task<()>>,
+    /// 单表类型映射弹框（结构同步）；`None` 表示未打开。
+    sync_type_map: Option<SyncTypeMapState>,
+    _sync_type_map_task: Option<Task<()>>,
+    _sync_preview_task: Option<Task<()>>,
+    _sync_execute_task: Option<Task<()>>,
+    /// 数据同步执行记录弹框；`None` 表示未打开。
+    sync_run_view: Option<SyncRunViewState>,
+    _sync_run_view_task: Option<Task<()>>,
     data_export_custom_conditions_open: bool,
     data_export_preview: Option<TableDataExportPreviewState>,
     data_export_preview_seq: u64,

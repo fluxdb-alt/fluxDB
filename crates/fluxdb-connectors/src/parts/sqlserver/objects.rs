@@ -118,12 +118,14 @@ fn sqlserver_list_relations(
             "SELECT o.name, o.type, o.object_id, o.create_date, o.modify_date, \
                     CAST(ep.value AS nvarchar(max)) AS comment, \
                     SUM(CASE WHEN p.index_id IN (0,1) THEN p.rows ELSE 0 END) AS row_count, \
-                    SUM(p.used_page_count) * 8192 AS size_bytes \
+                    SUM(ps.used_page_count) * 8192 AS size_bytes \
              FROM sys.objects o \
              JOIN sys.schemas s ON s.schema_id = o.schema_id \
              LEFT JOIN sys.extended_properties ep \
                ON ep.class = 1 AND ep.major_id = o.object_id AND ep.minor_id = 0 AND ep.name = 'MS_Description' \
              LEFT JOIN sys.partitions p ON p.object_id = o.object_id \
+             LEFT JOIN sys.dm_db_partition_stats ps \
+               ON ps.object_id = o.object_id AND ps.index_id = p.index_id \
              WHERE s.name = @P1 AND o.type IN ('U','V','P','PC','FN','IF','TF','FS','FT') \
                AND o.is_ms_shipped = 0 \
              GROUP BY o.name, o.type, o.object_id, o.create_date, o.modify_date, ep.value \
@@ -142,7 +144,8 @@ fn sqlserver_list_relations(
         };
         let object_type = row.values.get(1).and_then(cell_text).unwrap_or_default();
         let stable = row.values.get(2).and_then(cell_i64).and_then(|value| u64::try_from(value).ok());
-        // `used_page_count` 覆盖堆/聚集索引与非聚集索引；SQL Server 页固定 8 KiB。
+        // `used_page_count` 只在 sys.dm_db_partition_stats 中，覆盖堆/聚集索引与非聚集索引；
+        // SQL Server 页固定 8 KiB。
         let size_bytes = row
             .values
             .get(7)

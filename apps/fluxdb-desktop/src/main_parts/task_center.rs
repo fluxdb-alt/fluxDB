@@ -29,7 +29,7 @@ enum TaskCenterKind {
     MongoExport,
     MongoImport,
     StructureSync,
-    DataTransfer,
+    DataSync,
 }
 
 impl TaskCenterKind {
@@ -45,7 +45,7 @@ impl TaskCenterKind {
             Self::MongoExport => "mongo_export",
             Self::MongoImport => "mongo_import",
             Self::StructureSync => "structure_sync",
-            Self::DataTransfer => "data_transfer",
+            Self::DataSync => "data_sync",
         }
     }
 
@@ -60,7 +60,7 @@ impl TaskCenterKind {
             "mongo_export" => Self::MongoExport,
             "mongo_import" => Self::MongoImport,
             "structure_sync" => Self::StructureSync,
-            "data_transfer" => Self::DataTransfer,
+            "data_sync" | "data_transfer" => Self::DataSync,
             _ => return None,
         })
     }
@@ -76,7 +76,7 @@ impl TaskCenterKind {
             Self::MongoExport => tr("app.task_center.kind.mongo_export"),
             Self::MongoImport => tr("app.task_center.kind.mongo_import"),
             Self::StructureSync => tr("app.task_center.kind.structure_sync"),
-            Self::DataTransfer => tr("app.task_center.kind.data_transfer"),
+            Self::DataSync => tr("app.task_center.kind.data_sync"),
         }
     }
 
@@ -91,7 +91,7 @@ impl TaskCenterKind {
             Self::MongoExport => AppIcon::Upload,
             Self::MongoImport => AppIcon::FolderInput,
             Self::StructureSync => AppIcon::Schema,
-            Self::DataTransfer => AppIcon::ArrowUpDown,
+            Self::DataSync => AppIcon::ArrowUpDown,
         }
     }
 }
@@ -596,7 +596,72 @@ impl NavicatMain {
             .find(|row| row.key == selected)
     }
 
+    /// 「定位」：把运行中的实时任务送回产生它的界面。
+    /// 备份进对应库的备份 tab，表导出打开该任务的日志弹框，
+    /// SQL 文件打开执行弹框并把日志定位到该任务。
+    fn locate_task_center_row(
+        &mut self,
+        key: TaskCenterRowKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let located = match (key.source, key.kind) {
+            (TaskCenterRowSource::Live, TaskCenterKind::Backup) => {
+                self.locate_backup_task(key.id, cx)
+            }
+            (TaskCenterRowSource::Live, TaskCenterKind::TableExport) => {
+                self.data_export_log_task = Some(key.id);
+                true
+            }
+            (TaskCenterRowSource::Live, TaskCenterKind::SqlFile) => {
+                self.open_sql_file_dialog(window, cx);
+                self.sql_file_modal.borrow_mut().log_task = Some(key.id);
+                true
+            }
+            _ => false,
+        };
+        if located {
+            self.task_center.open = false;
+            self.task_center.selected = None;
+        } else {
+            // 记录已不在内存（通常已被归档进历史），原面板无法再定位。
+            self.show_message(
+                tr("app.task_center.open_unavailable"),
+                AppMessageKind::Warning,
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    /// 打开任务所属库的备份列表 tab；备份任务没记库名时无法定位。
+    fn locate_backup_task(&mut self, task_id: u64, cx: &mut Context<Self>) -> bool {
+        let Some((connection_id, database)) = self
+            .backup_tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .and_then(|task| {
+                task.database
+                    .clone()
+                    .filter(|database| !database.is_empty())
+                    .map(|database| (task.connection_id, database))
+            })
+        else {
+            return false;
+        };
+        let path = ObjectPath {
+            connection_id,
+            database: Some(database.clone()),
+            schema: None,
+            name: database,
+            kind: ObjectKind::Database,
+        };
+        self.dispatch(AppCommand::OpenBackupList(path), cx);
+        true
+    }
+
     fn cancel_task_center_task(&mut self, key: TaskCenterRowKey, cx: &mut Context<Self>) {
+
         match (key.source, key.kind) {
             (TaskCenterRowSource::Live, TaskCenterKind::Backup) => {
                 self.cancel_backup_task(key.id, cx)

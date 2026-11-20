@@ -465,7 +465,8 @@ fn build_import_batch_sql(
             let value = row.get(*import_index).cloned().unwrap_or(CellValue::Null);
             let parameter = import_sql_parameter_for_column(&value, &target_columns[*target_index])?;
             placeholders.push(match kind {
-                DatabaseKind::Postgres => {
+                // Kingbase 走 PostgreSQL 协议，占位符只认 `$N`，不认 `?`。
+                DatabaseKind::Postgres | DatabaseKind::Kingbase => {
                     parameters.push(parameter);
                     let index = parameters.len();
                     let column = &target_columns[*target_index];

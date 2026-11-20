@@ -720,6 +720,16 @@ pub trait Connector {
             indexes,
             foreign_keys,
             triggers,
+            // 默认实现不读取默认值：结构同步据此跳过 DEFAULT 比对。
+            column_defaults: BTreeMap::new(),
+            auto_increment_columns: Default::default(),
+            generated_columns: BTreeMap::new(),
+            index_attributes: BTreeMap::new(),
+            foreign_key_actions: BTreeMap::new(),
+            checks: Vec::new(),
+            // 未读取 CHECK：结构同步不得据此删除目标端检查约束。
+            checks_loaded: false,
+            table_comment: None,
             ddl,
             details_loaded: true,
         })

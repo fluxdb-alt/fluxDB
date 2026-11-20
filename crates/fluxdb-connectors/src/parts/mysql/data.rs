@@ -51,7 +51,8 @@ fn mysql_load_data_with_expression(
     runtime.block_on(async {
         let mut connection = plan.connect().await?;
 
-        let columns = mysql_columns(&mut connection, database, &path.name).await?;
+        // 数据同步按块逐页读取，走缓存避免每页都查一次 information_schema。
+        let columns = mysql_columns_cached(config, &mut connection, database, &path.name).await?;
         mysql_ensure_columns_available(database, &path.name, &columns)?;
         let select_list = columns
             .iter()
@@ -161,7 +162,7 @@ fn mysql_preview_data_export(
     runtime.block_on(async {
         let mut connection = plan.connect().await?;
 
-        let columns = mysql_columns(&mut connection, database, &path.name).await?;
+        let columns = mysql_columns_cached(config, &mut connection, database, &path.name).await?;
         let table_name = format!(
             "{}.{}",
             fluxdb_core::MySqlDialect.quote_identifier(database),
@@ -297,6 +298,52 @@ fn push_mysql_filter_bind(
             builder.push_bind(*value);
         }
     }
+}
+
+/// `information_schema.columns` 在远程 MySQL 上单次要 1s 以上（实测 1.4s）。数据同步按块
+/// 反复读取同一张表，元数据会盖过真正的取数耗时，因此按「连接 + 库 + 表」缓存一小段时间。
+///
+/// DDL 之后最多陈旧 `MYSQL_COLUMNS_CACHE_TTL`：期间拼出的 SELECT 列表可能引用已删列而报错，
+/// 用户重试即可；这段窗口换来的是大表比对每块少两次元数据往返。
+/// key = 连接 ID + 库名 + 表名，value = 写入时刻 + 列定义。
+type MysqlColumnsCache = std::sync::Mutex<
+    std::collections::HashMap<(u64, String, String), (std::time::Instant, Vec<Column>)>,
+>;
+
+static MYSQL_COLUMNS_CACHE: std::sync::LazyLock<MysqlColumnsCache> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+const MYSQL_COLUMNS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+async fn mysql_columns_cached(
+    config: &ConnectionConfig,
+    connection: &mut sqlx::MySqlConnection,
+    database: &str,
+    table: &str,
+) -> fluxdb_core::Result<Vec<Column>> {
+    let key = (config.id.0, database.to_owned(), table.to_owned());
+    let cached = MYSQL_COLUMNS_CACHE
+        .lock()
+        .ok()
+        .and_then(|cache| {
+            cache
+                .get(&key)
+                .filter(|(at, _)| at.elapsed() < MYSQL_COLUMNS_CACHE_TTL)
+                .map(|(_, columns)| columns.clone())
+        });
+    if let Some(columns) = cached {
+        return Ok(columns);
+    }
+
+    let columns = mysql_columns(connection, database, table).await?;
+    // 缓存写失败（锁中毒）只影响性能，不影响本次读取。
+    if let Ok(mut cache) = MYSQL_COLUMNS_CACHE.lock() {
+        cache.insert(key, (std::time::Instant::now(), columns.clone()));
+        if cache.len() > 256 {
+            cache.retain(|_, (at, _)| at.elapsed() < MYSQL_COLUMNS_CACHE_TTL);
+        }
+    }
+    Ok(columns)
 }
 
 async fn mysql_columns(

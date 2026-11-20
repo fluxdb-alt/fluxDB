@@ -24,6 +24,17 @@ impl TableRowWriter {
         object: &ObjectPath,
         source_columns: &[String],
     ) -> fluxdb_core::Result<Self> {
+        Self::new_with_skips(config, object, source_columns, &[])
+    }
+
+    /// `skip_columns` 按目标字段名（忽略大小写）排除，不参与写入；
+    /// 字段位置仍与传入的 `source_columns` 对齐。
+    pub fn new_with_skips(
+        config: &ConnectionConfig,
+        object: &ObjectPath,
+        source_columns: &[String],
+        skip_columns: &[String],
+    ) -> fluxdb_core::Result<Self> {
         if matches!(config.kind, DatabaseKind::Redis | DatabaseKind::MongoDb) {
             return Err(Error::new(
                 ErrorKind::Unsupported,
@@ -48,7 +59,11 @@ impl TableRowWriter {
         let selected = selected
             .into_iter()
             .filter(|(_, target_index)| {
-                !excluded.contains(&target_columns[*target_index].name.to_ascii_uppercase())
+                let name = &target_columns[*target_index].name;
+                !excluded.contains(&name.to_ascii_uppercase())
+                    && !skip_columns
+                        .iter()
+                        .any(|skipped| skipped.eq_ignore_ascii_case(name))
             })
             .collect::<Vec<_>>();
         if selected.is_empty() {

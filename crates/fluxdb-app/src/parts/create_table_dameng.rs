@@ -829,6 +829,14 @@ mod dameng_create_table_tests {
             }],
             foreign_keys: Vec::new(),
             triggers: Vec::new(),
+            column_defaults: Default::default(),
+            auto_increment_columns: Default::default(),
+            generated_columns: Default::default(),
+            index_attributes: Default::default(),
+            foreign_key_actions: Default::default(),
+            checks: Vec::new(),
+            checks_loaded: false,
+            table_comment: None,
             ddl: "CREATE TABLE \"APPS\".\"ORDERS\" (\"ID\" INT PRIMARY KEY); \
                   CREATE INDEX \"IDX_ORDERS_ID\" ON \"APPS\".\"ORDERS\" (\"ID\");"
                 .into(),

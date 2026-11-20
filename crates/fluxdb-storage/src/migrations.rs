@@ -18,7 +18,7 @@ use fluxdb_core::{Error, ErrorKind, Result};
 use crate::sqlite::sqlite_error;
 
 /// 当前代码认识的最新结构版本。新增结构变化时 +1，并在 [`STEPS`] 末尾追加一步。
-pub const LATEST_VERSION: i64 = 2;
+pub const LATEST_VERSION: i64 = 3;
 
 /// 迁移前备份保留份数。
 const BACKUP_KEEP: usize = 3;
@@ -42,7 +42,19 @@ const STEPS: &[Migration] = &[
         name: "MCP Server Profile 传输方式统一为应用内 HTTP",
         apply: unify_mcp_transport_http,
     },
+    Migration {
+        version: 3,
+        name: "新增数据同步执行记录表",
+        apply: create_sync_run_tables,
+    },
 ];
+
+/// v3：数据同步执行账本（`sync_runs` / `sync_run_tables` / `sync_run_chunks` /
+/// `sync_run_samples`）。建表语句幂等，旧库补齐空表即可。
+fn create_sync_run_tables(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch(crate::sync_run_store::CREATE_SQL)
+        .map_err(sqlite_error)
+}
 
 /// 当前连接的 `user_version`。
 pub fn user_version(conn: &Connection) -> Result<i64> {

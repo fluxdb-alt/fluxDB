@@ -587,11 +587,91 @@ fn pg_load_table_design_metadata(
                 stable: Some(u64::from(column.ordinal)),
             })
             .collect();
+        // 生成列的 pg_attrdef 存的是计算表达式，不是 DEFAULT，不能进 column_defaults。
+        let column_defaults = structure
+            .columns
+            .iter()
+            .filter(|column| !column.is_generated)
+            .filter_map(|column| {
+                column
+                    .default_expr
+                    .as_ref()
+                    .map(|expr| (column.name.clone(), expr.clone()))
+            })
+            .collect();
+        // serial 列没有 attidentity，默认值 nextval(...) 是它的自增标志。
+        let auto_increment_columns = structure
+            .columns
+            .iter()
+            .filter(|column| {
+                column.is_identity
+                    || column
+                        .default_expr
+                        .as_deref()
+                        .is_some_and(|expr| expr.to_ascii_lowercase().contains("nextval("))
+            })
+            .map(|column| column.name.clone())
+            .collect();
+        // 生成列：PG 只支持 STORED，表达式存在 pg_attrdef（即 default_expr）。
+        let generated_columns = structure
+            .columns
+            .iter()
+            .filter(|column| column.is_generated)
+            .filter_map(|column| {
+                let expression = column.default_expr.clone()?;
+                Some((
+                    column.name.clone(),
+                    fluxdb_core::GeneratedColumn {
+                        expression,
+                        stored: Some(true),
+                    },
+                ))
+            })
+            .collect();
+        // 索引方法/部分索引谓词/表达式键项：结构同步据此保留语义或跳过不安全的索引。
+        let index_attributes = structure
+            .indexes
+            .iter()
+            .map(|index| {
+                (
+                    index.name.clone(),
+                    fluxdb_core::IndexAttributes {
+                        index_type: index.index_type.clone(),
+                        predicate: index.predicate.clone(),
+                        has_expression: index
+                            .columns
+                            .iter()
+                            .any(|item| item.expression.is_some()),
+                    },
+                )
+            })
+            .collect();
+        let foreign_key_actions = structure
+            .foreign_keys
+            .iter()
+            .map(|foreign_key| {
+                (
+                    foreign_key.name.clone(),
+                    fluxdb_core::ForeignKeyActions {
+                        on_delete: foreign_key.on_delete.clone(),
+                        on_update: foreign_key.on_update.clone(),
+                    },
+                )
+            })
+            .collect();
         Ok(fluxdb_core::TableDesignMetadata {
             columns,
             indexes: pg_indexes_from_structure(&structure),
             foreign_keys: pg_foreign_keys_from_structure(&structure),
             triggers: pg_triggers_from_structure(&structure),
+            column_defaults,
+            auto_increment_columns,
+            generated_columns,
+            index_attributes,
+            foreign_key_actions,
+            checks: structure.checks.clone(),
+            checks_loaded: true,
+            table_comment: structure.comment.clone(),
             ddl,
             details_loaded: true,
         })
