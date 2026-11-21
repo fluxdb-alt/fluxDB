@@ -186,6 +186,8 @@ fn tab_view_with_context(
     active: bool,
     compact: bool,
     show_database_context: bool,
+    // 表注释：仅用于表 Tab 的悬停提示，其他类型 Tab 为 None。
+    table_comment: Option<&str>,
     connection_color_hex: Option<&str>,
     pinned: bool,
     hovered: bool,
@@ -208,7 +210,12 @@ fn tab_view_with_context(
         _ => 1,
     };
     let title = tab_title(tab, show_database_context);
-    let title_tooltip = title.clone();
+    let table_comment = table_comment.map(str::to_string);
+    // 页签保持单行，悬停提示分两行展示完整表名与注释。
+    let title_tooltip = match table_comment.as_deref() {
+        Some(comment) => format!("{title}\n{comment}"),
+        None => title.clone(),
+    };
     let dragged_tab = DraggedTab {
         tab_id,
         title: title.clone(),
@@ -937,7 +944,7 @@ fn connection_matches_sidebar_search(
 }
 
 fn object_matches_sidebar_search(object: &ObjectSummary, query: &str) -> bool {
-    matches!(
+    if !matches!(
         object.path.kind,
         ObjectKind::Table
             | ObjectKind::View
@@ -945,5 +952,13 @@ fn object_matches_sidebar_search(object: &ObjectSummary, query: &str) -> bool {
             | ObjectKind::Function
             | ObjectKind::Collection
             | ObjectKind::RedisKey
-    ) && search_matches_text(&object.path.name, query)
+    ) {
+        return false;
+    }
+    // 表注释同样参与搜索：几十上百张表时，用户常按业务含义而非表名查找。
+    search_matches_text(&object.path.name, query)
+        || object
+            .comment
+            .as_deref()
+            .is_some_and(|comment| search_matches_text(comment, query))
 }

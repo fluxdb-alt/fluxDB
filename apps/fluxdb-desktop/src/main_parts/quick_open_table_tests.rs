@@ -1,15 +1,18 @@
 mod quick_open_table_tests {
     use fluxdb_core::{ConnectionId, ObjectKind, ObjectPath};
 
-    use crate::quick_open_table_matches;
+    use crate::{QuickOpenTableEntry, quick_open_table_matches};
 
-    fn table(name: &str, schema: Option<&str>) -> ObjectPath {
-        ObjectPath {
-            connection_id: ConnectionId(1),
-            database: Some("app".into()),
-            schema: schema.map(str::to_string),
-            name: name.into(),
-            kind: ObjectKind::Table,
+    fn table(name: &str, schema: Option<&str>) -> QuickOpenTableEntry {
+        QuickOpenTableEntry {
+            path: ObjectPath {
+                connection_id: ConnectionId(1),
+                database: Some("app".into()),
+                schema: schema.map(str::to_string),
+                name: name.into(),
+                kind: ObjectKind::Table,
+            },
+            comment: None,
         }
     }
 
@@ -19,7 +22,7 @@ mod quick_open_table_tests {
         let entries = vec![table("users", None), table("accounts", None)];
         let names = quick_open_table_matches(&entries, "  ")
             .into_iter()
-            .map(|entry| entry.name)
+            .map(|entry| entry.path.name)
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["accounts", "users"]);
     }
@@ -34,7 +37,7 @@ mod quick_open_table_tests {
         ];
         let mut names = quick_open_table_matches(&entries, "ord")
             .into_iter()
-            .map(|entry| entry.name)
+            .map(|entry| entry.path.name)
             .collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, vec!["order_items", "orders"]);
@@ -46,8 +49,20 @@ mod quick_open_table_tests {
         let entries = vec![table("users", Some("public"))];
         let names = quick_open_table_matches(&entries, "pub")
             .into_iter()
-            .map(|entry| entry.name)
+            .map(|entry| entry.path.name)
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["users"]);
+    }
+
+    /// 表注释参与召回：按业务词搜索能找到对应表。
+    #[test]
+    fn comment_match_includes_table() {
+        let mut entry = table("t_sales", None);
+        entry.comment = Some("客户订单明细".into());
+        let names = quick_open_table_matches(&[entry], "订单")
+            .into_iter()
+            .map(|entry| entry.path.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["t_sales"]);
     }
 }

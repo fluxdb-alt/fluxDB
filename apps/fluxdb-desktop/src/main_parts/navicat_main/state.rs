@@ -596,7 +596,7 @@ struct NavicatMain {
     quick_open_table_open: bool,
     quick_open_table_selected: usize,
     /// 只来自侧边栏已加载对象树，不额外查询数据库 catalog。
-    quick_open_table_entries: Vec<ObjectPath>,
+    quick_open_table_entries: Vec<QuickOpenTableEntry>,
     /// 快速打开表弹层当前用于「给表快捷组添加表」：选中后加入草稿而不是打开表。
     quick_open_table_for_shortcut: bool,
     /// 表快捷组编辑弹窗；`None` 表示未打开。

@@ -881,6 +881,7 @@ fn build_sidebar_row(
             let is_mongo = connection
                 .is_some_and(|connection| connection.config.kind == DatabaseKind::MongoDb);
             let show_size = sidebar_table_size_visible(this.connection_browser_width);
+            let tooltip = table_row_tooltip(&object);
             table_tree(
                 &object,
                 row.indent,
@@ -894,6 +895,7 @@ fn build_sidebar_row(
                 cx,
             )
             .id(row_id)
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             .cursor_pointer()
             .into_any_element()
         }

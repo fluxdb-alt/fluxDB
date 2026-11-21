@@ -97,6 +97,49 @@
         });
     }
 
+    /// 连接级只读开关必须能再次关闭。
+    ///
+    /// 回归场景：编辑已有只读连接时，旧 `options` 与新草稿合并；草稿在关闭状态下
+    /// 不生成 `read_only`，旧值被保留，导致 UI 上关掉后重开仍是只读。
+    #[gpui::test]
+    fn connection_read_only_can_be_turned_off_on_edit(cx: &mut TestAppContext) {
+        let _guard = locale_guard();
+        let (cx, view, _temp) = redis_e2e_view(cx);
+
+        // 新建一条只读 Redis 连接。
+        redis_e2e_open_advanced(cx);
+        redis_e2e_click(cx, "new-connection-toggle-read-only");
+        redis_e2e_click(cx, "new-connection-save-only");
+        let connection_id = cx.update(|_, cx| {
+            let config = &view.read(cx).controller.state().connections[0].config;
+            assert!(
+                fluxdb_app::connection_is_read_only(config),
+                "只读开关应写入连接配置"
+            );
+            config.id
+        });
+
+        // 编辑同一条连接，关闭只读后保存。
+        cx.update(|window, cx| {
+            view.update(cx, |this, cx| {
+                this.show_edit_connection(connection_id, window, cx);
+            });
+        });
+        redis_e2e_redraw(cx);
+        redis_e2e_click(cx, "new-connection-tab-2");
+        redis_e2e_click(cx, "new-connection-toggle-read-only");
+        redis_e2e_click(cx, "new-connection-save-only");
+
+        cx.update(|_, cx| {
+            let config = &view.read(cx).controller.state().connections[0].config;
+            assert!(
+                !fluxdb_app::connection_is_read_only(config),
+                "关闭只读后保存必须清除 read_only，实际 options: {:?}",
+                config.options
+            );
+        });
+    }
+
     /// URL 参数入口只在 MySQL 系出现，且输入值会落进连接配置。
     ///
     /// 回归场景：字段原本建了输入实体但从不渲染，默认参数与导入参数

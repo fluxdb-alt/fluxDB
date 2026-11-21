@@ -78,6 +78,7 @@ fn tabs(
                 state.active_tab == Some(tab.id),
                 compact,
                 true,
+                tab_table_comment(state, tab),
                 tab_connection_color_hex(state, tab),
                 app.pinned_tabs.contains(&tab.id),
                 app.hovered_tab == Some(tab.id),
@@ -791,6 +792,27 @@ fn data_editor_table_name(state: &AppState, tab_id: TabId) -> Option<String> {
         })
 }
 
+/// 表 Tab 的第二行展示对象注释；对象可能已被刷新移除，取不到时返回 None。
+fn tab_table_comment<'a>(state: &'a AppState, tab: &TabState) -> Option<&'a str> {
+    let object = match &tab.kind {
+        TabKind::DataEditor(editor) => &editor.object,
+        _ => return None,
+    };
+    state
+        .connections
+        .iter()
+        .find(|connection| connection.config.id == object.connection_id)
+        .and_then(|connection| {
+            connection
+                .objects
+                .iter()
+                .find(|summary| summary.path == *object)
+        })
+        .and_then(|summary| summary.comment.as_deref())
+        .map(str::trim)
+        .filter(|comment| !comment.is_empty())
+}
+
 fn object_path_database_name(path: &ObjectPath) -> &str {
     path.database.as_deref().unwrap_or("main")
 }
@@ -932,6 +954,7 @@ fn table_tab_row(
             state.active_tab == Some(tab.id),
             compact,
             false,
+            tab_table_comment(state, tab),
             tab_connection_color_hex(state, tab),
             pinned_tabs.contains(&tab.id),
             hovered_tab == Some(tab.id),

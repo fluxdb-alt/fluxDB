@@ -354,16 +354,20 @@ impl NavicatMain {
                     .filter(|object| {
                         matches!(object.path.kind, ObjectKind::Table | ObjectKind::View)
                     })
-                    .map(|object| object.path.clone()),
+                    .map(|object| QuickOpenTableEntry {
+                        path: object.path.clone(),
+                        comment: object.comment.clone(),
+                    }),
             );
         }
         entries.sort_by(|left, right| {
-            left.name
-                .cmp(&right.name)
-                .then_with(|| left.connection_id.cmp(&right.connection_id))
-                .then_with(|| left.database.cmp(&right.database))
+            left.path
+                .name
+                .cmp(&right.path.name)
+                .then_with(|| left.path.connection_id.cmp(&right.path.connection_id))
+                .then_with(|| left.path.database.cmp(&right.path.database))
         });
-        entries.dedup();
+        entries.dedup_by(|left, right| left.path == right.path);
         if entries.is_empty() {
             self.show_message(
                 tr("app.quick_open_table.not_loaded").as_ref(),

@@ -493,8 +493,15 @@ impl NavicatMain {
         }
 
         if let Some((connection_id, database)) = self.quick_open_table_scope() {
-            for object in quick_open_table_loaded_entries(self, connection_id, database.as_deref())
+            for entry in quick_open_table_loaded_entries(self, connection_id, database.as_deref())
             {
+                let object = &entry.path;
+                let comment = entry
+                    .comment
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|comment| !comment.is_empty())
+                    .unwrap_or_default();
                 let (badge, icon) = match object.kind {
                     ObjectKind::View => (
                         tr("app.command_palette.badge.view").to_string(),
@@ -524,10 +531,11 @@ impl NavicatMain {
                     title: object.name.clone(),
                     detail: detail.clone(),
                     search_text: format!(
-                        "{} {} {}",
+                        "{} {} {} {}",
                         object.name,
                         object_scope,
-                        badge
+                        badge,
+                        comment
                     )
                     .to_lowercase(),
                     icon,

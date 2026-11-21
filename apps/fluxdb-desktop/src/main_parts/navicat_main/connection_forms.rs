@@ -74,6 +74,9 @@ impl NavicatMain {
             if let Some(existing) = existing {
                 let new_options = config.options;
                 config.options = existing.options;
+                // 只读关闭时草稿不会生成 `read_only`，直接合并会让旧值残留，
+                // 表现为只读一旦开启就再也关不掉；先删除旧键再合并。
+                config.options.remove("read_only");
                 config.options.extend(new_options);
             }
             let previous = self.controller.clone();
