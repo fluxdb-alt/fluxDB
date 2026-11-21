@@ -138,6 +138,44 @@ mod sidebar_refresh_tests {
         assert!(has_table_group_and_row(&visible_rows(true, true)));
     }
 
+    /// 表行悬停提示：无注释只显示表名，有注释追加完整注释。
+    #[test]
+    fn table_row_tooltip_includes_comment() {
+        let mut connection = connection_with_table();
+        let object = &mut connection.objects[0];
+        assert_eq!(table_row_tooltip(object), "SALES_REGION");
+        object.comment = Some("  客户订单明细  ".into());
+        assert_eq!(table_row_tooltip(object), "SALES_REGION — 客户订单明细");
+    }
+
+    /// 侧边栏搜索必须命中表注释，而不只是表名。
+    #[test]
+    fn sidebar_search_matches_table_comment() {
+        let mut connection = connection_with_table();
+        connection.objects[0].comment = Some("客户订单明细".into());
+        let matching = normalized_sidebar_search("订单");
+        assert!(object_matches_sidebar_search(
+            &connection.objects[0],
+            &matching
+        ));
+        assert!(connection_matches_sidebar_search(
+            &connection,
+            &[],
+            &matching
+        ));
+
+        let missing = normalized_sidebar_search("不存在的注释");
+        assert!(!object_matches_sidebar_search(
+            &connection.objects[0],
+            &missing
+        ));
+        assert!(!connection_matches_sidebar_search(
+            &connection,
+            &[],
+            &missing
+        ));
+    }
+
     /// Redis 库名是数字，侧边栏必须按数值升序（0,1,2,10），不能是字典序（0,1,10,2）。
     #[test]
     fn redis_databases_are_sorted_numerically() {

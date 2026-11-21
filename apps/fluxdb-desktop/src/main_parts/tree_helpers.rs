@@ -701,6 +701,20 @@ fn table_size_label(object: &ObjectSummary, show: bool) -> Option<String> {
         .map(fluxdb_core::format_byte_length)
 }
 
+/// 表行悬停提示：完整表名 + 表注释（无注释时只显示表名）。
+/// 表名在窄侧边栏会被截断，注释不占用行高，用悬停补充最合适。
+fn table_row_tooltip(object: &ObjectSummary) -> String {
+    match object
+        .comment
+        .as_deref()
+        .map(str::trim)
+        .filter(|comment| !comment.is_empty())
+    {
+        Some(comment) => format!("{} — {comment}", object.path.name),
+        None => object.path.name.clone(),
+    }
+}
+
 /// `is_mongo` 由调用方按连接类型给出：Mongo 集合走集合工作台，其余走数据编辑器。
 #[allow(clippy::too_many_arguments)]
 fn table_tree(

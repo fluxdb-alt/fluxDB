@@ -1,3 +1,10 @@
+/// 快速打开表的候选项：路径用于打开，注释参与搜索与副标题展示。
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct QuickOpenTableEntry {
+    path: ObjectPath,
+    comment: Option<String>,
+}
+
 impl NavicatMain {
     /// 快速打开表的作用域：当前工作区的连接/库；没有工作区时仅接受唯一的 SQL 连接。
     ///
@@ -192,18 +199,22 @@ impl NavicatMain {
             return;
         };
         if self.quick_open_table_for_shortcut {
-            self.add_table_shortcut_target(entry, cx);
+            self.add_table_shortcut_target(entry.path, cx);
             return;
         }
         self.open_quick_open_table_entry(entry, cx);
     }
 
-    fn open_quick_open_table_entry(&mut self, entry: ObjectPath, cx: &mut Context<Self>) {
-        if !matches!(entry.kind, ObjectKind::Table | ObjectKind::View) {
+    fn open_quick_open_table_entry(
+        &mut self,
+        entry: QuickOpenTableEntry,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(entry.path.kind, ObjectKind::Table | ObjectKind::View) {
             return;
         }
         self.quick_open_table_open = false;
-        self.dispatch(AppCommand::OpenDataEditor(entry), cx);
+        self.dispatch(AppCommand::OpenDataEditor(entry.path), cx);
     }
 }
 
@@ -220,7 +231,7 @@ fn quick_open_table_loaded_entries(
     this: &NavicatMain,
     connection_id: ConnectionId,
     database: Option<&str>,
-) -> Vec<ObjectPath> {
+) -> Vec<QuickOpenTableEntry> {
     let Some(connection) = this
         .controller
         .state()
@@ -230,7 +241,7 @@ fn quick_open_table_loaded_entries(
     else {
         return Vec::new();
     };
-    let mut paths = connection
+    let mut entries = connection
         .objects
         .iter()
         .filter(|object| matches!(object.path.kind, ObjectKind::Table | ObjectKind::View))
@@ -240,40 +251,59 @@ fn quick_open_table_loaded_entries(
                 object.path.database.as_deref().unwrap_or("main") == database
             })
         })
-        .map(|object| object.path.clone())
+        .map(|object| QuickOpenTableEntry {
+            path: object.path.clone(),
+            comment: object.comment.clone(),
+        })
         .collect::<Vec<_>>();
-    paths.sort_by(|left, right| {
-        left.name
-            .cmp(&right.name)
-            .then_with(|| left.schema.cmp(&right.schema))
+    entries.sort_by(|left, right| {
+        left.path
+            .name
+            .cmp(&right.path.name)
+            .then_with(|| left.path.schema.cmp(&right.path.schema))
     });
-    paths.dedup_by(|left, right| {
-        left.name == right.name && left.schema == right.schema && left.database == right.database
+    entries.dedup_by(|left, right| {
+        left.path.name == right.path.name
+            && left.path.schema == right.path.schema
+            && left.path.database == right.path.database
     });
-    paths
+    entries
 }
 
 /// 按当前搜索串过滤并排序候选；空串保留全部，按名称字典序。
-fn quick_open_table_filtered(this: &NavicatMain) -> Vec<ObjectPath> {
+fn quick_open_table_filtered(this: &NavicatMain) -> Vec<QuickOpenTableEntry> {
     quick_open_table_matches(&this.quick_open_table_entries, &this.quick_open_table_search)
 }
 
-fn quick_open_table_matches(entries: &[ObjectPath], search: &str) -> Vec<ObjectPath> {
+fn quick_open_table_matches(
+    entries: &[QuickOpenTableEntry],
+    search: &str,
+) -> Vec<QuickOpenTableEntry> {
     let query = search.trim();
     let mut entries = entries
         .iter()
         .enumerate()
         .filter_map(|(index, entry)| {
-            let name_score = fluxdb_completion::fuzzy_score(&entry.name, query);
+            let name_score = fluxdb_completion::fuzzy_score(&entry.path.name, query);
             let schema_score = entry
+                .path
                 .schema
                 .as_deref()
                 .and_then(|schema| fluxdb_completion::fuzzy_score(schema, query));
-            if name_score.is_none() && schema_score.is_none() {
+            // 表注释参与召回，但排序权重低于表名/schema：搜索业务词可找回表，
+            // 直接搜表名时仍应排在注释命中之前。
+            let comment_score = entry
+                .comment
+                .as_deref()
+                .and_then(|comment| fluxdb_completion::fuzzy_score(comment, query))
+                .map(|score| score.saturating_sub(8));
+            if name_score.is_none() && schema_score.is_none() && comment_score.is_none() {
                 return None;
             }
             Some((
-                name_score.unwrap_or(0) + schema_score.unwrap_or(0).saturating_sub(4),
+                name_score.unwrap_or(0)
+                    + schema_score.unwrap_or(0).saturating_sub(4)
+                    + comment_score.unwrap_or(0),
                 index,
                 entry.clone(),
             ))
@@ -283,10 +313,14 @@ fn quick_open_table_matches(entries: &[ObjectPath], search: &str) -> Vec<ObjectP
         right
             .0
             .cmp(&left.0)
-            .then_with(|| left.2.name.cmp(&right.2.name))
+            .then_with(|| left.2.path.name.cmp(&right.2.path.name))
             .then_with(|| left.1.cmp(&right.1))
     });
-    entries.into_iter().take(50).map(|(_, _, entry)| entry).collect()
+    entries
+        .into_iter()
+        .take(50)
+        .map(|(_, _, entry)| entry)
+        .collect()
 }
 
 fn quick_open_table_modal(
@@ -418,20 +452,31 @@ fn quick_open_table_modal(
 }
 
 fn quick_open_table_row(
-    entry: ObjectPath,
+    entry: QuickOpenTableEntry,
     search: &str,
     selected: bool,
     selected_bg: gpui::Rgba,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
-    let subtitle = match (&entry.database, &entry.schema) {
+    let location = match (&entry.path.database, &entry.path.schema) {
         (Some(database), Some(schema)) => format!("{database} / {schema}"),
         (Some(database), None) => database.clone(),
         (None, Some(schema)) => schema.clone(),
         (None, None) => String::new(),
     };
-    let name = entry.name.clone();
+    // 有注释时把注释放进副标题，搜索命中注释后能直接看到原因。
+    let subtitle = match entry
+        .comment
+        .as_deref()
+        .map(str::trim)
+        .filter(|comment| !comment.is_empty())
+    {
+        Some(comment) if location.is_empty() => comment.to_string(),
+        Some(comment) => format!("{location} · {comment}"),
+        None => location,
+    };
+    let name = entry.path.name.clone();
     let row_selector = format!("quick-open-table-row:{name}");
     div()
         .h(px(52.))
@@ -451,7 +496,7 @@ fn quick_open_table_row(
             MouseButton::Left,
             cx.listener(move |this, _, _, cx| {
                 if this.quick_open_table_for_shortcut {
-                    this.add_table_shortcut_target(entry.clone(), cx);
+                    this.add_table_shortcut_target(entry.path.clone(), cx);
                 } else {
                     this.open_quick_open_table_entry(entry.clone(), cx);
                 }
