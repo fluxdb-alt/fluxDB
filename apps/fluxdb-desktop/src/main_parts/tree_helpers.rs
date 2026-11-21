@@ -992,7 +992,7 @@ fn connection_tree(
         .flex()
         .items_center()
         .gap_2()
-        .cursor_move()
+        .cursor_pointer()
         .hover(move |style| style.bg(colors.hover))
         .on_drag(dragged_connection, |drag, _, _, cx| {
             cx.stop_propagation();
