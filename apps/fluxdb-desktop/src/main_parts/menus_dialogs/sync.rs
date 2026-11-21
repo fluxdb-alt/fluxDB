@@ -34,6 +34,28 @@ impl SyncLogEntry {
     }
 }
 
+/// 一次同步结束后的最终状态；成功后界面停留在预览步骤，用状态条替代「什么都没变」。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SyncCompletionStatus {
+    Success,
+    Partial,
+    Canceled,
+}
+
+#[derive(Clone, Debug)]
+struct SyncCompletion {
+    status: SyncCompletionStatus,
+    /// 本次实际处理的表数（含跳过表）。
+    tables: usize,
+    /// 失败表数；`Partial` 时用于提示。
+    failed_tables: usize,
+    inserted: u64,
+    updated: u64,
+    deleted: u64,
+    /// 结构同步累计应用的变更项数。
+    applied: usize,
+}
+
 /// 一张源表的「目标表」下拉。选项首项是「自动配对」，其余为目标端表键。
 #[derive(Clone)]
 struct SyncPairRow {
@@ -129,6 +151,8 @@ struct SyncWizardState {
     /// 数据预览样本的动作筛选；`None` 表示显示全部差异。
     data_sample_filter: Option<RowDiffAction>,
     running: bool,
+    /// 最近一次执行的最终状态；再次导航或重新预览时清空，避免展示过期结果。
+    completion: Option<SyncCompletion>,
     /// 向导是否显示。运行中关窗只置 false，状态保留，任务中心可重新打开。
     visible: bool,
     error: Option<String>,
@@ -172,6 +196,8 @@ impl SyncWizardState {
         self.structure_preview = None;
         self.preview_error = None;
         self.selected_table = None;
+        // 预览失效说明输入已改，完成状态也不再对应当前配置。
+        self.completion = None;
     }
 }
 
@@ -563,6 +589,7 @@ impl NavicatMain {
             selected_table: None,
             data_sample_filter: None,
             running: false,
+            completion: None,
             visible: true,
             error: None,
             log: Vec::new(),
@@ -1390,6 +1417,8 @@ impl NavicatMain {
                 return;
             }
             state.error = None;
+            // 导航后旧结果不再对应当前步骤，避免预览顶部残留上一次完成状态。
+            state.completion = None;
             state.step = step.clamp(1, 4);
             let needs_preview = state.step == 4
                 && match state.mode {
@@ -1639,6 +1668,7 @@ impl NavicatMain {
             state.task_center_id = Some(task_id);
             state.cancel = cancel.clone();
             state.error = None;
+            state.completion = None;
             // 上一次的记录号只对刚结束的任务有效；本次跑完会重新写入。
             state.last_run_id = None;
             state.log.clear();
@@ -1709,6 +1739,53 @@ impl NavicatMain {
             SyncExecuteOutcome::Data(Err(error)) | SyncExecuteOutcome::Structure(Err(error))
                 if error.kind == fluxdb_core::ErrorKind::Cancelled
         );
+        // 完成状态只表达执行结果；硬失败仍由 footer 错误提示，不重复展示。
+        let completion = match &outcome {
+            SyncExecuteOutcome::Data(Ok(report)) => {
+                let failed = report.failed_tables().len();
+                Some(SyncCompletion {
+                    status: if failed == 0 {
+                        SyncCompletionStatus::Success
+                    } else {
+                        SyncCompletionStatus::Partial
+                    },
+                    tables: report.tables.len(),
+                    failed_tables: failed,
+                    inserted: report.total_inserted(),
+                    updated: report.total_updated(),
+                    deleted: report.total_deleted(),
+                    applied: 0,
+                })
+            }
+            SyncExecuteOutcome::Structure(Ok(report)) => {
+                let failed = report.failed_tables().len();
+                Some(SyncCompletion {
+                    status: if failed == 0 {
+                        SyncCompletionStatus::Success
+                    } else {
+                        SyncCompletionStatus::Partial
+                    },
+                    tables: report.tables.len(),
+                    failed_tables: failed,
+                    inserted: 0,
+                    updated: 0,
+                    deleted: 0,
+                    applied: report.total_applied(),
+                })
+            }
+            SyncExecuteOutcome::Data(Err(_)) | SyncExecuteOutcome::Structure(Err(_)) if canceled => {
+                Some(SyncCompletion {
+                    status: SyncCompletionStatus::Canceled,
+                    tables: 0,
+                    failed_tables: 0,
+                    inserted: 0,
+                    updated: 0,
+                    deleted: 0,
+                    applied: 0,
+                })
+            }
+            _ => None,
+        };
         let (status, stage, error, lines) = match outcome {
             SyncExecuteOutcome::Data(Ok(report)) => {
                 data_run_id = report.run_id;
@@ -1797,7 +1874,12 @@ impl NavicatMain {
         {
             state.running = false;
             state.task_center_id = None;
-            state.log = lines.into_iter().map(SyncLogEntry::now).collect();
+            // 追加而不是覆盖：执行期的比对/写入进度与最终汇总都要留在日志里。
+            // 复用 push_sync_log，报告行再多也按统一上限截断。
+            for line in lines {
+                push_sync_log(state, line);
+            }
+            state.completion = completion;
             state.error = error.clone();
             if data_run_id.is_some() {
                 state.last_run_id = data_run_id;

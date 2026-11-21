@@ -843,6 +843,22 @@ fn sync_wizard_previews_and_executes_data_sync(cx: &mut TestAppContext) {
         "log lines carry time and text: {log_lines:?}"
     );
 
+    // 执行完成必须给出独立状态条，而不是继续显示成未执行的预览。
+    assert!(
+        cx.debug_bounds("sync-completion").is_some(),
+        "finished sync must render a completion banner"
+    );
+    let completion = cx.update(|_, cx| {
+        view.read(cx)
+            .sync_wizard
+            .as_ref()
+            .and_then(|state| state.completion.clone())
+    });
+    let completion = completion.expect("execution must record completion state");
+    assert_eq!(completion.status, crate::SyncCompletionStatus::Success);
+    assert_eq!(completion.tables, 1);
+    assert_eq!(completion.inserted, 1);
+
     // 执行记录回看：落盘后按钮出现在预览底部，点击后弹框展示该表记录。
     let run_id = cx.update(|_, cx| {
         view.read(cx)
