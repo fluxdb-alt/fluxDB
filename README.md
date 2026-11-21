@@ -19,6 +19,17 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 
 ## Latest changes
 
+### v0.1.20
+
+- **Structure and data sync**: sync orchestration with chunked previews and streaming execution, cross-dialect table creation and type mapping. Structure sync covers CHECK constraints, foreign-key actions, index types / predicates and generated columns; SQLite can create and drop native indexes. The task center records sync jobs, and the wizard requires an explicit table selection before preview or execution.
+- **Migration SQL and resumable data sync**: export migration SQL after each statement succeeds, with table-and-time file names, append mode and no repeated header. Cross-database writes add conflict modes, per-row failure policies and LOB summaries; the sync ledger records resume signatures, chunk cursors and failed rows.
+- **Backup and restore**: MongoDB native archive backup / restore (`mongodump` / `mongorestore`) with credentials passed through a temporary 0600 config file; PostgreSQL logical backup; MySQL / PostgreSQL logical backups now use consistent snapshots, keyset pagination and multi-row `INSERT` batches. Restore accepts MongoDB, and backup-list paths can be clicked to copy.
+- **Table comments and copy headers**: sidebar table rows show comments on hover, and object search, quick open (`⌘P`) and the command palette match comments. `⌘⇧C` / `Ctrl+Shift+C` copies a selection with column names.
+- **Sync completion and UI polish**: dedicated success / partial-failure / cancelled status bars with table and row totals; unified theme-aware database brand tiles; a loading state for structure comparison; the Schema field is hidden for databases where the database is the schema.
+- **Fixes**: SQL Server object-tree error 207, MySQL 9.x `mysqldump` rejecting `--connect-timeout`, read-only connections that could not be disabled when edited, and stale MySQL table sizes in the sidebar.
+
+[Full release notes](./release-notes/v0.1.20/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.19
 
 - **Query result export and select-all**: data pages and query results select every cell with `⌘A` / `Ctrl+A` and copy it as TSV. The query result toolbar gains an export that reuses the SQL actually executed and lets you edit it, with field selection and TXT / CSV / JSON / XML output, reading the full SQL in batches with cancellation.
@@ -30,16 +41,6 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 - **Improvements and fixes**: the built-in Flux Amber theme; fixed SQL history loss at startup, history skipping digit-prefixed table names, and history quick search leaking across databases.
 
 [Full release notes](./release-notes/v0.1.19/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
-
-### v0.1.18
-
-- **Server panels**: a connection's context menu opens a "Server" tab with overview, sessions and lock waits for MySQL / MariaDB / TiDB, PostgreSQL / KingbaseES, SQL Server, Oracle and Dameng; Redis adds clients and slow log, and MongoDB adds current operations and an in-session trend. Queries, sessions and clients can be terminated after confirmation, read-only connections are blocked at three layers, and panels refresh manually or every 5 seconds.
-- **Switch query scope**: the toolbar switches the target database and schema per connection type without opening a new query. Database switches clear results, running queries block switching, and PostgreSQL / KingbaseES return to the default schema with `RESET search_path`.
-- **Custom themes and fonts**: create, edit and delete themes with SQL highlight tokens, import Zed / VS Code themes (JSONC included), and set UI font/size and code font/size/line-height independently with live preview.
-- **Local MCP over in-app HTTP**: the stdio helper process is replaced by a loopback-only Streamable HTTP endpoint with a Bearer token, and existing client configs are taken over automatically.
-- **Improvements and fixes**: centralized SQLite migrations with `VACUUM INTO` backups and fail-closed version checks, unified SQLite / SQL Server / TiDB value and read-only semantics, numeric Redis database sorting, and exact negative DECIMAL rendering on SQL Server.
-
-[Full release notes](./release-notes/v0.1.18/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
 
 ## Why FluxDB
 
@@ -66,6 +67,12 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 - Layout ER diagrams from real foreign keys, with optional local logical relationships.
 - Local logical relationships never create or modify database foreign keys.
 - Export ER diagrams as JSON, DBML, Mermaid or SVG.
+
+### Backup and restore
+
+- Native tool paths for MySQL / MariaDB / TiDB (`mysqldump`), PostgreSQL (`pg_dump`), MongoDB (`mongodump`) and SQLite (`VACUUM INTO`), plus a built-in logical SQL fallback when dump tools are missing.
+- Logical backups use consistent snapshots where supported, keyset pagination and batched `INSERT`s; restores can target another database and verify the data-part SHA-256 and row counts when the manifest provides them.
+- The backup list keeps table manifests, restore history and notes, and paths can be copied with one click.
 
 ### MongoDB workbench
 
@@ -102,15 +109,16 @@ Capabilities vary by database. See the [user guide](./docs/user-guide.md) for de
 
 | Database | Current capabilities | Backup / restore | Connections and limits | Not yet supported |
 | --- | --- | --- | --- | --- |
-| MySQL | SQL queries, object browsing, table management, data editing, import/export, native client tool entry | `mysqldump` logical backup; SQL restore | TLS/SSL, SSH tunnel, proxy, timeouts, charset | - |
-| TiDB | Reuses the MySQL protocol path with TiDB SQL dialect, completion and schema management | Reuses MySQL logical backup | Same connection features as MySQL | - |
-| MariaDB | Reuses the MySQL protocol path for object browsing, SQL queries, table structure management, data editing, import/export, and users/privileges; detects MariaDB server versions | Reuses `mysqldump` / `mariadb-dump` logical backup and SQL restore | Same connection features as MySQL; default port 3306 | - |
-| PostgreSQL | SQL queries, schema/object browsing, table management, data editing, users and roles, psql tool entry | `pg_dump` plain SQL; `psql` restore | TLS, SSH, proxy, schema scope, timeouts | - |
+| MySQL | SQL queries, object browsing, table management, data editing, import/export, native client tool entry | Native `mysqldump`; built-in logical SQL backup on a consistent snapshot with keyset pagination; SQL restore | TLS/SSL, SSH tunnel, proxy, timeouts, charset | - |
+| TiDB | Reuses the MySQL protocol path with TiDB SQL dialect, completion and schema management | Reuses MySQL logical backup and restore | Same connection features as MySQL | - |
+| MariaDB | Reuses the MySQL protocol path for object browsing, SQL queries, table structure management, data editing, import/export, and users/privileges; detects MariaDB server versions | Native `mysqldump` / `mariadb-dump`; built-in logical SQL backup; SQL restore | Same connection features as MySQL; default port 3306 | - |
+| PostgreSQL | SQL queries, schema/object browsing, table management, data editing, users and roles, psql tool entry | Native `pg_dump` plain SQL; built-in logical backup on a repeatable-read snapshot; `psql` restore | TLS, SSH, proxy, schema scope, timeouts | - |
 | KingbaseES | Reuses the PostgreSQL connector in PG compatibility mode: connection, database/schema and object browsing, SQL queries, data viewing/editing, table structure viewing/design; the users and privileges page reuses the PostgreSQL implementation and has not been separately regression-tested | Native backup/restore not supported; use `sys_dump` / `ksql` from the command line | PG compatibility mode only; default port 54321, username usually `system`, default database `test`; the same form, TLS/SSH/proxy entry points as PostgreSQL | Oracle compatibility mode, native backup/restore, external `psql` / `ksql` tool entries |
 | SQL Server | T-SQL queries, database/schema/object browsing, table design and data editing, table import/export, logins, database users, role membership and explicit permissions, object-level logical backup/restore, AI page context and controlled execution | Object-level logical SQL backup and restore | SQL Server authentication, TLS, explicit ports; named instances require the actual port | Windows integrated authentication, Azure AD, contained database users, column-level permission editing, user-defined server roles, SQL Browser/named-instance auto-discovery, and database-level physical `BACKUP DATABASE`. Object-level logical backup and restore is not a substitute for database-level disaster recovery. |
 | SQLite | Local file connections, SQL queries, object browsing, table management, data editing | Consistent `VACUUM INTO` snapshot; restore to a new file with integrity and foreign-key checks | Local file path | - |
 | Dameng DM8 | Schema/object browsing, SQL queries, table design and management, data editing, table import | Logical backup and SQL restore; restore currently targets a single schema | Instance and schema connection settings | - |
-| MongoDB | Connection-string import (`mongodb://` / `mongodb+srv://`), database/collection/view browsing, collection workspace (document filter/projection/sort, condition builder, aggregation, indexes, collection info), document create/edit/duplicate/delete, JSON / JSONL / CSV import and export, collection rename and drop, command-line terminal, SQL-style query completion, AI page context and controlled execution | No database-level backup/restore; export is document-level logical export (JSON / JSONL / CSV) | `mongodb+srv://` discovery, SCRAM-SHA-1 / SCRAM-SHA-256 / MONGODB-X509, TLS options via connection-string import; at most 500 documents per query | No `mongodump` / `mongorestore` backup and restore, no performance-metrics panel, no SSH tunnel, no bulk delete (and no undo), no cross-database collection moves, no view rename/drop, no time-series or capped collection creation, no in-table row editing, no transactions or change streams; CSV import supports scalar fields only and must be UTF-8; new documents always get an ObjectId `_id`. |
+| Oracle | SQL queries, schema/object browsing, table design and management, data editing, filtering and sorting, SQL completion, users and privileges (read-only grants for the current account), logical export, AI page context and controlled execution | Local logical export (DDL + paged data); restore by replaying SQL | Service Name or SID, CDB/PDB target; unquoted identifiers fold to uppercase | Server-side Data Pump, grants for accounts other than the current one (`DBA_*` / `ALL_SYS_PRIVS` need extra privileges), cross-page consistent snapshot export. Paged export is neither a consistent snapshot nor a server-side native backup. |
+| MongoDB | Connection-string import (`mongodb://` / `mongodb+srv://`), database/collection/view browsing, collection workspace (document filter/projection/sort, condition builder, aggregation, indexes, collection info), document create/edit/duplicate/delete, JSON / JSONL / CSV import and export, collection rename and drop, command-line terminal, SQL-style query completion, AI page context and controlled execution | Native `mongodump` / `mongorestore` whole-database archive with `--gzip`; restore can remap to another database when started from a backup record | `mongodb+srv://` discovery, SCRAM-SHA-1 / SCRAM-SHA-256 / MONGODB-X509, TLS options via connection-string import; at most 500 documents per query | No per-collection backup selection, `--oplog` or performance-metrics panel; no SSH tunnel, bulk delete (and no undo), cross-database collection moves, view rename/drop, time-series or capped collection creation, in-table row editing, transactions or change streams. CSV import supports scalar fields only and must be UTF-8; new documents always get an ObjectId `_id`. |
 | Redis | Keyspace browsing, value editing, TTL, Workbench, CLI, Pub/Sub | No database-level backup/restore | TLS, SSH, Sentinel, Cluster, URI/Cloud; Cluster uses DB 0 only | - |
 
 ## AI Agent
@@ -143,7 +151,7 @@ Open the [latest release](https://github.com/fluxdb-alt/fluxDB/releases/latest) 
 
 Release packages include `.sha256` checksums. Windows ARM64, Linux ARM64, AppImage, Flatpak and Snap are not currently available.
 
-MySQL, MariaDB and PostgreSQL backup/restore depend on the local `mysqldump`/`mariadb-dump`, `mysql`/`mariadb` and `pg_dump`/`psql` clients. Basic queries and editing do not require them.
+Native backup/restore for MySQL, MariaDB, TiDB, PostgreSQL and MongoDB depends on the local `mysqldump` / `mariadb-dump`, `mysql` / `mariadb`, `pg_dump` / `psql`, `mongodump` / `mongorestore` and `mongosh` clients. The built-in logical SQL backup still works without `mysqldump` / `pg_dump`, and basic queries and editing do not require these tools.
 
 After installation, choose “Add connection”, select a database type, enter the connection details and test the connection. See the [user guide](./docs/user-guide.md); it currently uses Chinese screenshots and macOS shortcuts.
 
@@ -211,7 +219,7 @@ AI is used extensively in the development workflow. Humans own requirements, rev
 Current priorities are real-world coverage for existing databases, stability and the cross-platform release experience. Candidate directions include:
 
 - **SQL Server follow-up**: Windows integrated authentication and Azure AD, contained database users, column-level permissions, user-defined server roles, named-instance auto-discovery, and database-level physical backup/restore.
-- **MongoDB follow-up**: database-level backup/restore, performance metrics, bulk delete and bulk writes, in-table row editing, transactions and change streams.
+- **MongoDB follow-up**: performance metrics, bulk delete and bulk writes, in-table row editing, transactions and change streams.
 - **More databases**: evaluate ClickHouse, DuckDB, Elasticsearch/OpenSearch and others based on community demand.
 
 The roadmap does not imply current support.

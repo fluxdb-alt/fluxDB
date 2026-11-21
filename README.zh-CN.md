@@ -17,6 +17,17 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 
 ## 最近更新
 
+### v0.1.20
+
+- **结构同步与数据同步**：新增同步编排、分块预览与流式执行，支持跨类型建表与类型映射；结构同步覆盖 CHECK 约束、外键引用动作、索引类型 / predicate 与生成列，SQLite 支持原生索引建删。任务中心记录同步任务，向导在预览或执行前必须显式选择表。
+- **迁移 SQL 与断点续传**：数据同步可导出迁移 SQL，语句执行成功后才追加落盘，默认文件名带表名与本地时间，追加模式不重复文件头；跨库写入补齐冲突模式、行级失败策略与 LOB 摘要，同步账本记录续传签名、块游标与失败行。
+- **备份与恢复**：新增 MongoDB 原生归档备份 / 恢复（`mongodump` / `mongorestore`），凭据经临时 0600 配置文件传递；新增 PostgreSQL 逻辑备份；MySQL / PostgreSQL 逻辑备份改为一致性快照、keyset 分页与多行 `INSERT` 批量写入。恢复弹框支持 MongoDB，备份列表路径可点击复制。
+- **表注释与复制列名**：侧边栏表行悬停显示表注释，对象搜索、快速打开（`⌘P`）与命令面板均可按注释匹配；`⌘⇧C` / `Ctrl+Shift+C` 支持复制选区并附带列名。
+- **同步完成状态与界面打磨**：新增成功 / 部分失败 / 已取消状态条与表数、行数统计；统一跟随主题的数据库品牌图标底板；结构对比增加加载态；库即 Schema 的数据库隐藏 Schema 字段。
+- **修复**：SQL Server 展开对象树报 207、MySQL 9.x `mysqldump` 拒绝 `--connect-timeout`、编辑连接无法关闭只读、MySQL 侧边栏表体积显示旧值。
+
+[完整更新说明](./release-notes/v0.1.20/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.19
 
 - **查询结果导出与全选复制**：数据页和查询结果页支持 `⌘A` / `Ctrl+A` 全选当前页单元格并按 TSV 复制；查询结果工具栏新增导出，条件沿用实际执行的 SQL 且可编辑，支持字段选择与 TXT / CSV / JSON / XML，按全量 SQL 分批读取、可取消。
@@ -28,16 +39,6 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 - **改进与修复**：新增 Flux Amber 内置主题；修复启动时 SQL 历史丢失、数字开头表名漏记历史与历史快捷搜索跨库的问题。
 
 [完整更新说明](./release-notes/v0.1.19/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
-
-### v0.1.18
-
-- **服务器面板**：连接右键菜单新增「服务器」页签，MySQL / MariaDB / TiDB、PostgreSQL / KingbaseES、SQL Server、Oracle 与达梦提供概览、会话与锁等待；Redis 提供客户端与慢日志，MongoDB 提供当前操作与会话内性能趋势。查询、会话和客户端可在二次确认后终止，只读连接三层拦截，面板支持手动或每 5 秒自动刷新。
-- **切换查询作用域**：工具栏可按连接类型切换目标数据库与 Schema，无需新建查询；切库会清空结果，执行中禁止切换，PostgreSQL / KingbaseES 通过 `RESET search_path` 回到默认 Schema。
-- **自定义主题与字体**：可新建、编辑、删除主题并调整 SQL 高亮 token，导入 Zed / VS Code 主题（含 JSONC），并分别设置界面字体 / 字号与代码字体 / 字号 / 行高，支持实时预览。
-- **本地 MCP 改为应用内 HTTP**：移除 stdio 子进程，改为仅回环监听的 Streamable HTTP 端点并校验 Bearer 令牌，已有客户端配置自动接管。
-- **改进与修复**：集中式 SQLite 迁移（`VACUUM INTO` 备份、更高版本失败关闭）；统一 SQLite / SQL Server / TiDB 的值类型与只读语义；Redis 数据库按数值排序；SQL Server 负 DECIMAL 精确渲染。
-
-[完整更新说明](./release-notes/v0.1.18/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
 
 ## 为什么选择 FluxDB
 
@@ -64,6 +65,12 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 - ER 图基于真实外键自动布局，也支持手工记录本地逻辑关系。
 - 逻辑关系只保存在本地图谱中，不会创建或修改数据库外键。
 - ER 图可导出 JSON、DBML、Mermaid 和 SVG。
+
+### 备份与恢复
+
+- 原生工具链路覆盖 MySQL / MariaDB / TiDB（`mysqldump`）、PostgreSQL（`pg_dump`）、MongoDB（`mongodump`）与 SQLite（`VACUUM INTO`）；缺少 dump 工具时使用内置逻辑 SQL 备份。
+- 逻辑备份在支持时使用一致性快照、keyset 分页与多行 `INSERT`；恢复到另一库后会按清单校验数据部分 SHA-256 与行数。
+- 备份列表保留表清单、恢复历史与备注，路径可一键复制。
 
 ### MongoDB 工作台
 
@@ -100,16 +107,16 @@ https://github.com/user-attachments/assets/f6075999-a87f-4644-9d14-dbda49a7981d
 
 | 数据库 | 当前能力 | 备份 / 恢复 | 连接与限制 | 尚未支持 |
 | --- | --- | --- | --- | --- |
-| MySQL | SQL 查询、对象浏览、表结构管理、数据编辑、导入导出、原生客户端工具入口 | `mysqldump` 逻辑备份，SQL 恢复 | TLS / SSL、SSH 隧道、代理、超时、字符集 | - |
-| TiDB | 复用 MySQL 协议链路，适配 SQL 方言、补全与表结构管理 | 复用 MySQL 逻辑备份能力 | 连接能力与 MySQL 一致 | - |
-| MariaDB | 复用 MySQL 协议链路，支持对象浏览、SQL 查询、表结构管理、数据编辑、导入导出、用户与权限；识别 MariaDB 服务端版本 | 复用 `mysqldump` / `mariadb-dump` 逻辑备份与 SQL 恢复 | 连接能力与 MySQL 一致；默认端口 3306 | - |
-| PostgreSQL | SQL 查询、Schema / 对象浏览、表结构管理、数据编辑、用户与角色管理、psql 工具入口 | `pg_dump` plain SQL 备份，`psql` 恢复 | TLS、SSH、代理、Schema 作用域、超时 | - |
+| MySQL | SQL 查询、对象浏览、表结构管理、数据编辑、导入导出、原生客户端工具入口 | 原生 `mysqldump`；内置逻辑 SQL 备份（一致性快照 + keyset 分页）；SQL 恢复 | TLS / SSL、SSH 隧道、代理、超时、字符集 | - |
+| TiDB | 复用 MySQL 协议链路，适配 SQL 方言、补全与表结构管理 | 复用 MySQL 逻辑备份与恢复 | 连接能力与 MySQL 一致 | - |
+| MariaDB | 复用 MySQL 协议链路，支持对象浏览、SQL 查询、表结构管理、数据编辑、导入导出、用户与权限；识别 MariaDB 服务端版本 | 原生 `mysqldump` / `mariadb-dump`；内置逻辑 SQL 备份；SQL 恢复 | 连接能力与 MySQL 一致；默认端口 3306 | - |
+| PostgreSQL | SQL 查询、Schema / 对象浏览、表结构管理、数据编辑、用户与角色管理、psql 工具入口 | 原生 `pg_dump` plain SQL；内置逻辑备份（REPEATABLE READ 快照）；`psql` 恢复 | TLS、SSH、代理、Schema 作用域、超时 | - |
 | 人大金仓 KingbaseES | 复用 PostgreSQL 连接器（PG 兼容模式）：连接、库 / Schema 与对象浏览、SQL 查询、数据查看与编辑、表结构查看与设计；用户与权限页沿用 PostgreSQL 实现，尚未单独回归 | 暂不支持原生备份 / 恢复；需要时请在命令行使用 `sys_dump` / `ksql` | 仅支持 PG 兼容模式；默认端口 54321，用户名通常为 `system`、默认库 `test`；表单、TLS / SSH / 代理等入口与 PostgreSQL 一致 | Oracle 兼容模式、原生备份 / 恢复、`psql` / `ksql` 等外部工具入口 |
 | SQL Server | T-SQL 查询、数据库 / Schema / 对象浏览、表结构管理与数据编辑、表数据导入导出、登录名 / 数据库用户 / 角色成员 / 显式权限管理、对象级逻辑备份恢复、AI 页面上下文与受控执行 | 对象级逻辑 SQL 备份与恢复 | SQL Server 认证、TLS、显式端口；命名实例需填写实际端口 | Windows 集成认证、Azure AD、包含数据库用户、列级权限编辑、用户自定义服务器角色、SQL Browser / 命名实例自动解析、数据库级物理备份（`BACKUP DATABASE`）。对象级逻辑备份恢复不能替代数据库级灾难恢复。 |
 | SQLite | 本地文件连接、SQL 查询、对象浏览、表结构管理、数据编辑 | `VACUUM INTO` 完整一致快照；恢复到新文件并检查完整性与外键 | 本地文件路径 | - |
 | 达梦 DM8 | Schema / 对象浏览、SQL 查询、表结构管理与设计、数据编辑、表数据导入 | 逻辑备份与 SQL 恢复；当前恢复面向单 Schema | 实例与 Schema 连接配置 | - |
 | Oracle | SQL 查询、Schema / 对象浏览、表结构管理与设计、数据编辑、筛选与排序、SQL 补全、用户与权限（只读当前账号授权明细）、逻辑导出、AI 页面上下文与受控执行 | 本机逻辑导出（DDL + 逐页数据），恢复按 SQL 重放 | Service Name 或 SID、CDB / PDB 目标；未加引号的标识符按大写折叠 | 服务器端 Data Pump 备份、非当前账号的授权明细（`DBA_*` / `ALL_SYS_PRIVS` 需要额外权限）、跨页一致快照导出。逐页导出不是一致快照，也不是服务器端原生备份。 |
-| MongoDB | 连接串导入（`mongodb://` / `mongodb+srv://`）、库 / 集合 / 视图浏览、集合工作台（文档筛选投影排序、条件构建、聚合、索引、集合信息）、文档新增 / 编辑 / 复制 / 删除、JSON / JSONL / CSV 导入导出、集合重命名与删除、命令行终端、SQL 风格查询补全、AI 页面上下文与受控执行 | 不提供数据库级备份恢复；导出是文档级逻辑导出（JSON / JSONL / CSV） | `mongodb+srv://` 拓扑发现、SCRAM-SHA-1 / SCRAM-SHA-256 / MONGODB-X509、TLS 参数经连接串导入；单次查询最多返回 500 篇文档 | 无 `mongodump` / `mongorestore` 备份恢复、「查看性能指标」面板、SSH 隧道、批量删除（无撤销）、跨库移动集合、视图重命名 / 删除、时间序列与 capped 集合创建入口、表格行内编辑、事务与变更流；CSV 导入仅支持标量字段且必须是 UTF-8；新增文档的 `_id` 固定为 ObjectId。 |
+| MongoDB | 连接串导入（`mongodb://` / `mongodb+srv://`）、库 / 集合 / 视图浏览、集合工作台（文档筛选投影排序、条件构建、聚合、索引、集合信息）、文档新增 / 编辑 / 复制 / 删除、JSON / JSONL / CSV 导入导出、集合重命名与删除、命令行终端、SQL 风格查询补全、AI 页面上下文与受控执行 | 原生 `mongodump` / `mongorestore` 单库归档备份（`--gzip`）；从备份记录发起恢复时可重映射到另一库 | `mongodb+srv://` 拓扑发现、SCRAM-SHA-1 / SCRAM-SHA-256 / MONGODB-X509、TLS 参数经连接串导入；单次查询最多返回 500 篇文档 | 不支持按集合选择备份、`--oplog` 与「查看性能指标」面板；SSH 隧道、批量删除（无撤销）、跨库移动集合、视图重命名 / 删除、时间序列与 capped 集合创建入口、表格行内编辑、事务与变更流暂未支持。CSV 导入仅支持标量字段且必须是 UTF-8；新增文档的 `_id` 固定为 ObjectId。 |
 | Redis | 键空间浏览、键值编辑、TTL、Workbench、CLI、Pub/Sub | 不提供数据库级备份恢复 | TLS、SSH、Sentinel、Cluster、URI / Cloud；Cluster 仅支持 DB 0 | - |
 
 ## AI Agent
@@ -142,7 +149,7 @@ FluxDB 内置可选 AI Agent，用于理解结构、编写 SQL、排查数据和
 
 发布包附带 `.sha256` 校验文件。Windows ARM64、Linux ARM64、AppImage、Flatpak 和 Snap 暂未提供；更多发行版与硬件环境的兼容性仍需持续验证。
 
-MySQL / MariaDB / PostgreSQL 的备份恢复依赖本机 `mysqldump` / `mariadb-dump`、`mysql` / `mariadb`、`pg_dump` / `psql` 客户端；基础查询和编辑不需要这些工具。
+MySQL / MariaDB / TiDB / PostgreSQL / MongoDB 的原生备份恢复依赖本机 `mysqldump` / `mariadb-dump`、`mysql` / `mariadb`、`pg_dump` / `psql`、`mongodump` / `mongorestore` 与 `mongosh` 客户端；没有 `mysqldump` / `pg_dump` 时仍可使用内置逻辑 SQL 备份，基础查询和编辑不需要这些工具。
 
 安装后，点击「添加连接」，选择数据库类型，填写连接信息并测试连接，即可开始使用。详细步骤见[操作手册](./docs/user-guide.md)（当前以 macOS 界面和快捷键为例）。
 
@@ -209,7 +216,8 @@ macOS 可使用仓库脚本生成包含动态库的 `.app` 和 `.dmg`：
 
 当前优先完善既有数据库的真实场景覆盖、稳定性和跨平台发布体验。后续候选方向包括：
 
-- **MongoDB 后续**：数据库级备份恢复、性能指标面板、批量删除与批量写入、表格行内编辑、事务与变更流。
+- **SQL Server 后续**：Windows 集成认证与 Azure AD、包含数据库用户、列级权限、用户自定义服务器角色、命名实例自动发现，以及数据库级物理备份恢复。
+- **MongoDB 后续**：性能指标面板、批量删除与批量写入、表格行内编辑、事务与变更流。
 - **更多数据库**：按社区需求评估 ClickHouse、DuckDB、Elasticsearch / OpenSearch 等方向。
 
 路线图不代表当前版本已经支持。
