@@ -2708,6 +2708,9 @@ pub struct AppController {
     ai_storage: Option<fluxdb_storage::FileStorage>,
     /// ER 逻辑关系服务按作用域复用；生命周期由应用层管理，UI 不直接持有文件 store。
     er_model_storage: Option<fluxdb_storage::FileStorage>,
+    /// 数据同步执行账本：执行完成后回看块明细与行级样本。写入是最佳努力，
+    /// 失败只记日志，不影响同步结果。
+    sync_run_storage: Option<fluxdb_storage::FileStorage>,
     er_model_services: Arc<Mutex<BTreeMap<String, Arc<ErModelService>>>>,
     /// T071/F004：可关闭的轻量个性化（recency/frequency）。默认关闭，
     /// 关闭时排序与确定性基线一致。只记匿名 label，不记完整 SQL/敏感值。

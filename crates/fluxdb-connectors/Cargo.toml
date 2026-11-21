@@ -34,6 +34,8 @@ csv = "1.4"
 serde_json = "1"
 # 仅用于 MongoDB 游标的 `DeserializeOwned` 约束（驱动游标要求）。
 serde = { version = "1", default-features = false }
+# Oracle/达梦 LOB 摘要只能在客户端流式计算（服务端哈希不接受 LOB）。
+sha2 = "0.10.9"
 roxmltree = "0.21"
 # 导入文件按用户选择解码（UTF-8/GB18030 等）。
 encoding_rs = "0.8"

@@ -74,6 +74,8 @@ fn main() {
             // 首帧后加载 AI 设置列表，避免阻塞开窗；空列表由设置页给出空状态。
             let _ = controller.dispatch(AppCommand::RefreshAiSettings);
             controller.set_er_model_storage(storage.clone());
+            // 数据同步执行账本：执行后回看块明细与样本。
+            controller.set_sync_run_storage(storage.clone());
             let theme_mode = debug_theme_mode_override()
                 .unwrap_or_else(|| theme_mode_from_app_theme(saved_settings.theme));
             let _ = controller.dispatch(AppCommand::SaveSettings(saved_settings));
@@ -3493,11 +3495,22 @@ fn navicat_main_new(
         _data_generation_task: None,
         _data_generation_load_task: None,
         _data_generation_pool_task: None,
-        compare_transfer: None,
-        compare_transfer_inputs: new_compare_transfer_inputs(window, cx),
-        _compare_transfer_task: None,
-        _compare_transfer_source_options_task: None,
-        _compare_transfer_target_options_task: None,
+        sync_wizard: None,
+        sync_inputs: new_sync_inputs(window, cx),
+        _sync_source_options_task: None,
+        _sync_target_options_task: None,
+        _sync_tables_task: None,
+        _sync_target_tables_task: None,
+        sync_pair_rows: Vec::new(),
+        _sync_pair_subscriptions: Vec::new(),
+        sync_field_map: None,
+        _sync_field_map_task: None,
+        sync_type_map: None,
+        _sync_type_map_task: None,
+        _sync_preview_task: None,
+        _sync_execute_task: None,
+        sync_run_view: None,
+        _sync_run_view_task: None,
         data_export_custom_conditions_open: false,
         data_export_preview: None,
         data_export_preview_seq: 0,

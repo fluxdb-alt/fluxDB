@@ -77,6 +77,8 @@ pub fn create_schema(conn: &Connection) -> Result<i64> {
         .map_err(sqlite_error)?;
     conn.execute_batch(crate::history_store::CREATE_SQL)
         .map_err(sqlite_error)?;
+    conn.execute_batch(crate::sync_run_store::CREATE_SQL)
+        .map_err(sqlite_error)?;
     crate::connection_secrets::ensure_schema(conn)?;
     crate::ai_platform::ensure_schema(conn)?;
     let version = if fresh {

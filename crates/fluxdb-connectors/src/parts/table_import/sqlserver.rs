@@ -135,6 +135,7 @@ fn import_sqlserver(
             &selected,
             &target_columns,
             chunk,
+            InsertConflictMode::Error,
         )?;
         let sql = if identity_insert {
             format!("SET IDENTITY_INSERT {table} ON; {sql}; SET IDENTITY_INSERT {table} OFF")

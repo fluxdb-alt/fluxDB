@@ -218,11 +218,19 @@ impl Render for NavicatMain {
             (Rc::new(Vec::new()), Rc::new(Vec::new()))
         };
 
-        let compare_transfer_overlay = self.compare_transfer.clone().map(|state| {
+        // visible=false 表示同步在后台继续跑、向导界面收起，不渲染遮罩。
+        let sync_overlay = self
+            .sync_wizard
+            .clone()
+            .filter(|state| state.visible)
+            .map(|state| {
             let connections = self.controller.connection_configs();
-            compare_transfer_modal(
+            sync_wizard_modal(
                 &state,
-                &self.compare_transfer_inputs,
+                &self.sync_pair_rows,
+                self.sync_field_map.as_ref(),
+                self.sync_type_map.as_ref(),
+                &self.sync_inputs,
                 &connections,
                 colors,
                 cx,
@@ -695,9 +703,11 @@ impl Render for NavicatMain {
             .when_some(self.restore_modal.clone(), |this, modal| {
                 this.child(database_restore_modal(&modal, colors, cx))
             })
-            // 结构对比/同步与跨连接数据传输弹框。
-            .when_some(compare_transfer_overlay, |this, modal| {
-                this.child(modal)
+            // 结构同步 / 数据同步向导。
+            .when_some(sync_overlay, |this, modal| this.child(modal))
+            // 数据同步执行记录回看；叠在向导之上，关闭后回到向导。
+            .when_some(self.sync_run_view.clone(), |this, view| {
+                this.child(sync_run_record_modal(&view, colors, cx))
             })
             // 备份 tab：「备份表」查看弹框。
             .when_some(self.backup_tables_modal.clone(), |this, modal| {

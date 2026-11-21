@@ -5,6 +5,8 @@
 pub struct TableRowWriter {
     kind: DatabaseKind,
     connection_id: ConnectionId,
+    /// 保留完整连接配置：表级事务需要按方言重新建立并持有长连接。
+    config: ConnectionConfig,
     database: Option<String>,
     schema: Option<String>,
     connector: Box<dyn fluxdb_core::Connector>,
@@ -14,6 +16,12 @@ pub struct TableRowWriter {
     column_list: String,
     overriding: &'static str,
     table: String,
+    /// 唯一键冲突策略，默认按普通写入失败处理。
+    conflict: fluxdb_core::InsertConflictMode,
+    /// 表级事务会话；`None` 表示按批独立提交（默认）。
+    ///
+    /// 写入器在同步线程内单线程使用，不需要跨线程共享。
+    session: std::cell::RefCell<Option<TableWriteSession>>,
 }
 
 impl TableRowWriter {
@@ -23,6 +31,17 @@ impl TableRowWriter {
         config: &ConnectionConfig,
         object: &ObjectPath,
         source_columns: &[String],
+    ) -> fluxdb_core::Result<Self> {
+        Self::new_with_skips(config, object, source_columns, &[])
+    }
+
+    /// `skip_columns` 按目标字段名（忽略大小写）排除，不参与写入；
+    /// 字段位置仍与传入的 `source_columns` 对齐。
+    pub fn new_with_skips(
+        config: &ConnectionConfig,
+        object: &ObjectPath,
+        source_columns: &[String],
+        skip_columns: &[String],
     ) -> fluxdb_core::Result<Self> {
         if matches!(config.kind, DatabaseKind::Redis | DatabaseKind::MongoDb) {
             return Err(Error::new(
@@ -48,7 +67,11 @@ impl TableRowWriter {
         let selected = selected
             .into_iter()
             .filter(|(_, target_index)| {
-                !excluded.contains(&target_columns[*target_index].name.to_ascii_uppercase())
+                let name = &target_columns[*target_index].name;
+                !excluded.contains(&name.to_ascii_uppercase())
+                    && !skip_columns
+                        .iter()
+                        .any(|skipped| skipped.eq_ignore_ascii_case(name))
             })
             .collect::<Vec<_>>();
         if selected.is_empty() {
@@ -73,6 +96,7 @@ impl TableRowWriter {
         Ok(Self {
             kind: config.kind,
             connection_id: config.id,
+            config: config.clone(),
             database: object.database.clone(),
             schema: object.schema.clone(),
             connector,
@@ -81,12 +105,51 @@ impl TableRowWriter {
             column_list,
             overriding,
             table: transfer_qualified_table(config, object)?,
+            conflict: fluxdb_core::InsertConflictMode::Error,
+            session: std::cell::RefCell::new(None),
         })
     }
 
+    /// 设置唯一键冲突策略；仅 MySQL / PostgreSQL / SQLite 支持非默认值。
+    pub fn with_conflict(mut self, conflict: fluxdb_core::InsertConflictMode) -> Self {
+        self.conflict = conflict;
+        self
+    }
+
+    /// 开启表级事务：清空目标表与全部 INSERT 在同一连接、同一事务内执行。
+    ///
+    /// 由调用方在写入结束后调用 [`Self::commit_atomic`]；中途错误或提前返回时
+    /// 会话 Drop 会回滚，目标表保持写入前状态。
+    pub fn begin_atomic(&self) -> fluxdb_core::Result<()> {
+        let session = TableWriteSession::open(
+            &self.config,
+            self.database.as_deref(),
+            self.schema.as_deref(),
+        )?;
+        *self.session.borrow_mut() = Some(session);
+        Ok(())
+    }
+
+    /// 提交表级事务。未开启事务时是空操作。
+    pub fn commit_atomic(&self) -> fluxdb_core::Result<()> {
+        let session = self.session.borrow_mut().take();
+        match session {
+            Some(session) => session.commit(),
+            None => Ok(()),
+        }
+    }
+
     /// 覆盖模式清空目标表。SQLite 没有 TRUNCATE，用 DELETE 保持语句可执行。
+    ///
+    /// 表级事务内必须用 DELETE：TRUNCATE 在多数方言里无法回滚。
     pub fn truncate(&self, cancel: &AtomicBool) -> fluxdb_core::Result<()> {
         transfer_check_cancel(cancel)?;
+        let mut session = self.session.borrow_mut();
+        if let Some(session) = session.as_mut() {
+            session.execute(&format!("DELETE FROM {}", self.table), &[])?;
+            return Ok(());
+        }
+        drop(session);
         let sql = match self.kind {
             DatabaseKind::Sqlite => format!("DELETE FROM {}", self.table),
             _ => format!("TRUNCATE TABLE {}", self.table),
@@ -103,6 +166,7 @@ impl TableRowWriter {
         progress: &mut dyn FnMut(u64, usize),
     ) -> fluxdb_core::Result<u64> {
         let mut written = 0u64;
+        let mut session = self.session.borrow_mut();
         for chunk in rows.chunks(TABLE_IMPORT_BATCH_ROWS) {
             transfer_check_cancel(cancel)?;
             let (sql, parameters) = build_import_batch_sql(
@@ -113,12 +177,75 @@ impl TableRowWriter {
                 &self.selected,
                 &self.target_columns,
                 chunk,
+                self.conflict,
             )?;
-            self.execute_parameterized(sql, parameters)?;
-            written += chunk.len() as u64;
+            let affected = match session.as_mut() {
+                Some(session) => session.execute(&sql, &parameters)?,
+                None => self.execute_parameterized(sql, parameters)?,
+            };
+            // 忽略冲突时按实际写入行数计；其余模式按提交行数计（MySQL upsert
+            // 会把更新行计为 2，不能直接当插入数）。
+            written += if self.conflict == fluxdb_core::InsertConflictMode::Ignore {
+                affected.min(chunk.len() as u64)
+            } else {
+                chunk.len() as u64
+            };
             progress(written, chunk.len());
         }
         Ok(written)
+    }
+
+    /// 把一批行渲染成逐行 INSERT 字面量语句，用于「导出迁移 SQL」。
+    ///
+    /// 与执行路径共用列映射、冲突模式和表名限定；字面量按目标方言渲染，
+    /// 不含任何绑定占位符。
+    pub fn render_insert_scripts(
+        &self,
+        rows: &[Vec<CellValue>],
+    ) -> fluxdb_core::Result<Vec<String>> {
+        let conflict = import_conflict_clause(
+            self.kind,
+            &self.selected,
+            &self.target_columns,
+            self.conflict,
+        )?;
+        rows.iter()
+            .map(|row| {
+                let values = self
+                    .selected
+                    .iter()
+                    .map(|(source_index, _)| {
+                        let value = row.get(*source_index).unwrap_or(&CellValue::Null);
+                        script_literal(self.kind, value)
+                    })
+                    .collect::<fluxdb_core::Result<Vec<_>>>()?
+                    .join(", ");
+                Ok(format!(
+                    "{} {} ({}){} VALUES ({}){};",
+                    conflict.prefix,
+                    self.table,
+                    self.column_list,
+                    self.overriding,
+                    values,
+                    conflict.suffix
+                ))
+            })
+            .collect()
+    }
+
+    /// 覆盖模式的清空语句（表级事务内同样使用 DELETE）。
+    pub fn render_clear_script(&self) -> String {
+        format!("DELETE FROM {};", self.table)
+    }
+
+    /// 渲染一条 UPDATE 字面量语句；列名与值都按目标方言生成。
+    pub fn render_update_script(&self, update: &RowUpdate) -> fluxdb_core::Result<String> {
+        script_update_statement(self.kind, &self.table, update)
+    }
+
+    /// 渲染一条 DELETE 字面量语句。
+    pub fn render_delete_script(&self, identity: &RowIdentity) -> fluxdb_core::Result<String> {
+        script_delete_statement(self.kind, &self.table, identity)
     }
 
     fn execute(&self, text: String) -> fluxdb_core::Result<()> {
@@ -138,7 +265,7 @@ impl TableRowWriter {
         &self,
         text: String,
         parameters: Vec<fluxdb_core::SqlParameter>,
-    ) -> fluxdb_core::Result<()> {
+    ) -> fluxdb_core::Result<u64> {
         let result = self
             .connector
             .execute_parameterized(&ParameterizedQueryRequest {
@@ -153,7 +280,12 @@ impl TableRowWriter {
                 },
                 parameters,
             })?;
-        transfer_ensure_success(&result)
+        transfer_ensure_success(&result)?;
+        Ok(result
+            .summaries
+            .iter()
+            .map(|summary| summary.affected_rows)
+            .sum())
     }
 }
 

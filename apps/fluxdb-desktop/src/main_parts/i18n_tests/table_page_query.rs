@@ -216,7 +216,7 @@ fn ai_page_query_opens_sidebar_table_fills_conditions_and_shows_rows(cx: &mut Te
         assert_eq!(page.rows.len(), 2);
         assert_eq!(
             page.rows[0].values[0],
-            fluxdb_core::CellValue::Text("3".into())
+            fluxdb_core::CellValue::I64(3)
         );
         let session = app
             .controller
@@ -795,7 +795,7 @@ fn typed_and_like_form_filters_change_query_results(cx: &mut TestAppContext) {
             editor.page.as_ref().is_some_and(|page| {
                 page.rows.len() == 1
                     && page.rows[0].values.first()
-                        == Some(&fluxdb_core::CellValue::Text("2".into()))
+                        == Some(&fluxdb_core::CellValue::I64(2))
             })
         });
         if filtered {
@@ -822,7 +822,7 @@ fn typed_and_like_form_filters_change_query_results(cx: &mut TestAppContext) {
         };
         let page = editor.page.as_ref().expect("filtered page");
         assert_eq!(page.rows.len(), 1);
-        assert_eq!(page.rows[0].values[0], fluxdb_core::CellValue::Text("2".into()));
+        assert_eq!(page.rows[0].values[0], fluxdb_core::CellValue::I64(2));
     });
 
     cx.update(|window, cx| {
@@ -871,7 +871,7 @@ fn typed_and_like_form_filters_change_query_results(cx: &mut TestAppContext) {
             editor.page.as_ref().is_some_and(|page| {
                 page.rows.len() == 1
                     && page.rows[0].values.first()
-                        == Some(&fluxdb_core::CellValue::Text("3".into()))
+                        == Some(&fluxdb_core::CellValue::I64(3))
             })
         });
         if filtered {
@@ -898,7 +898,7 @@ fn typed_and_like_form_filters_change_query_results(cx: &mut TestAppContext) {
         };
         let page = editor.page.as_ref().expect("numeric filtered page");
         assert_eq!(page.rows.len(), 1);
-        assert_eq!(page.rows[0].values[0], fluxdb_core::CellValue::Text("3".into()));
+        assert_eq!(page.rows[0].values[0], fluxdb_core::CellValue::I64(3));
     });
 
     cx.update(|window, cx| {

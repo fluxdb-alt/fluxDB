@@ -33,20 +33,13 @@ impl NavicatMain {
                 self.show_sql_file_execution_modal(Some(connection_id), None, window, cx);
             }
             ConnectionMenuAction::CompareStructure => {
-                self.show_compare_transfer_modal(
-                    connection_id,
-                    CompareTransferTab::Structure,
-                    window,
-                    cx,
-                );
+                self.show_sync_wizard(connection_id, SyncMode::Structure, window, cx);
             }
             ConnectionMenuAction::TransferData => {
-                self.show_compare_transfer_modal(
-                    connection_id,
-                    CompareTransferTab::Data,
-                    window,
-                    cx,
-                );
+                self.show_sync_wizard(connection_id, SyncMode::Data, window, cx);
+            }
+            ConnectionMenuAction::SyncRunLog => {
+                self.open_sync_run_view(None, cx);
             }
             ConnectionMenuAction::NewDatabase => {
                 self.show_create_database_modal(connection_id, window, cx);

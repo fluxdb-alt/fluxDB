@@ -157,6 +157,24 @@ impl Connector for MySqlConnector {
         mysql_load_data(config, path, offset, limit, sort, filters)
     }
 
+    fn load_data_with_digests(
+        &self,
+        path: &ObjectPath,
+        offset: u64,
+        limit: u64,
+        sort: &[SortSpec],
+        filters: &[FilterSpec],
+        digest_columns: &[String],
+    ) -> fluxdb_core::Result<DataPage> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "MySQL 数据读取需要连接配置上下文",
+            ));
+        };
+        mysql_load_data_digests(config, path, offset, limit, sort, filters, digest_columns)
+    }
+
     fn load_data_expression(
         &self,
         path: &ObjectPath,
@@ -205,6 +223,21 @@ impl Connector for MySqlConnector {
         mysql_apply_changes(config, changes)?;
         // 这些方言暂不返回插入身份：INSERT 补偿回退到编辑器已知的主键值。
         Ok(AppliedChangeOutcome::default())
+    }
+
+    fn load_cell_text(
+        &self,
+        path: &ObjectPath,
+        identity: &fluxdb_core::RowIdentity,
+        column: &str,
+    ) -> fluxdb_core::Result<String> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "MySQL 文本读取需要连接配置上下文",
+            ));
+        };
+        mysql_load_cell_text(config, path, identity, column)
     }
 
     fn load_cell_binary(

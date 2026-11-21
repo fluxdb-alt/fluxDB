@@ -419,10 +419,69 @@ fn oracle_column(metadata: &OracleMetadata, primary_key: bool) -> Column {
 }
 
 fn oracle_row(row: &mut OracleRow, columns: &[Column]) -> Row {
+    oracle_row_with_digests(row, columns, &[])
+}
+
+/// 数据页行解码。摘要列（LOB）在这里整段流式哈希，不把正文放进结果页；
+/// 其余列沿用常规解码。Oracle 服务端 `STANDARD_HASH` 不接受 LOB，只能客户端算。
+fn oracle_row_with_digests(row: &mut OracleRow, columns: &[Column], digest_columns: &[String]) -> Row {
     let values = (0..columns.len())
-        .map(|index| oracle_cell_value(row, index, &columns[index]))
+        .map(|index| {
+            let column = &columns[index];
+            if digest_columns
+                .iter()
+                .any(|digest| digest.eq_ignore_ascii_case(&column.name))
+            {
+                return oracle_digest_cell_value(row, index, column);
+            }
+            oracle_cell_value(row, index, column)
+        })
         .collect();
     Row { values }
+}
+
+/// 单列摘要：LOB 流式读取后哈希，普通类型按字面字节哈希。
+/// 同类型库（Oracle→Oracle）比对口径一致；跨类型库不会启用摘要比对。
+fn oracle_digest_cell_value(row: &mut OracleRow, index: usize, column: &Column) -> CellValue {
+    use sha2::{Digest, Sha256};
+    if oracle_column_is_lob(row, index) {
+        let Ok(value) = row.take::<Option<OracleLob>>(index) else {
+            return CellValue::Text("(LOB 读取失败)".to_string());
+        };
+        let Some(mut lob) = value else {
+            return CellValue::Null;
+        };
+        let mut hasher = Sha256::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match std::io::Read::read(&mut lob, &mut chunk) {
+                Ok(0) => break,
+                Ok(read) => hasher.update(&chunk[..read]),
+                Err(error) => {
+                    tracing::warn!(target: "fluxdb_connectors", message = %error, "Oracle LOB 哈希读取中断");
+                    return CellValue::Text("(LOB 读取失败)".to_string());
+                }
+            }
+        }
+        return CellValue::Text(hex_lower(&hasher.finalize()));
+    }
+    match oracle_cell_value(row, index, column) {
+        CellValue::Bytes(bytes) => CellValue::Text(hex_lower(&Sha256::digest(bytes))),
+        CellValue::Text(text) | CellValue::Json(text) => {
+            CellValue::Text(hex_lower(&Sha256::digest(text.as_bytes())))
+        }
+        CellValue::Null => CellValue::Null,
+        other => other,
+    }
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(text, "{byte:02x}");
+    }
+    text
 }
 
 #[cfg(test)]

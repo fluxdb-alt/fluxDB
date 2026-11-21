@@ -125,6 +125,8 @@ enum ConnectionMenuAction {
     CompareStructure,
     /// 打开跨连接数据传输弹框。
     TransferData,
+    /// 打开数据同步执行记录（本地账本，回看历史任务）。
+    SyncRunLog,
     NewDatabase,
     Edit,
     Copy,

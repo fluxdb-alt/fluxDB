@@ -593,6 +593,14 @@ fn dm_load_table_design_metadata_with_details(
             indexes: Vec::new(),
             foreign_keys: Vec::new(),
             triggers: Vec::new(),
+            column_defaults: Default::default(),
+            auto_increment_columns: Default::default(),
+            generated_columns: Default::default(),
+            index_attributes: Default::default(),
+            foreign_key_actions: Default::default(),
+            checks: Vec::new(),
+            checks_loaded: false,
+            table_comment: None,
             ddl,
             details_loaded: true,
         });
@@ -634,14 +642,94 @@ fn dm_load_table_design_metadata_with_details(
             table_comment.as_deref(),
         )
     };
+    let column_defaults = columns
+        .iter()
+        .filter_map(|column| {
+            column
+                .default_value
+                .as_ref()
+                .map(|value| (column.name.clone(), value.clone()))
+        })
+        .collect();
+    let auto_increment_columns = columns
+        .iter()
+        .filter(|column| column.auto_increment)
+        .map(|column| column.name.clone())
+        .collect();
+    let foreign_key_actions = if include_details {
+        let mut client = dm_connect(config)?;
+        let actions = dm_load_foreign_key_actions(&mut client, &schema, &path.name);
+        client.close();
+        actions?
+    } else {
+        BTreeMap::new()
+    };
+    let index_attributes = indexes
+        .iter()
+        .map(|index| {
+            (
+                index.name.clone(),
+                fluxdb_core::IndexAttributes {
+                    index_type: index.index_type.clone(),
+                    predicate: None,
+                    has_expression: false,
+                },
+            )
+        })
+        .collect();
     Ok(fluxdb_core::TableDesignMetadata {
         columns: dm_completion_columns(path, &schema, columns),
         indexes,
         foreign_keys,
         triggers,
+        column_defaults,
+        auto_increment_columns,
+        // 虚拟列表达式在达梦目录里是长文本，未在本加载器读取。
+        generated_columns: Default::default(),
+        index_attributes,
+        foreign_key_actions,
+        // 达梦与 Oracle 一样把 NOT NULL 存成 CHECK，跳过 CHECK 比对。
+        checks: Vec::new(),
+        checks_loaded: false,
+        table_comment,
         ddl,
         details_loaded: include_details,
     })
+}
+
+/// 外键删除动作：达梦/Oracle 兼容目录只有 ON DELETE 规则。
+fn dm_load_foreign_key_actions(
+    client: &mut DmClient,
+    schema: &str,
+    table: &str,
+) -> fluxdb_core::Result<BTreeMap<String, fluxdb_core::ForeignKeyActions>> {
+    let result = dm_execute(
+        client,
+        "SELECT CONSTRAINT_NAME, DELETE_RULE FROM ALL_CONSTRAINTS \
+         WHERE OWNER=? AND TABLE_NAME=? AND CONSTRAINT_TYPE='R'",
+        &[Param::Str(schema.to_string()), Param::Str(table.to_string())],
+    )?;
+    let ExecuteResult::Query { rows, .. } = result else {
+        return Err(Error::new(ErrorKind::Query, "达梦外键动作返回类型异常"));
+    };
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let name = row.first().and_then(dm_value_text)?;
+            let action = row
+                .get(1)
+                .and_then(dm_value_text)
+                .map(|text| text.replace('_', " ").to_ascii_uppercase())
+                .filter(|text| !text.is_empty());
+            Some((
+                name,
+                fluxdb_core::ForeignKeyActions {
+                    on_delete: action,
+                    on_update: None,
+                },
+            ))
+        })
+        .collect())
 }
 
 fn dm_render_table_base_ddl(

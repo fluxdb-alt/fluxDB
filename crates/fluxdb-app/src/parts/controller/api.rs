@@ -11,6 +11,7 @@ impl AppController {
             completion_index_storage: None,
             ai_storage: None,
             er_model_storage: None,
+            sync_run_storage: None,
             er_model_services: Arc::new(Mutex::new(BTreeMap::new())),
             recency: Arc::new(Mutex::new(RecencyFrequency::new())),
             query_cancel_flags: Arc::new(Mutex::new(BTreeMap::new())),
@@ -84,6 +85,11 @@ impl AppController {
 
     pub fn set_completion_index_storage(&mut self, storage: fluxdb_storage::FileStorage) {
         self.completion_index_storage = Some(storage);
+    }
+
+    /// 注册数据同步执行账本存储（未注册时执行照常跑，只是不落记录）。
+    pub fn set_sync_run_storage(&mut self, storage: fluxdb_storage::FileStorage) {
+        self.sync_run_storage = Some(storage);
     }
 
     /// 注册 ER 关系目录的持久化存储。服务实例由应用层按 scope 惰性创建并复用。

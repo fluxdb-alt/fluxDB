@@ -647,6 +647,14 @@ fn oracle_load_table_design_metadata_with_details(
             indexes: Vec::new(),
             foreign_keys: Vec::new(),
             triggers: Vec::new(),
+            column_defaults: Default::default(),
+            auto_increment_columns: Default::default(),
+            generated_columns: Default::default(),
+            index_attributes: Default::default(),
+            foreign_key_actions: Default::default(),
+            checks: Vec::new(),
+            checks_loaded: false,
+            table_comment: None,
             ddl,
             details_loaded: true,
         });
@@ -675,14 +683,90 @@ fn oracle_load_table_design_metadata_with_details(
         &foreign_keys,
         table_comment.as_deref(),
     );
+    let column_defaults = columns
+        .iter()
+        .filter_map(|column| {
+            column
+                .default_value
+                .as_ref()
+                .map(|value| (column.name.clone(), value.clone()))
+        })
+        .collect();
+    let auto_increment_columns = columns
+        .iter()
+        .filter(|column| column.identity.is_some())
+        .map(|column| column.name.clone())
+        .collect();
+    let foreign_key_actions = if include_details {
+        oracle_load_foreign_key_actions(&connection, &schema, &path.name)?
+    } else {
+        BTreeMap::new()
+    };
+    let index_attributes = indexes
+        .iter()
+        .map(|index| {
+            (
+                index.name.clone(),
+                fluxdb_core::IndexAttributes {
+                    index_type: index.index_type.clone(),
+                    predicate: None,
+                    has_expression: false,
+                },
+            )
+        })
+        .collect();
     Ok(fluxdb_core::TableDesignMetadata {
         columns: oracle_completion_columns(path, &schema, columns),
         indexes,
         foreign_keys,
         triggers,
+        column_defaults,
+        auto_increment_columns,
+        // 虚拟列表达式在 Oracle 里是 LONG 类型，未在本加载器读取。
+        generated_columns: Default::default(),
+        index_attributes,
+        foreign_key_actions,
+        // Oracle 把 NOT NULL 也存成 CHECK，无法可靠区分用户约束，跳过 CHECK 比对。
+        checks: Vec::new(),
+        checks_loaded: false,
+        table_comment,
         ddl,
         details_loaded: include_details,
     })
+}
+
+/// 外键删除动作：Oracle 只支持 ON DELETE，没有 ON UPDATE。
+fn oracle_load_foreign_key_actions(
+    connection: &OracleConnection,
+    schema: &str,
+    table: &str,
+) -> fluxdb_core::Result<BTreeMap<String, fluxdb_core::ForeignKeyActions>> {
+    let rows = oracle_query(
+        connection,
+        "SELECT CONSTRAINT_NAME, DELETE_RULE \
+         FROM ALL_CONSTRAINTS \
+         WHERE OWNER = :1 AND TABLE_NAME = :2 AND CONSTRAINT_TYPE = 'R'",
+        &[
+            OracleBindValue::Text(schema.to_string()),
+            OracleBindValue::Text(table.to_string()),
+        ],
+    )?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let name = oracle_meta_text(row, 0)?;
+            let action = oracle_meta_text(row, 1)
+                .map(|text| text.replace('_', " ").to_ascii_uppercase())
+                .filter(|text| !text.is_empty());
+            Some((
+                name,
+                fluxdb_core::ForeignKeyActions {
+                    on_delete: action,
+                    on_update: None,
+                },
+            ))
+        })
+        .collect())
 }
 
 fn oracle_completion_columns(

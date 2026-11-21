@@ -24,7 +24,28 @@ fn pg_load_data(
     sort: &[SortSpec],
     filters: &[FilterSpec],
 ) -> fluxdb_core::Result<DataPage> {
-    pg_load_data_with_expression(config, path, offset, limit, sort, filters, None)
+    pg_load_data_with_expression(config, path, offset, limit, sort, filters, None, &[])
+}
+
+fn pg_load_data_digests(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    offset: u64,
+    limit: u64,
+    sort: &[SortSpec],
+    filters: &[FilterSpec],
+    digest_columns: &[String],
+) -> fluxdb_core::Result<DataPage> {
+    pg_load_data_with_expression(
+        config,
+        path,
+        offset,
+        limit,
+        sort,
+        filters,
+        None,
+        digest_columns,
+    )
 }
 
 fn pg_load_data_expression(
@@ -35,7 +56,16 @@ fn pg_load_data_expression(
     sort: &[SortSpec],
     expression: &fluxdb_core::FilterExpression,
 ) -> fluxdb_core::Result<DataPage> {
-    pg_load_data_with_expression(config, path, offset, limit, sort, &[], Some(expression))
+    pg_load_data_with_expression(
+        config,
+        path,
+        offset,
+        limit,
+        sort,
+        &[],
+        Some(expression),
+        &[],
+    )
 }
 
 fn pg_load_data_with_expression(
@@ -46,6 +76,7 @@ fn pg_load_data_with_expression(
     sort: &[SortSpec],
     filters: &[FilterSpec],
     expression: Option<&fluxdb_core::FilterExpression>,
+    digest_columns: &[String],
 ) -> fluxdb_core::Result<DataPage> {
     if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
         return Err(Error::new(ErrorKind::Unsupported, "仅表和视图支持数据读取"));
@@ -60,7 +91,7 @@ fn pg_load_data_with_expression(
         let session = pg_connect(config, database).await?;
 
         let columns = pg_columns(&session.client, database, path.schema.as_deref(), &path.name).await?;
-        let (select_list, positions) = pg_select_list_and_positions(&columns);
+        let (select_list, positions) = pg_select_list_and_positions(&columns, digest_columns);
         let table = pg_qualified_table(database, path.schema.as_deref(), &path.name);
 
         let mut sql = format!(
@@ -100,7 +131,14 @@ fn pg_load_data_with_expression(
         let owner = fluxdb_core::table_content_owner(path);
         let page = tokio::time::timeout(
             Duration::from_secs(30),
-            pg_collect_data_page(columns, stream, &positions, pagination, &owner),
+            pg_collect_data_page(
+                columns,
+                stream,
+                &positions,
+                pagination,
+                &owner,
+                digest_columns,
+            ),
         )
         .await
         .map_err(|_| Error::new(ErrorKind::Query, "查询超时"))??;
@@ -115,12 +153,29 @@ fn pg_params_refs(params: &[Box<dyn ToSql + Sync>]) -> Vec<&(dyn ToSql + Sync)> 
 }
 
 /// 生成 SELECT 列表并同步返回各列的首投影位置表。
-fn pg_select_list_and_positions(columns: &[Column]) -> (String, Vec<(Vec<usize>, usize)>) {
+fn pg_select_list_and_positions(
+    columns: &[Column],
+    digest_columns: &[String],
+) -> (String, Vec<(Vec<usize>, usize)>) {
     let mut parts = Vec::with_capacity(columns.len());
     let mut position = 0usize;
     let mut positions = Vec::with_capacity(columns.len());
     for (col_idx, column) in columns.iter().enumerate() {
-        let expr = if is_binary_column(column) {
+        let name = fluxdb_core::PostgresDialect.quote_identifier(&column.name);
+        let expr = if digest_columns
+            .iter()
+            .any(|digest| digest.eq_ignore_ascii_case(&column.name))
+        {
+            // 摘要只用于同类型库比对：bytea 直接哈希字节，文本按 UTF-8 字节哈希。
+            let payload = if is_binary_column(column) {
+                name.clone()
+            } else {
+                format!("convert_to({name}::text, 'UTF8')")
+            };
+            positions.push((vec![position], col_idx));
+            position += 1;
+            format!("encode(sha256({payload}), 'hex') AS {name}")
+        } else if is_binary_column(column) {
             let name = fluxdb_core::PostgresDialect.quote_identifier(&column.name);
             let is_null = fluxdb_core::PostgresDialect.quote_identifier(&binary_alias(&column.name, "is_null"));
             let byte_length = fluxdb_core::PostgresDialect.quote_identifier(&binary_alias(&column.name, "byte_length"));
@@ -175,6 +230,7 @@ async fn pg_collect_data_page(
     positions: &[(Vec<usize>, usize)],
     pagination: Pagination,
     owner: &str,
+    digest_columns: &[String],
 ) -> fluxdb_core::Result<DataPage> {
     let capacity = pagination.limit as usize;
     let mut page = DataPage {
@@ -196,7 +252,21 @@ async fn pg_collect_data_page(
         let mut values = positions
             .iter()
             .map(|(idxs, col_idx)| {
-                pg_projected_position_value(&row, idxs, &page.columns[*col_idx])
+                let column = &page.columns[*col_idx];
+                if digest_columns
+                    .iter()
+                    .any(|digest| digest.eq_ignore_ascii_case(&column.name))
+                {
+                    // 摘要列是服务端算好的十六进制文本。
+                    return idxs
+                        .first()
+                        .and_then(|index| {
+                            row.try_get::<_, Option<String>>(*index).ok().flatten()
+                        })
+                        .map(CellValue::Text)
+                        .unwrap_or(CellValue::Null);
+                }
+                pg_projected_position_value(&row, idxs, column)
             })
             .collect::<Vec<_>>();
         spill_large_cells(owner, &mut values)?;
@@ -349,6 +419,44 @@ fn pg_load_cell_binary(
         row.try_get::<_, Option<Vec<u8>>>(0)
             .map_err(|error| Error::new(ErrorKind::Query, error.to_string()))?
             .ok_or_else(|| Error::new(ErrorKind::Query, "二进制单元格为 NULL"))
+    })
+}
+
+fn pg_load_cell_text(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    identity: &fluxdb_core::RowIdentity,
+    column: &str,
+) -> fluxdb_core::Result<String> {
+    if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
+        return Err(Error::new(ErrorKind::Unsupported, "仅表和视图支持文本读取"));
+    }
+    let database = path
+        .database
+        .as_deref()
+        .ok_or_else(|| Error::new(ErrorKind::Query, "缺少数据库名称"))?;
+    let table = pg_qualified_table(database, path.schema.as_deref(), &path.name);
+
+    pg_runtime().block_on(async {
+        let session = pg_connect(config, database).await?;
+        let columns = pg_columns(&session.client, database, path.schema.as_deref(), &path.name).await?;
+        ensure_column_exists(column, &columns)?;
+
+        let mut sql = format!("SELECT {} FROM {table}", fluxdb_core::PostgresDialect.quote_identifier(column));
+        let (where_sql, params) = pg_identity_params(identity, &columns)?;
+        sql.push_str(&where_sql);
+        sql.push_str(" LIMIT 1");
+
+        let row = session
+            .client
+            .query_opt(&sql, &pg_params_refs(&params))
+            .await
+            .map_err(pg_error)?
+            .ok_or_else(|| Error::new(ErrorKind::Query, "未找到目标行"))?;
+
+        row.try_get::<_, Option<String>>(0)
+            .map_err(|error| Error::new(ErrorKind::Query, error.to_string()))?
+            .ok_or_else(|| Error::new(ErrorKind::Query, "文本单元格为 NULL"))
     })
 }
 
@@ -874,7 +982,8 @@ pub fn pg_export_pages(
                 let result: fluxdb_core::Result<()> = async {
                     let columns =
                         pg_columns(client, database, path.schema.as_deref(), &path.name).await?;
-                    let (select_list, positions) = pg_select_list_and_positions(&columns);
+                    let (select_list, positions) =
+                        pg_select_list_and_positions(&columns, &[]);
                     let table = pg_qualified_table(database, path.schema.as_deref(), &path.name);
                     let (where_sql, params) = pg_where_params(filters, &columns)?;
                     let order = pg_order_by_clause(sort, &columns);
@@ -943,6 +1052,19 @@ mod pg_filter_binding_tests {
             primary_key: false,
             comment: None,
         }
+    }
+
+    #[test]
+    fn digest_columns_project_single_hashed_value() {
+        let columns = [column("body", "bytea"), column("note", "text")];
+        let (select_list, positions) =
+            pg_select_list_and_positions(&columns, &["body".into(), "note".into()]);
+        assert_eq!(positions, vec![(vec![0], 0), (vec![1], 1)]);
+        assert!(select_list.contains("encode(sha256(\"body\"), 'hex')"), "{select_list}");
+        assert!(
+            select_list.contains("convert_to(\"note\"::text, 'UTF8')"),
+            "{select_list}"
+        );
     }
 
     #[test]

@@ -571,6 +571,54 @@ fn task_center_detail(
                 .gap_2()
                 .border_t_1()
                 .border_color(colors.border_soft)
+                // 同步向导可以在后台继续跑；运行中就提供回到向导的入口。
+                // 同步任务记录行也用 history key（见 task_center_rows），只看 kind；
+                // 历史记录永远不会是 Running，不会误开。
+                .when(
+                    row.status.is_running()
+                        && matches!(
+                            row.kind,
+                            TaskCenterKind::DataSync | TaskCenterKind::StructureSync
+                        ),
+                    |this| {
+                        this.child(
+                            div()
+                                .flex_none()
+                                .debug_selector(|| "task-center-open-window".into())
+                                .child(
+                                    Button::new("task-center-open-window")
+                                        .label(tr("app.task_center.action.open"))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.reopen_sync_wizard(key.id, cx);
+                                        })),
+                                ),
+                        )
+                    },
+                )
+                // 常驻型任务的界面在主窗口：备份 tab / 表导出日志弹框 / SQL 文件执行弹框。
+                .when(
+                    row.key.source == TaskCenterRowSource::Live
+                        && matches!(
+                            row.kind,
+                            TaskCenterKind::Backup
+                                | TaskCenterKind::TableExport
+                                | TaskCenterKind::SqlFile
+                        ),
+                    |this| {
+                        this.child(
+                            div()
+                                .flex_none()
+                                .debug_selector(|| "task-center-locate-task".into())
+                                .child(
+                                    Button::new("task-center-locate-task")
+                                        .label(tr("app.task_center.action.locate"))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.locate_task_center_row(key, window, cx);
+                                        })),
+                                ),
+                        )
+                    },
+                )
                 .when(row.status.is_running() && row.cancel_requested, |this| {
                     this.child(
                         div()

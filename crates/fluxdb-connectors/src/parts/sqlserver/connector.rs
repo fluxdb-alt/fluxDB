@@ -93,6 +93,54 @@ impl Connector for SqlServerConnector {
         )
     }
 
+    fn load_data_with_digests(
+        &self,
+        path: &ObjectPath,
+        offset: u64,
+        limit: u64,
+        sort: &[SortSpec],
+        filters: &[FilterSpec],
+        digest_columns: &[String],
+    ) -> fluxdb_core::Result<DataPage> {
+        sqlserver_load_data_digests(
+            self.config("SQL Server 数据读取需要连接配置上下文")?,
+            path,
+            offset,
+            limit,
+            sort,
+            filters,
+            digest_columns,
+        )
+    }
+
+    fn load_cell_text(
+        &self,
+        path: &ObjectPath,
+        identity: &fluxdb_core::RowIdentity,
+        column: &str,
+    ) -> fluxdb_core::Result<String> {
+        sqlserver_load_cell_text(
+            self.config("SQL Server 文本读取需要连接配置上下文")?,
+            path,
+            identity,
+            column,
+        )
+    }
+
+    fn load_cell_binary(
+        &self,
+        path: &ObjectPath,
+        identity: &fluxdb_core::RowIdentity,
+        column: &str,
+    ) -> fluxdb_core::Result<Vec<u8>> {
+        sqlserver_load_cell_binary(
+            self.config("SQL Server 二进制读取需要连接配置上下文")?,
+            path,
+            identity,
+            column,
+        )
+    }
+
     fn load_data_expression(
         &self,
         path: &ObjectPath,

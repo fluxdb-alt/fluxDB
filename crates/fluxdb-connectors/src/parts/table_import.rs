@@ -1,5 +1,6 @@
 use fluxdb_core::{
-    ParameterizedQueryRequest, QueryExecutionOptions, QueryMode, SqlParameter, TableDataImport,
+    InsertConflictMode, ParameterizedQueryRequest, QueryExecutionOptions, QueryMode, SqlParameter,
+    TableDataImport,
     TableImportColumnMapping, TableImportFormat, TableImportMode, TableImportPreview,
     TableImportPreviewRequest, TableImportProgress, TableImportReport, TableImportRequest,
     TableImportTargetColumn,
@@ -333,6 +334,7 @@ fn import_relational(
             &selected,
             &target_columns,
             chunk,
+            InsertConflictMode::Error,
         )?;
         let result = connector.execute_parameterized(&ParameterizedQueryRequest {
             request: QueryRequest {
@@ -433,7 +435,9 @@ fn build_import_batch_sql(
     selected: &[(usize, usize)],
     target_columns: &[fluxdb_core::CompletionColumn],
     rows: &[Vec<CellValue>],
+    conflict: InsertConflictMode,
 ) -> fluxdb_core::Result<(String, Vec<SqlParameter>)> {
+    let conflict = import_conflict_clause(kind, selected, target_columns, conflict)?;
     let mut parameters = Vec::with_capacity(selected.len() * rows.len());
     // Oracle 不支持 `VALUES (..),(..)`；用 `INSERT ALL ... SELECT 1 FROM DUAL`
     // 把整批做成一条语句，绑定仍是唯一的 `:N`。
@@ -465,7 +469,8 @@ fn build_import_batch_sql(
             let value = row.get(*import_index).cloned().unwrap_or(CellValue::Null);
             let parameter = import_sql_parameter_for_column(&value, &target_columns[*target_index])?;
             placeholders.push(match kind {
-                DatabaseKind::Postgres => {
+                // Kingbase 走 PostgreSQL 协议，占位符只认 `$N`，不认 `?`。
+                DatabaseKind::Postgres | DatabaseKind::Kingbase => {
                     parameters.push(parameter);
                     let index = parameters.len();
                     let column = &target_columns[*target_index];
@@ -505,11 +510,89 @@ fn build_import_batch_sql(
     }
     Ok((
         format!(
-            "INSERT INTO {table} ({column_list}){overriding} VALUES {}",
-            values.join(", ")
+            "{} {table} ({column_list}){overriding} VALUES {}{}",
+            conflict.prefix,
+            values.join(", "),
+            conflict.suffix
         ),
         parameters,
     ))
+}
+
+/// 唯一键冲突语法：MySQL 用 `INSERT IGNORE` / `ON DUPLICATE KEY UPDATE`，
+/// PostgreSQL / SQLite 用 `ON CONFLICT`。其余方言只支持默认的 `Error`。
+struct ImportConflictSql {
+    prefix: &'static str,
+    suffix: String,
+}
+
+fn import_conflict_clause(
+    kind: DatabaseKind,
+    selected: &[(usize, usize)],
+    target_columns: &[fluxdb_core::CompletionColumn],
+    conflict: InsertConflictMode,
+) -> fluxdb_core::Result<ImportConflictSql> {
+    let plain = ImportConflictSql {
+        prefix: "INSERT INTO",
+        suffix: String::new(),
+    };
+    if conflict == InsertConflictMode::Error {
+        return Ok(plain);
+    }
+    let mysql = matches!(
+        kind,
+        DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb
+    );
+    let ansi = matches!(
+        kind,
+        DatabaseKind::Postgres | DatabaseKind::Kingbase | DatabaseKind::Sqlite
+    );
+    if !mysql && !ansi {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "当前数据库暂不支持唯一键冲突处理，仅 MySQL / PostgreSQL / SQLite 可用",
+        ));
+    }
+    let quoted = selected
+        .iter()
+        .map(|(_, target_index)| {
+            import_quote_identifier(kind, &target_columns[*target_index].name)
+        })
+        .collect::<Vec<_>>();
+    let assignments = |source: &str| {
+        quoted
+            .iter()
+            .map(|name| format!("{name} = {source}{name}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    Ok(match (mysql, conflict) {
+        (true, InsertConflictMode::Ignore) => ImportConflictSql {
+            prefix: "INSERT IGNORE INTO",
+            suffix: String::new(),
+        },
+        (true, InsertConflictMode::Overwrite) => ImportConflictSql {
+            prefix: "INSERT INTO",
+            suffix: format!(
+                " ON DUPLICATE KEY UPDATE {}",
+                quoted
+                    .iter()
+                    .map(|name| format!("{name} = VALUES({name})"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        },
+        (false, InsertConflictMode::Ignore) => ImportConflictSql {
+            prefix: "INSERT INTO",
+            suffix: " ON CONFLICT DO NOTHING".to_string(),
+        },
+        (false, InsertConflictMode::Overwrite) => ImportConflictSql {
+            prefix: "INSERT INTO",
+            suffix: format!(" ON CONFLICT DO UPDATE SET {}", assignments("EXCLUDED.")),
+        },
+        // 函数开头已提前返回，保留分支让穷举检查生效。
+        (_, InsertConflictMode::Error) => plain,
+    })
 }
 
 fn parse_import_file(
@@ -1587,6 +1670,7 @@ mod table_import_tests {
             &[(0, 0), (1, 1)],
             &columns,
             &[vec![CellValue::Null, CellValue::Null]],
+            InsertConflictMode::Error,
         )
         .expect("build SQL Server import SQL");
         assert_eq!(sql, "INSERT INTO [dbo].[sample] ([PAYLOAD], [NOTE]) VALUES (NULL, @P1)");
@@ -1624,6 +1708,7 @@ mod table_import_tests {
                 CellValue::Text("{1.0000,2.5000}".into()),
                 CellValue::Text("1.0000".into()),
             ]],
+            InsertConflictMode::Error,
         )
         .expect("build PostgreSQL import SQL");
         assert_eq!(
@@ -1637,6 +1722,73 @@ mod table_import_tests {
                 SqlParameter::Text("{1.0000,2.5000}".into()),
                 SqlParameter::Decimal("1.0000".into())
             ]
+        );
+    }
+
+    #[test]
+    fn conflict_modes_only_append_native_insert_syntax() {
+        let columns = [
+            completion_column("ID", "INT"),
+            completion_column("NAME", "TEXT"),
+        ];
+        let rows = [vec![CellValue::I64(1), CellValue::Text("a".into())]];
+        let build = |kind, column_list: &str, conflict| {
+            build_import_batch_sql(
+                kind,
+                "t",
+                column_list,
+                "",
+                &[(0, 0), (1, 1)],
+                &columns,
+                &rows,
+                conflict,
+            )
+            .expect("build conflict insert")
+            .0
+        };
+        assert_eq!(
+            build(DatabaseKind::MySql, "`ID`, `NAME`", InsertConflictMode::Ignore),
+            "INSERT IGNORE INTO t (`ID`, `NAME`) VALUES (?, ?)"
+        );
+        assert_eq!(
+            build(
+                DatabaseKind::MySql,
+                "`ID`, `NAME`",
+                InsertConflictMode::Overwrite
+            ),
+            "INSERT INTO t (`ID`, `NAME`) VALUES (?, ?) \
+             ON DUPLICATE KEY UPDATE `ID` = VALUES(`ID`), `NAME` = VALUES(`NAME`)"
+        );
+        assert_eq!(
+            build(
+                DatabaseKind::Postgres,
+                "\"ID\", \"NAME\"",
+                InsertConflictMode::Overwrite
+            ),
+            "INSERT INTO t (\"ID\", \"NAME\") VALUES ($1, $2) \
+             ON CONFLICT DO UPDATE SET \"ID\" = EXCLUDED.\"ID\", \"NAME\" = EXCLUDED.\"NAME\""
+        );
+        assert_eq!(
+            build(
+                DatabaseKind::Sqlite,
+                "\"ID\", \"NAME\"",
+                InsertConflictMode::Ignore
+            ),
+            "INSERT INTO t (\"ID\", \"NAME\") VALUES (?, ?) ON CONFLICT DO NOTHING"
+        );
+        // 没有原生语法的方言只在选择非默认模式时报错，默认路径不受影响。
+        assert!(
+            build_import_batch_sql(
+                DatabaseKind::SqlServer,
+                "t",
+                "[ID], [NAME]",
+                "",
+                &[(0, 0), (1, 1)],
+                &columns,
+                &rows,
+                InsertConflictMode::Overwrite,
+            )
+            .is_err()
         );
     }
 

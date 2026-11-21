@@ -173,6 +173,17 @@ fn connection_context_menu(
                 colors,
                 cx,
             ))
+            // 同步记录是本地账本，连接未打开也能回看。
+            .child(connection_menu_item(
+                tr("app.connection_menu.sync_run_log").to_string(),
+                "activity",
+                None,
+                false,
+                Some(ConnectionMenuAction::SyncRunLog),
+                menu.connection_id,
+                colors,
+                cx,
+            ))
         })
         .when(!is_redis, |this| {
             this.child(connection_menu_item(

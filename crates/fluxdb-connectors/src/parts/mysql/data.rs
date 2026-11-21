@@ -10,7 +10,29 @@ fn mysql_load_data(
     sort: &[SortSpec],
     filters: &[FilterSpec],
 ) -> fluxdb_core::Result<DataPage> {
-    mysql_load_data_with_expression(config, path, offset, limit, sort, filters, None)
+    mysql_load_data_with_expression(config, path, offset, limit, sort, filters, None, &[])
+}
+
+/// 带摘要列的分页读取：摘要列只返回 SHA-256 十六进制文本，避免把大字段整列搬进内存。
+fn mysql_load_data_digests(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    offset: u64,
+    limit: u64,
+    sort: &[SortSpec],
+    filters: &[FilterSpec],
+    digest_columns: &[String],
+) -> fluxdb_core::Result<DataPage> {
+    mysql_load_data_with_expression(
+        config,
+        path,
+        offset,
+        limit,
+        sort,
+        filters,
+        None,
+        digest_columns,
+    )
 }
 
 fn mysql_load_data_expression(
@@ -21,7 +43,16 @@ fn mysql_load_data_expression(
     sort: &[SortSpec],
     expression: &fluxdb_core::FilterExpression,
 ) -> fluxdb_core::Result<DataPage> {
-    mysql_load_data_with_expression(config, path, offset, limit, sort, &[], Some(expression))
+    mysql_load_data_with_expression(
+        config,
+        path,
+        offset,
+        limit,
+        sort,
+        &[],
+        Some(expression),
+        &[],
+    )
 }
 
 fn mysql_load_data_with_expression(
@@ -32,6 +63,7 @@ fn mysql_load_data_with_expression(
     sort: &[SortSpec],
     filters: &[FilterSpec],
     expression: Option<&fluxdb_core::FilterExpression>,
+    digest_columns: &[String],
 ) -> fluxdb_core::Result<DataPage> {
     if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
         return Err(Error::new(ErrorKind::Unsupported, "仅表和视图支持数据读取"));
@@ -51,11 +83,13 @@ fn mysql_load_data_with_expression(
     runtime.block_on(async {
         let mut connection = plan.connect().await?;
 
-        let columns = mysql_columns(&mut connection, database, &path.name).await?;
+        // 数据同步按块逐页读取，走缓存避免每页都查一次 information_schema。
+        let columns = mysql_columns_cached(config, &mut connection, database, &path.name).await?;
         mysql_ensure_columns_available(database, &path.name, &columns)?;
+        // 摘要列沿用原列名做别名，行数据的列顺序与普通读取完全一致。
         let select_list = columns
             .iter()
-            .map(mysql_select_expr)
+            .map(|column| mysql_select_expr_digest(column, digest_columns))
             .collect::<Vec<_>>()
             .join(", ");
         let mut builder = QueryBuilder::<MySql>::new(format!(
@@ -93,19 +127,47 @@ fn mysql_load_data_with_expression(
         // 不会像 `fetch_all` 那样先把整个结果集堆进内存。
         let stream = builder.build().fetch(&mut connection);
         let owner = fluxdb_core::table_content_owner(path);
+        let digest_columns = digest_columns.to_vec();
         let (page, _read_rows) = collect_sqlx_page(
             stream,
             columns,
             pagination,
             0,
             &owner,
-            |row, _index, column| mysql_cell_value(row, column),
+            move |row, _index, column| {
+                // 摘要列是十六进制文本，直接按文本解码；其余列保持原投影规则。
+                if digest_columns
+                    .iter()
+                    .any(|digest| digest.eq_ignore_ascii_case(&column.name))
+                {
+                    return row
+                        .try_get::<Option<String>, _>(column.name.as_str())
+                        .map(|value| value.map(CellValue::Text).unwrap_or(CellValue::Null))
+                        .unwrap_or(CellValue::Null);
+                }
+                mysql_cell_value(row, column)
+            },
             mysql_error,
         )
         .await?;
         connection.close().await.map_err(mysql_error)?;
         Ok(page)
     })
+}
+
+/// 摘要列用 `SHA2(..., 256)` 覆盖，其余列保持原投影。
+///
+/// 同一引擎两端摘要表达式一致，所以可以直接比较；不接受跨数据库类型比对。
+fn mysql_select_expr_digest(column: &Column, digest_columns: &[String]) -> String {
+    if digest_columns
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(&column.name))
+    {
+        let quoted = fluxdb_core::MySqlDialect.quote_identifier(&column.name);
+        format!("LOWER(SHA2({quoted}, 256)) AS {quoted}")
+    } else {
+        mysql_select_expr(column)
+    }
 }
 
 /// 用户排序后面追加主键作为稳定 tie breaker（设计 7.2），避免同值行分页随并发漂移。
@@ -161,7 +223,7 @@ fn mysql_preview_data_export(
     runtime.block_on(async {
         let mut connection = plan.connect().await?;
 
-        let columns = mysql_columns(&mut connection, database, &path.name).await?;
+        let columns = mysql_columns_cached(config, &mut connection, database, &path.name).await?;
         let table_name = format!(
             "{}.{}",
             fluxdb_core::MySqlDialect.quote_identifier(database),
@@ -249,6 +311,57 @@ fn mysql_load_cell_binary(
     })
 }
 
+fn mysql_load_cell_text(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    identity: &fluxdb_core::RowIdentity,
+    column: &str,
+) -> fluxdb_core::Result<String> {
+    if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "仅表和视图支持文本读取",
+        ));
+    }
+
+    let database = path
+        .database
+        .as_deref()
+        .ok_or_else(|| Error::new(ErrorKind::Query, "缺少数据库名称"))?;
+    let plan = mysql_connection_plan(config)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
+
+    runtime.block_on(async {
+        let mut connection = plan.connect().await?;
+
+        let columns = mysql_columns(&mut connection, database, &path.name).await?;
+        ensure_column_exists(column, &columns)?;
+        let table_name = format!(
+            "{}.{}",
+            fluxdb_core::MySqlDialect.quote_identifier(database),
+            fluxdb_core::MySqlDialect.quote_identifier(&path.name)
+        );
+        let mut builder = QueryBuilder::<MySql>::new(format!(
+            "SELECT {} FROM {table_name}",
+            fluxdb_core::MySqlDialect.quote_identifier(column)
+        ));
+        push_mysql_identity_where(&mut builder, identity, &columns)?;
+        builder.push(" LIMIT 1");
+        let row = builder
+            .build()
+            .fetch_one(&mut connection)
+            .await
+            .map_err(mysql_error)?;
+        connection.close().await.map_err(mysql_error)?;
+        row.try_get::<Option<String>, _>(0)
+            .map_err(mysql_error)?
+            .ok_or_else(|| Error::new(ErrorKind::Query, "文本单元格为 NULL"))
+    })
+}
+
 /// 校验字段信息是否足以拼出 SELECT 列表。
 ///
 /// `information_schema.columns` 会按当前账号权限过滤，缺权限时返回空列表；此时 `select_list`
@@ -299,6 +412,52 @@ fn push_mysql_filter_bind(
     }
 }
 
+/// `information_schema.columns` 在远程 MySQL 上单次要 1s 以上（实测 1.4s）。数据同步按块
+/// 反复读取同一张表，元数据会盖过真正的取数耗时，因此按「连接 + 库 + 表」缓存一小段时间。
+///
+/// DDL 之后最多陈旧 `MYSQL_COLUMNS_CACHE_TTL`：期间拼出的 SELECT 列表可能引用已删列而报错，
+/// 用户重试即可；这段窗口换来的是大表比对每块少两次元数据往返。
+/// key = 连接 ID + 库名 + 表名，value = 写入时刻 + 列定义。
+type MysqlColumnsCache = std::sync::Mutex<
+    std::collections::HashMap<(u64, String, String), (std::time::Instant, Vec<Column>)>,
+>;
+
+static MYSQL_COLUMNS_CACHE: std::sync::LazyLock<MysqlColumnsCache> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+const MYSQL_COLUMNS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+async fn mysql_columns_cached(
+    config: &ConnectionConfig,
+    connection: &mut sqlx::MySqlConnection,
+    database: &str,
+    table: &str,
+) -> fluxdb_core::Result<Vec<Column>> {
+    let key = (config.id.0, database.to_owned(), table.to_owned());
+    let cached = MYSQL_COLUMNS_CACHE
+        .lock()
+        .ok()
+        .and_then(|cache| {
+            cache
+                .get(&key)
+                .filter(|(at, _)| at.elapsed() < MYSQL_COLUMNS_CACHE_TTL)
+                .map(|(_, columns)| columns.clone())
+        });
+    if let Some(columns) = cached {
+        return Ok(columns);
+    }
+
+    let columns = mysql_columns(connection, database, table).await?;
+    // 缓存写失败（锁中毒）只影响性能，不影响本次读取。
+    if let Ok(mut cache) = MYSQL_COLUMNS_CACHE.lock() {
+        cache.insert(key, (std::time::Instant::now(), columns.clone()));
+        if cache.len() > 256 {
+            cache.retain(|_, (at, _)| at.elapsed() < MYSQL_COLUMNS_CACHE_TTL);
+        }
+    }
+    Ok(columns)
+}
+
 async fn mysql_columns(
     connection: &mut sqlx::MySqlConnection,
     database: &str,
@@ -340,4 +499,34 @@ async fn mysql_columns(
             })
         })
         .collect::<fluxdb_core::Result<Vec<_>>>()?)
+}
+
+#[cfg(test)]
+mod mysql_digest_projection_tests {
+    use super::*;
+
+    fn column(name: &str, type_name: &str) -> Column {
+        Column {
+            name: name.into(),
+            type_name: Some(type_name.into()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        }
+    }
+
+    #[test]
+    fn digest_column_uses_sha256_and_keeps_alias() {
+        let column = column("payload", "longblob");
+        let sql = mysql_select_expr_digest(&column, &["PAYLOAD".into()]);
+        assert_eq!(sql, "LOWER(SHA2(`payload`, 256)) AS `payload`");
+    }
+
+    #[test]
+    fn non_digest_column_keeps_page_projection() {
+        let column = column("payload", "longblob");
+        let sql = mysql_select_expr_digest(&column, &[]);
+        assert!(sql.contains("SUBSTRING"), "{sql}");
+        assert!(!sql.contains("SHA2"), "{sql}");
+    }
 }

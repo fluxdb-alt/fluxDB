@@ -30,6 +30,10 @@ mod connection_store;
 #[path = "parts/history_store.rs"]
 mod history_store;
 
+/// 数据同步执行账本：`sync_runs` 系列表，供执行后回看块明细与行级样本。
+#[path = "parts/sync_run_store.rs"]
+pub mod sync_run_store;
+
 /// 进程实例标识（`FLUXDB_PROFILE`）：并行多开时隔离数据目录与单实例锁。
 #[path = "parts/instance_profile.rs"]
 mod instance_profile;
@@ -42,6 +46,10 @@ pub use history_store::{
     QueryHistoryRecord, RedisKeySearchHistoryRecord, RedisWorkbenchHistoryRecord,
 };
 pub use instance_profile::{PROFILE_ENV, instance_profile};
+pub use sync_run_store::{
+    SyncRunChunkRecord, SyncRunFailureRecord, SyncRunRecord, SyncRunSampleRecord,
+    SyncRunTableRecord,
+};
 
 use fluxdb_core::{
     ColumnRef, CompletionIndexMeta, CompletionIndexSnapshot, ConnectionConfig, ConnectionId,
@@ -583,6 +591,104 @@ impl FileStorage {
     pub fn save_task_history(&self, records: &[TaskHistoryRecord]) -> Result<()> {
         let conn = self.open_sqlite()?;
         sqlite::put_json(&conn, sqlite::KEY_TASK_HISTORY, &records.to_vec())
+    }
+
+    // ---- 数据同步执行账本（回看用，写失败由调用方降级为日志，不中断同步）----
+
+    /// 开始一次同步记录，返回 run ID；`signature` 用于断点续传时校验参数一致。
+    pub fn begin_sync_run(
+        &self,
+        source: &str,
+        target: &str,
+        signature: &str,
+        started_unix_ms: u64,
+    ) -> Result<i64> {
+        let conn = self.open_sqlite()?;
+        sync_run_store::begin(&conn, source, target, signature, started_unix_ms)
+    }
+
+    /// 收尾：写状态与总计数，并裁剪过老记录。
+    pub fn finish_sync_run(
+        &self,
+        run_id: i64,
+        status: &str,
+        inserted: u64,
+        updated: u64,
+        deleted: u64,
+        finished_unix_ms: u64,
+    ) -> Result<()> {
+        let conn = self.open_sqlite()?;
+        sync_run_store::finish(
+            &conn,
+            run_id,
+            status,
+            inserted,
+            updated,
+            deleted,
+            finished_unix_ms,
+        )
+    }
+
+    /// 写入（或覆盖）单表汇总。
+    pub fn save_sync_run_table(&self, run_id: i64, table: &SyncRunTableRecord) -> Result<()> {
+        let conn = self.open_sqlite()?;
+        sync_run_store::upsert_table(&conn, run_id, table)
+    }
+
+    /// 记录一个块：块明细与行级样本同一事务落盘，避免只写一半。
+    pub fn save_sync_run_chunk(
+        &self,
+        run_id: i64,
+        chunk: &SyncRunChunkRecord,
+        samples: &[SyncRunSampleRecord],
+    ) -> Result<()> {
+        let conn = self.open_sqlite()?;
+        let tx = conn.unchecked_transaction().map_err(storage_error)?;
+        sync_run_store::insert_chunk(&tx, run_id, chunk)?;
+        sync_run_store::insert_samples(&tx, run_id, samples)?;
+        tx.commit().map_err(storage_error)
+    }
+
+    /// 最近 `limit` 次执行记录，新的在前。
+    pub fn load_sync_runs(&self, limit: i64) -> Result<Vec<SyncRunRecord>> {
+        let conn = self.open_sqlite()?;
+        sync_run_store::load_runs(&conn, limit)
+    }
+
+    /// 按 ID 读取单次任务；已裁剪或不存在时返回 `None`。
+    pub fn load_sync_run(&self, run_id: i64) -> Result<Option<SyncRunRecord>> {
+        let conn = self.open_sqlite()?;
+        sync_run_store::load_run(&conn, run_id)
+    }
+
+    /// 某次任务的表汇总。
+    pub fn load_sync_run_tables(&self, run_id: i64) -> Result<Vec<SyncRunTableRecord>> {
+        let conn = self.open_sqlite()?;
+        sync_run_store::load_tables(&conn, run_id)
+    }
+
+    /// 某次任务的块明细。
+    pub fn load_sync_run_chunks(&self, run_id: i64) -> Result<Vec<SyncRunChunkRecord>> {
+        let conn = self.open_sqlite()?;
+        sync_run_store::load_chunks(&conn, run_id)
+    }
+
+    /// 某次任务的行级样本。
+    pub fn load_sync_run_samples(&self, run_id: i64) -> Result<Vec<SyncRunSampleRecord>> {
+        let conn = self.open_sqlite()?;
+        sync_run_store::load_samples(&conn, run_id)
+    }
+
+    /// 追加一条失败行；执行期逐条调用，单条失败由调用方降级为日志。
+    pub fn save_sync_run_failure(&self, run_id: i64, failure: &SyncRunFailureRecord) -> Result<()> {
+        let conn = self.open_sqlite()?;
+        sync_run_store::insert_failure(&conn, run_id, failure)
+    }
+
+    /// 某次任务被跳过的失败行，按写入顺序。
+    pub fn load_sync_run_failures(&self, run_id: i64) -> Result<Vec<SyncRunFailureRecord>> {
+        let conn = self.open_sqlite()?;
+        sync_run_store::load_failures(&conn, run_id)
     }
 }
 

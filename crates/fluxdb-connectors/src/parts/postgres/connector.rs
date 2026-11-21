@@ -524,6 +524,24 @@ impl Connector for PostgresConnector {
         pg_load_data(config, path, offset, limit, sort, filters)
     }
 
+    fn load_data_with_digests(
+        &self,
+        path: &ObjectPath,
+        offset: u64,
+        limit: u64,
+        sort: &[SortSpec],
+        filters: &[FilterSpec],
+        digest_columns: &[String],
+    ) -> fluxdb_core::Result<DataPage> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 数据读取需要连接配置上下文",
+            ));
+        };
+        pg_load_data_digests(config, path, offset, limit, sort, filters, digest_columns)
+    }
+
     fn load_data_expression(
         &self,
         path: &ObjectPath,
@@ -581,6 +599,21 @@ impl Connector for PostgresConnector {
             ));
         };
         pg_apply_changes(config, changes)
+    }
+
+    fn load_cell_text(
+        &self,
+        path: &ObjectPath,
+        identity: &fluxdb_core::RowIdentity,
+        column: &str,
+    ) -> fluxdb_core::Result<String> {
+        let Some(config) = self.config.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::Connection,
+                "PostgreSQL 文本读取需要连接配置上下文",
+            ));
+        };
+        pg_load_cell_text(config, path, identity, column)
     }
 
     fn load_cell_binary(
