@@ -97,6 +97,39 @@ fn sqlserver_list_schemas(
         .collect())
 }
 
+/// 对象列表 SQL：`include_size` 为真时从 `sys.dm_db_partition_stats` 取表大小；
+/// 该 DMV 需要 VIEW DATABASE PERFORMANCE STATE，权限不足时由调用方退回无大小版本。
+///
+/// 注意：`used_page_count` 只存在于 `sys.dm_db_partition_stats`，`sys.partitions`
+/// 没有该列（SQL Server 各版本均如此），写错列名会直接报 207 导致对象树无法展开。
+fn sqlserver_relations_sql(include_size: bool) -> String {
+    // 两个版本列顺序必须一致：行解析按固定下标读取 row_count(6) 与 size_bytes(7)。
+    let (row_count, size_expression, partition_source) = if include_size {
+        (
+            "p.row_count",
+            "SUM(p.used_page_count) * 8192",
+            "sys.dm_db_partition_stats",
+        )
+    } else {
+        ("p.rows", "CAST(NULL AS bigint)", "sys.partitions")
+    };
+    format!(
+        "SELECT o.name, o.type, o.object_id, o.create_date, o.modify_date, \
+                CAST(ep.value AS nvarchar(max)) AS comment, \
+                SUM(CASE WHEN p.index_id IN (0,1) THEN {row_count} ELSE 0 END) AS row_count, \
+                {size_expression} AS size_bytes \
+         FROM sys.objects o \
+         JOIN sys.schemas s ON s.schema_id = o.schema_id \
+         LEFT JOIN sys.extended_properties ep \
+           ON ep.class = 1 AND ep.major_id = o.object_id AND ep.minor_id = 0 AND ep.name = 'MS_Description' \
+         LEFT JOIN {partition_source} p ON p.object_id = o.object_id \
+         WHERE s.name = @P1 AND o.type IN ('U','V','P','PC','FN','IF','TF','FS','FT') \
+           AND o.is_ms_shipped = 0 \
+         GROUP BY o.name, o.type, o.object_id, o.create_date, o.modify_date, ep.value \
+         ORDER BY o.name"
+    )
+}
+
 fn sqlserver_list_relations(
     config: &ConnectionConfig,
     path: &ObjectPath,
@@ -112,27 +145,23 @@ fn sqlserver_list_relations(
         .or_else(|| (!path.name.trim().is_empty()).then(|| path.name.clone()))
         .ok_or_else(|| Error::new(ErrorKind::Query, "SQL Server 表列表缺少 schema 上下文"))?;
     let mut client = sqlserver_connect_database(config, Some(&database))?;
+    let parameters = [fluxdb_core::SqlParameter::Text(schema.clone())];
     let batch = sqlserver_block_on(async {
-        let batch = sqlserver_run_query(
+        let batch = match sqlserver_run_query(
             &mut client,
-            "SELECT o.name, o.type, o.object_id, o.create_date, o.modify_date, \
-                    CAST(ep.value AS nvarchar(max)) AS comment, \
-                    SUM(CASE WHEN p.index_id IN (0,1) THEN p.rows ELSE 0 END) AS row_count, \
-                    SUM(ps.used_page_count) * 8192 AS size_bytes \
-             FROM sys.objects o \
-             JOIN sys.schemas s ON s.schema_id = o.schema_id \
-             LEFT JOIN sys.extended_properties ep \
-               ON ep.class = 1 AND ep.major_id = o.object_id AND ep.minor_id = 0 AND ep.name = 'MS_Description' \
-             LEFT JOIN sys.partitions p ON p.object_id = o.object_id \
-             LEFT JOIN sys.dm_db_partition_stats ps \
-               ON ps.object_id = o.object_id AND ps.index_id = p.index_id \
-             WHERE s.name = @P1 AND o.type IN ('U','V','P','PC','FN','IF','TF','FS','FT') \
-               AND o.is_ms_shipped = 0 \
-             GROUP BY o.name, o.type, o.object_id, o.create_date, o.modify_date, ep.value \
-             ORDER BY o.name",
-            &[fluxdb_core::SqlParameter::Text(schema.clone())],
+            &sqlserver_relations_sql(true),
+            &parameters,
         )
-        .await?;
+        .await
+        {
+            Ok(batch) => batch,
+            // `sys.dm_db_partition_stats` 需要 VIEW DATABASE PERFORMANCE STATE；
+            // 低权限账号会报 262/297，此时退回不带大小的查询，保证对象树仍能展开。
+            Err(error) if error.kind == ErrorKind::Permission => {
+                sqlserver_run_query(&mut client, &sqlserver_relations_sql(false), &parameters).await?
+            }
+            Err(error) => return Err(error),
+        };
         sqlserver_close(client).await;
         Ok(batch)
     })?;
@@ -144,8 +173,7 @@ fn sqlserver_list_relations(
         };
         let object_type = row.values.get(1).and_then(cell_text).unwrap_or_default();
         let stable = row.values.get(2).and_then(cell_i64).and_then(|value| u64::try_from(value).ok());
-        // `used_page_count` 只在 sys.dm_db_partition_stats 中，覆盖堆/聚集索引与非聚集索引；
-        // SQL Server 页固定 8 KiB。
+        // `used_page_count` 覆盖堆/聚集索引与非聚集索引；SQL Server 页固定 8 KiB。
         let size_bytes = row
             .values
             .get(7)
