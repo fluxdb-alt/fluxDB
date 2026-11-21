@@ -2201,6 +2201,65 @@ fn sync_loading_spinner(size: f32, color: gpui::Rgba) -> impl IntoElement {
         )
 }
 
+/// 执行完成后的状态条：成功 / 部分失败 / 已取消都在这里给出结论，
+/// 不再让界面停留在「刚打开预览」的样子。
+fn sync_completion_banner(state: &SyncWizardState, colors: UiColors) -> Option<Div> {
+    let completion = state.completion.as_ref()?;
+    let (text, color) = match completion.status {
+        SyncCompletionStatus::Success => match state.mode {
+            SyncMode::Data => (
+                tr("app.sync.completion_data")
+                    .replace("%{tables}", &completion.tables.to_string())
+                    .replace("%{inserted}", &completion.inserted.to_string())
+                    .replace("%{updated}", &completion.updated.to_string())
+                    .replace("%{deleted}", &completion.deleted.to_string()),
+                colors.success,
+            ),
+            SyncMode::Structure => (
+                tr("app.sync.completion_structure")
+                    .replace("%{tables}", &completion.tables.to_string())
+                    .replace("%{applied}", &completion.applied.to_string()),
+                colors.success,
+            ),
+        },
+        SyncCompletionStatus::Partial => match state.mode {
+            SyncMode::Data => (
+                tr("app.sync.completion_data_partial")
+                    .replace("%{tables}", &completion.tables.to_string())
+                    .replace("%{failed}", &completion.failed_tables.to_string())
+                    .replace("%{inserted}", &completion.inserted.to_string())
+                    .replace("%{updated}", &completion.updated.to_string())
+                    .replace("%{deleted}", &completion.deleted.to_string()),
+                colors.danger,
+            ),
+            SyncMode::Structure => (
+                tr("app.sync.completion_structure_partial")
+                    .replace("%{tables}", &completion.tables.to_string())
+                    .replace("%{failed}", &completion.failed_tables.to_string())
+                    .replace("%{applied}", &completion.applied.to_string()),
+                colors.danger,
+            ),
+        },
+        SyncCompletionStatus::Canceled => (
+            tr("app.sync.completion_canceled").to_string(),
+            colors.muted,
+        ),
+    };
+    Some(
+        div()
+            .debug_selector(|| "sync-completion".into())
+            .flex_none()
+            .px_4()
+            .py_2()
+            .border_b_1()
+            .border_color(colors.border_soft)
+            .bg(colors.panel_alt)
+            .text_size(ui_text_size(11.))
+            .text_color(color)
+            .child(text),
+    )
+}
+
 fn sync_step_preview(
     state: &SyncWizardState,
     colors: UiColors,
@@ -2215,6 +2274,9 @@ fn sync_step_preview(
         .min_h(px(0.))
         .flex()
         .flex_col()
+        .when_some(sync_completion_banner(state, colors), |this, banner| {
+            this.child(banner)
+        })
         .when_some(state.preview_error.clone(), |this, error| {
             this.child(
                 div()
@@ -3368,6 +3430,8 @@ fn sync_footer(
     cx: &mut Context<NavicatMain>,
 ) -> Div {
     let busy = state.running || state.preview_running;
+    // 执行结束后主按钮改为「完成」：关闭向导，结果已固定在状态条与任务中心。
+    let finished = state.completion.is_some() && !state.running;
     div()
         .debug_selector(|| "sync-wizard-footer".into())
         .flex_none()
@@ -3472,12 +3536,18 @@ fn sync_footer(
                 Button::new("sync-wizard-run")
                     .label(if state.running {
                         tr("app.sync.running")
+                    } else if finished {
+                        tr("app.sync.done")
                     } else {
                         tr("app.sync.run")
                     })
                     .disabled(busy)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.start_sync_execute(cx);
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if finished {
+                            this.close_sync_wizard(cx);
+                        } else {
+                            this.start_sync_execute(cx);
+                        }
                     }))),
             )
         })
