@@ -357,6 +357,7 @@ fn backup_list_content(
                         .items_center()
                         .gap_2()
                         .child(backup_text_button(
+                            "backup-new",
                             tr("app.backup.new"),
                             colors,
                             cx.listener(move |this, _, window, cx| {
@@ -370,6 +371,7 @@ fn backup_list_content(
                             }),
                         ))
                         .child(backup_text_button(
+                            "backup-restore-from-file",
                             tr("app.backup.restore_from_file"),
                             colors,
                             cx.listener(move |this, _, window, cx| {
@@ -377,6 +379,7 @@ fn backup_list_content(
                             }),
                         ))
                         .child(backup_text_button(
+                            "backup-refresh",
                             tr("app.common.refresh"),
                             colors,
                             cx.listener(|_, _, _, cx| {
@@ -421,12 +424,15 @@ fn backup_list_hint(text: impl Into<SharedString>, colors: UiColors) -> Div {
 
 /// 通用小按钮（纯 div + App 级监听，cx.listener 负责回写实体状态）。
 fn backup_text_button(
+    id: impl Into<SharedString>,
     label: impl Into<SharedString>,
     colors: UiColors,
     on_click: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> Div {
     let label = label.into();
+    let selector: SharedString = id.into();
     div()
+        .debug_selector(move || selector.to_string())
         .h(px(22.))
         .px_2()
         .flex()
@@ -521,6 +527,7 @@ fn backup_running_row(
                 .items_center()
                 .gap_2()
                 .child(backup_text_button(
+                    format!("backup-running-log:{task_id}"),
                     tr("app.backup.log"),
                     colors,
                     cx.listener(move |this, _, _, cx| {
@@ -530,6 +537,7 @@ fn backup_running_row(
                     }),
                 ))
                 .child(backup_text_button(
+                    format!("backup-running-cancel:{task_id}"),
                     tr("app.backup.cancel"),
                     colors,
                     cx.listener(move |this, _, _, cx| {
@@ -543,7 +551,9 @@ fn backup_running_row(
 /// 磁盘备份文件行。
 fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<NavicatMain>) -> Div {
     let path_display = row.path.to_string_lossy().to_string();
+    let path_for_copy = path_display.clone();
     let file_name_for_tables = row.file_name.clone();
+    let file_name_for_buttons = row.file_name.clone();
     let meta_for_tables = row.meta.clone();
     let path_for_note = row.path.clone();
     let path_for_delete = row.path.clone();
@@ -600,6 +610,7 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
                 .gap_2()
                 .child(div().text_color(colors.muted).child(backup_tables_cell_text(&row.meta)))
                 .child(backup_text_button(
+                    format!("backup-row-tables:{}", file_name_for_tables),
                     tr("app.backup.view"),
                     colors,
                     cx.listener(move |this, _, _, cx| {
@@ -611,10 +622,23 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
         .child(div().w(px(BACKUP_COL_SIZE)).child(format_backup_size(row.size)))
         .child(
             div()
+                .id(path_for_copy.clone())
+                .debug_selector(|| "backup-row-path".into())
                 .w(px(BACKUP_COL_PATH))
                 .overflow_hidden()
                 .text_ellipsis()
                 .text_color(colors.muted)
+                .cursor_pointer()
+                .hover(move |style| style.text_color(colors.text))
+                .tooltip(|window, cx| Tooltip::new(tr("app.backup.copy_path")).build(window, cx))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(path_for_copy.clone()));
+                        this.show_message(tr("app.backup.path_copied"), AppMessageKind::Success, cx);
+                        cx.stop_propagation();
+                    }),
+                )
                 .child(path_display.clone()),
         )
         .child(
@@ -633,6 +657,7 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
                 .items_center()
                 .gap_2()
                 .child(backup_text_button(
+                    "backup-row-restore",
                     tr("app.backup.restore"),
                     colors,
                     cx.listener(move |this, _, window, cx| {
@@ -642,6 +667,7 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
                     }),
                 ))
                 .child(backup_text_button(
+                    format!("backup-row-records:{}", file_name_for_records),
                     tr("app.backup.records"),
                     colors,
                     cx.listener(move |this, _, _, cx| {
@@ -654,6 +680,7 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
                     }),
                 ))
                 .child(backup_text_button(
+                    format!("backup-row-edit:{}", file_name_for_buttons),
                     tr("app.backup.edit"),
                     colors,
                     cx.listener(move |this, _, window, cx| {
@@ -662,6 +689,7 @@ fn backup_file_row(row: BackupFileRow, colors: UiColors, cx: &mut Context<Navica
                     }),
                 ))
                 .child(backup_text_button(
+                    format!("backup-row-delete:{}", file_name_for_buttons),
                     tr("app.common.delete"),
                     colors,
                     cx.listener(move |this, _, _, cx| {
@@ -791,6 +819,7 @@ fn backup_tables_modal(
                                 ),
                         )
                         .child(backup_text_button(
+                            "backup-modal-close",
                             tr("app.common.close"),
                             colors,
                             cx.listener(|this, _, _, cx| {
@@ -920,6 +949,7 @@ fn restore_records_modal(
                                 ),
                         )
                         .child(backup_text_button(
+                            "backup-modal-close",
                             tr("app.common.close"),
                             colors,
                             cx.listener(|this, _, _, cx| {

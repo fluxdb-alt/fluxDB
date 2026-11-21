@@ -101,7 +101,11 @@ fn restore_general_page(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(restore_input_frame(modal.source_input.clone(), colors))
+                        .child(restore_input_frame(
+                            modal.source_input.clone(),
+                            "restore-source",
+                            colors,
+                        ))
                         .child(
                             Button::new("restore-pick-backup-file")
                                 .label(tr("app.common.choose"))
@@ -134,7 +138,7 @@ fn restore_general_page(
                     .min_w(px(0.))
                     .child(Select::new(&modal.target_db).disabled(locked).w_full())
             } else {
-                restore_input_frame(modal.target_input.clone(), colors)
+                restore_input_frame(modal.target_input.clone(), "restore-target", colors)
             };
             div()
                 .w_full()

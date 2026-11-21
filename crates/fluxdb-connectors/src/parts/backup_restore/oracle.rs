@@ -365,8 +365,10 @@ fn oracle_logical_backup(
         if request.include_schema {
             writeln!(writer, "{}", connector.table_ddl(&object)?).map_err(io_error)?;
         }
+        let mut exported_rows: Option<u64> = None;
         if request.include_data && object.kind == ObjectKind::Table {
             let mut offset = 0u64;
+            let mut rows_exported = 0u64;
             loop {
                 canceled(cancel)?;
                 // 分页独立读取：不是同一 SCN，跨页期间的变化可能混进文件。
@@ -392,14 +394,24 @@ fn oracle_logical_backup(
                     .map_err(io_error)?;
                 }
                 offset += page.rows.len() as u64;
+                rows_exported += page.rows.len() as u64;
                 if !page.has_more || page.rows.is_empty() {
                     break;
                 }
             }
+            exported_rows = Some(rows_exported);
         }
-        meta.objects.push(key);
+        meta.objects.push(key.clone());
+        meta.object_stats.push(BackupObjectStats {
+            name: key,
+            rows: exported_rows,
+        });
     }
+    // 本次为逐页独立读取，不是同一事务快照；清单如实标注。
+    meta.consistent = Some(false);
     writer.flush().map_err(io_error)?;
+    drop(writer);
+    finalize_embedded_manifest(&request.output, &mut meta)?;
     Ok(meta)
 }
 

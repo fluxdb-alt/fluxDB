@@ -267,12 +267,20 @@ fn settings_panel_header(
                 cx,
             ))
         })
+        .when(active_section == SettingsPanelSection::Data, |this| {
+            // 数据分区的备份目录与客户端工具路径已具备脏检查、字段映射和落盘逻辑；
+            // 启用保存按钮让配置的工具路径可跨重启生效，而不只是当前会话。
+            this.child(settings_section_header_actions(
+                SettingsPanelSection::Data,
+                &state.settings,
+                &editor_draft,
+                cx,
+            ))
+        })
         .when(
             matches!(
                 active_section,
-                SettingsPanelSection::Data
-                    | SettingsPanelSection::ConnectionSecurity
-                    | SettingsPanelSection::DatabaseSupport
+                SettingsPanelSection::ConnectionSecurity | SettingsPanelSection::DatabaseSupport
             ),
             |this| this.child(settings_section_header_actions_disabled(colors)),
         )

@@ -13,6 +13,38 @@ pub struct CreateDatabaseRequest {
     pub path: Option<PathBuf>,
 }
 
+/// 逻辑备份用的一致快照会话。
+///
+/// 备份要求「多张表的 DDL 与数据在同一个读视图里」，不能每页新建连接；
+/// 引擎不支持时 `Connector::backup_snapshot` 返回 `Unsupported`，
+/// 调用方退回逐页独立读取并在 manifest 标注 `consistent=false`。
+pub trait BackupSnapshot {
+    /// 读取建表语句；必须与数据读取处于同一会话。
+    fn table_ddl(&mut self, path: &ObjectPath) -> Result<String>;
+    /// 在快照上读取一页数据（`offset` 语义与 `Connector::load_data` 一致）。
+    fn load_data(&mut self, path: &ObjectPath, offset: u64, limit: u64) -> Result<DataPage>;
+    /// 按主键键集读取下一页：只返回主键严格大于 `after` 的行，`after` 为空表示首页。
+    ///
+    /// `after` 是上一页最后一行的主键值，顺序必须与 `DataPage.columns` 中
+    /// `primary_key` 列的顺序一致。无主键或引擎不支持时返回 `Unsupported`，
+    /// 调用方退回 `load_data` 的 OFFSET 分页。
+    fn load_data_keyset(
+        &mut self,
+        _path: &ObjectPath,
+        _after: &[CellValue],
+        _limit: u64,
+    ) -> Result<DataPage> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "当前快照不支持主键键集分页",
+        ))
+    }
+    /// 快照位点（GTID / LSN / SCN）；引擎给不出时返回 None。
+    fn snapshot_id(&self) -> Option<String>;
+    /// 结束会话并释放快照（只读事务回滚）。失败不改变已导出内容。
+    fn finish(&mut self) -> Result<()>;
+}
+
 pub trait Connector {
     fn kind(&self) -> DatabaseKind;
     fn test_connection(&self, config: &ConnectionConfig) -> Result<()>;
@@ -336,6 +368,13 @@ pub trait Connector {
         sort: &[SortSpec],
         filters: &[FilterSpec],
     ) -> Result<DataPage>;
+    /// 建立指定数据库的备份一致快照会话；默认不支持，逻辑备份退回逐页读取。
+    fn backup_snapshot(&self, _database: &str) -> Result<Box<dyn BackupSnapshot>> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "当前数据库不支持一致快照备份",
+        ))
+    }
     /// 使用统一表达式树读取数据页。默认实现保留旧连接器兼容，新方言走精确参数绑定。
     fn load_data_expression(
         &self,

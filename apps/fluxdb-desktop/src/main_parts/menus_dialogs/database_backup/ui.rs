@@ -423,6 +423,7 @@ fn database_backup_dir_row(
                 .gap_2()
                 .child(
                     div()
+                        .debug_selector(|| "backup-target-dir".into())
                         .flex_1()
                         .min_w(px(0.))
                         .h(px(34.))
@@ -465,6 +466,7 @@ fn database_backup_note_row(input: Entity<InputState>, colors: UiColors) -> Div 
         )))
         .child(
             div()
+                .debug_selector(|| "backup-note".into())
                 .flex_1()
                 .min_w(px(0.))
                 .h(px(34.))
@@ -572,6 +574,7 @@ fn database_backup_file_name_row(input: Entity<InputState>, colors: UiColors) ->
         )))
         .child(
             div()
+                .debug_selector(|| "backup-file-name".into())
                 .flex_1()
                 .min_w(px(0.))
                 .h(px(34.))
@@ -901,6 +904,7 @@ fn database_backup_log_list(
     } else {
         // 顶部工具行：复制全部日志（含失败原因与跳过项）。
         list = list.child(div().flex().justify_end().pb_1().child(backup_text_button(
+            "backup-log-copy-all",
             tr("app.database_backup.copy_all"),
             colors,
             {
@@ -972,7 +976,7 @@ fn backup_log_row(
         .child(
             div()
                 .flex_none()
-                .child(backup_text_button(tr("app.database_backup.copy"), colors, move |_, _, cx| {
+                .child(backup_text_button("backup-log-copy", tr("app.database_backup.copy"), colors, move |_, _, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
                 })),
         )
@@ -997,6 +1001,7 @@ fn database_backup_modal_footer(
         .gap_2()
         .child(
             Button::new("backup-close")
+                .debug_selector(|| "backup-close".into())
                 .label(tr("app.common.close"))
                 .small()
                 .w(px(78.))
@@ -1057,6 +1062,7 @@ fn database_backup_modal_footer(
         let running = tasks.iter().any(|task| task.running());
         footer = footer.child(
             Button::new("backup-start")
+                .debug_selector(|| "backup-start".into())
                 .label(tr("app.database_backup.start"))
                 .primary()
                 .small()

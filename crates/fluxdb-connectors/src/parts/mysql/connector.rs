@@ -522,4 +522,14 @@ impl Connector for MySqlConnector {
             .ok_or_else(|| Error::new(ErrorKind::Connection, "MySQL DDL 读取需要连接配置上下文"))?;
         mysql_table_ddl(config, path)
     }
+
+    fn backup_snapshot(
+        &self,
+        _database: &str,
+    ) -> fluxdb_core::Result<Box<dyn fluxdb_core::BackupSnapshot>> {
+        let config = self.config.as_ref().ok_or_else(|| {
+            Error::new(ErrorKind::Connection, "MySQL 一致快照需要连接配置上下文")
+        })?;
+        Ok(Box::new(MysqlBackupSnapshot::begin(config)?))
+    }
 }

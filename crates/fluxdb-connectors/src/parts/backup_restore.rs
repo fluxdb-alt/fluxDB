@@ -2,14 +2,16 @@ mod backup_restore {
     use super::*;
     use fluxdb_core::{
         BackupExecution, BackupFormat, BackupManifest, BackupMethod, BackupObjectKind,
-        BackupObjectRef, BackupRequest, BackupScope, Connector, DatabaseBackup,
-        DatabaseTaskProgress, PerTableDecision, RestoreObjectProbe, RestoreObjectResult,
-        RestoreObjectStatus, RestoreOutcome, RestorePlan, RestoreRequest, RestoreTableAction,
-        RestoreTableInfo, RestoreTransactionMode, RestoreValidation,
+        BackupObjectRef, BackupObjectStats, BackupRequest, BackupScope,
+        Connector, DatabaseBackup, DatabaseKind, DatabaseTaskProgress, PerTableDecision, RestoreObjectProbe,
+        RestoreObjectResult, RestoreObjectStatus, RestoreOutcome, RestorePlan, RestoreRequest,
+        RestoreTableAction, RestoreTableInfo, RestoreTransactionMode, RestoreValidation,
+        BACKUP_MANIFEST_BEGIN, BACKUP_MANIFEST_END, BACKUP_MANIFEST_VERSION,
     };
     use std::{
         fs,
-        io::{Read, Write},
+        io::{Read, Seek, SeekFrom, Write},
+        path::PathBuf,
         process::{Command, Stdio},
         sync::atomic::{AtomicBool, Ordering},
     };
@@ -20,6 +22,7 @@ mod backup_restore {
     include!("backup_restore/dameng.rs");
     include!("backup_restore/sqlserver.rs");
     include!("backup_restore/oracle.rs");
+    include!("backup_restore/mongo.rs");
     include!("backup_restore/restore.rs");
 }
 pub use backup_restore::{

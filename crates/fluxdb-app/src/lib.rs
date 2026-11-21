@@ -96,6 +96,7 @@ include!("parts/terminal_mongo.rs");
 include!("parts/native_client_io.rs");
 include!("parts/updater.rs");
 include!("parts/pg_client_tools.rs");
+include!("parts/mongo_client_tools.rs");
 #[path = "parts/mysql_client_tools.rs"]
 mod mysql_client_tools;
 pub use mysql_client_tools::*;

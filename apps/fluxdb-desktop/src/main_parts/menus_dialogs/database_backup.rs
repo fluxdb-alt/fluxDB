@@ -533,12 +533,16 @@ impl NavicatMain {
 
 /// 计算最终备份文件名：配合「使用指定的文件名」门控；否则用默认 `库名_时间戳.sql`（保持旧行为）。
 fn resolve_backup_file_name(form: &BackupForm) -> String {
-    let format = if form.database_kind == DatabaseKind::Sqlite { fluxdb_app::BackupFormat::SqliteBinary } else { fluxdb_app::BackupFormat::Sql };
+    let format = match form.database_kind {
+        DatabaseKind::Sqlite => fluxdb_app::BackupFormat::SqliteBinary,
+        DatabaseKind::MongoDb => fluxdb_app::BackupFormat::MongoArchive,
+        _ => fluxdb_app::BackupFormat::Sql,
+    };
     let default = {
         let name = form.database.clone().unwrap_or_default();
         let name = safe_data_export_filename_segment(&name);
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        format!("{name}_{timestamp}.sql")
+        format!("{name}_{timestamp}.{}", format.extension())
     };
     let raw = form.file_name.trim();
     if raw.is_empty() {

@@ -22,6 +22,8 @@ mod i18n_e2e_tests {
     include!("i18n_tests/dameng_connection.rs");
     // 生产视图里的 Redis 拓扑显式选择 + 节点列表完整落库。
     include!("i18n_tests/redis_topology.rs");
+    // 生产视图里的 MongoDB 备份/恢复端到端（真实 mongodump/mongorestore，环境变量门控）。
+    include!("i18n_tests/mongo_backup_restore.rs");
     // 生产视图里的 PostgreSQL 连接串导入与真实库端到端（Podman 容器 + 环境变量门控）。
     include!("i18n_tests/postgres_connection.rs");
     // 连接表单字段按高频/低频分页展示。

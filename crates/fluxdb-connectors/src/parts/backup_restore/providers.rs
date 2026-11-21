@@ -8,6 +8,7 @@ pub fn database_backup(kind: DatabaseKind) -> fluxdb_core::Result<Box<dyn Databa
         DatabaseKind::Dameng => Ok(Box::new(DamengBackup)),
         DatabaseKind::SqlServer => Ok(Box::new(SqlServerBackup)),
         DatabaseKind::Oracle => Ok(Box::new(OracleBackup)),
+        DatabaseKind::MongoDb => Ok(Box::new(MongoBackup)),
         _ => Err(task_error("该数据库尚不支持备份与恢复")),
     }
 }
@@ -60,6 +61,19 @@ fn manifest(request: &BackupRequest, objects: Vec<String>) -> BackupManifest {
         include_data: request.include_data,
         objects,
         tool_version: request.tool_version.clone(),
+        // 原生工具备份不内嵌清单；逐表行数、文件哈希等由逻辑备份在收尾时回填。
+        ..Default::default()
+    }
+}
+/// 恢复请求的有效清单：内嵌清单随文件走，优先于可能缺失或过期的备份记录。
+/// 调用方没有内嵌清单时不克隆请求。
+fn with_embedded_manifest(request: &RestoreRequest) -> std::borrow::Cow<'_, RestoreRequest> {
+    match embedded_manifest(&request.source) {
+        Some(manifest) => std::borrow::Cow::Owned(RestoreRequest {
+            manifest: Some(manifest),
+            ..request.clone()
+        }),
+        None => std::borrow::Cow::Borrowed(request),
     }
 }
 macro_rules! restore_methods {
@@ -69,7 +83,7 @@ macro_rules! restore_methods {
             request: &RestoreRequest,
             cancel: &AtomicBool,
         ) -> fluxdb_core::Result<RestorePlan> {
-            inspect_restore(self.kind(), request, cancel)
+            inspect_restore(self.kind(), &with_embedded_manifest(request), cancel)
         }
         fn probe_restore(
             &self,
@@ -85,7 +99,13 @@ macro_rules! restore_methods {
             cancel: &AtomicBool,
             progress: &mut dyn FnMut(DatabaseTaskProgress),
         ) -> fluxdb_core::Result<RestoreOutcome> {
-            restore_database(self.kind(), request, plan, cancel, progress)
+            restore_database(
+                self.kind(),
+                &with_embedded_manifest(request),
+                plan,
+                cancel,
+                progress,
+            )
         }
     };
 }
@@ -158,6 +178,7 @@ impl DatabaseBackup for MySqlBackup {
             &request.config,
             version.mariadb,
             tunnel.is_some(),
+            false,
         )?;
         command
             .args(invocation.args)
@@ -228,8 +249,20 @@ impl DatabaseBackup for PostgresBackup {
     fn kind(&self) -> DatabaseKind {
         DatabaseKind::Postgres
     }
-    fn execution(&self, _: BackupMethod, _: bool) -> fluxdb_core::Result<BackupExecution> {
-        Ok(BackupExecution::PgDump)
+    fn execution(
+        &self,
+        method: BackupMethod,
+        native: bool,
+    ) -> fluxdb_core::Result<BackupExecution> {
+        // 无 pg_dump 或用户显式选逻辑备份时走自研 SQL 转储；PG 的逻辑路径同样在
+        // 单连接只读 REPEATABLE READ 快照上读取，不逐页重连。
+        Ok(
+            if method == BackupMethod::Logical || (method == BackupMethod::Auto && !native) {
+                BackupExecution::SqlDump
+            } else {
+                BackupExecution::PgDump
+            },
+        )
     }
     fn backup(
         &self,
@@ -237,6 +270,9 @@ impl DatabaseBackup for PostgresBackup {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(DatabaseTaskProgress),
     ) -> fluxdb_core::Result<BackupManifest> {
+        if request.execution == BackupExecution::SqlDump {
+            return logical_backup_postgres(request, cancel, progress);
+        }
         // 执行前把动态范围解析成固定快照；-t 参数使用 schema 限定键，避免跨 schema 误配。
         let snapshot = resolve_backup_scope(request)?;
         let (host, port, user, password, tunnel) = native_connection(&request.config)?;

@@ -1,7 +1,26 @@
 include!("logical.rs");
+include!("logical_postgres.rs");
 include!("script.rs");
 include!("partition.rs");
 include!("checks.rs");
+/// 读取 SQL 备份尾部内嵌清单：只读文件尾部 1 MiB，避免为大文件整读入内存。
+/// 非 SQL、旧文件或 footer 损坏时返回 None，调用方回退到记录中的 manifest。
+fn embedded_manifest(path: &std::path::Path) -> Option<BackupManifest> {
+    const TAIL: u64 = 1 << 20;
+    let mut file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let tail = len.min(TAIL);
+    file.seek(SeekFrom::Start(len - tail)).ok()?;
+    let mut bytes = Vec::with_capacity(tail as usize);
+    file.read_to_end(&mut bytes).ok()?;
+    parse_embedded_manifest(&String::from_utf8_lossy(&bytes))
+}
+
+/// 有效清单：文件内嵌清单优先于调用方传入的备份记录。
+/// 文件可能被移动/复制，内嵌清单随文件走；记录可能缺失（外部文件或旧记录）。
+fn effective_manifest(request: &RestoreRequest) -> Option<BackupManifest> {
+    embedded_manifest(&request.source).or_else(|| request.manifest.clone())
+}
 fn inspect_restore(
     kind: DatabaseKind,
     request: &RestoreRequest,
@@ -28,7 +47,19 @@ fn inspect_restore(
         ));
     }
     let mut warnings = vec!["恢复失败或取消可能留下部分目标数据，任务不会自动删除目标。".into()];
-    if let Some(meta) = &request.manifest {
+    let manifest = effective_manifest(request);
+    // 清单带文件哈希时先校验数据部分，损坏/被改动的备份在这里拒绝，不进入执行阶段。
+    if let Some(expected) = manifest.as_ref().and_then(|m| m.file_sha256.as_deref()) {
+        let actual = data_sha256_reader(fs::File::open(&request.source).map_err(io_error)?)
+            .map_err(io_error)?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(task_error(
+                "备份文件校验失败：数据内容与清单 sha256 不一致，文件可能损坏或被修改",
+            ));
+        }
+        warnings.push("已校验备份文件数据部分 sha256。".into());
+    }
+    if let Some(meta) = &manifest {
         if !meta.complete {
             return Err(task_error("备份未完整成功，不能自动恢复"));
         }
@@ -562,8 +593,7 @@ fn restore_database(
         drop(target);
         report(progress, "验证", "检查 SQLite 完整性与外键");
         validate_sqlite(Path::new(&request.target))?;
-        let objects: Vec<RestoreObjectResult> = request
-            .manifest
+        let objects: Vec<RestoreObjectResult> = effective_manifest(request)
             .as_ref()
             .map(|m| {
                 m.objects
@@ -634,6 +664,7 @@ fn restore_database(
             &request.config,
             version.mariadb,
             tunnel.is_some(),
+            true,
         )?;
         command
             .arg("-h")
@@ -746,7 +777,9 @@ fn restore_database(
         .map(|d| d.table.as_str())
         .collect();
     let kept = |name: &str| !skipped.contains(name);
-    if let Some(meta) = &request.manifest {
+    // 执行阶段的清单与预检查一致：内嵌清单优先，回退到备份记录。
+    let manifest = effective_manifest(request);
+    if let Some(meta) = &manifest {
         for name in &meta.objects {
             if !kept(name) {
                 continue;
@@ -787,8 +820,7 @@ fn restore_database(
             })
             .collect()
     } else {
-        request
-            .manifest
+        manifest
             .as_ref()
             .map(|m| {
                 m.objects
@@ -805,6 +837,16 @@ fn restore_database(
             .unwrap_or_default()
     };
     let total_objects = object_results.len();
+    // 备份时行数（内嵌清单优先）：只有带统计值的表参与比对，视图/旧文件不比对。
+    let expected_rows: std::collections::BTreeMap<&str, u64> = manifest
+        .as_ref()
+        .map(|m| {
+            m.object_stats
+                .iter()
+                .filter_map(|s| s.rows.map(|rows| (s.name.as_str(), rows)))
+                .collect()
+        })
+        .unwrap_or_default();
     // 完成验证=逐表行数：对已恢复对象补充 count(*)，跳过（Skip）不核对；查询失败不阻断。
     let row_count_checked = if request.options.validation == RestoreValidation::RowCount
         && kind != DatabaseKind::Sqlite
@@ -817,7 +859,16 @@ fn restore_database(
             }
             if let Some(n) = count_target_rows(kind, request, &*connector, &item.name) {
                 checked = true;
-                let suffix = format!("{n} 行");
+                // 追加（Append）目标原有数据仍在，行数天然大于备份值，不作一致性比对。
+                let comparable = !matches!(item.action, Some(RestoreTableAction::Append));
+                let suffix = match expected_rows.get(item.name.as_str()) {
+                    Some(expected) if comparable && *expected != n as u64 => {
+                        item.status = RestoreObjectStatus::Warning;
+                        format!("备份 {expected} 行，目标 {n} 行（不一致）")
+                    }
+                    Some(_) if comparable => format!("{n} 行（与备份一致）"),
+                    _ => format!("{n} 行"),
+                };
                 item.detail = if item.detail.is_empty() {
                     suffix
                 } else {
