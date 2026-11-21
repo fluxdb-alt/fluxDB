@@ -1,6 +1,20 @@
 fn task_error(message: impl Into<String>) -> Error {
     Error::new(ErrorKind::Internal, message)
 }
+/// 给已写完数据的 SQL 备份追加内嵌清单 footer，并回填版本与数据部分 sha256。
+///
+/// 清单写在数据之后：只有写完全部对象才知道逐表行数与文件哈希；footer 自身
+/// 是 SQL 注释，不影响脚本执行，也不参与 sha256（校验时截到 footer 标记）。
+fn finalize_embedded_manifest(path: &std::path::Path, manifest: &mut BackupManifest) -> fluxdb_core::Result<()> {
+    // 流式哈希：备份文件可能远大于内存，不能整文件读入。
+    let file = fs::File::open(path).map_err(io_error)?;
+    manifest.file_sha256 = Some(data_sha256_reader(file).map_err(io_error)?);
+    manifest.format_version = Some(BACKUP_MANIFEST_VERSION);
+    let footer = format_embedded_manifest(manifest);
+    let mut file = fs::OpenOptions::new().append(true).open(path).map_err(io_error)?;
+    file.write_all(footer.as_bytes()).map_err(io_error)?;
+    file.flush().map_err(io_error)
+}
 fn io_error(error: impl std::fmt::Display) -> Error {
     task_error(error.to_string())
 }
@@ -210,6 +224,7 @@ fn mysql_tls(
     config: &ConnectionConfig,
     mariadb: bool,
     tunneled: bool,
+    pass_connect_timeout: bool,
 ) -> fluxdb_core::Result<()> {
     let profile = config
         .mysql_profile
@@ -219,9 +234,12 @@ fn mysql_tls(
         return Err(task_error(error));
     }
     let tls = &profile.tls;
-    // 建连超时与主连接使用同一来源，避免备份工具用客户端默认值（通常无上限）。
-    let connect_timeout = profile.advanced.connect_timeout_secs.max(1);
-    command.arg(format!("--connect-timeout={connect_timeout}"));
+    // mysql 客户端支持 connect-timeout，mysqldump 全系不支持（9.3 起会直接报
+    // unknown variable），因此只在恢复导入时传入。
+    if pass_connect_timeout {
+        let connect_timeout = profile.advanced.connect_timeout_secs.max(1);
+        command.arg(format!("--connect-timeout={connect_timeout}"));
+    }
     if !tls.sni.is_empty() {
         return Err(task_error("原生 MySQL 工具暂不支持独立 SNI，请清空 SNI 后再备份"));
     }
@@ -301,3 +319,58 @@ fn postgres_env(
     Ok(())
 }
 
+
+#[cfg(test)]
+mod mysql_tls_tests {
+    use super::*;
+    use fluxdb_core::{
+        ConnectionConfig, ConnectionId, DatabaseKind, Endpoint,
+    };
+
+    fn config() -> ConnectionConfig {
+        ConnectionConfig {
+            id: ConnectionId(1),
+            name: "mysql tls test".into(),
+            kind: DatabaseKind::MySql,
+            endpoint: Endpoint::Tcp {
+                host: "127.0.0.1".into(),
+                port: 3306,
+                database: None,
+            },
+            options: [
+                ("host".to_string(), "127.0.0.1".to_string()),
+                ("port".to_string(), "3306".to_string()),
+                ("username".to_string(), "root".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+            dameng_profile: None,
+            sqlserver_profile: None,
+            mongo_profile: None,
+            oracle_profile: None,
+        }
+    }
+
+    fn has_connect_timeout(command: &Command) -> bool {
+        command
+            .get_args()
+            .any(|arg| arg.to_string_lossy().starts_with("--connect-timeout="))
+    }
+
+    #[test]
+    fn mysqldump_never_gets_connect_timeout() {
+        let mut command = Command::new("mysqldump");
+        mysql_tls(&mut command, &config(), false, false, false).unwrap();
+        assert!(!has_connect_timeout(&command));
+    }
+
+    #[test]
+    fn mysql_import_gets_connect_timeout() {
+        let mut command = Command::new("mysql");
+        mysql_tls(&mut command, &config(), false, false, true).unwrap();
+        assert!(has_connect_timeout(&command));
+    }
+}

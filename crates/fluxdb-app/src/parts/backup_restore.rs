@@ -131,7 +131,31 @@ impl AppController {
         } else {
             None
         };
-        request.execution = provider.execution(method, mysql.is_some())?;
+        // PG 的原生可用性要在选择执行器之前确定：Auto 模式工具缺失时回退到逻辑备份，
+        // 显式 Native 才在下面报错。
+        let (pg_tool, pg_server) = if request.config.kind == DatabaseKind::Postgres
+            && method != BackupMethod::Logical
+        {
+            let major = pg_server_major_version(&request.config)?;
+            (resolve_pg_client_tool(settings, PgClientTool::Dump, major), major)
+        } else {
+            (None, None)
+        };
+        let pg_native_ok = pg_tool
+            .as_ref()
+            .is_some_and(|client| pg_dump_version_compatible(client.major_version, pg_server));
+        // MongoDB 只有原生工具一条路径；准备阶段确定可用性，执行器选择与工具缺失提示都由它决定。
+        let mongo_tool = if request.config.kind == DatabaseKind::MongoDb
+            && method != BackupMethod::Logical
+        {
+            resolve_mongo_client_tool(MongoClientTool::Dump)
+        } else {
+            None
+        };
+        request.execution = provider.execution(
+            method,
+            mysql.is_some() || (pg_tool.is_some() && pg_native_ok) || mongo_tool.is_some(),
+        )?;
         match request.execution {
             BackupExecution::MySqlDump => {
                 let client = mysql.ok_or_else(|| {
@@ -150,10 +174,9 @@ impl AppController {
                 ));
             }
             BackupExecution::PgDump => {
-                let major = pg_server_major_version(&request.config)?;
-                let client = resolve_pg_client_tool(settings, PgClientTool::Dump, major)
+                let client = pg_tool
                     .ok_or_else(|| Error::new(ErrorKind::Unsupported, pg_client_install_hint()))?;
-                if !pg_dump_version_compatible(client.major_version, major) {
+                if !pg_native_ok {
                     return Err(Error::new(
                         ErrorKind::Unsupported,
                         "pg_dump 版本低于服务端版本",
@@ -161,6 +184,13 @@ impl AppController {
                 }
                 request.tool = PathBuf::from(client.program);
                 request.tool_version = client.major_version.map(|v| format!("PostgreSQL {v}"));
+            }
+            BackupExecution::MongoDump => {
+                let program = mongo_tool.ok_or_else(|| {
+                    Error::new(ErrorKind::Unsupported, mongo_client_install_hint())
+                })?;
+                request.tool_version = mongo_tool_version(&program);
+                request.tool = program;
             }
             _ => {}
         }
@@ -212,6 +242,10 @@ impl AppController {
                     .ok_or_else(|| Error::new(ErrorKind::Unsupported, pg_client_install_hint()))?
                     .program,
             ),
+            DatabaseKind::MongoDb => resolve_mongo_client_tool(MongoClientTool::Restore)
+                .ok_or_else(|| {
+                    Error::new(ErrorKind::Unsupported, mongo_client_install_hint())
+                })?,
             DatabaseKind::Sqlite => PathBuf::new(),
             DatabaseKind::Dameng => PathBuf::new(),
             DatabaseKind::Oracle => PathBuf::new(),

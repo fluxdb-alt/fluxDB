@@ -1528,6 +1528,7 @@ fn mongo_error_block(
             )
         })
         .child(backup_text_button(
+            "mongo-load-retry",
             tr("app.common.retry"),
             colors,
             cx.listener(move |this, _, _, cx| {

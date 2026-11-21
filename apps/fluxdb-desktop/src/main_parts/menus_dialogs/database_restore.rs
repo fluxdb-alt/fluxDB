@@ -190,6 +190,9 @@ fn restore_format_label(format: fluxdb_core::BackupFormat) -> SharedString {
         fluxdb_core::BackupFormat::SqliteBinary => {
             tr("app.database_restore.format.sqlite_binary")
         }
+        fluxdb_core::BackupFormat::MongoArchive => {
+            tr("app.database_restore.format.mongo_archive")
+        }
     }
 }
 
@@ -231,6 +234,7 @@ impl NavicatMain {
                 | DatabaseKind::Sqlite
                 | DatabaseKind::Dameng
                 | DatabaseKind::Oracle
+                | DatabaseKind::MongoDb
         ) {
             self.show_message(
                 tr("app.database_restore.unsupported"),
@@ -1185,8 +1189,9 @@ fn restore_modal_body(
 }
 
 /// 表单输入框：34px 外框 + 无边框内嵌 Input（ui-style 规范，与备份弹框一致）。
-fn restore_input_frame(input: Entity<InputState>, colors: UiColors) -> Div {
+fn restore_input_frame(input: Entity<InputState>, id: &'static str, colors: UiColors) -> Div {
     div()
+        .debug_selector(move || id.into())
         .flex_1()
         .min_w(px(0.))
         .h(px(34.))
@@ -1308,6 +1313,7 @@ fn restore_modal_footer(
         )
         .child(
             Button::new("restore-check")
+                .debug_selector(|| "restore-check".into())
                 .label(if busy {
                     tr("app.database_restore.processing")
                 } else {
@@ -1323,6 +1329,7 @@ fn restore_modal_footer(
         )
         .child(
             Button::new("restore-run")
+                .debug_selector(|| "restore-run".into())
                 .label(tr("app.database_restore.confirm_restore"))
                 .primary()
                 .small()
@@ -1443,7 +1450,11 @@ fn restore_confirm_overlay(
                                 .w_full()
                                 .flex()
                                 .items_center()
-                                .child(restore_input_frame(modal.confirm_input.clone(), colors)),
+                                .child(restore_input_frame(
+                                    modal.confirm_input.clone(),
+                                    "restore-confirm-input",
+                                    colors,
+                                )),
                         ),
                 )
                 .child(div().h(px(1.)).flex_none().bg(colors.border))

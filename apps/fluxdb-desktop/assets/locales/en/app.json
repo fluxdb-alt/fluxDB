@@ -3516,6 +3516,8 @@
     "cancel": "Cancel",
     "view": "View",
     "restore": "Restore",
+    "copy_path": "Copy path",
+    "path_copied": "Path copied",
     "records": "Records",
     "edit": "Edit",
     "whole_database": "Whole database",
@@ -3743,7 +3745,8 @@
     },
     "format": {
       "sql": "SQL dump",
-      "sqlite_binary": "SQLite binary backup"
+      "sqlite_binary": "SQLite binary backup",
+      "mongo_archive": "MongoDB archive"
     },
     "status": {
       "succeeded": "Succeeded",

@@ -18,6 +18,11 @@ fn run_backup_task(
     // 否则按勾选的表 + （可选）全部视图组成固定对象清单。
     let scope = if form.database_kind == DatabaseKind::Sqlite {
         fluxdb_app::BackupScope::SqliteSnapshot
+    } else if form.database_kind == DatabaseKind::MongoDb {
+        // mongodump 归档只能整实例导出；忽略 UI 的逐对象勾选，避免提交后才报错。
+        fluxdb_app::BackupScope::All {
+            include_views: true,
+        }
     } else if form.scope_all {
         fluxdb_app::BackupScope::All {
             include_views: form.include_views,

@@ -85,12 +85,38 @@ fn pg_load_data_with_expression(
         .database
         .as_deref()
         .ok_or_else(|| Error::new(ErrorKind::Query, "缺少数据库名称"))?;
-    let pagination = Pagination::new(offset, limit);
-
     pg_runtime().block_on(async {
         let session = pg_connect(config, database).await?;
+        pg_fetch_page(
+            &session.client,
+            database,
+            path,
+            offset,
+            limit,
+            sort,
+            filters,
+            expression,
+            digest_columns,
+        )
+        .await
+    })
+}
 
-        let columns = pg_columns(&session.client, database, path.schema.as_deref(), &path.name).await?;
+/// 在既有连接上读取一页；备份快照复用同一事务连接。
+#[allow(clippy::too_many_arguments)]
+async fn pg_fetch_page(
+    client: &tokio_postgres::Client,
+    database: &str,
+    path: &ObjectPath,
+    offset: u64,
+    limit: u64,
+    sort: &[SortSpec],
+    filters: &[FilterSpec],
+    expression: Option<&fluxdb_core::FilterExpression>,
+    digest_columns: &[String],
+) -> fluxdb_core::Result<DataPage> {
+    let pagination = Pagination::new(offset, limit);
+    let columns = pg_columns(client, database, path.schema.as_deref(), &path.name).await?;
         let (select_list, positions) = pg_select_list_and_positions(&columns, digest_columns);
         let table = pg_qualified_table(database, path.schema.as_deref(), &path.name);
 
@@ -123,8 +149,7 @@ fn pg_load_data_with_expression(
 
         // 流式收行：`query` 会把整页原始行先攒进内存，一条 100 MB 的字段
         // 乘以行数就是几个 GB；这里边读边按预算收页、单格立刻外置。
-        let stream = session
-            .client
+        let stream = client
             .query_raw(&sql, pg_params_refs(&params))
             .await
             .map_err(pg_error)?;
@@ -144,7 +169,104 @@ fn pg_load_data_with_expression(
         .map_err(|_| Error::new(ErrorKind::Query, "查询超时"))??;
 
         Ok(page)
-    })
+}
+
+/// 按主键键集读取下一页；无主键时返回 `Unsupported`，由调用方退回 OFFSET。
+///
+/// 条件用行构造器 `(pk1, pk2) > ($1, $2)`；参数经 `pg_bind_sql` 按列类型绑定，
+/// 数值/文本/二进制主键都不需要手工拼字面量。
+async fn pg_fetch_page_keyset(
+    client: &tokio_postgres::Client,
+    database: &str,
+    path: &ObjectPath,
+    after: &[CellValue],
+    limit: u64,
+) -> fluxdb_core::Result<DataPage> {
+    let pagination = Pagination::new(0, limit);
+    let columns = pg_columns(client, database, path.schema.as_deref(), &path.name).await?;
+    let keys = columns
+        .iter()
+        .filter(|column| column.primary_key)
+        .collect::<Vec<_>>();
+    if keys.is_empty() {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "表没有主键，无法使用键集分页",
+        ));
+    }
+    if !after.is_empty() && after.len() != keys.len() {
+        return Err(Error::new(
+            ErrorKind::Query,
+            "键集游标与主键列数量不一致",
+        ));
+    }
+    // 二进制主键的单元格只有摘要（无原始字节），绑定会退化成 NULL 并静默截断结果；
+    // 整页预览/截断值同理。此时退回 OFFSET，不冒险用错误游标继续。
+    if after.iter().any(|value| {
+        matches!(
+            value,
+            CellValue::Null
+                | CellValue::BinarySummary(_)
+                | CellValue::LargeValue(_)
+                | CellValue::TruncatedText { .. }
+        )
+    }) {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "主键值无法安全绑定，退回偏移分页",
+        ));
+    }
+    let (select_list, positions) = pg_select_list_and_positions(&columns, &[]);
+    let table = pg_qualified_table(database, path.schema.as_deref(), &path.name);
+    let mut sql = format!(
+        "SELECT {select_list}\nFROM {table} AS {}",
+        fluxdb_core::PostgresDialect.quote_identifier(PG_DATA_SOURCE_ALIAS)
+    );
+    let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
+    if !after.is_empty() {
+        let key_columns = keys
+            .iter()
+            .map(|column| pg_data_source_column(&column.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let placeholders = keys
+            .iter()
+            .zip(after)
+            .map(|(column, value)| pg_bind_sql(&mut params, column, value))
+            .collect::<Vec<_>>()
+            .join(", ");
+        sql.push_str(&format!("\nWHERE ({key_columns}) > ({placeholders})"));
+    }
+    sql.push_str(" ORDER BY ");
+    sql.push_str(
+        &keys
+            .iter()
+            .map(|column| pg_data_source_column(&column.name))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    // limit+1 探测是否还有下一页。
+    sql.push_str(&format!(" LIMIT {}", pagination.limit + 1));
+    tracing::debug!(
+        target: "fluxdb_connectors",
+        database,
+        schema = path.schema.as_deref().unwrap_or("public"),
+        table = path.name.as_str(),
+        sql = sql.as_str(),
+        "PostgreSQL 键集数据页查询"
+    );
+    let stream = client
+        .query_raw(&sql, pg_params_refs(&params))
+        .await
+        .map_err(pg_error)?;
+    let owner = fluxdb_core::table_content_owner(path);
+    let page = tokio::time::timeout(
+        Duration::from_secs(30),
+        pg_collect_data_page(columns, stream, &positions, pagination, &owner, &[]),
+    )
+    .await
+    .map_err(|_| Error::new(ErrorKind::Query, "查询超时"))??;
+    Ok(page)
 }
 
 /// 把 `Vec<Box<dyn ToSql>>` 转为 tokio-postgres 需要的 `&[&(dyn ToSql + Sync)]`。
@@ -1133,5 +1255,111 @@ mod pg_filter_binding_tests {
             ),
             Ok(tokio_postgres::types::IsNull::No)
         ));
+    }
+}
+
+/// PostgreSQL 备份一致快照：单连接 `REPEATABLE READ READ ONLY` 事务。
+///
+/// DDL（`pg_catalog_table_ddl`）与数据页都走同一连接，备份期间提交的写入不会混入。
+struct PgBackupSnapshot {
+    session: PgSession,
+    database: String,
+    snapshot_id: Option<String>,
+    finished: bool,
+}
+
+impl PgBackupSnapshot {
+    fn begin(config: &ConnectionConfig, database: &str) -> fluxdb_core::Result<Self> {
+        pg_runtime().block_on(async {
+            let session = pg_connect(config, database).await?;
+            session
+                .client
+                .batch_execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                .await
+                .map_err(pg_error)?;
+            // 位点用于排障与跨备份比对；查询失败不影响快照本身。
+            let snapshot_id = session
+                .client
+                .query_one("SELECT pg_current_snapshot()::text", &[])
+                .await
+                .ok()
+                .map(|row| row.get::<_, String>(0));
+            Ok(Self {
+                session,
+                database: database.to_string(),
+                snapshot_id,
+                finished: false,
+            })
+        })
+    }
+}
+
+impl fluxdb_core::BackupSnapshot for PgBackupSnapshot {
+    fn table_ddl(&mut self, path: &ObjectPath) -> fluxdb_core::Result<String> {
+        let schema = path
+            .schema
+            .as_deref()
+            .filter(|schema| !schema.is_empty())
+            .ok_or_else(|| Error::new(ErrorKind::Query, "缺少 schema 上下文"))?;
+        pg_runtime().block_on(pg_catalog_table_ddl(
+            &self.session.client,
+            &self.database,
+            schema,
+            &path.name,
+        ))
+    }
+
+    fn load_data(
+        &mut self,
+        path: &ObjectPath,
+        offset: u64,
+        limit: u64,
+    ) -> fluxdb_core::Result<DataPage> {
+        if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
+            return Err(Error::new(ErrorKind::Unsupported, "仅表和视图支持数据读取"));
+        }
+        pg_runtime().block_on(pg_fetch_page(
+            &self.session.client,
+            &self.database,
+            path,
+            offset,
+            limit,
+            &[],
+            &[],
+            None,
+            &[],
+        ))
+    }
+
+    fn load_data_keyset(
+        &mut self,
+        path: &ObjectPath,
+        after: &[CellValue],
+        limit: u64,
+    ) -> fluxdb_core::Result<DataPage> {
+        if !matches!(path.kind, ObjectKind::Table) {
+            return Err(Error::new(ErrorKind::Unsupported, "仅表支持键集分页"));
+        }
+        pg_runtime().block_on(pg_fetch_page_keyset(
+            &self.session.client,
+            &self.database,
+            path,
+            after,
+            limit,
+        ))
+    }
+
+    fn snapshot_id(&self) -> Option<String> {
+        self.snapshot_id.clone()
+    }
+
+    fn finish(&mut self) -> fluxdb_core::Result<()> {
+        if self.finished {
+            return Ok(());
+        }
+        pg_runtime().block_on(self.session.client.batch_execute("ROLLBACK"))
+            .map_err(pg_error)?;
+        self.finished = true;
+        Ok(())
     }
 }

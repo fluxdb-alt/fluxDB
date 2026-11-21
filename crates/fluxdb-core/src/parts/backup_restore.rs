@@ -3,18 +3,22 @@
 pub enum BackupFormat {
     Sql,
     SqliteBinary,
+    /// `mongodump --archive --gzip` 的单文件归档；不是可执行 SQL。
+    MongoArchive,
 }
 impl BackupFormat {
     pub fn extension(self) -> &'static str {
         match self {
             Self::Sql => "sql",
             Self::SqliteBinary => "db",
+            Self::MongoArchive => "archive",
         }
     }
     pub fn label(self) -> &'static str {
         match self {
             Self::Sql => "SQL 转储",
             Self::SqliteBinary => "SQLite 二进制备份",
+            Self::MongoArchive => "MongoDB 归档",
         }
     }
     pub fn is_sql(self) -> bool {
@@ -25,21 +29,23 @@ impl BackupFormat {
 pub enum BackupExecution {
     MySqlDump,
     PgDump,
+    MongoDump,
     SqlDump,
     SqliteBinary,
 }
 impl BackupExecution {
     pub fn format(self) -> BackupFormat {
-        if self == Self::SqliteBinary {
-            BackupFormat::SqliteBinary
-        } else {
-            BackupFormat::Sql
+        match self {
+            Self::SqliteBinary => BackupFormat::SqliteBinary,
+            Self::MongoDump => BackupFormat::MongoArchive,
+            _ => BackupFormat::Sql,
         }
     }
     pub fn as_record(self) -> &'static str {
         match self {
             Self::MySqlDump => "mysqldump",
             Self::PgDump => "pg_dump",
+            Self::MongoDump => "mongodump",
             Self::SqlDump => "sql_dump",
             Self::SqliteBinary => "sqlite3_backup",
         }
@@ -115,12 +121,33 @@ pub struct BackupRequest {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub struct BackupManifest {
     pub kind: Option<DatabaseKind>,
+    /// 归档内原始库名（Mongo 恢复时用于命名空间重映射）；旧记录为 None。
+    #[serde(default)]
+    pub database: Option<String>,
     pub execution: Option<BackupExecution>,
     pub complete: bool,
     pub include_schema: bool,
     pub include_data: bool,
     pub objects: Vec<String>,
     pub tool_version: Option<String>,
+    /// 内嵌清单格式版本；旧记录/旧文件为 None。
+    #[serde(default)]
+    pub format_version: Option<u32>,
+    /// 备份时各对象行数；旧记录为空。
+    #[serde(default)]
+    pub object_stats: Vec<BackupObjectStats>,
+    /// 数据部分（不含 footer）的 sha256 十六进制；恢复前据此校验文件未被修改。
+    #[serde(default)]
+    pub file_sha256: Option<String>,
+    /// 是否一致快照；None = 旧文件或未知。
+    #[serde(default)]
+    pub consistent: Option<bool>,
+    /// 快照标识（GTID / LSN / SCN / pg snapshot）。
+    #[serde(default)]
+    pub snapshot_id: Option<String>,
+    /// complete=false 时列出失败对象，供 UI 明确提示。
+    #[serde(default)]
+    pub failed_objects: Vec<String>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct RestoreRequest {
@@ -154,6 +181,23 @@ impl RestoreTransactionMode {
             Self::SingleTransaction => "单事务（整任务）",
         }
     }
+}
+
+/// 备份内嵌清单的当前格式版本；解析时据此判断兼容性。
+pub const BACKUP_MANIFEST_VERSION: u32 = 2;
+/// 备份 SQL 文件中内嵌清单的起止标记。放在文件尾，写完数据后追加，
+/// 这样清单可以包含整文件 sha256 和逐对象行数，而不需要回填头部。
+pub const BACKUP_MANIFEST_BEGIN: &str = "-- fluxDB-backup-manifest-v2-begin";
+pub const BACKUP_MANIFEST_END: &str = "-- fluxDB-backup-manifest-v2-end";
+
+/// 单个对象的备份统计，供恢复后做行数真比对。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BackupObjectStats {
+    /// 与 `BackupManifest.objects` 中的 key 一致（PG 为 `schema.name`）。
+    pub name: String,
+    /// 备份时读到的行数；`None` 表示该对象不适合计数（如视图）。
+    #[serde(default)]
+    pub rows: Option<u64>,
 }
 
 /// 完成验证级别（设计文档 §6.7）。基础验证默认开；行数核对更慢但更可信。

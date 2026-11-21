@@ -507,6 +507,14 @@ impl Connector for PostgresConnector {
         pg_table_ddl(config, path)
     }
 
+    fn backup_snapshot(
+        &self,
+        database: &str,
+    ) -> fluxdb_core::Result<Box<dyn fluxdb_core::BackupSnapshot>> {
+        let config = self.as_config("PostgreSQL 一致快照需要连接配置上下文")?;
+        Ok(Box::new(PgBackupSnapshot::begin(config, database)?))
+    }
+
     fn load_data(
         &self,
         path: &ObjectPath,

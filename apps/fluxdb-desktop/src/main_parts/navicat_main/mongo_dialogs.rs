@@ -188,6 +188,7 @@ fn mongo_info_dialog_view(
             .text_size(ui_text_size(13.))
             .child(div().text_color(colors.danger).child(error.message.clone()))
             .child(backup_text_button(
+                "mongo-info-refresh",
                 tr("app.mongo.info_dialog.refresh"),
                 colors,
                 cx.listener(move |this, _, _, cx| {
@@ -311,6 +312,7 @@ fn mongo_info_dialog_view(
                         .gap_2()
                         .child(
                             backup_text_button(
+                                "mongo-info-refresh",
                                 tr("app.mongo.info_dialog.refresh"),
                                 colors,
                                 cx.listener(move |this, _, _, cx| {

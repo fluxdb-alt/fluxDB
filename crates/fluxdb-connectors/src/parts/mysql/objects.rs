@@ -70,6 +70,12 @@ async fn mysql_table_objects(
     connection: &mut sqlx::MySqlConnection,
     database: &str,
 ) -> fluxdb_core::Result<Vec<ObjectSummary>> {
+    // MySQL 8 默认把 information_schema 的统计缓存 24 小时；大批量导入后侧边栏
+    // 仍会显示旧的行数/体积。列对象时强制从存储引擎读取，避免用陈旧统计误导用户。
+    // MySQL 5.7/MariaDB/TiDB 不认该变量，失败时继续走各自默认行为。
+    let _ = sqlx::query("SET SESSION information_schema_stats_expiry = 0")
+        .execute(&mut *connection)
+        .await;
     let rows = sqlx::query(mysql_table_objects_query())
     .bind(database)
     .fetch_all(&mut *connection)

@@ -73,7 +73,6 @@ fn mysql_load_data_with_expression(
         .database
         .as_deref()
         .ok_or_else(|| Error::new(ErrorKind::Query, "缺少数据库名称"))?;
-    let pagination = Pagination::new(offset, limit);
     let plan = mysql_connection_plan(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -82,9 +81,41 @@ fn mysql_load_data_with_expression(
 
     runtime.block_on(async {
         let mut connection = plan.connect().await?;
+        let page = mysql_fetch_page(
+            &mut connection,
+            config,
+            database,
+            path,
+            offset,
+            limit,
+            sort,
+            filters,
+            expression,
+            digest_columns,
+        )
+        .await?;
+        connection.close().await.map_err(mysql_error)?;
+        Ok(page)
+    })
+}
 
+/// 在既有连接上读取一页数据。备份快照复用同一连接，避免每页重连。
+#[allow(clippy::too_many_arguments)]
+async fn mysql_fetch_page(
+    connection: &mut sqlx::MySqlConnection,
+    config: &ConnectionConfig,
+    database: &str,
+    path: &ObjectPath,
+    offset: u64,
+    limit: u64,
+    sort: &[SortSpec],
+    filters: &[FilterSpec],
+    expression: Option<&fluxdb_core::FilterExpression>,
+    digest_columns: &[String],
+) -> fluxdb_core::Result<DataPage> {
+        let pagination = Pagination::new(offset, limit);
         // 数据同步按块逐页读取，走缓存避免每页都查一次 information_schema。
-        let columns = mysql_columns_cached(config, &mut connection, database, &path.name).await?;
+        let columns = mysql_columns_cached(config, connection, database, &path.name).await?;
         mysql_ensure_columns_available(database, &path.name, &columns)?;
         // 摘要列沿用原列名做别名，行数据的列顺序与普通读取完全一致。
         let select_list = columns
@@ -125,7 +156,7 @@ fn mysql_load_data_with_expression(
 
         // 流式取行：大字段行一读进来就外置，整页超出预算就停读，
         // 不会像 `fetch_all` 那样先把整个结果集堆进内存。
-        let stream = builder.build().fetch(&mut connection);
+        let stream = builder.build().fetch(&mut *connection);
         let owner = fluxdb_core::table_content_owner(path);
         let digest_columns = digest_columns.to_vec();
         let (page, _read_rows) = collect_sqlx_page(
@@ -150,9 +181,111 @@ fn mysql_load_data_with_expression(
             mysql_error,
         )
         .await?;
-        connection.close().await.map_err(mysql_error)?;
         Ok(page)
-    })
+}
+
+/// 按主键键集读取下一页；无主键时返回 `Unsupported`，由调用方退回 OFFSET。
+///
+/// 键集条件用行构造器 `(pk1, pk2) > (?, ?)`，与 `ORDER BY pk1, pk2` 配合，
+/// 避免大表 OFFSET 越翻越慢，也避免页边界随并发写入漂移。
+#[allow(clippy::too_many_arguments)]
+async fn mysql_fetch_page_keyset(
+    connection: &mut sqlx::MySqlConnection,
+    config: &ConnectionConfig,
+    database: &str,
+    path: &ObjectPath,
+    after: &[CellValue],
+    limit: u64,
+) -> fluxdb_core::Result<DataPage> {
+    let pagination = Pagination::new(0, limit);
+    let columns = mysql_columns_cached(config, connection, database, &path.name).await?;
+    mysql_ensure_columns_available(database, &path.name, &columns)?;
+    let keys = columns
+        .iter()
+        .filter(|column| column.primary_key)
+        .collect::<Vec<_>>();
+    if keys.is_empty() {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "表没有主键，无法使用键集分页",
+        ));
+    }
+    if !after.is_empty() && after.len() != keys.len() {
+        return Err(Error::new(
+            ErrorKind::Query,
+            "键集游标与主键列数量不一致",
+        ));
+    }
+    // 二进制主键的单元格只有摘要（无原始字节），绑定会退化成 NULL 并静默截断结果；
+    // 整页预览/截断值同理。此时退回 OFFSET，不冒险用错误游标继续。
+    if after.iter().any(|value| {
+        matches!(
+            value,
+            CellValue::Null
+                | CellValue::BinarySummary(_)
+                | CellValue::LargeValue(_)
+                | CellValue::TruncatedText { .. }
+        )
+    }) {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "主键值无法安全绑定，退回偏移分页",
+        ));
+    }
+    let select_list = columns
+        .iter()
+        .map(mysql_select_expr)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let table = format!(
+        "{}.{}",
+        fluxdb_core::MySqlDialect.quote_identifier(database),
+        fluxdb_core::MySqlDialect.quote_identifier(&path.name)
+    );
+    let mut builder = QueryBuilder::<MySql>::new(format!(
+        "SELECT {select_list} FROM {table} AS {}",
+        fluxdb_core::MySqlDialect.quote_identifier(MYSQL_DATA_SOURCE_ALIAS)
+    ));
+    if !after.is_empty() {
+        builder.push(" WHERE (");
+        for (index, column) in keys.iter().enumerate() {
+            if index > 0 {
+                builder.push(", ");
+            }
+            builder.push(mysql_data_source_column(&column.name));
+        }
+        builder.push(") > (");
+        for (index, value) in after.iter().enumerate() {
+            if index > 0 {
+                builder.push(", ");
+            }
+            push_mysql_bind(&mut builder, value);
+        }
+        builder.push(")");
+    }
+    builder.push(" ORDER BY ");
+    for (index, column) in keys.iter().enumerate() {
+        if index > 0 {
+            builder.push(", ");
+        }
+        builder.push(mysql_data_source_column(&column.name));
+    }
+    builder.push(" LIMIT ");
+    builder.push_bind(pagination.limit + 1);
+
+    let stream = builder.build().fetch(&mut *connection);
+    let owner = fluxdb_core::table_content_owner(path);
+    let (page, _read_rows) = collect_sqlx_page(
+        stream,
+        columns,
+        pagination,
+        0,
+        &owner,
+        |row, _index, column| mysql_cell_value(row, column),
+        mysql_error,
+    )
+    .await?;
+    Ok(page)
 }
 
 /// 摘要列用 `SHA2(..., 256)` 覆盖，其余列保持原投影。
@@ -528,5 +661,156 @@ mod mysql_digest_projection_tests {
         let sql = mysql_select_expr_digest(&column, &[]);
         assert!(sql.contains("SUBSTRING"), "{sql}");
         assert!(!sql.contains("SHA2"), "{sql}");
+    }
+}
+
+/// 备份用 MySQL 一致快照：单连接只读事务，DDL 与数据读到同一视图。
+///
+/// `START TRANSACTION WITH CONSISTENT SNAPSHOT`（REPEATABLE READ）只在 InnoDB
+/// 上保证事务快照；MyISAM 等非事务表仍可能读到并发改动，因此 manifest 的
+/// `consistent=true` 表示「已建立快照事务」，不宣称所有表都受事务保护。
+struct MysqlBackupSnapshot {
+    runtime: tokio::runtime::Runtime,
+    connection: sqlx::MySqlConnection,
+    config: ConnectionConfig,
+    finished: bool,
+}
+
+impl MysqlBackupSnapshot {
+    fn begin(config: &ConnectionConfig) -> fluxdb_core::Result<Self> {
+        let plan = mysql_connection_plan(config)?;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
+        let connection = runtime.block_on(async {
+            let mut connection = plan.connect().await?;
+            sqlx::raw_sql("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                .execute(&mut connection)
+                .await
+                .map_err(mysql_error)?;
+            sqlx::raw_sql("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+                .execute(&mut connection)
+                .await
+                .map_err(mysql_error)?;
+            Ok::<_, fluxdb_core::Error>(connection)
+        })?;
+        Ok(Self {
+            runtime,
+            connection,
+            config: config.clone(),
+            finished: false,
+        })
+    }
+}
+
+impl fluxdb_core::BackupSnapshot for MysqlBackupSnapshot {
+    fn table_ddl(&mut self, path: &ObjectPath) -> fluxdb_core::Result<String> {
+        let database = mysql_database_for_path(&self.config, path)?;
+        let sql = format!(
+            "SHOW CREATE TABLE {}.{}",
+            fluxdb_core::MySqlDialect.quote_identifier(&database),
+            fluxdb_core::MySqlDialect.quote_identifier(&path.name)
+        );
+        let Self {
+            runtime,
+            connection,
+            ..
+        } = self;
+        runtime.block_on(async {
+            let row = sqlx::query(&sql)
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(mysql_error)?;
+            row.try_get::<String, _>(1).map_err(mysql_error)
+        })
+    }
+
+    fn load_data(
+        &mut self,
+        path: &ObjectPath,
+        offset: u64,
+        limit: u64,
+    ) -> fluxdb_core::Result<DataPage> {
+        if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
+            return Err(Error::new(ErrorKind::Unsupported, "仅表和视图支持数据读取"));
+        }
+        let database = path
+            .database
+            .as_deref()
+            .ok_or_else(|| Error::new(ErrorKind::Query, "缺少数据库名称"))?;
+        let Self {
+            runtime,
+            connection,
+            config,
+            ..
+        } = self;
+        runtime.block_on(mysql_fetch_page(
+            connection,
+            config,
+            database,
+            path,
+            offset,
+            limit,
+            &[],
+            &[],
+            None,
+            &[],
+        ))
+    }
+
+    fn load_data_keyset(
+        &mut self,
+        path: &ObjectPath,
+        after: &[CellValue],
+        limit: u64,
+    ) -> fluxdb_core::Result<DataPage> {
+        if !matches!(path.kind, ObjectKind::Table) {
+            return Err(Error::new(ErrorKind::Unsupported, "仅表支持键集分页"));
+        }
+        let database = path
+            .database
+            .as_deref()
+            .ok_or_else(|| Error::new(ErrorKind::Query, "缺少数据库名称"))?;
+        let Self {
+            runtime,
+            connection,
+            config,
+            ..
+        } = self;
+        runtime.block_on(mysql_fetch_page_keyset(
+            connection,
+            config,
+            database,
+            path,
+            after,
+            limit,
+        ))
+    }
+
+    fn snapshot_id(&self) -> Option<String> {
+        None
+    }
+
+    fn finish(&mut self) -> fluxdb_core::Result<()> {
+        if self.finished {
+            return Ok(());
+        }
+        let Self {
+            runtime,
+            connection,
+            finished,
+            ..
+        } = self;
+        // 只回滚读事务；连接由结构体 drop 时关闭，避免在 &mut self 上 move 连接。
+        runtime.block_on(async {
+            sqlx::raw_sql("ROLLBACK")
+                .execute(&mut *connection)
+                .await
+                .map_err(mysql_error)?;
+            Ok::<_, fluxdb_core::Error>(())
+        })?;
+        *finished = true;
+        Ok(())
     }
 }

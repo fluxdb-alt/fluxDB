@@ -3516,6 +3516,8 @@
     "cancel": "取消",
     "view": "查看",
     "restore": "恢复",
+    "copy_path": "复制路径",
+    "path_copied": "路径已复制",
     "records": "记录",
     "edit": "编辑",
     "whole_database": "整库",
@@ -3743,7 +3745,8 @@
     },
     "format": {
       "sql": "SQL 转储",
-      "sqlite_binary": "SQLite 二进制备份"
+      "sqlite_binary": "SQLite 二进制备份",
+      "mongo_archive": "MongoDB 归档"
     },
     "status": {
       "succeeded": "成功",
