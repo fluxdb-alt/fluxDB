@@ -207,6 +207,39 @@ fn sqlite_create_database(
     })
 }
 
+/// 摘要列投影：SQLite 走客户端哈希，这里直接取原值（文本按 UTF-8、BLOB 按原始字节），
+/// 避免依赖 sqlx 内置 SQLite 是否编译了 `sha3()`。
+fn sqlite_select_expr_digest(column: &Column, digest_columns: &[String]) -> String {
+    if digest_columns
+        .iter()
+        .any(|digest| digest.eq_ignore_ascii_case(&column.name))
+    {
+        let name = fluxdb_core::SqliteDialect.quote_identifier(&column.name);
+        format!("{name} AS {name}")
+    } else {
+        sqlite_select_expr(column)
+    }
+}
+
+/// 客户端摘要：文本按 UTF-8 字节、BLOB 按原始字节计算 SHA-256。
+fn sqlite_digest_cell(row: &SqliteRow, column: &Column) -> CellValue {
+    use sha2::{Digest, Sha256};
+    let bytes = if let Ok(Some(text)) = row.try_get::<Option<String>, _>(column.name.as_str()) {
+        text.into_bytes()
+    } else if let Ok(Some(bytes)) = row.try_get::<Option<Vec<u8>>, _>(column.name.as_str()) {
+        bytes
+    } else {
+        return CellValue::Null;
+    };
+    let digest = Sha256::digest(&bytes);
+    let mut text = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(text, "{byte:02x}");
+    }
+    CellValue::Text(text)
+}
+
 fn sqlite_load_data(
     config: &ConnectionConfig,
     path: &ObjectPath,
@@ -215,7 +248,28 @@ fn sqlite_load_data(
     sort: &[SortSpec],
     filters: &[FilterSpec],
 ) -> fluxdb_core::Result<DataPage> {
-    sqlite_load_data_with_expression(config, path, offset, limit, sort, filters, None)
+    sqlite_load_data_with_expression(config, path, offset, limit, sort, filters, None, &[])
+}
+
+fn sqlite_load_data_digests(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    offset: u64,
+    limit: u64,
+    sort: &[SortSpec],
+    filters: &[FilterSpec],
+    digest_columns: &[String],
+) -> fluxdb_core::Result<DataPage> {
+    sqlite_load_data_with_expression(
+        config,
+        path,
+        offset,
+        limit,
+        sort,
+        filters,
+        None,
+        digest_columns,
+    )
 }
 
 fn sqlite_load_data_expression(
@@ -226,7 +280,16 @@ fn sqlite_load_data_expression(
     sort: &[SortSpec],
     expression: &fluxdb_core::FilterExpression,
 ) -> fluxdb_core::Result<DataPage> {
-    sqlite_load_data_with_expression(config, path, offset, limit, sort, &[], Some(expression))
+    sqlite_load_data_with_expression(
+        config,
+        path,
+        offset,
+        limit,
+        sort,
+        &[],
+        Some(expression),
+        &[],
+    )
 }
 
 fn sqlite_load_data_with_expression(
@@ -237,6 +300,7 @@ fn sqlite_load_data_with_expression(
     sort: &[SortSpec],
     filters: &[FilterSpec],
     expression: Option<&fluxdb_core::FilterExpression>,
+    digest_columns: &[String],
 ) -> fluxdb_core::Result<DataPage> {
     if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
         return Err(Error::new(ErrorKind::Unsupported, "仅表和视图支持数据读取"));
@@ -260,7 +324,7 @@ fn sqlite_load_data_with_expression(
         let columns = sqlite_columns(&mut connection, database, &path.name).await?;
         let select_list = columns
             .iter()
-            .map(sqlite_select_expr)
+            .map(|column| sqlite_select_expr_digest(column, digest_columns))
             .collect::<Vec<_>>()
             .join(", ");
         let mut builder = QueryBuilder::<Sqlite>::new(format!(
@@ -299,13 +363,24 @@ fn sqlite_load_data_with_expression(
         // 流式取行：与 MySQL 表浏览同一套预算规则，见 `collect_sqlx_page`。
         let stream = builder.build().fetch(&mut connection);
         let owner = fluxdb_core::table_content_owner(path);
+        let digest_columns = digest_columns.to_vec();
         let (page, _read_rows) = collect_sqlx_page(
             stream,
             columns,
             pagination,
             0,
             &owner,
-            |row, _index, column| sqlite_cell_value(row, column),
+            move |row, _index, column| {
+                // 摘要列由 SQL 端算成小写十六进制文本，直接按文本解码；
+                // 其余列沿用表浏览的类型推断。
+                if digest_columns
+                    .iter()
+                    .any(|digest| digest.eq_ignore_ascii_case(&column.name))
+                {
+                    return sqlite_digest_cell(row, column);
+                }
+                sqlite_cell_value(row, column)
+            },
             sqlite_error,
         )
         .await?;
@@ -674,6 +749,54 @@ fn sqlite_load_cell_binary(
         row.try_get::<Option<Vec<u8>>, _>(0)
             .map_err(sqlite_error)?
             .ok_or_else(|| Error::new(ErrorKind::Query, "二进制单元格为 NULL"))
+    })
+}
+
+fn sqlite_load_cell_text(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    identity: &fluxdb_core::RowIdentity,
+    column: &str,
+) -> fluxdb_core::Result<String> {
+    if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "仅表和视图支持文本读取",
+        ));
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| Error::new(ErrorKind::Internal, error.to_string()))?;
+
+    runtime.block_on(async {
+        let connect = tokio::time::timeout(Duration::from_secs(5), sqlite_connect(config)).await;
+        let mut connection = match connect {
+            Ok(Ok(connection)) => connection,
+            Ok(Err(error)) => return Err(error),
+            Err(_) => return Err(Error::new(ErrorKind::Connection, "连接超时")),
+        };
+
+        let database = sqlite_database_for_path(path);
+        let columns = sqlite_columns(&mut connection, database, &path.name).await?;
+        ensure_column_exists(column, &columns)?;
+        let mut builder = QueryBuilder::<Sqlite>::new(format!(
+            "SELECT {} FROM {}",
+            fluxdb_core::SqliteDialect.quote_identifier(column),
+            sqlite_qualified_table(database, &path.name)
+        ));
+        push_sqlite_identity_where(&mut builder, identity, &columns)?;
+        builder.push(" LIMIT 1");
+        let row = builder
+            .build()
+            .fetch_one(&mut connection)
+            .await
+            .map_err(sqlite_error)?;
+        connection.close().await.map_err(sqlite_error)?;
+        row.try_get::<Option<String>, _>(0)
+            .map_err(sqlite_error)?
+            .ok_or_else(|| Error::new(ErrorKind::Query, "文本单元格为 NULL"))
     })
 }
 

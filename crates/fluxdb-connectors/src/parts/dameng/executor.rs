@@ -165,6 +165,18 @@ fn dm_collect_page(
     skip_rows: u64,
     owner: &str,
 ) -> fluxdb_core::Result<DataPage> {
+    dm_collect_page_with_digests(columns, rows, pagination, skip_rows, owner, &[])
+}
+
+/// `digest_columns` 里的列在落页前替换为 SHA-256 摘要，避免大字段正文进结果页。
+fn dm_collect_page_with_digests(
+    columns: Vec<Column>,
+    rows: impl Iterator<Item = Vec<Value>>,
+    pagination: Pagination,
+    skip_rows: u64,
+    owner: &str,
+    digest_columns: &[String],
+) -> fluxdb_core::Result<DataPage> {
     let width = columns.len();
     let capacity = query_execution_row_capacity(pagination.limit);
     let mut page = DataPage {
@@ -185,6 +197,7 @@ fn dm_collect_page(
             break;
         }
         let mut values = dm_page_values(row, width);
+        dm_apply_digests(&mut values, &page.columns, digest_columns);
         spill_large_cells(owner, &mut values)?;
         page.rows.push(Row { values });
     }
@@ -193,6 +206,45 @@ fn dm_collect_page(
         page.has_more = false;
     }
     Ok(page)
+}
+
+/// 摘要列就地替换。文本按 UTF-8 字节、字节串按原始字节哈希，与服务端摘要口径一致。
+fn dm_apply_digests(values: &mut [CellValue], columns: &[Column], digest_columns: &[String]) {
+    use sha2::{Digest, Sha256};
+    if digest_columns.is_empty() {
+        return;
+    }
+    for (index, value) in values.iter_mut().enumerate() {
+        let Some(column) = columns.get(index) else {
+            continue;
+        };
+        if !digest_columns
+            .iter()
+            .any(|digest| digest.eq_ignore_ascii_case(&column.name))
+        {
+            continue;
+        }
+        let current = std::mem::replace(value, CellValue::Null);
+        *value = match current {
+            CellValue::Text(text) | CellValue::Json(text) => {
+                CellValue::Text(hex_lower_digest(Sha256::digest(text.as_bytes())))
+            }
+            CellValue::Bytes(bytes) => {
+                CellValue::Text(hex_lower_digest(Sha256::digest(&bytes)))
+            }
+            other => other,
+        };
+    }
+}
+
+fn hex_lower_digest(bytes: impl AsRef<[u8]>) -> String {
+    use std::fmt::Write;
+    let bytes = bytes.as_ref();
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(text, "{byte:02x}");
+    }
+    text
 }
 
 fn dm_execute_parameterized(
@@ -434,5 +486,42 @@ mod dameng_page_tests {
         )
         .expect_err("外置失败必须冒泡");
         assert_eq!(error.message, "测试外置失败");
+    }
+}
+
+#[cfg(test)]
+mod dm_digest_tests {
+    use super::*;
+
+    fn column(name: &str, type_name: &str) -> Column {
+        Column {
+            name: name.into(),
+            type_name: Some(type_name.into()),
+            nullable: true,
+            primary_key: false,
+            comment: None,
+        }
+    }
+
+    #[test]
+    fn digest_replaces_text_and_bytes_only() {
+        let columns = [column("body", "blob"), column("note", "clob")];
+        let mut values = vec![
+            CellValue::Bytes(vec![0, 0xff]),
+            CellValue::Text("hello".into()),
+        ];
+        dm_apply_digests(&mut values, &columns, &["body".into(), "note".into()]);
+        let CellValue::Text(body) = &values[0] else {
+            panic!("body 应变成摘要文本：{values:?}");
+        };
+        let CellValue::Text(note) = &values[1] else {
+            panic!("note 应变成摘要文本：{values:?}");
+        };
+        assert_eq!(body.len(), 64);
+        assert_eq!(note.len(), 64);
+        assert_eq!(
+            note,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
     }
 }

@@ -88,6 +88,26 @@ impl Connector for OracleConnector {
         )
     }
 
+    fn load_data_with_digests(
+        &self,
+        path: &ObjectPath,
+        offset: u64,
+        limit: u64,
+        sort: &[SortSpec],
+        filters: &[FilterSpec],
+        digest_columns: &[String],
+    ) -> fluxdb_core::Result<DataPage> {
+        oracle_load_data_digests(
+            self.config("Oracle 数据读取需要连接配置上下文")?,
+            path,
+            offset,
+            limit,
+            sort,
+            filters,
+            digest_columns,
+        )
+    }
+
     fn load_data_expression(
         &self,
         path: &ObjectPath,
@@ -103,6 +123,20 @@ impl Connector for OracleConnector {
             limit,
             sort,
             expression,
+        )
+    }
+
+    fn load_cell_binary(
+        &self,
+        path: &ObjectPath,
+        identity: &fluxdb_core::RowIdentity,
+        column: &str,
+    ) -> fluxdb_core::Result<Vec<u8>> {
+        oracle_load_cell_binary(
+            self.config("Oracle 二进制读取需要连接配置上下文")?,
+            path,
+            identity,
+            column,
         )
     }
 

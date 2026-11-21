@@ -324,7 +324,13 @@ fn sync_run_detail_body(detail: &SyncRunDetail, colors: UiColors) -> Div {
             .samples
             .iter()
             .filter(|sample| sample.table_key == table.table_key);
-        body = body.child(sync_run_table_section(table, chunks, samples, colors));
+        let failures = detail
+            .failures
+            .iter()
+            .filter(|failure| failure.table_key == table.table_key);
+        body = body.child(sync_run_table_section(
+            table, chunks, samples, failures, colors,
+        ));
     }
     body
 }
@@ -392,10 +398,12 @@ fn sync_run_table_section<'a>(
     table: &fluxdb_storage::SyncRunTableRecord,
     chunks: impl Iterator<Item = &'a fluxdb_storage::SyncRunChunkRecord>,
     samples: impl Iterator<Item = &'a fluxdb_storage::SyncRunSampleRecord>,
+    failures: impl Iterator<Item = &'a fluxdb_storage::SyncRunFailureRecord>,
     colors: UiColors,
 ) -> Div {
     let chunks = chunks.collect::<Vec<_>>();
     let samples = samples.collect::<Vec<_>>();
+    let failures = failures.collect::<Vec<_>>();
     let mut section = div()
         .debug_selector({
             let key = table.table_key.clone();
@@ -467,7 +475,77 @@ fn sync_run_table_section<'a>(
             section = section.child(sync_run_sample_row(sample, index, colors));
         }
     }
+    if !failures.is_empty() {
+        section = section.child(
+            div()
+                .pt_1()
+                .text_size(ui_text_size(10.))
+                .text_color(colors.muted)
+                .child(
+                    tr("app.sync.record_failures")
+                        .replace("%{count}", &failures.len().to_string()),
+                ),
+        );
+        for (index, failure) in failures.iter().enumerate() {
+            section = section.child(sync_run_failure_row(failure, index, colors));
+        }
+    }
     section
+}
+
+/// 失败行：键 + 数据库原文，单行省略；完整原因可从日志或账本导出。
+fn sync_run_failure_row(
+    failure: &fluxdb_storage::SyncRunFailureRecord,
+    index: usize,
+    colors: UiColors,
+) -> Div {
+    let zebra = index % 2 == 1;
+    div()
+        .debug_selector({
+            let table_key = failure.table_key.clone();
+            move || format!("sync-run-failure:{table_key}:{index}")
+        })
+        .flex()
+        .items_center()
+        .gap_2()
+        .h(px(24.))
+        .px_2()
+        .rounded(px(4.))
+        .when(zebra, |this| this.bg(colors.panel_alt))
+        .child(
+            div()
+                .flex_none()
+                .px_1p5()
+                .py_0p5()
+                .rounded(px(4.))
+                .bg(colors.hover)
+                .text_size(ui_text_size(10.))
+                .text_color(colors.danger)
+                .child(tr("app.sync.record_failure_badge")),
+        )
+        .child(
+            div()
+                .flex_none()
+                .max_w(px(220.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .truncate()
+                .font_family(crate::PLATFORM_MONOSPACE_FONT)
+                .text_size(ui_text_size(10.5))
+                .text_color(colors.text)
+                .child(failure.row_key.clone()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .truncate()
+                .text_size(ui_text_size(10.))
+                .text_color(colors.danger)
+                .child(failure.message.clone()),
+        )
 }
 
 /// 块明细：固定列宽的行式列表，避免长键把计数和耗时挤成一行流水账。

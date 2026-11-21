@@ -18,7 +18,7 @@ use fluxdb_core::{Error, ErrorKind, Result};
 use crate::sqlite::sqlite_error;
 
 /// 当前代码认识的最新结构版本。新增结构变化时 +1，并在 [`STEPS`] 末尾追加一步。
-pub const LATEST_VERSION: i64 = 3;
+pub const LATEST_VERSION: i64 = 5;
 
 /// 迁移前备份保留份数。
 const BACKUP_KEEP: usize = 3;
@@ -47,13 +47,54 @@ const STEPS: &[Migration] = &[
         name: "新增数据同步执行记录表",
         apply: create_sync_run_tables,
     },
+    Migration {
+        version: 4,
+        name: "新增数据同步失败行明细表",
+        apply: create_sync_run_tables,
+    },
+    Migration {
+        version: 5,
+        name: "数据同步断点续传字段",
+        apply: add_sync_resume_columns,
+    },
 ];
 
-/// v3：数据同步执行账本（`sync_runs` / `sync_run_tables` / `sync_run_chunks` /
-/// `sync_run_samples`）。建表语句幂等，旧库补齐空表即可。
+/// v3/v4：数据同步执行账本（`sync_runs` / `sync_run_tables` / `sync_run_chunks` /
+/// `sync_run_samples` / `sync_run_failures`）。建表语句幂等，旧库补齐空表即可。
 fn create_sync_run_tables(tx: &Transaction<'_>) -> Result<()> {
     tx.execute_batch(crate::sync_run_store::CREATE_SQL)
         .map_err(sqlite_error)
+}
+
+/// v5：续传所需的签名与块游标值。新库的 `CREATE_SQL` 已含这些列，
+/// 这里用列存在性检查兼容「从旧版本升级」路径。
+fn add_sync_resume_columns(tx: &Transaction<'_>) -> Result<()> {
+    add_column_if_missing(tx, "sync_runs", "signature", "TEXT NOT NULL DEFAULT ''")?;
+    add_column_if_missing(tx, "sync_run_chunks", "key_to_value", "TEXT")?;
+    Ok(())
+}
+
+/// 幂等加列：列已存在时保持原样。
+fn add_column_if_missing(
+    tx: &Transaction<'_>,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<()> {
+    let mut stmt = tx
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(sqlite_error)?;
+    let mut rows = stmt.query([]).map_err(sqlite_error)?;
+    while let Some(row) = rows.next().map_err(sqlite_error)? {
+        let name: String = row.get(1).map_err(sqlite_error)?;
+        if name == column {
+            return Ok(());
+        }
+    }
+    tx.execute_batch(&format!(
+        "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+    ))
+    .map_err(sqlite_error)
 }
 
 /// 当前连接的 `user_version`。

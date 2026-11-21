@@ -773,7 +773,8 @@ impl NavicatMain {
                 state.tables_loading = false;
                 match tables {
                     Ok(tables) => {
-                        state.selected_tables = tables.iter().map(|table| table.key.clone()).collect();
+                        // 默认不勾选任何表：由用户显式选择同步范围，避免误同步整库。
+                        state.selected_tables.clear();
                         state.tables = tables;
                         state.error = None;
                     }
@@ -1277,6 +1278,47 @@ impl NavicatMain {
         cx.notify();
     }
 
+    /// 选择「导出迁移 SQL」的保存路径；取消或失败时保持原选择。
+    fn choose_sync_export_path(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 默认文件名带表名与本地时间：单表用表名，多表/未选用通用名，避免覆盖旧脚本。
+        let suggested = {
+            let base = match self.sync_wizard.as_ref() {
+                Some(state) if state.selected_tables.len() == 1 => state
+                    .selected_tables
+                    .iter()
+                    .next()
+                    .map(|key| safe_data_export_filename_segment(key))
+                    .unwrap_or_else(|| "sync-migration".to_string()),
+                _ => "sync-migration".to_string(),
+            };
+            format!(
+                "{base}-{}.sql",
+                chrono::Local::now().format("%Y%m%d-%H%M%S")
+            )
+        };
+        let receiver = cx.prompt_for_new_path(&default_data_export_directory(), Some(&suggested));
+        self._file_picker_task = Some(cx.spawn_in(window, async move |view, cx| {
+            let Ok(Ok(Some(path))) = receiver.await else {
+                return;
+            };
+            let path = sql_path_with_extension(path);
+            cx.update(|_window, cx| {
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| {
+                    if let Some(state) = this.sync_wizard.as_mut() {
+                        state.data_options.export_sql_path = Some(path);
+                        // 导出设置不改变差异本身，但选项已变，旧预览不再代表本次任务。
+                        state.clear_preview();
+                    }
+                    cx.notify();
+                });
+            })
+            .ok();
+        }));
+    }
+
     fn close_sync_type_map(&mut self, cx: &mut Context<Self>) {
         self.sync_type_map = None;
         cx.notify();
@@ -1377,6 +1419,11 @@ impl NavicatMain {
             cx.notify();
             return;
         };
+        if state.selected_tables.is_empty() {
+            state.error = Some(tr("app.sync.choose_tables").to_string());
+            cx.notify();
+            return;
+        }
         let mode = state.mode;
         let tables = state.request_tables();
         let data_request = (mode == SyncMode::Data).then(|| DataSyncRequest {
@@ -1529,6 +1576,11 @@ impl NavicatMain {
     }
 
     fn start_sync_execute(&mut self, cx: &mut Context<Self>) {
+        self.start_sync_execute_with_resume(None, cx);
+    }
+
+    /// `resume` 为上次中断的执行记录 ID；只在本次请求里生效，不写回向导选项。
+    fn start_sync_execute_with_resume(&mut self, resume: Option<i64>, cx: &mut Context<Self>) {
         let Some(state) = self.sync_wizard.as_ref() else {
             return;
         };
@@ -1542,13 +1594,24 @@ impl NavicatMain {
             cx.notify();
             return;
         };
+        if state.selected_tables.is_empty() {
+            if let Some(state) = self.sync_wizard.as_mut() {
+                state.error = Some(tr("app.sync.choose_tables").to_string());
+            }
+            cx.notify();
+            return;
+        }
         let mode = state.mode;
         let tables = state.request_tables();
-        let data_request = (mode == SyncMode::Data).then(|| DataSyncRequest {
-            source: source.clone(),
-            target: target.clone(),
-            tables: tables.clone(),
-            options: data_options_from_state(state, &self.sync_pair_rows, cx),
+        let data_request = (mode == SyncMode::Data).then(|| {
+            let mut options = data_options_from_state(state, &self.sync_pair_rows, cx);
+            options.resume_from_run = resume;
+            DataSyncRequest {
+                source: source.clone(),
+                target: target.clone(),
+                tables: tables.clone(),
+                options,
+            }
         });
         let structure_request = (mode == SyncMode::Structure).then(|| StructureSyncRequest {
             source,
@@ -1576,6 +1639,8 @@ impl NavicatMain {
             state.task_center_id = Some(task_id);
             state.cancel = cancel.clone();
             state.error = None;
+            // 上一次的记录号只对刚结束的任务有效；本次跑完会重新写入。
+            state.last_run_id = None;
             state.log.clear();
         }
         let controller = self.controller.clone();
@@ -1639,6 +1704,11 @@ impl NavicatMain {
         cx: &mut Context<Self>,
     ) {
         let mut data_run_id = None;
+        let canceled = matches!(
+            &outcome,
+            SyncExecuteOutcome::Data(Err(error)) | SyncExecuteOutcome::Structure(Err(error))
+                if error.kind == fluxdb_core::ErrorKind::Cancelled
+        );
         let (status, stage, error, lines) = match outcome {
             SyncExecuteOutcome::Data(Ok(report)) => {
                 data_run_id = report.run_id;
@@ -1731,6 +1801,9 @@ impl NavicatMain {
             state.error = error.clone();
             if data_run_id.is_some() {
                 state.last_run_id = data_run_id;
+            } else if canceled && state.mode == SyncMode::Data {
+                // 取消时没有报告，用刚写入的账本任务号接上「继续」按钮。
+                state.last_run_id = self.controller.latest_sync_run_id();
             }
             // 后台跑完且界面仍是收起状态：结果已在任务中心，没必要再留一份向导状态。
             close_after_finish = !state.visible;

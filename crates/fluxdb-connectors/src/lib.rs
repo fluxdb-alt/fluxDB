@@ -65,6 +65,8 @@ include!("parts/shared_read_sql.rs");
 include!("parts/shared_demo.rs");
 include!("parts/table_import.rs");
 include!("parts/sync/insert_writer.rs");
+include!("parts/sync/sql_script.rs");
+include!("parts/sync/write_session.rs");
 
 #[path = "parts/mysql/native_tools.rs"]
 mod mysql_native_tools;

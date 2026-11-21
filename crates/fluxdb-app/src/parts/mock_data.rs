@@ -423,6 +423,26 @@ fn apply_data_changes_for_connection(
     connector_for(config)?.apply_changes(changes)
 }
 
+/// 带大字段摘要列的导出分页；只用于同类型库之间的大字段比对。
+fn export_pages_with_digests_for_connection(
+    config: &ConnectionConfig,
+    object: &ObjectPath,
+    sort: &[SortSpec],
+    filters: &[FilterSpec],
+    digest_columns: &[String],
+    on_cancel: &dyn Fn() -> bool,
+    on_page: &mut dyn FnMut(DataPage) -> bool,
+) -> fluxdb_core::Result<()> {
+    connector_for(config)?.export_pages_with_digests(
+        object,
+        sort,
+        filters,
+        digest_columns,
+        on_cancel,
+        on_page,
+    )
+}
+
 fn load_cell_binary_for_connection(
     config: &ConnectionConfig,
     object: &ObjectPath,

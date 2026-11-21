@@ -155,6 +155,21 @@ pub struct DataSyncOptions {
     pub table_map: BTreeMap<String, String>,
     /// 单行写入失败时的处理策略；默认跳过并记录。
     pub row_error_policy: RowErrorPolicy,
+    /// 目标端唯一键冲突时的处理方式；只改 INSERT 语句，默认按普通写入失败处理。
+    pub insert_conflict: fluxdb_core::InsertConflictMode,
+    /// 覆盖模式下把清空与全部写入放进同一事务：任一批失败则整表回滚。
+    ///
+    /// 仅覆盖模式支持；增量模式的更新/删除由比对批次各自提交，无法并进同一事务。
+    pub atomic_table: bool,
+    /// 「导出迁移 SQL」目标文件；`None` 表示不导出。
+    ///
+    /// 同步照常写目标库，同时把**已执行成功**的修改语句逐条追加到该文件。
+    /// 与表级事务互斥：事务回滚后脚本里的语句并不对应最终目标数据。
+    pub export_sql_path: Option<std::path::PathBuf>,
+    /// 从指定执行记录续传：跳过上次已完成的表，未完成的表从最后一个完整块继续。
+    ///
+    /// 仅支持增量模式；端点、表清单与其余选项必须与上次一致（签名校验）。
+    pub resume_from_run: Option<i64>,
 }
 
 impl Default for DataSyncOptions {
@@ -174,6 +189,10 @@ impl Default for DataSyncOptions {
             table_column_map: BTreeMap::new(),
             table_map: BTreeMap::new(),
             row_error_policy: RowErrorPolicy::default(),
+            insert_conflict: fluxdb_core::InsertConflictMode::default(),
+            atomic_table: false,
+            export_sql_path: None,
+            resume_from_run: None,
         }
     }
 }

@@ -1,7 +1,8 @@
 //! 数据同步执行记录（本地审计账本）。
 //!
 //! 执行阶段逐块写入：`sync_runs`（一次任务）→ `sync_run_tables`（表汇总）→
-//! `sync_run_chunks`（块明细）→ `sync_run_samples`（行级样本）。
+//! `sync_run_chunks`（块明细）→ `sync_run_samples`（行级样本）→
+//! `sync_run_failures`（被跳过的失败行）。
 //!
 //! 只给回看/排障用，不参与同步决策；写账本失败不能中断同步，由调用方降级为日志。
 //! 行级样本按表截断（[`SAMPLE_LIMIT`]），计数始终精确——大表不该把整表差异再复制一份。
@@ -24,7 +25,8 @@ CREATE TABLE IF NOT EXISTS sync_runs (
     target           TEXT    NOT NULL,
     inserted         INTEGER NOT NULL DEFAULT 0,
     updated          INTEGER NOT NULL DEFAULT 0,
-    deleted          INTEGER NOT NULL DEFAULT 0
+    deleted          INTEGER NOT NULL DEFAULT 0,
+    signature        TEXT    NOT NULL DEFAULT ''  -- 端点+选项指纹，用于断点续传校验
 );
 CREATE TABLE IF NOT EXISTS sync_run_tables (
     run_id    INTEGER NOT NULL,
@@ -43,6 +45,7 @@ CREATE TABLE IF NOT EXISTS sync_run_chunks (
     ordinal   INTEGER NOT NULL,             -- 表内块序号，从 1 开始
     key_from  TEXT,                         -- 本块键下界（开区间），首页为空
     key_to    TEXT,                         -- 本块键上界（闭区间），收尾块为空
+    key_to_value TEXT,                      -- 上界值的 JSON，续传时还原为精确游标
     inserted  INTEGER NOT NULL DEFAULT 0,
     updated   INTEGER NOT NULL DEFAULT 0,
     deleted   INTEGER NOT NULL DEFAULT 0,
@@ -60,6 +63,15 @@ CREATE TABLE IF NOT EXISTS sync_run_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_sync_run_samples
     ON sync_run_samples(run_id, table_key);
+CREATE TABLE IF NOT EXISTS sync_run_failures (
+    id        INTEGER PRIMARY KEY,          -- rowid，保持写入顺序
+    run_id    INTEGER NOT NULL,
+    table_key TEXT    NOT NULL,
+    row_key   TEXT    NOT NULL,             -- 键列展示文本；覆盖模式为源端行号
+    message   TEXT    NOT NULL              -- 目标库返回的原文
+);
+CREATE INDEX IF NOT EXISTS idx_sync_run_failures
+    ON sync_run_failures(run_id, table_key);
 ";
 
 /// 每个表最多落盘的行级样本数，与预览的样本上限保持一致。
@@ -80,6 +92,8 @@ pub struct SyncRunRecord {
     pub inserted: u64,
     pub updated: u64,
     pub deleted: u64,
+    /// 端点 + 同步选项的指纹；断点续传只有在签名一致时才允许。
+    pub signature: String,
 }
 
 /// 单表汇总。
@@ -101,6 +115,8 @@ pub struct SyncRunChunkRecord {
     pub ordinal: u64,
     pub key_from: Option<String>,
     pub key_to: Option<String>,
+    /// `key_to` 对应值的 JSON；续传时用它还原精确键值，不靠展示文本猜类型。
+    pub key_to_value: Option<String>,
     pub inserted: u64,
     pub updated: u64,
     pub deleted: u64,
@@ -118,17 +134,26 @@ pub struct SyncRunSampleRecord {
     pub target_value: Option<String>,
 }
 
+/// 被跳过（`RowErrorPolicy::Skip`）的失败行：定位键 + 目标库错误原文。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SyncRunFailureRecord {
+    pub table_key: String,
+    pub row_key: String,
+    pub message: String,
+}
+
 /// 开始一次记录，返回 run ID。
 pub(crate) fn begin(
     conn: &Connection,
     source: &str,
     target: &str,
+    signature: &str,
     started_unix_ms: u64,
 ) -> Result<i64> {
     conn.execute(
-        "INSERT INTO sync_runs (started_unix_ms, status, source, target)
-         VALUES (?1, 'running', ?2, ?3)",
-        params![started_unix_ms as i64, source, target],
+        "INSERT INTO sync_runs (started_unix_ms, status, source, target, signature)
+         VALUES (?1, 'running', ?2, ?3, ?4)",
+        params![started_unix_ms as i64, source, target, signature],
     )
     .map_err(sqlite_error)?;
     Ok(conn.last_insert_rowid())
@@ -165,6 +190,12 @@ pub(crate) fn finish(
 pub(crate) fn prune(conn: &Connection, keep: i64) -> Result<()> {
     conn.execute(
         "DELETE FROM sync_run_samples WHERE run_id IN (
+             SELECT id FROM sync_runs ORDER BY id DESC LIMIT -1 OFFSET ?1)",
+        params![keep.max(1)],
+    )
+    .map_err(sqlite_error)?;
+    conn.execute(
+        "DELETE FROM sync_run_failures WHERE run_id IN (
              SELECT id FROM sync_runs ORDER BY id DESC LIMIT -1 OFFSET ?1)",
         params![keep.max(1)],
     )
@@ -227,19 +258,36 @@ pub(crate) fn insert_chunk(
 ) -> Result<()> {
     conn.execute(
         "INSERT OR REPLACE INTO sync_run_chunks
-             (run_id, table_key, ordinal, key_from, key_to, inserted, updated, deleted, elapsed_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (run_id, table_key, ordinal, key_from, key_to, key_to_value,
+              inserted, updated, deleted, elapsed_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             run_id,
             chunk.table_key,
             chunk.ordinal as i64,
             chunk.key_from,
             chunk.key_to,
+            chunk.key_to_value,
             chunk.inserted as i64,
             chunk.updated as i64,
             chunk.deleted as i64,
             chunk.elapsed_ms as i64,
         ],
+    )
+    .map_err(sqlite_error)?;
+    Ok(())
+}
+
+/// 追加一条失败行；执行期逐条写入，避免把大表失败明细全堆在内存。
+pub(crate) fn insert_failure(
+    conn: &Connection,
+    run_id: i64,
+    failure: &SyncRunFailureRecord,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO sync_run_failures (run_id, table_key, row_key, message)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![run_id, failure.table_key, failure.row_key, failure.message],
     )
     .map_err(sqlite_error)?;
     Ok(())
@@ -278,7 +326,7 @@ pub(crate) fn load_runs(conn: &Connection, limit: i64) -> Result<Vec<SyncRunReco
     let mut stmt = conn
         .prepare(
             "SELECT id, started_unix_ms, finished_unix_ms, status, source, target,
-                    inserted, updated, deleted
+                    inserted, updated, deleted, signature
                FROM sync_runs ORDER BY id DESC LIMIT ?1",
         )
         .map_err(sqlite_error)?;
@@ -294,6 +342,7 @@ pub(crate) fn load_runs(conn: &Connection, limit: i64) -> Result<Vec<SyncRunReco
                 inserted: row.get::<_, i64>(6)?.max(0) as u64,
                 updated: row.get::<_, i64>(7)?.max(0) as u64,
                 deleted: row.get::<_, i64>(8)?.max(0) as u64,
+                signature: row.get(9)?,
             })
         })
         .map_err(sqlite_error)?;
@@ -305,7 +354,7 @@ pub(crate) fn load_runs(conn: &Connection, limit: i64) -> Result<Vec<SyncRunReco
 pub(crate) fn load_run(conn: &Connection, run_id: i64) -> Result<Option<SyncRunRecord>> {
     conn.query_row(
         "SELECT id, started_unix_ms, finished_unix_ms, status, source, target,
-                inserted, updated, deleted
+                inserted, updated, deleted, signature
            FROM sync_runs WHERE id = ?1",
         params![run_id],
         |row| {
@@ -319,6 +368,7 @@ pub(crate) fn load_run(conn: &Connection, run_id: i64) -> Result<Option<SyncRunR
                 inserted: row.get::<_, i64>(6)?.max(0) as u64,
                 updated: row.get::<_, i64>(7)?.max(0) as u64,
                 deleted: row.get::<_, i64>(8)?.max(0) as u64,
+                signature: row.get(9)?,
             })
         },
     )
@@ -355,7 +405,8 @@ pub(crate) fn load_tables(conn: &Connection, run_id: i64) -> Result<Vec<SyncRunT
 pub(crate) fn load_chunks(conn: &Connection, run_id: i64) -> Result<Vec<SyncRunChunkRecord>> {
     let mut stmt = conn
         .prepare(
-            "SELECT table_key, ordinal, key_from, key_to, inserted, updated, deleted, elapsed_ms
+            "SELECT table_key, ordinal, key_from, key_to, key_to_value,
+                    inserted, updated, deleted, elapsed_ms
                FROM sync_run_chunks WHERE run_id = ?1 ORDER BY table_key, ordinal",
         )
         .map_err(sqlite_error)?;
@@ -366,10 +417,32 @@ pub(crate) fn load_chunks(conn: &Connection, run_id: i64) -> Result<Vec<SyncRunC
                 ordinal: row.get::<_, i64>(1)?.max(0) as u64,
                 key_from: row.get(2)?,
                 key_to: row.get(3)?,
-                inserted: row.get::<_, i64>(4)?.max(0) as u64,
-                updated: row.get::<_, i64>(5)?.max(0) as u64,
-                deleted: row.get::<_, i64>(6)?.max(0) as u64,
-                elapsed_ms: row.get::<_, i64>(7)?.max(0) as u64,
+                key_to_value: row.get(4)?,
+                inserted: row.get::<_, i64>(5)?.max(0) as u64,
+                updated: row.get::<_, i64>(6)?.max(0) as u64,
+                deleted: row.get::<_, i64>(7)?.max(0) as u64,
+                elapsed_ms: row.get::<_, i64>(8)?.max(0) as u64,
+            })
+        })
+        .map_err(sqlite_error)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(sqlite_error)
+}
+
+/// 某次任务的失败行，按写入顺序。
+pub(crate) fn load_failures(conn: &Connection, run_id: i64) -> Result<Vec<SyncRunFailureRecord>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT table_key, row_key, message
+               FROM sync_run_failures WHERE run_id = ?1 ORDER BY id",
+        )
+        .map_err(sqlite_error)?;
+    let rows = stmt
+        .query_map(params![run_id], |row| {
+            Ok(SyncRunFailureRecord {
+                table_key: row.get(0)?,
+                row_key: row.get(1)?,
+                message: row.get(2)?,
             })
         })
         .map_err(sqlite_error)?;
@@ -417,6 +490,7 @@ mod tests {
             ordinal,
             key_from: None,
             key_to: Some(format!("{ordinal}000")),
+            key_to_value: Some(format!("\"{ordinal}000\"")),
             inserted: 1,
             updated: 0,
             deleted: 0,
@@ -427,7 +501,7 @@ mod tests {
     #[test]
     fn run_roundtrip_records_tables_chunks_and_samples() {
         let conn = memory();
-        let run = begin(&conn, "src/main", "dst/main", 100).expect("begin");
+        let run = begin(&conn, "src/main", "dst/main", "sig", 100).expect("begin");
         upsert_table(
             &conn,
             run,
@@ -477,10 +551,41 @@ mod tests {
     }
 
     #[test]
+    fn failure_rows_roundtrip_in_write_order() {
+        let conn = memory();
+        let run = begin(&conn, "src", "dst", "sig", 1).expect("begin");
+        for (row_key, message) in [("id=1", "duplicate"), ("id=2", "invalid")] {
+            insert_failure(
+                &conn,
+                run,
+                &SyncRunFailureRecord {
+                    table_key: "items".into(),
+                    row_key: row_key.into(),
+                    message: message.into(),
+                },
+            )
+            .expect("failure");
+        }
+        finish(&conn, run, "failed", 0, 0, 0, 2).expect("finish");
+        let failures = load_failures(&conn, run).expect("failures");
+        assert_eq!(failures.len(), 2);
+        assert_eq!(failures[0].row_key, "id=1");
+        assert_eq!(failures[1].message, "invalid");
+
+        let newer = begin(&conn, "src", "dst", "sig", 3).expect("begin");
+        finish(&conn, newer, "success", 0, 0, 0, 4).expect("finish");
+        prune(&conn, 1).expect("prune");
+        assert!(
+            load_failures(&conn, run).expect("failures").is_empty(),
+            "旧任务的失败行随任务一起裁剪"
+        );
+    }
+
+    #[test]
     fn prune_keeps_only_recent_runs() {
         let conn = memory();
         for index in 0..4 {
-            let run = begin(&conn, "s", "t", index).expect("begin");
+            let run = begin(&conn, "s", "t", "sig", index).expect("begin");
             finish(&conn, run, "success", 0, 0, 0, index).expect("finish");
         }
         prune(&conn, 2).expect("prune");

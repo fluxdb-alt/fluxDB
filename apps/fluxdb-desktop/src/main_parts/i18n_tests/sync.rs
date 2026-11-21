@@ -305,7 +305,19 @@ fn sync_wizard_previews_and_executes_data_sync(cx: &mut TestAppContext) {
             .selected_tables
             .len()
     });
-    assert_eq!(selected, 1, "tables default to selected");
+    assert_eq!(selected, 0, "tables must not be preselected");
+    let select_all = cx.debug_bounds("sync-select-all").expect("select all button");
+    cx.simulate_click(select_all.center(), Modifiers::default());
+    sync_redraw(cx);
+    let selected = cx.update(|_, cx| {
+        view.read(cx)
+            .sync_wizard
+            .as_ref()
+            .expect("wizard state")
+            .selected_tables
+            .len()
+    });
+    assert_eq!(selected, 1, "select all ticks every visible table");
 
     // 布局对齐设计稿：左栏端点卡片，右侧表清单，底部固定操作栏。
     let rail = cx.debug_bounds("sync-pick-rail").expect("endpoint rail");
@@ -522,6 +534,145 @@ fn sync_wizard_previews_and_executes_data_sync(cx: &mut TestAppContext) {
             cx.simulate_click(skip.center(), Modifiers::default());
             sync_redraw(cx);
             assert_eq!(policy(cx), fluxdb_app::RowErrorPolicy::Skip);
+            // 唯一键冲突：默认按失败行处理，可切到忽略/覆盖再切回。
+            let conflict = |cx: &mut gpui::VisualTestContext| {
+                cx.update(|_, cx| {
+                    view.read(cx)
+                        .sync_wizard
+                        .as_ref()
+                        .expect("wizard state")
+                        .data_options
+                        .insert_conflict
+                })
+            };
+            assert_eq!(
+                conflict(cx),
+                fluxdb_core::InsertConflictMode::Error,
+                "默认按失败行处理"
+            );
+            let ignore = cx
+                .debug_bounds("sync-insert-conflict-ignore")
+                .expect("ignore conflict row");
+            cx.simulate_click(ignore.center(), Modifiers::default());
+            sync_redraw(cx);
+            assert_eq!(conflict(cx), fluxdb_core::InsertConflictMode::Ignore);
+            let overwrite = cx
+                .debug_bounds("sync-insert-conflict-overwrite")
+                .expect("overwrite conflict row");
+            cx.simulate_click(overwrite.center(), Modifiers::default());
+            sync_redraw(cx);
+            assert_eq!(conflict(cx), fluxdb_core::InsertConflictMode::Overwrite);
+            let error = cx
+                .debug_bounds("sync-insert-conflict-error")
+                .expect("error conflict row");
+            cx.simulate_click(error.center(), Modifiers::default());
+            sync_redraw(cx);
+            assert_eq!(conflict(cx), fluxdb_core::InsertConflictMode::Error);
+            // 表级事务：默认按批提交，可切到整表原子再切回。
+            let atomic = |cx: &mut gpui::VisualTestContext| {
+                cx.update(|_, cx| {
+                    view.read(cx)
+                        .sync_wizard
+                        .as_ref()
+                        .expect("wizard state")
+                        .data_options
+                        .atomic_table
+                })
+            };
+            assert!(!atomic(cx), "默认按批提交");
+            // 表级事务卡位于滚动区底部，先滚到可见范围再点；
+            // 落在窗口/底栏覆盖区的点击会被静默丢弃。
+            let mut last_y = f32::NAN;
+            let mut lines = -3.;
+            for _ in 0..12 {
+                let row = cx
+                    .debug_bounds("sync-atomic-on")
+                    .expect("atomic on row");
+                let footer = cx
+                    .debug_bounds("sync-footer-hint")
+                    .expect("footer hint");
+                let y = f32::from(row.center().y);
+                if y < f32::from(footer.origin.y) - 8. {
+                    break;
+                }
+                if (y - last_y).abs() < 0.5 {
+                    lines = -lines;
+                }
+                last_y = y;
+                let center = cx.update(|window, _| window.bounds().center());
+                cx.simulate_event(gpui::ScrollWheelEvent {
+                    position: center,
+                    delta: gpui::ScrollDelta::Lines(gpui::point(0., lines)),
+                    ..Default::default()
+                });
+                sync_redraw(cx);
+            }
+            let atomic_on = cx
+                .debug_bounds("sync-atomic-on")
+                .expect("atomic on row");
+            cx.simulate_click(atomic_on.center(), Modifiers::default());
+            sync_redraw(cx);
+            assert!(atomic(cx));
+            let atomic_off = cx
+                .debug_bounds("sync-atomic-off")
+                .expect("atomic off row");
+            cx.simulate_click(atomic_off.center(), Modifiers::default());
+            sync_redraw(cx);
+            assert!(!atomic(cx));
+            // 导出迁移 SQL：默认不导出；已选路径可清回「不导出」。
+            let export_path = |cx: &mut gpui::VisualTestContext| {
+                cx.update(|_, cx| {
+                    view.read(cx)
+                        .sync_wizard
+                        .as_ref()
+                        .expect("wizard state")
+                        .data_options
+                        .export_sql_path
+                        .clone()
+                })
+            };
+            assert!(export_path(cx).is_none(), "默认不导出");
+            cx.update(|_, cx| {
+                view.update(cx, |this, cx| {
+                    this.sync_wizard
+                        .as_mut()
+                        .expect("wizard state")
+                        .data_options
+                        .export_sql_path = Some("/tmp/sync-migration.sql".into());
+                    cx.notify();
+                });
+            });
+            let mut last_y = f32::NAN;
+            let mut lines = -3.;
+            for _ in 0..12 {
+                let row = cx
+                    .debug_bounds("sync-export-sql-off")
+                    .expect("export off row");
+                let footer = cx
+                    .debug_bounds("sync-footer-hint")
+                    .expect("footer hint");
+                let y = f32::from(row.center().y);
+                if y < f32::from(footer.origin.y) - 8. {
+                    break;
+                }
+                if (y - last_y).abs() < 0.5 {
+                    lines = -lines;
+                }
+                last_y = y;
+                let center = cx.update(|window, _| window.bounds().center());
+                cx.simulate_event(gpui::ScrollWheelEvent {
+                    position: center,
+                    delta: gpui::ScrollDelta::Lines(gpui::point(0., lines)),
+                    ..Default::default()
+                });
+                sync_redraw(cx);
+            }
+            let export_off = cx
+                .debug_bounds("sync-export-sql-off")
+                .expect("export off row");
+            cx.simulate_click(export_off.center(), Modifiers::default());
+            sync_redraw(cx);
+            assert!(export_path(cx).is_none(), "「不导出」必须清掉路径");
             // 比对键/字段映射/跳过字段等批量文本收进「高级」，默认收起。
             let expanded = |cx: &mut gpui::VisualTestContext| {
                 cx.update(|_, cx| {
@@ -533,6 +684,35 @@ fn sync_wizard_previews_and_executes_data_sync(cx: &mut TestAppContext) {
                 })
             };
             assert!(!expanded(cx), "advanced card starts collapsed");
+            // 新增策略卡后「高级」在滚动区底部，先滚到可见范围再点；
+            // 落在窗口外的点击会被静默丢弃。
+            let mut last_y = f32::NAN;
+            let mut lines = -3.;
+            for _ in 0..12 {
+                let toggle = cx
+                    .debug_bounds("sync-advanced-toggle")
+                    .expect("advanced toggle");
+                // 底栏覆盖滚动区下沿：中心落在底栏上方的点击才不会被底栏吞掉。
+                let footer = cx
+                    .debug_bounds("sync-footer-hint")
+                    .expect("footer hint");
+                let y = f32::from(toggle.center().y);
+                if y < f32::from(footer.origin.y) - 8. {
+                    break;
+                }
+                // 滚不动就反向：不同平台的滚轮方向约定不一致。
+                if (y - last_y).abs() < 0.5 {
+                    lines = -lines;
+                }
+                last_y = y;
+                let center = cx.update(|window, _| window.bounds().center());
+                cx.simulate_event(gpui::ScrollWheelEvent {
+                    position: center,
+                    delta: gpui::ScrollDelta::Lines(gpui::point(0., lines)),
+                    ..Default::default()
+                });
+                sync_redraw(cx);
+            }
             let toggle = cx
                 .debug_bounds("sync-advanced-toggle")
                 .expect("advanced toggle");
@@ -865,6 +1045,12 @@ fn sync_wizard_previews_big_table_by_page(cx: &mut TestAppContext) {
         .expect("data sync entry in connection menu");
     cx.simulate_click(entry.center(), Modifiers::default());
     sync_redraw(cx);
+    // 表清单默认不勾选：先「全选」再进入配对。
+    cx.run_until_parked();
+    sync_redraw(cx);
+    let select_all = cx.debug_bounds("sync-select-all").expect("select all");
+    cx.simulate_click(select_all.center(), Modifiers::default());
+    sync_redraw(cx);
     for _ in 0..3 {
         let next = cx.debug_bounds("sync-wizard-next").expect("next button");
         cx.simulate_click(next.center(), Modifiers::default());
@@ -1038,6 +1224,10 @@ fn sync_wizard_switches_to_structure_mode(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("sync-wizard-modal").is_some());
 
     cx.run_until_parked();
+    sync_redraw(cx);
+    // 表清单默认不勾选：先「全选」再进入配对。
+    let select_all = cx.debug_bounds("sync-select-all").expect("select all");
+    cx.simulate_click(select_all.center(), Modifiers::default());
     sync_redraw(cx);
     for index in 0..3 {
         let next = cx.debug_bounds("sync-wizard-next").expect("next button");

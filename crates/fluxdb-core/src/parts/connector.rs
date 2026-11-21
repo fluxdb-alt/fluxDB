@@ -347,6 +347,61 @@ pub trait Connector {
     ) -> Result<DataPage> {
         self.load_data(path, offset, limit, sort, &[])
     }
+    /// 按页读取数据，并把 `digest_columns` 中的列替换为库端摘要（十六进制字符串）。
+    ///
+    /// 仅用于**同类型库之间**的数据比对：不同方言对文本的字符编码不同，摘要不能跨类型比。
+    /// 默认不支持；摘要列返回 `Text`，NULL 仍为 `Null`。
+    fn load_data_with_digests(
+        &self,
+        _: &ObjectPath,
+        _: u64,
+        _: u64,
+        _: &[SortSpec],
+        _: &[FilterSpec],
+        _: &[String],
+    ) -> Result<DataPage> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "该连接不支持大字段摘要读取",
+        ))
+    }
+
+    /// 带摘要列的导出分页；默认逐页调用 [`Self::load_data_with_digests`]。
+    fn export_pages_with_digests(
+        &self,
+        path: &ObjectPath,
+        sort: &[SortSpec],
+        filters: &[FilterSpec],
+        digest_columns: &[String],
+        on_cancel: &dyn Fn() -> bool,
+        on_page: &mut dyn FnMut(DataPage) -> bool,
+    ) -> Result<()> {
+        let mut offset: u64 = 0;
+        loop {
+            if on_cancel() {
+                return Ok(());
+            }
+            let page =
+                self.load_data_with_digests(path, offset, 4096, sort, filters, digest_columns)?;
+            if let Some(incomplete) = &page.incomplete {
+                return Err(Error::new(
+                    ErrorKind::Query,
+                    format!("结果页不完整，已停止比对：{}", incomplete.reason),
+                ));
+            }
+            let count = page.rows.len() as u64;
+            let has_more = page.has_more;
+            let next_offset = page.next_offset();
+            if !on_page(page) {
+                return Ok(());
+            }
+            offset = next_offset;
+            if count == 0 || !has_more {
+                return Ok(());
+            }
+        }
+    }
+
     fn preview_data_export(
         &self,
         _: &ObjectPath,

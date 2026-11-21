@@ -425,16 +425,20 @@ fn sync_step_pick(
                         )
                         .child(div().flex_1())
                         .child(
-                            Button::new("sync-select-all")
-                                .label(if all_visible_selected {
-                                    tr("app.sync.select_none")
-                                } else {
-                                    tr("app.sync.select_all")
-                                })
-                                .disabled(visible.is_empty())
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.toggle_sync_tables(visible_keys.clone(), cx);
-                                })),
+                            div()
+                                .debug_selector(|| "sync-select-all".into())
+                                .child(
+                                    Button::new("sync-select-all")
+                                        .label(if all_visible_selected {
+                                            tr("app.sync.select_none")
+                                        } else {
+                                            tr("app.sync.select_all")
+                                        })
+                                        .disabled(visible.is_empty())
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.toggle_sync_tables(visible_keys.clone(), cx);
+                                        })),
+                                ),
                         ),
                 )
                 .child(
@@ -1583,6 +1587,145 @@ fn sync_step_options(
                                 }),
                             )),
                     ))
+                    // 唯一键冲突：只改 INSERT 语句，不影响预览与比对结果。
+                    .child(sync_option_card(
+                        tr("app.sync.insert_conflict_card"),
+                        tr("app.sync.insert_conflict_desc"),
+                        colors,
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(sync_action_row(
+                                "sync-insert-conflict-error",
+                                tr("app.sync.insert_conflict_error"),
+                                tr("app.sync.insert_conflict_error_hint"),
+                                state.data_options.insert_conflict == InsertConflictMode::Error,
+                                false,
+                                colors,
+                                cx.listener(|this, _, _, cx| {
+                                    if let Some(state) = this.sync_wizard.as_mut() {
+                                        state.data_options.insert_conflict =
+                                            InsertConflictMode::Error;
+                                    }
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(sync_action_row(
+                                "sync-insert-conflict-ignore",
+                                tr("app.sync.insert_conflict_ignore"),
+                                tr("app.sync.insert_conflict_ignore_hint"),
+                                state.data_options.insert_conflict == InsertConflictMode::Ignore,
+                                false,
+                                colors,
+                                cx.listener(|this, _, _, cx| {
+                                    if let Some(state) = this.sync_wizard.as_mut() {
+                                        state.data_options.insert_conflict =
+                                            InsertConflictMode::Ignore;
+                                    }
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(sync_action_row(
+                                "sync-insert-conflict-overwrite",
+                                tr("app.sync.insert_conflict_overwrite"),
+                                tr("app.sync.insert_conflict_overwrite_hint"),
+                                state.data_options.insert_conflict
+                                    == InsertConflictMode::Overwrite,
+                                false,
+                                colors,
+                                cx.listener(|this, _, _, cx| {
+                                    if let Some(state) = this.sync_wizard.as_mut() {
+                                        state.data_options.insert_conflict =
+                                            InsertConflictMode::Overwrite;
+                                    }
+                                    cx.notify();
+                                }),
+                            )),
+                    ))
+                    // 表级事务只作用于覆盖模式：清空与写入同属一个事务，失败整表回滚。
+                    .child(sync_option_card(
+                        tr("app.sync.atomic_card"),
+                        tr("app.sync.atomic_desc"),
+                        colors,
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(sync_action_row(
+                                "sync-atomic-off",
+                                tr("app.sync.atomic_off"),
+                                tr("app.sync.atomic_off_hint"),
+                                !state.data_options.atomic_table,
+                                false,
+                                colors,
+                                cx.listener(|this, _, _, cx| {
+                                    if let Some(state) = this.sync_wizard.as_mut() {
+                                        state.data_options.atomic_table = false;
+                                    }
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(sync_action_row(
+                                "sync-atomic-on",
+                                tr("app.sync.atomic_on"),
+                                tr("app.sync.atomic_on_hint"),
+                                state.data_options.atomic_table,
+                                false,
+                                colors,
+                                cx.listener(|this, _, _, cx| {
+                                    if let Some(state) = this.sync_wizard.as_mut() {
+                                        state.data_options.atomic_table = true;
+                                    }
+                                    cx.notify();
+                                }),
+                            )),
+                    ))
+                    // 导出迁移 SQL：同步照常执行，同时把成功语句落盘；后端拒绝与表级事务同用。
+                    .child(sync_option_card(
+                        tr("app.sync.export_sql_card"),
+                        tr("app.sync.export_sql_desc"),
+                        colors,
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(sync_action_row(
+                                "sync-export-sql-choose",
+                                tr("app.sync.export_sql_choose"),
+                                state
+                                    .data_options
+                                    .export_sql_path
+                                    .as_ref()
+                                    .map(|path| path.display().to_string())
+                                    .unwrap_or_else(|| {
+                                        tr("app.sync.export_sql_choose_hint").to_string()
+                                    })
+                                    .into(),
+                                state.data_options.export_sql_path.is_some(),
+                                false,
+                                colors,
+                                cx.listener(|this, _, window, cx| {
+                                    this.choose_sync_export_path(window, cx);
+                                }),
+                            ))
+                            .child(sync_action_row(
+                                "sync-export-sql-off",
+                                tr("app.sync.export_sql_off"),
+                                tr("app.sync.export_sql_off_hint"),
+                                state.data_options.export_sql_path.is_none(),
+                                false,
+                                colors,
+                                cx.listener(|this, _, _, cx| {
+                                    if let Some(state) = this.sync_wizard.as_mut() {
+                                        if state.data_options.export_sql_path.take().is_some() {
+                                            state.clear_preview();
+                                        }
+                                    }
+                                    cx.notify();
+                                }),
+                            )),
+                    ))
                     // 「高级」默认收起：表级设置在第二步「字段设置」完成，
                     // 这里的批量文本只是多表场景的兜底。
                     .child(sync_advanced_card(
@@ -2276,21 +2419,46 @@ fn sync_preview_footer(
             |this| {
                 this.child(
                     div()
-                        .debug_selector(|| "sync-view-run-record".into())
+                        .flex()
+                        .items_center()
+                        .gap_2()
                         .child(
-                            Button::new("sync-view-run-record")
-                                .label(tr("app.sync.view_record"))
-                                .small()
-                                .disabled(state.running)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(run_id) = this
-                                        .sync_wizard
-                                        .as_ref()
-                                        .and_then(|wizard| wizard.last_run_id)
-                                    {
-                                        this.open_sync_run_view(Some(run_id), cx);
-                                    }
-                                })),
+                            div()
+                                .debug_selector(|| "sync-resume-run".into())
+                                .child(
+                                    Button::new("sync-resume-run")
+                                        .label(tr("app.sync.resume_run"))
+                                        .small()
+                                        .disabled(state.running)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            if let Some(run_id) = this
+                                                .sync_wizard
+                                                .as_ref()
+                                                .and_then(|wizard| wizard.last_run_id)
+                                            {
+                                                this.start_sync_execute_with_resume(Some(run_id), cx);
+                                            }
+                                        })),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "sync-view-run-record".into())
+                                .child(
+                                    Button::new("sync-view-run-record")
+                                        .label(tr("app.sync.view_record"))
+                                        .small()
+                                        .disabled(state.running)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            if let Some(run_id) = this
+                                                .sync_wizard
+                                                .as_ref()
+                                                .and_then(|wizard| wizard.last_run_id)
+                                            {
+                                                this.open_sync_run_view(Some(run_id), cx);
+                                            }
+                                        })),
+                                ),
                         ),
                 )
             },

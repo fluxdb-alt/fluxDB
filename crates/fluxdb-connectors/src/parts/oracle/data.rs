@@ -63,6 +63,72 @@ fn oracle_load_cell_text(
     }
 }
 
+/// 二进制完整值读取上限：与文本一致，超限报错而不是截断。
+const ORACLE_LOB_BINARY_FULL_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// 按行身份读取二进制单元格完整值（同步写回大字段用）。
+fn oracle_load_cell_binary(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    identity: &fluxdb_core::RowIdentity,
+    column: &str,
+) -> fluxdb_core::Result<Vec<u8>> {
+    if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
+        return Err(Error::new(ErrorKind::Unsupported, "仅表和视图支持二进制读取"));
+    }
+    let schema = oracle_request_schema(config, path)?;
+    let connection = oracle_connect(config)?;
+    let columns = oracle_load_columns(&connection, &schema, &path.name)?;
+    ensure_column_exists(column, &columns)?;
+    let target = columns
+        .iter()
+        .find(|candidate| candidate.name == column)
+        .ok_or_else(|| Error::new(ErrorKind::Query, format!("字段不存在或已变更：{column}")))?;
+    let (where_sql, binds) = oracle_identity_where(identity, &columns)?;
+    let sql = format!(
+        "SELECT {} FROM {}{where_sql} FETCH FIRST 1 ROWS ONLY",
+        fluxdb_core::OracleDialect.quote_identifier(column),
+        oracle_qualified_table(&schema, &path.name)
+    );
+    let mut rows = oracle_query(&connection, &sql, &binds)?;
+    let row = rows
+        .first_mut()
+        .ok_or_else(|| Error::new(ErrorKind::Query, "未找到目标行"))?;
+    let is_lob = row
+        .columns()
+        .first()
+        .is_some_and(|metadata| oracle_db_type_is_lob(metadata.db_type()));
+    if is_lob {
+        let Ok(value) = row.take::<Option<OracleLob>>(0) else {
+            return Err(Error::new(ErrorKind::Query, "读取 LOB 失败"));
+        };
+        let Some(mut lob) = value else {
+            return Err(Error::new(ErrorKind::Query, "二进制单元格为 NULL"));
+        };
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            if bytes.len() >= ORACLE_LOB_BINARY_FULL_MAX_BYTES {
+                return Err(Error::new(ErrorKind::Query, "二进制单元格超过 8 MiB，无法完整读入"));
+            }
+            match std::io::Read::read(&mut lob, &mut chunk) {
+                Ok(0) => break,
+                Ok(read) => bytes.extend_from_slice(&chunk[..read]),
+                Err(error) => {
+                    return Err(Error::new(ErrorKind::Query, format!("读取 LOB 失败：{error}")));
+                }
+            }
+        }
+        return Ok(bytes);
+    }
+    match oracle_cell_value(row, 0, target) {
+        CellValue::Bytes(bytes) => Ok(bytes),
+        CellValue::Text(text) => Ok(text.into_bytes()),
+        CellValue::Null => Err(Error::new(ErrorKind::Query, "二进制单元格为 NULL")),
+        _ => Err(Error::new(ErrorKind::Query, "二进制单元格类型异常")),
+    }
+}
+
 fn oracle_load_data(
     config: &ConnectionConfig,
     path: &ObjectPath,
@@ -71,7 +137,28 @@ fn oracle_load_data(
     sort: &[SortSpec],
     filters: &[FilterSpec],
 ) -> fluxdb_core::Result<DataPage> {
-    oracle_load_data_with_expression(config, path, offset, limit, sort, filters, None)
+    oracle_load_data_with_expression(config, path, offset, limit, sort, filters, None, &[])
+}
+
+fn oracle_load_data_digests(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    offset: u64,
+    limit: u64,
+    sort: &[SortSpec],
+    filters: &[FilterSpec],
+    digest_columns: &[String],
+) -> fluxdb_core::Result<DataPage> {
+    oracle_load_data_with_expression(
+        config,
+        path,
+        offset,
+        limit,
+        sort,
+        filters,
+        None,
+        digest_columns,
+    )
 }
 
 fn oracle_load_data_expression(
@@ -83,7 +170,16 @@ fn oracle_load_data_expression(
     expression: &fluxdb_core::FilterExpression,
 ) -> fluxdb_core::Result<DataPage> {
     // 显式实现真实筛选链路：默认 trait 实现会丢掉 expression，退化成无过滤全表。
-    oracle_load_data_with_expression(config, path, offset, limit, sort, &[], Some(expression))
+    oracle_load_data_with_expression(
+        config,
+        path,
+        offset,
+        limit,
+        sort,
+        &[],
+        Some(expression),
+        &[],
+    )
 }
 
 fn oracle_load_data_with_expression(
@@ -94,6 +190,7 @@ fn oracle_load_data_with_expression(
     sort: &[SortSpec],
     filters: &[FilterSpec],
     expression: Option<&fluxdb_core::FilterExpression>,
+    digest_columns: &[String],
 ) -> fluxdb_core::Result<DataPage> {
     if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
         return Err(Error::new(ErrorKind::Unsupported, "仅表和视图支持数据读取"));
@@ -122,7 +219,11 @@ fn oracle_load_data_with_expression(
     let rows = oracle_query(&connection, &sql, &binds)?;
     let mut page_rows = Vec::with_capacity(rows.len());
     for mut row in rows {
-        page_rows.push(oracle_row(&mut row, &columns));
+        page_rows.push(oracle_row_with_digests(
+            &mut row,
+            &columns,
+            digest_columns,
+        ));
     }
     let has_more = page_rows.len() > pagination.limit as usize;
     page_rows.truncate(pagination.limit as usize);

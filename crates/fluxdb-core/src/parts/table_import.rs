@@ -19,6 +19,21 @@ impl TableImportMode {
     }
 }
 
+/// 批量 INSERT 遇到目标端唯一键冲突时的处理方式。
+///
+/// 只改插入语句，不改变比对结果；目前仅 MySQL / PostgreSQL / SQLite 三类方言
+/// 有原生支持，其余方言选择非默认值时直接报「不支持」。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum InsertConflictMode {
+    /// 不特殊处理：冲突按普通写入失败交给行错误策略（默认）。
+    #[default]
+    Error,
+    /// 忽略冲突行，不报错也不写入。
+    Ignore,
+    /// 用源行覆盖目标端同键行。
+    Overwrite,
+}
+
 /// 默认每批写入行数：与历史行为一致，避免参数绑定数量失控。
 pub const TABLE_IMPORT_DEFAULT_BATCH_ROWS: usize = 500;
 

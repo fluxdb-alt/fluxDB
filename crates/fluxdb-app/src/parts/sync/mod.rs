@@ -21,6 +21,7 @@ mod data_sync;
 mod inventory;
 mod ledger;
 mod model;
+mod script_file;
 mod structure_diff;
 mod structure_sql;
 mod structure_sync;

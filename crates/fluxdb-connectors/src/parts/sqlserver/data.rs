@@ -6,7 +6,28 @@ fn sqlserver_load_data(
     sort: &[SortSpec],
     filters: &[FilterSpec],
 ) -> fluxdb_core::Result<DataPage> {
-    sqlserver_load_data_with_expression(config, path, offset, limit, sort, filters, None)
+    sqlserver_load_data_with_expression(config, path, offset, limit, sort, filters, None, &[])
+}
+
+fn sqlserver_load_data_digests(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    offset: u64,
+    limit: u64,
+    sort: &[SortSpec],
+    filters: &[FilterSpec],
+    digest_columns: &[String],
+) -> fluxdb_core::Result<DataPage> {
+    sqlserver_load_data_with_expression(
+        config,
+        path,
+        offset,
+        limit,
+        sort,
+        filters,
+        None,
+        digest_columns,
+    )
 }
 
 fn sqlserver_load_data_expression(
@@ -17,7 +38,16 @@ fn sqlserver_load_data_expression(
     sort: &[SortSpec],
     expression: &fluxdb_core::FilterExpression,
 ) -> fluxdb_core::Result<DataPage> {
-    sqlserver_load_data_with_expression(config, path, offset, limit, sort, &[], Some(expression))
+    sqlserver_load_data_with_expression(
+        config,
+        path,
+        offset,
+        limit,
+        sort,
+        &[],
+        Some(expression),
+        &[],
+    )
 }
 
 fn sqlserver_load_data_with_expression(
@@ -28,6 +58,7 @@ fn sqlserver_load_data_with_expression(
     sort: &[SortSpec],
     filters: &[FilterSpec],
     expression: Option<&fluxdb_core::FilterExpression>,
+    digest_columns: &[String],
 ) -> fluxdb_core::Result<DataPage> {
     if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
         return Err(Error::new(ErrorKind::Unsupported, "仅表和视图支持数据读取"));
@@ -48,7 +79,8 @@ fn sqlserver_load_data_with_expression(
     };
     let order = sqlserver_data_order_by(sort, &query_columns, None);
     // 二进制列按摘要投影：正文永不进结果页，与 MySQL/PG 同一口径。
-    let (select_list, outer_list, positions) = sqlserver_page_select_list(&query_columns);
+    let (select_list, outer_list, positions) =
+        sqlserver_page_select_list(&query_columns, digest_columns);
     let fetch_limit = pagination.limit.saturating_add(1);
     let sql = if pagination.offset == 0 {
         parameters.push(fluxdb_core::SqlParameter::I64(fetch_limit.to_string()));
@@ -88,7 +120,9 @@ fn sqlserver_load_data_with_expression(
         .ok_or_else(|| Error::new(ErrorKind::Query, "SQL Server 数据页返回类型异常"))?
         .rows
         .into_iter()
-        .map(|row| sqlserver_project_row(row.values, &query_columns, &positions))
+        .map(|row| {
+            sqlserver_project_row(row.values, &query_columns, &positions, digest_columns)
+        })
         .collect::<Vec<_>>();
     let has_more = rows.len() > pagination.limit as usize;
     rows.truncate(pagination.limit as usize);
@@ -138,12 +172,30 @@ fn sqlserver_is_sql_variant(column: &Column) -> bool {
 ///
 /// 同时返回外层列清单：翻页 SQL 用 `ROW_NUMBER` 包了一层子查询，外层只能引用
 /// 子查询的输出列名，不能再套一次投影表达式（子查询里没有原始二进制列）。
-fn sqlserver_page_select_list(columns: &[Column]) -> (String, String, Vec<(Vec<usize>, usize)>) {
+fn sqlserver_page_select_list(
+    columns: &[Column],
+    digest_columns: &[String],
+) -> (String, String, Vec<(Vec<usize>, usize)>) {
     let mut inner = Vec::with_capacity(columns.len());
     let mut outer = Vec::with_capacity(columns.len());
     let mut positions = Vec::with_capacity(columns.len());
     let mut position = 0usize;
     for (index, column) in columns.iter().enumerate() {
+        if digest_columns
+            .iter()
+            .any(|digest| digest.eq_ignore_ascii_case(&column.name))
+        {
+            // 摘要列：单列输出小写十六进制哈希。先 CAST 成 varbinary 以兼容
+            // text/ntext/image 等 HASHBYTES 不接受的历史类型。
+            let name = fluxdb_core::SqlServerDialect.quote_identifier(&column.name);
+            positions.push((vec![position], index));
+            position += 1;
+            inner.push(format!(
+                "LOWER(CONVERT(varchar(64), HASHBYTES('SHA2_256', CAST({name} AS varbinary(max))), 2)) AS {name}"
+            ));
+            outer.push(name);
+            continue;
+        }
         let width = if is_binary_column(column) { 3 } else { 1 };
         positions.push(((position..position + width).collect(), index));
         position += width;
@@ -167,12 +219,24 @@ fn sqlserver_project_row(
     values: Vec<CellValue>,
     columns: &[Column],
     positions: &[(Vec<usize>, usize)],
+    digest_columns: &[String],
 ) -> Row {
     Row {
         values: positions
             .iter()
             .map(|(indexes, column_index)| {
                 let column = &columns[*column_index];
+                if digest_columns
+                    .iter()
+                    .any(|digest| digest.eq_ignore_ascii_case(&column.name))
+                {
+                    // 摘要列已是文本，直接取第一个投影下标。
+                    return indexes
+                        .first()
+                        .and_then(|index| values.get(*index))
+                        .cloned()
+                        .unwrap_or(CellValue::Null);
+                }
                 if is_binary_column(column) {
                     let is_null = indexes
                         .first()
@@ -529,7 +593,7 @@ mod sqlserver_page_projection_tests {
     /// 翻页 SQL 的外层不能重复投影表达式：子查询里二进制列已经折成 3 个别名。
     #[test]
     fn outer_select_uses_projected_aliases() {
-        let (inner, outer, positions) = sqlserver_page_select_list(&columns());
+        let (inner, outer, positions) = sqlserver_page_select_list(&columns(), &[]);
         assert!(inner.contains("[photo__byte_length]"), "内层必须投影字节数：{inner}");
         assert!(!outer.contains("DATALENGTH"), "外层不能再用原始列计算：{outer}");
         assert_eq!(
@@ -544,9 +608,19 @@ mod sqlserver_page_projection_tests {
     }
 
     #[test]
+    fn digest_column_projects_single_hash_value() {
+        let columns = columns();
+        let (inner, outer, positions) =
+            sqlserver_page_select_list(&columns, &["photo".into()]);
+        assert_eq!(positions[1], (vec![1], 1));
+        assert!(inner.contains("HASHBYTES('SHA2_256'"), "{inner}");
+        assert_eq!(outer.split(", ").count(), 2, "{outer}");
+    }
+
+    #[test]
     fn projected_row_folds_binary_summary() {
         let columns = columns();
-        let (_, _, positions) = sqlserver_page_select_list(&columns);
+        let (_, _, positions) = sqlserver_page_select_list(&columns, &[]);
         let row = sqlserver_project_row(
             vec![
                 CellValue::I64(7),
@@ -556,6 +630,7 @@ mod sqlserver_page_projection_tests {
             ],
             &columns,
             &positions,
+            &[],
         );
         assert_eq!(row.values[0], CellValue::I64(7));
         assert_eq!(
@@ -573,7 +648,7 @@ mod sqlserver_page_projection_tests {
     #[test]
     fn empty_binary_has_no_preview() {
         let columns = columns();
-        let (_, _, positions) = sqlserver_page_select_list(&columns);
+        let (_, _, positions) = sqlserver_page_select_list(&columns, &[]);
         let row = sqlserver_project_row(
             vec![
                 CellValue::I64(7),
@@ -583,10 +658,87 @@ mod sqlserver_page_projection_tests {
             ],
             &columns,
             &positions,
+            &[],
         );
         assert!(matches!(
             &row.values[1],
             CellValue::BinarySummary(summary) if summary.preview_hex.is_none() && summary.byte_length == 0
         ));
     }
+}
+
+/// 按行身份读取二进制单元格完整值（同步写回大字段用）。
+///
+/// 数据页的二进制列只有摘要；写回必须重新取一次完整值，不能拿摘要凑数。
+/// 统一 CAST 成 `varbinary(max)` 以兼容 `image` 等历史类型。
+fn sqlserver_load_cell_binary(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    identity: &fluxdb_core::RowIdentity,
+    column: &str,
+) -> fluxdb_core::Result<Vec<u8>> {
+    let cell = sqlserver_load_cell_raw(config, path, identity, column, "varbinary(max)")?;
+    match cell {
+        CellValue::Bytes(bytes) => Ok(bytes),
+        CellValue::Text(text) => Ok(text.into_bytes()),
+        CellValue::Null => Err(Error::new(ErrorKind::Query, "二进制单元格为 NULL")),
+        _ => Err(Error::new(ErrorKind::Query, "二进制单元格类型异常")),
+    }
+}
+
+/// 按行身份读取文本单元格完整值（同步写回大文本用）。
+fn sqlserver_load_cell_text(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    identity: &fluxdb_core::RowIdentity,
+    column: &str,
+) -> fluxdb_core::Result<String> {
+    let cell = sqlserver_load_cell_raw(config, path, identity, column, "nvarchar(max)")?;
+    match cell {
+        CellValue::Text(text) | CellValue::Json(text) => Ok(text),
+        CellValue::Bytes(bytes) => String::from_utf8(bytes)
+            .map_err(|_| Error::new(ErrorKind::Query, "文本单元格不是合法 UTF-8")),
+        CellValue::Null => Err(Error::new(ErrorKind::Query, "文本单元格为 NULL")),
+        _ => Err(Error::new(ErrorKind::Query, "文本单元格类型异常")),
+    }
+}
+
+/// 读取单列单行并按 `cast_type` 转成驱动可解码的类型。
+fn sqlserver_load_cell_raw(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    identity: &fluxdb_core::RowIdentity,
+    column: &str,
+    cast_type: &str,
+) -> fluxdb_core::Result<CellValue> {
+    if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
+        return Err(Error::new(ErrorKind::Unsupported, "仅表和视图支持单元格读取"));
+    }
+    let schema = sqlserver_request_schema(config, path)?;
+    let database = sqlserver_request_database(config, path.database.as_deref())?;
+    let mut client = sqlserver_connect_database(config, Some(&database))?;
+    let columns = sqlserver_load_columns(&mut client, &schema, &path.name)?;
+    if !columns
+        .iter()
+        .any(|candidate| candidate.name.eq_ignore_ascii_case(column))
+    {
+        return Err(Error::new(ErrorKind::Query, format!("字段不存在或已变更：{column}")));
+    }
+    let (where_sql, values) = sqlserver_identity_predicate(identity, &columns)?;
+    let qualified = fluxdb_core::SqlServerDialect.quote_identifier(column);
+    let sql = format!(
+        "SELECT CAST({qualified} AS {cast_type}) FROM {}{where_sql}",
+        sqlserver_qualified_table(&schema, &path.name)
+    );
+    let batch = sqlserver_block_on(sqlserver_run_query_bound(&mut client, &sql, &values))?;
+    sqlserver_block_on(sqlserver_close(client));
+    let row = batch
+        .result_sets
+        .first()
+        .and_then(|set| set.rows.first())
+        .ok_or_else(|| Error::new(ErrorKind::Query, "未找到目标行"))?;
+    row.values
+        .first()
+        .cloned()
+        .ok_or_else(|| Error::new(ErrorKind::Query, "未读取到目标列"))
 }

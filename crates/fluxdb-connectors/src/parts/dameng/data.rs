@@ -8,7 +8,28 @@ fn dm_load_data(
     sort: &[SortSpec],
     filters: &[FilterSpec],
 ) -> fluxdb_core::Result<DataPage> {
-    dm_load_data_with_expression(config, path, offset, limit, sort, filters, None)
+    dm_load_data_with_expression(config, path, offset, limit, sort, filters, None, &[])
+}
+
+fn dm_load_data_digests(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    offset: u64,
+    limit: u64,
+    sort: &[SortSpec],
+    filters: &[FilterSpec],
+    digest_columns: &[String],
+) -> fluxdb_core::Result<DataPage> {
+    dm_load_data_with_expression(
+        config,
+        path,
+        offset,
+        limit,
+        sort,
+        filters,
+        None,
+        digest_columns,
+    )
 }
 
 fn dm_load_data_expression(
@@ -19,7 +40,16 @@ fn dm_load_data_expression(
     sort: &[SortSpec],
     expression: &fluxdb_core::FilterExpression,
 ) -> fluxdb_core::Result<DataPage> {
-    dm_load_data_with_expression(config, path, offset, limit, sort, &[], Some(expression))
+    dm_load_data_with_expression(
+        config,
+        path,
+        offset,
+        limit,
+        sort,
+        &[],
+        Some(expression),
+        &[],
+    )
 }
 
 fn dm_load_data_with_expression(
@@ -30,6 +60,7 @@ fn dm_load_data_with_expression(
     sort: &[SortSpec],
     filters: &[FilterSpec],
     expression: Option<&fluxdb_core::FilterExpression>,
+    digest_columns: &[String],
 ) -> fluxdb_core::Result<DataPage> {
     if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
         return Err(Error::new(ErrorKind::Unsupported, "仅表和视图支持数据读取"));
@@ -63,12 +94,13 @@ fn dm_load_data_with_expression(
     let output_columns = columns;
     // 大字段按内容归属外置：同一张表的多次翻页共用一个归属，重新加载时整批替换。
     let owner = fluxdb_core::table_content_owner(path);
-    dm_collect_page(
+    dm_collect_page_with_digests(
         output_columns,
         rows.into_iter(),
         pagination,
         0,
         &owner,
+        digest_columns,
     )
 }
 
@@ -399,4 +431,71 @@ fn dm_push_filter(
             clauses.push(format!("{name} {op} ?"));
         }
     }
+}
+
+/// 按行身份读取二进制单元格完整值（同步写回大字段用）。
+fn dm_load_cell_binary(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    identity: &fluxdb_core::RowIdentity,
+    column: &str,
+) -> fluxdb_core::Result<Vec<u8>> {
+    match dm_load_cell_raw(config, path, identity, column)? {
+        CellValue::Bytes(bytes) => Ok(bytes),
+        CellValue::Text(text) => Ok(text.into_bytes()),
+        CellValue::Null => Err(Error::new(ErrorKind::Query, "二进制单元格为 NULL")),
+        _ => Err(Error::new(ErrorKind::Query, "二进制单元格类型异常")),
+    }
+}
+
+/// 按行身份读取文本单元格完整值（同步写回大文本用）。
+fn dm_load_cell_text(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    identity: &fluxdb_core::RowIdentity,
+    column: &str,
+) -> fluxdb_core::Result<String> {
+    match dm_load_cell_raw(config, path, identity, column)? {
+        CellValue::Text(text) | CellValue::Json(text) => Ok(text),
+        CellValue::Bytes(bytes) => String::from_utf8(bytes)
+            .map_err(|_| Error::new(ErrorKind::Query, "文本单元格不是合法 UTF-8")),
+        CellValue::Null => Err(Error::new(ErrorKind::Query, "文本单元格为 NULL")),
+        _ => Err(Error::new(ErrorKind::Query, "文本单元格类型异常")),
+    }
+}
+
+/// 读取单列单行：达梦驱动直接把 LOB 读成 Str/Bytes，可直接取完整值。
+fn dm_load_cell_raw(
+    config: &ConnectionConfig,
+    path: &ObjectPath,
+    identity: &fluxdb_core::RowIdentity,
+    column: &str,
+) -> fluxdb_core::Result<CellValue> {
+    if !matches!(path.kind, ObjectKind::Table | ObjectKind::View) {
+        return Err(Error::new(ErrorKind::Unsupported, "仅表和视图支持单元格读取"));
+    }
+    let schema = dm_request_schema(config, path)?;
+    let mut client = dm_connect(config)?;
+    let columns = dm_load_columns(&mut client, &schema, &path.name)?;
+    if !columns
+        .iter()
+        .any(|candidate| candidate.name.eq_ignore_ascii_case(column))
+    {
+        return Err(Error::new(ErrorKind::Query, format!("字段不存在或已变更：{column}")));
+    }
+    let (where_sql, params) = dm_identity_where(identity, &columns)?;
+    let sql = format!(
+        "SELECT {} FROM {}{where_sql} LIMIT 1",
+        fluxdb_core::DamengDialect.quote_identifier(column),
+        dm_qualified_table(&schema, &path.name)
+    );
+    let result = dm_execute(&mut client, &sql, &params)?;
+    client.close();
+    let ExecuteResult::Query { rows, .. } = result else {
+        return Err(Error::new(ErrorKind::Query, "单元格读取返回类型异常"));
+    };
+    let Some(value) = rows.into_iter().next().and_then(|row| row.into_iter().next()) else {
+        return Err(Error::new(ErrorKind::Query, "未找到目标行"));
+    };
+    Ok(dm_cell_value(value))
 }

@@ -11,10 +11,13 @@ use fluxdb_connectors::{TableRowWriter, connector_for};
 use fluxdb_core::{
     CellValue, CompletionColumn, ConnectionConfig, DataChangeSet, DataPage, DatabaseKind, Error,
     ErrorKind, FilterOp, FilterSpec, ObjectPath, RowIdentity, RowUpdate, SortDirection, SortSpec,
-    WriteIntent,
+    WriteIntent, is_binary_type_name, is_large_text_type_name,
 };
 
-use crate::AppController;
+use crate::{
+    AppController, export_pages_with_digests_for_connection, load_cell_binary_for_connection,
+    load_cell_text_for_connection,
+};
 
 use super::column_types::{column_family, families_compatible};
 use super::data_diff::{self, ColumnPlan, KeyPlanError, TableDiff};
@@ -25,6 +28,7 @@ use super::model::{
     RowErrorPolicy, RowWriteFailure, SyncEndpoint, TableDataDiff, TableDiffState, TableSkipReason,
     TableSyncReport,
 };
+use super::script_file::MigrationScriptFile;
 use super::structure_sql;
 
 impl AppController {
@@ -341,11 +345,20 @@ impl AppController {
         // 这类表退回「一次比完」，行为与分页前一致。
         let pageable = key_not_null(&source_columns, &plan.key_source_names[0])
             && key_not_null(&target_columns, &plan.key_target_names[0]);
+        let digest = lob_digest_plan(
+            source_config.kind,
+            target_config.kind,
+            &plan,
+            &source_columns,
+            &target_columns,
+        );
         let context = ChunkContext {
             plan: &plan,
             source_names: &source_names,
             target_names: &target_names,
             pageable,
+            source_digests: &digest.source_names,
+            target_digests: &digest.target_names,
         };
         // 预览分块先用源端自己的块边界封顶：目标端稀疏时（目标 10 万行、源 1400 万行），
         // 目标第 4096 行的键可能落在源端几十万行之后，照它切块单块就要扫几十万行。
@@ -457,6 +470,7 @@ impl AppController {
             &sort_by(&plan.key_target_names),
             &range_filters(&first_target_key, cursor, cap),
             context.target_names,
+            context.target_digests,
             cancel,
             key,
             "目标",
@@ -494,6 +508,7 @@ impl AppController {
             &sort_by(&plan.key_source_names),
             &source_filters,
             context.source_names,
+            context.source_digests,
             cancel,
             key,
             "源",
@@ -655,6 +670,7 @@ impl AppController {
             &sort_by(key_names),
             &range_filters(field, Some(bound), None),
             expected,
+            &[],
             cancel,
             key,
             "探测",
@@ -665,6 +681,104 @@ impl AppController {
         )?;
         Ok(found)
     }
+
+    /// 把摘要列换回完整值。摘要只为比对服务，写回前必须重新读取正文，
+    /// 否则会把哈希文本当成真实数据写进目标表。
+    fn materialize_lob_row(
+        &self,
+        config: &ConnectionConfig,
+        path: &ObjectPath,
+        plan: &ColumnPlan,
+        digest: &LobDigest,
+        row: &mut [CellValue],
+    ) -> fluxdb_core::Result<()> {
+        if digest.is_empty() {
+            return Ok(());
+        }
+        let identity = digest_identity(plan, row)?;
+        for column in &digest.columns {
+            // NULL 大字段没有完整值可读，保留页里的 NULL。
+            if matches!(row.get(column.source_index), Some(CellValue::Null)) {
+                continue;
+            }
+            let value = if column.binary {
+                CellValue::Bytes(load_cell_binary_for_connection(
+                    config,
+                    path,
+                    &identity,
+                    &column.source_name,
+                )?)
+            } else {
+                CellValue::Text(load_cell_text_for_connection(
+                    config,
+                    path,
+                    &identity,
+                    &column.source_name,
+                )?)
+            };
+            if let Some(slot) = row.get_mut(column.source_index) {
+                *slot = value;
+            }
+        }
+        Ok(())
+    }
+
+    /// 读取完整大字段；失败按行错误策略处理，返回 `false` 表示该行应跳过。
+    #[allow(clippy::too_many_arguments)]
+    fn materialize_or_record(
+        &self,
+        config: &ConnectionConfig,
+        path: &ObjectPath,
+        plan: &ColumnPlan,
+        digest: &LobDigest,
+        row: &mut [CellValue],
+        policy: RowErrorPolicy,
+        failures: &mut RowWriteFailures<'_>,
+        progress: &mut dyn FnMut(&str),
+        key: &str,
+    ) -> fluxdb_core::Result<bool> {
+        match self.materialize_lob_row(config, path, plan, digest, row) {
+            Ok(()) => Ok(true),
+            Err(error) if skippable(&error, policy) => {
+                let label = source_key_label(plan, row);
+                progress(&skip_line(key, &label, &error));
+                failures.record(label, &error);
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// 摘要可比范围：同一种库，或共享同一连接器/哈希口径的协议家族。
+fn digest_kinds_compatible(source: DatabaseKind, target: DatabaseKind) -> bool {
+    source == target
+        || (source.is_mysql_family() && target.is_mysql_family())
+        || (source.is_postgres_family() && target.is_postgres_family())
+}
+
+/// 该字段是否属于「页里只有摘要、写回需要完整值」的大字段。
+fn lob_type(type_name: Option<&str>) -> bool {
+    let Some(type_name) = type_name else {
+        return false;
+    };
+    is_binary_type_name(type_name) || is_large_text_type_name(type_name)
+}
+
+/// 用比对键构造行身份（字段名按源端表列名）。
+fn digest_identity(plan: &ColumnPlan, row: &[CellValue]) -> fluxdb_core::Result<RowIdentity> {
+    let mut values = BTreeMap::new();
+    for (position, (source_index, _)) in plan.key_pairs.iter().enumerate() {
+        let Some(name) = plan.key_source_names.get(position) else {
+            continue;
+        };
+        let value = row
+            .get(*source_index)
+            .cloned()
+            .ok_or_else(row_width_error)?;
+        values.insert(name.clone(), value);
+    }
+    Ok(RowIdentity { values })
 }
 
 /// 单块比对需要的表级信息（预览与执行共用）。
@@ -674,6 +788,81 @@ struct ChunkContext<'a> {
     target_names: &'a [String],
     /// 键首列两端都确定非空时才按键区间切分。
     pageable: bool,
+    /// 源端需要按摘要读取的字段；空表示普通读取。
+    source_digests: &'a [String],
+    /// 目标端需要按摘要读取的字段；空表示普通读取。
+    target_digests: &'a [String],
+}
+
+/// 摘要口径一致的两端之间的大字段摘要计划。
+///
+/// 摘要只在同一数据库类型或同一协议家族（MySQL 家族 / PostgreSQL 家族）时启用：
+/// 不同方言的文本编码（UTF-8 / UTF-16 / 库内码页）和二进制投影口径不同，
+/// 跨类型比较只会产生假差异。
+struct LobDigest {
+    /// 源端摘要字段名（发往源端扫描）。
+    source_names: Vec<String>,
+    /// 目标端摘要字段名（发往目标端扫描）。
+    target_names: Vec<String>,
+    /// 需要在写回前换成完整值的源端字段。
+    columns: Vec<LobDigestColumn>,
+}
+
+struct LobDigestColumn {
+    source_index: usize,
+    source_name: String,
+    /// `true` 走 `load_cell_binary`，`false` 走 `load_cell_text`。
+    binary: bool,
+}
+
+impl LobDigest {
+    fn is_empty(&self) -> bool {
+        self.columns.is_empty()
+    }
+}
+
+/// 计算大字段摘要列：只有两端同类（二进制/BLOB 或大文本/CLOB）的字段才参与。
+fn lob_digest_plan(
+    source_kind: DatabaseKind,
+    target_kind: DatabaseKind,
+    plan: &ColumnPlan,
+    source_columns: &[CompletionColumn],
+    target_columns: &[CompletionColumn],
+) -> LobDigest {
+    let mut digest = LobDigest {
+        source_names: Vec::new(),
+        target_names: Vec::new(),
+        columns: Vec::new(),
+    };
+    if !digest_kinds_compatible(source_kind, target_kind) {
+        return digest;
+    }
+    for (source_index, target_index) in &plan.compare_pairs {
+        let Some(source_column) = source_columns.get(*source_index) else {
+            continue;
+        };
+        let Some(target_column) = target_columns.get(*target_index) else {
+            continue;
+        };
+        let source_type = source_column.type_name.as_deref().unwrap_or("");
+        let target_type = target_column.type_name.as_deref().unwrap_or("");
+        let binary = if is_binary_type_name(source_type) && is_binary_type_name(target_type) {
+            true
+        } else if is_large_text_type_name(source_type) && is_large_text_type_name(target_type) {
+            false
+        } else {
+            // 一端是普通类型时不摘要：否则摘要文本与真实值天然不同，会产生假差异。
+            continue;
+        };
+        digest.source_names.push(source_column.name.clone());
+        digest.target_names.push(target_column.name.clone());
+        digest.columns.push(LobDigestColumn {
+            source_index: *source_index,
+            source_name: source_column.name.clone(),
+            binary,
+        });
+    }
+    digest
 }
 
 /// 一块扫描的收敛结果。
@@ -702,6 +891,7 @@ fn scan_rows(
     sort: &[SortSpec],
     filters: &[FilterSpec],
     expected: &[String],
+    digest_columns: &[String],
     cancel: &AtomicBool,
     key: &str,
     side: &str,
@@ -711,35 +901,43 @@ fn scan_rows(
     let mut columns_checked = false;
     let mut scan_error: Option<Error> = None;
     let mut stopped = false;
-    controller.export_pages_for_connection(
-        path,
-        sort,
-        filters,
-        &|| cancel.load(Ordering::Relaxed),
-        &mut |page: DataPage| {
-            if !columns_checked {
-                columns_checked = true;
-                if let Err(error) = ensure_page_columns(&page, expected) {
-                    scan_error = Some(error);
-                    return false;
-                }
+    let on_cancel = || cancel.load(Ordering::Relaxed);
+    let mut on_page = |page: DataPage| {
+        if !columns_checked {
+            columns_checked = true;
+            if let Err(error) = ensure_page_columns(&page, expected) {
+                scan_error = Some(error);
+                return false;
             }
-            match absorb_page(&page, &mut absorb) {
-                Ok(true) => {}
-                Ok(false) => {
-                    stopped = true;
-                    return false;
-                }
-                Err(error) => {
-                    scan_error = Some(error);
-                    return false;
-                }
+        }
+        match absorb_page(&page, &mut absorb) {
+            Ok(true) => {}
+            Ok(false) => {
+                stopped = true;
+                return false;
             }
-            scanned += page.rows.len() as u64;
-            check_progress(config, key, side, scanned);
-            true
-        },
-    )?;
+            Err(error) => {
+                scan_error = Some(error);
+                return false;
+            }
+        }
+        scanned += page.rows.len() as u64;
+        check_progress(config, key, side, scanned);
+        true
+    };
+    if digest_columns.is_empty() {
+        controller.export_pages_for_connection(path, sort, filters, &on_cancel, &mut on_page)?;
+    } else {
+        export_pages_with_digests_for_connection(
+            config,
+            path,
+            sort,
+            filters,
+            digest_columns,
+            &on_cancel,
+            &mut on_page,
+        )?;
+    }
     if let Some(error) = scan_error {
         return Err(error);
     }
@@ -1037,65 +1235,141 @@ impl AppController {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(&str),
     ) -> fluxdb_core::Result<DataSyncReport> {
-        let (source_config, target_config) =
-            self.sync_endpoint_configs(&request.source, &request.target)?;
-        ensure_data_sync_comparable(&source_config, &target_config)?;
         if !request.options.writes_anything() {
             return Err(Error::new(ErrorKind::Query, "至少选择一种同步动作"));
         }
+        if request.options.atomic_table && !request.options.overwrite {
+            return Err(Error::new(
+                ErrorKind::Query,
+                "表级事务仅支持覆盖模式（清空目标表后全量写入）",
+            ));
+        }
+        if request.options.atomic_table && request.options.export_sql_path.is_some() {
+            return Err(Error::new(
+                ErrorKind::Query,
+                "表级事务与导出迁移 SQL 不能同时使用：事务回滚后脚本会与实际目标数据不一致",
+            ));
+        }
+        let (source_config, target_config) =
+            self.sync_endpoint_configs(&request.source, &request.target)?;
+        ensure_data_sync_comparable(&source_config, &target_config)?;
         crate::ensure_read_only_allows(&target_config, WriteIntent::Mutation)?;
 
         let source_tables = inventory::endpoint_tables(self, &request.source)?;
         let target_tables = inventory::endpoint_tables(self, &request.target)?;
         let selected = selected_tables(&request.tables);
 
+        // 断点续传：签名一致才允许；覆盖模式没有块游标，不支持续传。
+        let signature = data_sync_signature(request);
+        let resume = match request.options.resume_from_run {
+            Some(_) if request.options.overwrite => {
+                return Err(Error::new(
+                    ErrorKind::Query,
+                    "覆盖模式不支持断点续传，请重新开始同步",
+                ));
+            }
+            Some(run_id) => {
+                let plan = self.load_sync_resume(run_id)?;
+                if plan.signature != signature {
+                    return Err(Error::new(
+                        ErrorKind::Query,
+                        "上次任务的连接、表或选项与当前不一致，无法续传",
+                    ));
+                }
+                progress(&format!("从执行记录 #{run_id} 继续未完成的表"));
+                Some(plan)
+            }
+            None => None,
+        };
+
         // 执行账本：逐块记录写了什么，成败都不影响同步本身。
         let ledger = SyncLedger::begin(
             self.sync_run_storage.clone(),
             &endpoint_label(&source_config, &request.source),
             &endpoint_label(&target_config, &request.target),
+            &signature,
         );
 
+        // 导出迁移 SQL：只追加成功执行的语句；写入失败按任务失败处理。
+        let mut script = match request.options.export_sql_path.as_deref() {
+            Some(path) => Some(MigrationScriptFile::create(path)?),
+            None => None,
+        };
         let mut tables = Vec::new();
-        for (key, source_path) in &source_tables {
-            if !selected.is_empty() && !selected.contains(key) {
-                continue;
-            }
-            if let Err(error) = check_cancel(cancel) {
-                ledger.finish("canceled", &tables);
-                return Err(error);
-            }
-            progress(&format!("同步 {key}"));
-            let result = self.sync_one_table(
-                &source_config,
-                &target_config,
-                source_path,
-                inventory::resolve(&target_tables, source_path, key, &request.options.table_map),
-                key,
-                request,
-                &ledger,
-                cancel,
-                progress,
-            );
-            match result {
-                Ok(report) => {
-                    ledger.record_table(&report);
-                    tables.push(report);
+        // 闭包借用 `script`；用块作用域收回借用，才能在循环后 finish 文件。
+        {
+            let mut emit_script = |sql: &str| -> fluxdb_core::Result<()> {
+                match script.as_mut() {
+                    Some(script) => script.write(sql),
+                    None => Ok(()),
                 }
-                Err(error) if error.kind == ErrorKind::Cancelled => {
+            };
+            for (key, source_path) in &source_tables {
+                if !selected.is_empty() && !selected.contains(key) {
+                    continue;
+                }
+                if let Err(error) = check_cancel(cancel) {
                     ledger.finish("canceled", &tables);
                     return Err(error);
                 }
-                Err(error) => {
-                    let report = TableSyncReport::failed(
+                let resume_table = resume.as_ref().and_then(|plan| plan.tables.get(key));
+                if resume_table.is_some_and(|table| table.completed) {
+                    progress(&format!("{key}: 上次已完成，跳过"));
+                    let report = TableSyncReport::skipped(
                         key.clone(),
                         source_path.name.clone(),
-                        error.message,
+                        "上次同步已完成，本次跳过",
                     );
                     ledger.record_table(&report);
                     tables.push(report);
+                    continue;
+                }
+                // 游标是上一次完整块的上界；解析失败时从表头重来，宁可多扫不跳过数据。
+                let start_cursor = resume_table
+                    .and_then(|table| table.cursor.as_deref())
+                    .and_then(|json| serde_json::from_str::<fluxdb_core::CellValue>(json).ok());
+                progress(&format!("同步 {key}"));
+                let result = self.sync_one_table(
+                    &source_config,
+                    &target_config,
+                    source_path,
+                    inventory::resolve(
+                        &target_tables,
+                        source_path,
+                        key,
+                        &request.options.table_map,
+                    ),
+                    key,
+                    request,
+                    start_cursor.as_ref(),
+                    &ledger,
+                    cancel,
+                    progress,
+                    &mut emit_script,
+                );
+                match result {
+                    Ok(report) => {
+                        ledger.record_table(&report);
+                        tables.push(report);
+                    }
+                    Err(error) if error.kind == ErrorKind::Cancelled => {
+                        ledger.finish("canceled", &tables);
+                        return Err(error);
+                    }
+                    Err(error) => {
+                        let report = TableSyncReport::failed(
+                            key.clone(),
+                            source_path.name.clone(),
+                            error.message,
+                        );
+                        ledger.record_table(&report);
+                        tables.push(report);
+                    }
                 }
             }
+        }
+        if let Some(mut script) = script {
+            script.finish()?;
         }
         let report = DataSyncReport {
             tables,
@@ -1114,9 +1388,11 @@ impl AppController {
         existing_target: Option<&ObjectPath>,
         key: &str,
         request: &DataSyncRequest,
+        start_cursor: Option<&fluxdb_core::CellValue>,
         ledger: &SyncLedger,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(&str),
+        script: &mut dyn FnMut(&str) -> fluxdb_core::Result<()>,
     ) -> fluxdb_core::Result<TableSyncReport> {
         let target = match existing_target {
             Some(path) => path.clone(),
@@ -1149,26 +1425,38 @@ impl AppController {
         // 写入器按映射后的字段名匹配目标列；跳过的字段在这里一并过滤。
         let column_map = request.options.column_map_for(key);
         let mapped_names = mapped_source_names(&source_names, &column_map);
+        // 唯一键冲突策略只影响 INSERT 语句；比对与预览结果不变。
         let mut writer = TableRowWriter::new_with_skips(
             target_config,
             &target,
             &mapped_names,
             &request.options.skip_columns,
-        )?;
+        )?
+        .with_conflict(request.options.insert_conflict);
 
+        if request.options.atomic_table {
+            // 清空与全部 INSERT 共用一个事务；失败时由写入器 Drop 回滚。
+            writer.begin_atomic()?;
+        }
+
+        let target_columns = self.table_columns(target_config, &target)?;
         if request.options.overwrite {
             return self.sync_overwrite(
                 source_config,
+                target_config,
                 source,
                 &source_names,
+                &source_columns,
+                &target_columns,
                 &mut writer,
                 key,
                 &request.options,
+                ledger,
                 cancel,
                 progress,
+                script,
             );
         }
-        let target_columns = self.table_columns(target_config, &target)?;
         self.sync_incremental(
             source_config,
             target_config,
@@ -1180,9 +1468,11 @@ impl AppController {
             &mut writer,
             key,
             request,
+            start_cursor,
             ledger,
             cancel,
             progress,
+            script,
         )
     }
 
@@ -1191,18 +1481,55 @@ impl AppController {
     fn sync_overwrite(
         &self,
         source_config: &ConnectionConfig,
+        target_config: &ConnectionConfig,
         source: &ObjectPath,
         source_names: &[String],
+        source_columns: &[CompletionColumn],
+        target_columns: &[CompletionColumn],
         writer: &mut TableRowWriter,
         key: &str,
         options: &DataSyncOptions,
+        ledger: &SyncLedger,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(&str),
+        script: &mut dyn FnMut(&str) -> fluxdb_core::Result<()>,
     ) -> fluxdb_core::Result<TableSyncReport> {
+        // 大字段在页里只有摘要，写回前要按行身份重读完整值；没有比对键就无法定位行。
+        let lob_present = source_columns
+            .iter()
+            .any(|column| lob_type(column.type_name.as_deref()));
+        let plan = match sync_plan(source_names, target_columns, options, key) {
+            Ok(plan) => Some(plan),
+            Err(_) if !lob_present => None,
+            Err(reason) => {
+                return Err(Error::new(
+                    ErrorKind::Unsupported,
+                    format!(
+                        "覆盖模式同步大字段需要可用的比对键（主键或手填键列）：{}",
+                        key_plan_error(reason)
+                    ),
+                ));
+            }
+        };
+        let digest = match plan.as_ref() {
+            Some(plan) => lob_digest_plan(
+                source_config.kind,
+                target_config.kind,
+                plan,
+                source_columns,
+                target_columns,
+            ),
+            None => LobDigest {
+                source_names: Vec::new(),
+                target_names: Vec::new(),
+                columns: Vec::new(),
+            },
+        };
         writer.truncate(cancel)?;
+        script(&writer.render_clear_script())?;
         progress(&format!("{key}: 已清空目标表"));
         let mut inserted = 0u64;
-        let mut failures = RowWriteFailures::default();
+        let mut failures = RowWriteFailures::new(ledger, key);
         let mut ordinal = 0u64;
         scan_rows(
             self,
@@ -1211,14 +1538,32 @@ impl AppController {
             &[],
             &[],
             source_names,
+            &digest.source_names,
             cancel,
             key,
             "源",
             |row| {
                 ordinal += 1;
-                match writer.write_rows(std::slice::from_ref(&row.to_vec()), cancel, &mut |_, _| {})
+                let mut values = row.to_vec();
+                if let Some(plan) = plan.as_ref()
+                    && let Err(error) =
+                        self.materialize_lob_row(source_config, source, plan, &digest, &mut values)
                 {
-                    Ok(written) => inserted += written,
+                    if skippable(&error, options.row_error_policy) {
+                        let label = format!("第 {ordinal} 行");
+                        progress(&skip_line(key, &label, &error));
+                        failures.record(label, &error);
+                        return Ok(true);
+                    }
+                    return Err(error);
+                }
+                match writer.write_rows(std::slice::from_ref(&values), cancel, &mut |_, _| {}) {
+                    Ok(written) => {
+                        inserted += written;
+                        for sql in writer.render_insert_scripts(std::slice::from_ref(&values))? {
+                            script(&sql)?;
+                        }
+                    }
                     // 覆盖模式没有比对键可用，失败行只按源端序号定位。
                     Err(error) if skippable(&error, options.row_error_policy) => {
                         let label = format!("第 {ordinal} 行");
@@ -1230,6 +1575,8 @@ impl AppController {
                 Ok(true)
             },
         )?;
+        // 全部批次写完才提交；上面任何一步失败都会让写入器 Drop 回滚整表。
+        writer.commit_atomic()?;
         Ok(TableSyncReport {
             key: key.to_string(),
             name: source.name.clone(),
@@ -1257,9 +1604,11 @@ impl AppController {
         writer: &mut TableRowWriter,
         key: &str,
         request: &DataSyncRequest,
+        start_cursor: Option<&fluxdb_core::CellValue>,
         ledger: &SyncLedger,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(&str),
+        script: &mut dyn FnMut(&str) -> fluxdb_core::Result<()>,
     ) -> fluxdb_core::Result<TableSyncReport> {
         let options = &request.options;
         let target_names = target_columns
@@ -1271,20 +1620,29 @@ impl AppController {
             .map_err(|message| Error::new(ErrorKind::Unsupported, message))?;
 
         // 逐块比对 + 写入：单块内存只与块大小相关，超大表不再受整表索引限制。
-        let pageable = key_not_null(&source_columns, &plan.key_source_names[0])
+        let pageable = key_not_null(source_columns, &plan.key_source_names[0])
             && key_not_null(target_columns, &plan.key_target_names[0]);
+        let digest = lob_digest_plan(
+            source_config.kind,
+            target_config.kind,
+            &plan,
+            source_columns,
+            target_columns,
+        );
         let context = ChunkContext {
             plan: &plan,
             source_names,
             target_names: &target_names,
             pageable,
+            source_digests: &digest.source_names,
+            target_digests: &digest.target_names,
         };
         let batch_rows = options.batch_rows();
         let policy = options.row_error_policy;
         let mut pacer = WritePacer::new(batch_rows);
-        let mut failures = RowWriteFailures::default();
+        let mut failures = RowWriteFailures::new(ledger, key);
         let mut deleted = 0u64;
-        let mut cursor: Option<CellValue> = None;
+        let mut cursor: Option<CellValue> = start_cursor.cloned();
         let mut chunk_rows = DEFAULT_CHUNK_ROWS;
         let mut table_ledger = ledger.table(key, options);
         loop {
@@ -1321,7 +1679,7 @@ impl AppController {
                     };
                     match action {
                         data_diff::SourceRowAction::Insert if options.insert => {
-                            if let Some(normalized) = coerce_row_or_record(
+                            if let Some(mut normalized) = coerce_row_or_record(
                                 &plan,
                                 row,
                                 policy,
@@ -1329,12 +1687,25 @@ impl AppController {
                                 progress,
                                 key,
                             )? {
+                                if !self.materialize_or_record(
+                                    source_config,
+                                    source,
+                                    &plan,
+                                    &digest,
+                                    &mut normalized,
+                                    policy,
+                                    &mut failures,
+                                    progress,
+                                    key,
+                                )? {
+                                    return Ok(());
+                                }
                                 let label = source_key_label(&plan, &normalized);
                                 pacer.push_insert(label, normalized);
                             }
                         }
                         data_diff::SourceRowAction::Update if options.update => {
-                            if let Some(normalized) = coerce_row_or_record(
+                            if let Some(mut normalized) = coerce_row_or_record(
                                 &plan,
                                 row,
                                 policy,
@@ -1342,6 +1713,19 @@ impl AppController {
                                 progress,
                                 key,
                             )? {
+                                if !self.materialize_or_record(
+                                    source_config,
+                                    source,
+                                    &plan,
+                                    &digest,
+                                    &mut normalized,
+                                    policy,
+                                    &mut failures,
+                                    progress,
+                                    key,
+                                )? {
+                                    return Ok(());
+                                }
                                 let label = source_key_label(&plan, &normalized);
                                 pacer.push_update(
                                     label,
@@ -1361,6 +1745,7 @@ impl AppController {
                         false,
                         &mut failures,
                         policy,
+                        script,
                     )?;
                     Ok(())
                 },
@@ -1376,6 +1761,7 @@ impl AppController {
                 true,
                 &mut failures,
                 policy,
+                script,
             )?;
             let outcome = engine.finish();
             if options.delete && !outcome.deleted_keys.is_empty() {
@@ -1385,6 +1771,7 @@ impl AppController {
                     .map(|values| (key_label(&plan.key_target_names, &values), values))
                     .collect::<Vec<_>>();
                 deleted += apply_deletes(
+                    writer,
                     target_config,
                     target,
                     &plan.key_target_names,
@@ -1394,6 +1781,7 @@ impl AppController {
                     policy,
                     progress,
                     key,
+                    script,
                 )?;
             }
             let key_to = if walk.done {
@@ -1401,9 +1789,18 @@ impl AppController {
             } else {
                 walk.cursor.as_ref().map(CellValue::display_label)
             };
+            // 精确游标与展示文本分开存：续传不能靠格式化后的字符串反推类型。
+            let key_to_value = if walk.done {
+                None
+            } else {
+                walk.cursor
+                    .as_ref()
+                    .and_then(|value| serde_json::to_string(value).ok())
+            };
             table_ledger.record(
                 key_from,
                 key_to,
+                key_to_value,
                 pacer.inserted - inserted_before,
                 pacer.updated - updated_before,
                 deleted - deleted_before,
@@ -1482,23 +1879,36 @@ impl WritePacer {
         progress: &mut dyn FnMut(&str),
         key: &str,
         force: bool,
-        failures: &mut RowWriteFailures,
+        failures: &mut RowWriteFailures<'_>,
         policy: RowErrorPolicy,
+        script: &mut dyn FnMut(&str) -> fluxdb_core::Result<()>,
     ) -> fluxdb_core::Result<()> {
         if !self.inserts.is_empty() && (force || self.inserts.len() >= self.batch_rows) {
             let batch = std::mem::take(&mut self.inserts);
             let rows = batch.iter().map(|(_, row)| row.clone()).collect::<Vec<_>>();
+            // 先渲染脚本再执行：不支持的字段值在写目标库之前就失败。
+            let insert_scripts = writer.render_insert_scripts(&rows)?;
             match writer.write_rows(&rows, cancel, &mut |_, _| {}) {
                 Ok(written) => {
                     self.inserted += written;
+                    for sql in &insert_scripts {
+                        script(sql)?;
+                    }
                     progress(&format!("{key}: 已写入 {written} 行"));
                 }
                 Err(error) if skippable(&error, policy) => {
                     // 批量语句一行坏全批回滚：退回逐行写，只丢真正失败的行。
                     for (label, row) in batch {
+                        let row_scripts =
+                            writer.render_insert_scripts(std::slice::from_ref(&row))?;
                         match writer.write_rows(std::slice::from_ref(&row), cancel, &mut |_, _| {})
                         {
-                            Ok(written) => self.inserted += written,
+                            Ok(written) => {
+                                self.inserted += written;
+                                for sql in &row_scripts {
+                                    script(sql)?;
+                                }
+                            }
                             Err(row_error) if row_error.kind == ErrorKind::Cancelled => {
                                 return Err(row_error);
                             }
@@ -1519,15 +1929,27 @@ impl WritePacer {
                 .iter()
                 .map(|(_, update)| update.clone())
                 .collect::<Vec<_>>();
+            // 先渲染脚本再执行：不支持的字段值在写目标库之前就失败。
+            let update_scripts = batch
+                .iter()
+                .map(|update| writer.render_update_script(update))
+                .collect::<fluxdb_core::Result<Vec<_>>>()?;
             match apply_updates(target_config, target, batch) {
                 Ok(()) => {
                     self.updated += count;
+                    for sql in &update_scripts {
+                        script(sql)?;
+                    }
                     progress(&format!("{key}: 已更新 {count} 行"));
                 }
                 Err(error) if skippable(&error, policy) => {
                     for (label, update) in updates {
+                        let update_script = writer.render_update_script(&update)?;
                         match apply_updates(target_config, target, vec![update]) {
-                            Ok(()) => self.updated += 1,
+                            Ok(()) => {
+                                self.updated += 1;
+                                script(&update_script)?;
+                            }
                             Err(row_error) if row_error.kind == ErrorKind::Cancelled => {
                                 return Err(row_error);
                             }
@@ -1554,16 +1976,30 @@ fn skip_line(key: &str, label: &str, error: &Error) -> String {
     format!("{key}: 跳过失败行 {label} · {}", error.message)
 }
 
-/// 跳过写入失败的累计器：总数 + 有上限的明细。
-#[derive(Default)]
-struct RowWriteFailures {
+/// 跳过写入失败的累计器：总数 + 有上限的报告明细 + 逐条落本地的账本。
+///
+/// 报告里只留 [`FAILURE_DETAIL_LIMIT`] 条，避免大表把内存撑爆；账本另行逐条写入，
+/// 回看时能拿到全量失败行。
+struct RowWriteFailures<'a> {
     total: u64,
     details: Vec<RowWriteFailure>,
+    ledger: Option<(&'a SyncLedger, &'a str)>,
 }
 
-impl RowWriteFailures {
+impl<'a> RowWriteFailures<'a> {
+    fn new(ledger: &'a SyncLedger, table_key: &'a str) -> Self {
+        Self {
+            total: 0,
+            details: Vec::new(),
+            ledger: Some((ledger, table_key)),
+        }
+    }
+
     fn record(&mut self, key: String, error: &Error) {
         self.total += 1;
+        if let Some((ledger, table_key)) = self.ledger {
+            ledger.record_failure(table_key, &key, &error.message);
+        }
         if self.details.len() < FAILURE_DETAIL_LIMIT {
             self.details.push(RowWriteFailure {
                 key,
@@ -1581,7 +2017,7 @@ fn coerce_row_or_record(
     plan: &ColumnPlan,
     row: &[CellValue],
     policy: RowErrorPolicy,
-    failures: &mut RowWriteFailures,
+    failures: &mut RowWriteFailures<'_>,
     progress: &mut dyn FnMut(&str),
     key: &str,
 ) -> fluxdb_core::Result<Option<Vec<CellValue>>> {
@@ -1678,29 +2114,46 @@ fn apply_updates(
 /// 批量删除；`Skip` 策略下失败的行单独重试，成功多少返回多少。
 #[allow(clippy::too_many_arguments)]
 fn apply_deletes(
+    writer: &TableRowWriter,
     config: &ConnectionConfig,
     target: &ObjectPath,
     key_names: &[String],
     keys: Vec<(String, Vec<CellValue>)>,
     batch_rows: usize,
-    failures: &mut RowWriteFailures,
+    failures: &mut RowWriteFailures<'_>,
     policy: RowErrorPolicy,
     progress: &mut dyn FnMut(&str),
     table_key: &str,
+    script: &mut dyn FnMut(&str) -> fluxdb_core::Result<()>,
 ) -> fluxdb_core::Result<u64> {
     let mut deleted = 0u64;
     for chunk in keys.chunks(batch_rows.max(1)) {
+        // 先渲染脚本再执行：不支持的字段值在删目标行之前就失败。
+        let chunk_scripts = chunk
+            .iter()
+            .map(|(_, values)| writer.render_delete_script(&row_identity(key_names, values)))
+            .collect::<fluxdb_core::Result<Vec<_>>>()?;
         match apply_delete_chunk(config, target, key_names, chunk) {
-            Ok(()) => deleted += chunk.len() as u64,
+            Ok(()) => {
+                deleted += chunk.len() as u64;
+                for sql in &chunk_scripts {
+                    script(sql)?;
+                }
+            }
             Err(error) if skippable(&error, policy) => {
                 for (label, values) in chunk {
+                    let row_script =
+                        writer.render_delete_script(&row_identity(key_names, values))?;
                     match apply_delete_chunk(
                         config,
                         target,
                         key_names,
                         std::slice::from_ref(&(label.clone(), values.clone())),
                     ) {
-                        Ok(()) => deleted += 1,
+                        Ok(()) => {
+                            deleted += 1;
+                            script(&row_script)?;
+                        }
                         Err(row_error) if row_error.kind == ErrorKind::Cancelled => {
                             return Err(row_error);
                         }
@@ -1725,13 +2178,7 @@ fn apply_delete_chunk(
 ) -> fluxdb_core::Result<()> {
     let deletes = keys
         .iter()
-        .map(|(_, values)| {
-            let mut identity = std::collections::BTreeMap::new();
-            for (name, value) in key_names.iter().zip(values) {
-                identity.insert(name.clone(), value.clone());
-            }
-            RowIdentity { values: identity }
-        })
+        .map(|(_, values)| row_identity(key_names, values))
         .collect::<Vec<_>>();
     connector_for(config)?
         .apply_changes(&DataChangeSet {
@@ -1742,6 +2189,15 @@ fn apply_delete_chunk(
             insert_intents: None,
         })
         .map(|_| ())
+}
+
+/// 用键列名与键值组装行标识；DELETE 执行与脚本导出共用同一份映射。
+fn row_identity(key_names: &[String], values: &[CellValue]) -> RowIdentity {
+    let mut identity = std::collections::BTreeMap::new();
+    for (name, value) in key_names.iter().zip(values) {
+        identity.insert(name.clone(), value.clone());
+    }
+    RowIdentity { values: identity }
 }
 
 fn key_plan_error(reason: KeyPlanError) -> Error {
@@ -1766,6 +2222,18 @@ fn endpoint_label(config: &ConnectionConfig, endpoint: &SyncEndpoint) -> String 
     }
 }
 
+/// 续传签名：两端端点、表清单与除续传本身外的全部选项。
+///
+/// 用 `Debug` 输出即可：结构体字段固定、集合都是 `BTreeMap`/`Vec`，同输入必得同结果。
+fn data_sync_signature(request: &DataSyncRequest) -> String {
+    let mut options = request.options.clone();
+    options.resume_from_run = None;
+    format!(
+        "{:?}|{:?}|{:?}|{:?}",
+        request.source, request.target, request.tables, options
+    )
+}
+
 fn selected_tables(tables: &[String]) -> BTreeSet<String> {
     tables
         .iter()
@@ -1778,7 +2246,7 @@ fn selected_tables(tables: &[String]) -> BTreeSet<String> {
 mod tests {
     use super::super::test_support::{create_sqlite, execute};
     use super::*;
-    use fluxdb_core::ConnectionConfig;
+    use fluxdb_core::{ConnectionConfig, ConnectionId};
 
     fn column(name: &str, type_name: &str, primary_key: bool) -> CompletionColumn {
         CompletionColumn {
@@ -2211,7 +2679,9 @@ mod tests {
         );
         let source_path = std::env::temp_dir().join(format!("fluxdb-sync-skip-src-{stamp}.db"));
         let target_path = std::env::temp_dir().join(format!("fluxdb-sync-skip-tgt-{stamp}.db"));
+        let ledger_root = std::env::temp_dir().join(format!("fluxdb-sync-skip-ledger-{stamp}"));
         let mut controller = AppController::new();
+        controller.set_sync_run_storage(fluxdb_storage::FileStorage::new(&ledger_root));
         let source = create_sqlite(&mut controller, "sync-skip-source", &source_path);
         let target = create_sqlite(&mut controller, "sync-skip-target", &target_path);
         for (config, sql) in [
@@ -2253,6 +2723,20 @@ mod tests {
         assert!(table.error.is_none(), "跳过失败行不算表级失败：{table:?}");
         assert_eq!(target_rows(&target, &items_path(&target)).len(), 1);
 
+        // 失败行逐条落本地账本，回看时拿到与报告一致的定位键与数据库原文。
+        let run = controller
+            .load_sync_runs(1)
+            .into_iter()
+            .next()
+            .expect("账本应记录本次任务");
+        let detail = controller.load_sync_run_detail(run.id).expect("账本详情");
+        assert_eq!(detail.failures.len(), 1, "{detail:?}");
+        assert!(detail.failures[0].row_key.contains("id=2"), "{detail:?}");
+        assert!(
+            detail.failures[0].message.to_lowercase().contains("unique"),
+            "{detail:?}"
+        );
+
         // 同一张表改成「停止」策略：首行写入失败即按表级失败返回。
         request.options.row_error_policy = RowErrorPolicy::Stop;
         let report = controller
@@ -2264,6 +2748,127 @@ mod tests {
 
         let _ = std::fs::remove_file(source_path);
         let _ = std::fs::remove_file(target_path);
+        let _ = std::fs::remove_dir_all(ledger_root);
+    }
+
+    #[test]
+    fn resume_plan_exposes_chunk_cursor_and_signature() {
+        let root = std::env::temp_dir().join(format!(
+            "fluxdb-sync-cursor-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let store = fluxdb_storage::FileStorage::new(&root);
+        let mut controller = AppController::new();
+        controller.set_sync_run_storage(store.clone());
+        let run = store.begin_sync_run("s", "t", "sig-1", 1).expect("begin");
+        store
+            .save_sync_run_chunk(
+                run,
+                &fluxdb_storage::SyncRunChunkRecord {
+                    table_key: "t".into(),
+                    ordinal: 1,
+                    key_from: None,
+                    key_to: Some("42".into()),
+                    key_to_value: Some(r#"{"I64":42}"#.into()),
+                    inserted: 1,
+                    updated: 0,
+                    deleted: 0,
+                    elapsed_ms: 3,
+                },
+                &[],
+            )
+            .expect("chunk");
+
+        let plan = controller.load_sync_resume(run).expect("resume plan");
+        assert_eq!(plan.signature, "sig-1");
+        let table = &plan.tables["t"];
+        assert!(!table.completed, "还有后续块，不能算完成");
+        let cursor: fluxdb_core::CellValue =
+            serde_json::from_str(table.cursor.as_deref().expect("cursor")).expect("json");
+        assert_eq!(cursor, fluxdb_core::CellValue::I64(42));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_resume_skips_completed_tables_and_rejects_changed_options() {
+        let stamp = format!(
+            "{}-resume",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        );
+        let source_path = std::env::temp_dir().join(format!("fluxdb-sync-resume-src-{stamp}.db"));
+        let target_path = std::env::temp_dir().join(format!("fluxdb-sync-resume-tgt-{stamp}.db"));
+        let ledger_root = std::env::temp_dir().join(format!("fluxdb-sync-resume-ledger-{stamp}"));
+        let mut controller = AppController::new();
+        controller.set_sync_run_storage(fluxdb_storage::FileStorage::new(&ledger_root));
+        let source = create_sqlite(&mut controller, "sync-resume-source", &source_path);
+        let target = create_sqlite(&mut controller, "sync-resume-target", &target_path);
+        for (config, sql) in [
+            (
+                &source,
+                "CREATE TABLE a (id INTEGER PRIMARY KEY, name TEXT)",
+            ),
+            (&source, "INSERT INTO a (id, name) VALUES (1, 'x')"),
+            (
+                &source,
+                "CREATE TABLE b (id INTEGER PRIMARY KEY, name TEXT)",
+            ),
+            (&source, "INSERT INTO b (id, name) VALUES (1, 'y')"),
+            (
+                &target,
+                "CREATE TABLE a (id INTEGER PRIMARY KEY, name TEXT)",
+            ),
+            (
+                &target,
+                "CREATE TABLE b (id INTEGER PRIMARY KEY, name TEXT)",
+            ),
+        ] {
+            execute(config, sql);
+        }
+
+        let mut request = DataSyncRequest {
+            source: crate::SyncEndpoint::new(source.id, "main", None),
+            target: crate::SyncEndpoint::new(target.id, "main", None),
+            tables: vec!["a".into(), "b".into()],
+            options: DataSyncOptions::default(),
+        };
+        // 表 b 开始后置取消位：a 已完整落账，b 中断，模拟「跑到一半被取消」。
+        let cancel = AtomicBool::new(false);
+        let error = controller
+            .execute_data_sync(&request, &cancel, &mut |message| {
+                if message == "同步 b" {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            })
+            .expect_err("应被取消");
+        assert_eq!(error.kind, ErrorKind::Cancelled);
+        let run_id = controller.latest_sync_run_id().expect("账本应有任务号");
+
+        let cancel = AtomicBool::new(false);
+        request.options.resume_from_run = Some(run_id);
+        let report = controller
+            .execute_data_sync(&request, &cancel, &mut |_| {})
+            .expect("resume");
+        assert!(report.tables[0].skipped, "表 a 上次已完成：{:?}", report);
+        assert_eq!(report.tables[0].inserted, 0, "{report:?}");
+        assert_eq!(report.tables[1].inserted, 1, "{report:?}");
+
+        // 选项变化后签名不一致：拒绝续传，避免按旧游标跳过数据。
+        request.options.batch_rows = 7;
+        let error = controller
+            .execute_data_sync(&request, &cancel, &mut |_| {})
+            .expect_err("参数变化应拒绝续传");
+        assert!(error.message.contains("无法续传"), "{error:?}");
+
+        let _ = std::fs::remove_file(source_path);
+        let _ = std::fs::remove_file(target_path);
+        let _ = std::fs::remove_dir_all(ledger_root);
     }
 
     #[test]
@@ -2385,5 +2990,482 @@ mod tests {
 
         let _ = std::fs::remove_file(source_path);
         let _ = std::fs::remove_file(target_path);
+    }
+
+    /// 表级事务：中途一批失败时回滚，目标表保持写入前数据（含已清空的前置步骤）。
+    #[test]
+    fn sqlite_atomic_overwrite_rolls_back_whole_table_on_failure() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let source_path = std::env::temp_dir().join(format!("fluxdb-sync-atomic-src-{stamp}.db"));
+        let target_path = std::env::temp_dir().join(format!("fluxdb-sync-atomic-tgt-{stamp}.db"));
+        let mut controller = AppController::new();
+        let source = create_sqlite(&mut controller, "sync-atomic-source", &source_path);
+        let target = create_sqlite(&mut controller, "sync-atomic-target", &target_path);
+        for (config, sql) in [
+            (
+                &source,
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            ),
+            // 第二行违反目标端 CHECK，用来触发写入中途失败。
+            (
+                &source,
+                "INSERT INTO items (id, name) VALUES (1, 'a'), (200, 'boom')",
+            ),
+            (
+                &target,
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL CHECK (id < 100))",
+            ),
+            (&target, "INSERT INTO items (id, name) VALUES (9, 'stale')"),
+        ] {
+            execute(config, sql);
+        }
+
+        let request = DataSyncRequest {
+            source: crate::SyncEndpoint::new(source.id, "main", None),
+            target: crate::SyncEndpoint::new(target.id, "main", None),
+            tables: vec!["items".into()],
+            options: DataSyncOptions {
+                overwrite: true,
+                atomic_table: true,
+                // 逐行提交，确保第一行已经写入后第二行才失败。
+                batch_rows: 1,
+                row_error_policy: RowErrorPolicy::Stop,
+                ..DataSyncOptions::default()
+            },
+        };
+        let cancel = AtomicBool::new(false);
+        let report = controller
+            .execute_data_sync(&request, &cancel, &mut |_| {})
+            .expect("execute");
+        assert!(report.tables[0].error.is_some(), "{:?}", report.tables[0]);
+
+        // 清空与第一行插入都在同一事务里，失败后应回到原始目标数据。
+        let rows = target_rows(&target, &items_path(&target));
+        assert_eq!(rows.len(), 1, "整表应回滚，实际保留 {rows:?}");
+        assert_eq!(rows[0][0], CellValue::I64(9));
+
+        let _ = std::fs::remove_file(source_path);
+        let _ = std::fs::remove_file(target_path);
+    }
+
+    /// 表级事务只允许覆盖模式，其它模式提前拒绝。
+    #[test]
+    fn atomic_table_rejects_incremental_mode() {
+        let request = DataSyncRequest {
+            source: crate::SyncEndpoint::new(ConnectionId(1), "main", None),
+            target: crate::SyncEndpoint::new(ConnectionId(2), "main", None),
+            tables: vec!["items".into()],
+            options: DataSyncOptions {
+                overwrite: false,
+                atomic_table: true,
+                ..DataSyncOptions::default()
+            },
+        };
+        let controller = AppController::new();
+        let cancel = AtomicBool::new(false);
+        let error = controller
+            .execute_data_sync(&request, &cancel, &mut |_| {})
+            .expect_err("incremental atomic must be rejected");
+        assert!(error.message.contains("覆盖模式"), "{error:?}");
+    }
+
+    /// 摘要计划：只在同类型库、同类字段之间启用，跨类型/跨类别一律不摘要。
+    #[test]
+    fn lob_digest_plan_requires_same_kind_and_matching_families() {
+        let source_columns = vec![
+            completion_column("id", "INTEGER", true),
+            completion_column("body", "BLOB", false),
+            completion_column("note", "TEXT", false),
+        ];
+        let target_columns = vec![
+            completion_column("id", "INTEGER", true),
+            completion_column("body", "BLOB", false),
+            completion_column("note", "TEXT", false),
+        ];
+        let plan = data_diff::plan_columns(
+            &["id".into(), "body".into(), "note".into()],
+            &["id".into(), "body".into(), "note".into()],
+            &["id".into()],
+        )
+        .expect("column plan");
+
+        let same_kind = lob_digest_plan(
+            DatabaseKind::Sqlite,
+            DatabaseKind::Sqlite,
+            &plan,
+            &source_columns,
+            &target_columns,
+        );
+        assert_eq!(same_kind.source_names, vec!["body", "note"]);
+        assert_eq!(same_kind.columns.len(), 2);
+        assert!(same_kind.columns[0].binary);
+        assert!(!same_kind.columns[1].binary);
+
+        let cross_kind = lob_digest_plan(
+            DatabaseKind::Sqlite,
+            DatabaseKind::MySql,
+            &plan,
+            &source_columns,
+            &target_columns,
+        );
+        assert!(cross_kind.is_empty());
+
+        // 一端二进制、一端文本：不摘要，避免「哈希文本 vs 正文」的假差异。
+        let mixed_target = vec![
+            completion_column("id", "INTEGER", true),
+            completion_column("body", "TEXT", false),
+            completion_column("note", "TEXT", false),
+        ];
+        let mixed = lob_digest_plan(
+            DatabaseKind::Sqlite,
+            DatabaseKind::Sqlite,
+            &plan,
+            &source_columns,
+            &mixed_target,
+        );
+        assert_eq!(mixed.source_names, vec!["note"]);
+    }
+
+    fn completion_column(name: &str, type_name: &str, primary_key: bool) -> CompletionColumn {
+        CompletionColumn {
+            database: Some("main".into()),
+            schema: None,
+            table: "files".into(),
+            name: name.into(),
+            type_name: Some(type_name.into()),
+            nullable: !primary_key,
+            primary_key,
+            comment: None,
+            stable: None,
+        }
+    }
+
+    /// 唯一键冲突：Ignore 不写冲突行，Overwrite 按唯一键用源行覆盖。
+    #[test]
+    fn sqlite_insert_conflict_modes_ignore_or_overwrite_target_rows() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let source_path = std::env::temp_dir().join(format!("fluxdb-sync-conflict-src-{stamp}.db"));
+        let target_path = std::env::temp_dir().join(format!("fluxdb-sync-conflict-tgt-{stamp}.db"));
+        let mut controller = AppController::new();
+        let source = create_sqlite(&mut controller, "sync-conflict-source", &source_path);
+        let target = create_sqlite(&mut controller, "sync-conflict-target", &target_path);
+        for (config, sql) in [
+            (
+                &source,
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            ),
+            (&source, "CREATE UNIQUE INDEX items_name ON items(name)"),
+            (
+                &target,
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            ),
+            (&target, "CREATE UNIQUE INDEX items_name ON items(name)"),
+            (&source, "INSERT INTO items (id, name) VALUES (1, 'a')"),
+            // 目标端已有同 name 的唯一键行，源端插入必然冲突。
+            (&target, "INSERT INTO items (id, name) VALUES (2, 'a')"),
+        ] {
+            execute(config, sql);
+        }
+        let mut request = DataSyncRequest {
+            source: crate::SyncEndpoint::new(source.id, "main", None),
+            target: crate::SyncEndpoint::new(target.id, "main", None),
+            tables: vec!["items".into()],
+            options: DataSyncOptions::default(),
+        };
+        let cancel = AtomicBool::new(false);
+
+        request.options.insert_conflict = fluxdb_core::InsertConflictMode::Ignore;
+        let report = controller
+            .execute_data_sync(&request, &cancel, &mut |_| {})
+            .expect("ignore sync");
+        assert_eq!(report.total_inserted(), 0, "{report:?}");
+        assert_eq!(report.tables[0].failed_rows, 0, "{report:?}");
+        let rows = |config: &ConnectionConfig| -> Vec<i64> {
+            let result = connector_for(config)
+                .expect("connector")
+                .execute(&fluxdb_core::QueryRequest {
+                    connection_id: config.id,
+                    database: Some("main".into()),
+                    schema: None,
+                    session_id: None,
+                    text: "SELECT id FROM items ORDER BY id".into(),
+                    mode: fluxdb_core::QueryMode::All,
+                    options: fluxdb_core::QueryExecutionOptions::default(),
+                })
+                .expect("query");
+            result.results[0]
+                .rows
+                .iter()
+                .map(|row| match row.values[0] {
+                    CellValue::I64(value) => value,
+                    ref other => panic!("unexpected id value: {other:?}"),
+                })
+                .collect()
+        };
+        assert_eq!(rows(&target), vec![2], "ignore 不应改动目标行");
+
+        request.options.insert_conflict = fluxdb_core::InsertConflictMode::Overwrite;
+        let report = controller
+            .execute_data_sync(&request, &cancel, &mut |_| {})
+            .expect("overwrite sync");
+        assert_eq!(report.total_inserted(), 1, "{report:?}");
+        assert_eq!(rows(&target), vec![1], "overwrite 应把目标行改成源端行");
+    }
+
+    /// 大字段摘要：页里只带哈希，写回前按行身份重读完整值；
+    /// 内容未变时必须判为一致，不能因为哈希文本 vs 正文的表示差异重复写。
+    #[test]
+    fn sqlite_lob_digest_sync_writes_full_values_and_detects_changes() {
+        let stamp = format!(
+            "{}-lob",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        );
+        let source_path = std::env::temp_dir().join(format!("fluxdb-sync-lob-src-{stamp}.db"));
+        let target_path = std::env::temp_dir().join(format!("fluxdb-sync-lob-tgt-{stamp}.db"));
+        let mut controller = AppController::new();
+        let source = create_sqlite(&mut controller, "sync-lob-source", &source_path);
+        let target = create_sqlite(&mut controller, "sync-lob-target", &target_path);
+        let ddl = "CREATE TABLE files (id INTEGER PRIMARY KEY, body BLOB, note TEXT)";
+        for (config, sql) in [
+            (&source, ddl),
+            (&target, ddl),
+            (
+                &source,
+                "INSERT INTO files (id, body, note) VALUES (1, zeroblob(200000), 'big')",
+            ),
+            (
+                &source,
+                "INSERT INTO files (id, body, note) VALUES (2, X'00FF10', 'small')",
+            ),
+            (
+                &source,
+                "INSERT INTO files (id, body, note) VALUES (3, NULL, 'empty')",
+            ),
+        ] {
+            execute(config, sql);
+        }
+        let request = DataSyncRequest {
+            source: crate::SyncEndpoint::new(source.id, "main", None),
+            target: crate::SyncEndpoint::new(target.id, "main", None),
+            tables: vec!["files".into()],
+            options: DataSyncOptions::default(),
+        };
+        let cancel = AtomicBool::new(false);
+        let report = controller
+            .execute_data_sync(&request, &cancel, &mut |_| {})
+            .expect("first sync");
+        assert_eq!(report.total_inserted(), 3, "{report:?}");
+
+        let length = |sql: &str| -> i64 {
+            let result = connector_for(&target)
+                .expect("connector")
+                .execute(&fluxdb_core::QueryRequest {
+                    connection_id: target.id,
+                    database: Some("main".into()),
+                    schema: None,
+                    session_id: None,
+                    text: sql.into(),
+                    mode: fluxdb_core::QueryMode::All,
+                    options: fluxdb_core::QueryExecutionOptions::default(),
+                })
+                .expect("query");
+            match result.results[0].rows[0].values[0] {
+                CellValue::I64(value) => value,
+                ref other => panic!("unexpected length value: {other:?}"),
+            }
+        };
+        assert_eq!(
+            length("SELECT length(body) FROM files WHERE id = 1"),
+            200000
+        );
+        assert_eq!(length("SELECT length(body) FROM files WHERE id = 2"), 3);
+        // NULL 大字段不应触发「读取完整值」，仍按 NULL 写入。
+        assert_eq!(length("SELECT body IS NULL FROM files WHERE id = 3"), 1);
+
+        // 第二次同步：摘要一致，整表不应再写任何行。
+        let report = controller
+            .execute_data_sync(&request, &cancel, &mut |_| {})
+            .expect("second sync");
+        assert_eq!(report.total_inserted(), 0, "{report:?}");
+        assert_eq!(report.total_updated(), 0, "{report:?}");
+
+        // 源端内容变化后必须重新写入，并写回完整新值而不是摘要。
+        execute(
+            &source,
+            "UPDATE files SET body = randomblob(150000) WHERE id = 1",
+        );
+        let report = controller
+            .execute_data_sync(&request, &cancel, &mut |_| {})
+            .expect("third sync");
+        assert_eq!(report.total_updated(), 1, "{report:?}");
+        assert_eq!(
+            length("SELECT length(body) FROM files WHERE id = 1"),
+            150000
+        );
+
+        let _ = std::fs::remove_file(source_path);
+        let _ = std::fs::remove_file(target_path);
+    }
+
+    /// 覆盖模式：脚本按实际执行顺序记录清空与逐行 INSERT。
+    #[test]
+    fn sqlite_export_script_records_overwrite_in_order() {
+        let stamp = format!("{}-export-overwrite", std::process::id());
+        let source_path = std::env::temp_dir().join(format!("fluxdb-sync-exp-src-{stamp}.db"));
+        let target_path = std::env::temp_dir().join(format!("fluxdb-sync-exp-tgt-{stamp}.db"));
+        let script_path = std::env::temp_dir().join(format!("fluxdb-sync-exp-{stamp}.sql"));
+        let mut controller = AppController::new();
+        let source = create_sqlite(&mut controller, "sync-exp-source", &source_path);
+        let target = create_sqlite(&mut controller, "sync-exp-target", &target_path);
+        for (config, sql) in [
+            (
+                &source,
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)",
+            ),
+            (
+                &source,
+                "INSERT INTO items (id, name) VALUES (1, 'a'), (2, 'it''s')",
+            ),
+            (
+                &target,
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)",
+            ),
+            (&target, "INSERT INTO items (id, name) VALUES (9, 'stale')"),
+        ] {
+            execute(config, sql);
+        }
+
+        let request = DataSyncRequest {
+            source: crate::SyncEndpoint::new(source.id, "main", None),
+            target: crate::SyncEndpoint::new(target.id, "main", None),
+            tables: vec!["items".into()],
+            options: DataSyncOptions {
+                overwrite: true,
+                export_sql_path: Some(script_path.clone()),
+                ..DataSyncOptions::default()
+            },
+        };
+        let cancel = AtomicBool::new(false);
+        controller
+            .execute_data_sync(&request, &cancel, &mut |_| {})
+            .expect("execute");
+        let script = std::fs::read_to_string(&script_path).expect("script");
+
+        assert_eq!(target_rows(&target, &items_path(&target)).len(), 2);
+        let delete = script.find("DELETE FROM \"items\";").expect(&script);
+        let first = script.find("VALUES (1, 'a');").expect(&script);
+        let second = script.find("VALUES (2, 'it''s');").expect(&script);
+        assert!(
+            delete < first && first < second,
+            "语句顺序必须与执行顺序一致: {script}"
+        );
+        assert!(
+            !script.contains("stale"),
+            "清空语句不应把旧行写进脚本: {script}"
+        );
+
+        let _ = std::fs::remove_file(source_path);
+        let _ = std::fs::remove_file(target_path);
+        let _ = std::fs::remove_file(script_path);
+    }
+
+    /// 增量模式：INSERT / UPDATE / DELETE 都按执行成功写入脚本。
+    #[test]
+    fn sqlite_export_script_records_incremental_changes() {
+        let stamp = format!("{}-export-inc", std::process::id());
+        let source_path = std::env::temp_dir().join(format!("fluxdb-sync-inc-src-{stamp}.db"));
+        let target_path = std::env::temp_dir().join(format!("fluxdb-sync-inc-tgt-{stamp}.db"));
+        let script_path = std::env::temp_dir().join(format!("fluxdb-sync-inc-{stamp}.sql"));
+        let mut controller = AppController::new();
+        let source = create_sqlite(&mut controller, "sync-inc-source", &source_path);
+        let target = create_sqlite(&mut controller, "sync-inc-target", &target_path);
+        for (config, sql) in [
+            (
+                &source,
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)",
+            ),
+            (
+                &source,
+                "INSERT INTO items (id, name) VALUES (1, 'new'), (2, 'same'), (3, 'changed')",
+            ),
+            (
+                &target,
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)",
+            ),
+            (
+                &target,
+                "INSERT INTO items (id, name) VALUES (2, 'same'), (3, 'old'), (4, 'gone')",
+            ),
+        ] {
+            execute(config, sql);
+        }
+
+        let request = DataSyncRequest {
+            source: crate::SyncEndpoint::new(source.id, "main", None),
+            target: crate::SyncEndpoint::new(target.id, "main", None),
+            tables: vec!["items".into()],
+            options: DataSyncOptions {
+                insert: true,
+                update: true,
+                delete: true,
+                export_sql_path: Some(script_path.clone()),
+                ..DataSyncOptions::default()
+            },
+        };
+        let cancel = AtomicBool::new(false);
+        controller
+            .execute_data_sync(&request, &cancel, &mut |_| {})
+            .expect("execute");
+        let script = std::fs::read_to_string(&script_path).expect("script");
+
+        assert!(script.contains("INSERT INTO \"items\""), "{script}");
+        assert!(script.contains("VALUES (1, 'new');"), "{script}");
+        assert!(
+            script.contains("UPDATE \"items\" SET \"name\" = 'changed' WHERE \"id\" = 3;"),
+            "{script}"
+        );
+        assert!(
+            script.contains("DELETE FROM \"items\" WHERE \"id\" = 4;"),
+            "{script}"
+        );
+        assert!(
+            !script.contains("'gone'"),
+            "只记录删除条件，不记录旧值: {script}"
+        );
+
+        let _ = std::fs::remove_file(source_path);
+        let _ = std::fs::remove_file(target_path);
+        let _ = std::fs::remove_file(script_path);
+    }
+
+    /// 表级事务回滚后脚本会与目标数据不一致，后端必须拒绝组合使用。
+    #[test]
+    fn export_script_rejects_atomic_table() {
+        let controller = AppController::new();
+        let request = DataSyncRequest {
+            source: crate::SyncEndpoint::new(ConnectionId(1), "main", None),
+            target: crate::SyncEndpoint::new(ConnectionId(1), "main", None),
+            tables: vec!["items".into()],
+            options: DataSyncOptions {
+                overwrite: true,
+                atomic_table: true,
+                export_sql_path: Some(std::env::temp_dir().join("unused.sql")),
+                ..DataSyncOptions::default()
+            },
+        };
+        let cancel = AtomicBool::new(false);
+        let error = controller
+            .execute_data_sync(&request, &cancel, &mut |_| {})
+            .expect_err("atomic + export");
+        assert!(error.message.contains("不能同时使用"), "{}", error.message);
     }
 }

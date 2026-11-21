@@ -3,12 +3,14 @@
 //! 只做回看与排障，不参与同步决策。所有写操作都是最佳努力：失败只记 warn，
 //! 绝不让账本问题中断同步。覆盖模式（truncate + 全量写）只记表级汇总，不记块明细。
 
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fluxdb_core::{Error, ErrorKind};
 use fluxdb_storage::sync_run_store::SAMPLE_LIMIT;
 use fluxdb_storage::{
-    FileStorage, SyncRunChunkRecord, SyncRunRecord, SyncRunSampleRecord, SyncRunTableRecord,
+    FileStorage, SyncRunChunkRecord, SyncRunFailureRecord, SyncRunRecord, SyncRunSampleRecord,
+    SyncRunTableRecord,
 };
 
 use crate::AppController;
@@ -25,9 +27,14 @@ pub(crate) struct SyncLedger {
 
 impl SyncLedger {
     /// 开始记录。存储缺失或写头失败时退化为空账本，调用方无需分支。
-    pub(crate) fn begin(storage: Option<FileStorage>, source: &str, target: &str) -> Self {
+    pub(crate) fn begin(
+        storage: Option<FileStorage>,
+        source: &str,
+        target: &str,
+        signature: &str,
+    ) -> Self {
         let run_id = match storage.as_ref() {
-            Some(store) => match store.begin_sync_run(source, target, now_ms()) {
+            Some(store) => match store.begin_sync_run(source, target, signature, now_ms()) {
                 Ok(id) => Some(id),
                 Err(error) => {
                     tracing::warn!(target: "fluxdb_app", %error, "数据同步记录：写任务头失败，本次不落账本");
@@ -42,6 +49,22 @@ impl SyncLedger {
     /// 本次记录的 run ID；未接存储或写头失败时为 `None`。
     pub(crate) fn run_id(&self) -> Option<i64> {
         self.run_id
+    }
+
+    /// 记录一条被跳过的失败行。执行期逐条落盘，宁可慢一点也不丢明细；
+    /// 写失败只记 warn，不中断同步。
+    pub(crate) fn record_failure(&self, table_key: &str, row_key: &str, message: &str) {
+        let (Some(store), Some(run_id)) = (self.storage.as_ref(), self.run_id) else {
+            return;
+        };
+        let failure = SyncRunFailureRecord {
+            table_key: table_key.to_string(),
+            row_key: row_key.to_string(),
+            message: message.to_string(),
+        };
+        if let Err(error) = store.save_sync_run_failure(run_id, &failure) {
+            tracing::warn!(target: "fluxdb_app", %error, table = %table_key, "数据同步记录：写失败行失败");
+        }
     }
 
     /// 单表块记录器；`options` 决定哪些差异样本真正落盘。
@@ -122,6 +145,7 @@ impl TableLedger<'_> {
         &mut self,
         key_from: Option<String>,
         key_to: Option<String>,
+        key_to_value: Option<String>,
         inserted: u64,
         updated: u64,
         deleted: u64,
@@ -137,6 +161,7 @@ impl TableLedger<'_> {
             ordinal: self.ordinal,
             key_from,
             key_to,
+            key_to_value,
             inserted,
             updated,
             deleted,
@@ -184,9 +209,72 @@ pub struct SyncRunDetail {
     pub tables: Vec<SyncRunTableRecord>,
     pub chunks: Vec<SyncRunChunkRecord>,
     pub samples: Vec<SyncRunSampleRecord>,
+    /// 被跳过的失败行（全量明细，不再受报告 200 条上限约束）。
+    pub failures: Vec<SyncRunFailureRecord>,
+}
+
+/// 单表续传位置：已完成则整表跳过；否则从 `cursor`（块上界 JSON）之后继续。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SyncResumeTable {
+    pub completed: bool,
+    pub cursor: Option<String>,
+}
+
+/// 一次执行记录的续传计划。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SyncResume {
+    pub signature: String,
+    pub tables: BTreeMap<String, SyncResumeTable>,
 }
 
 impl AppController {
+    /// 读取续传计划：表汇总判断完成，块明细给出最后完成的块上界。
+    pub(crate) fn load_sync_resume(&self, run_id: i64) -> fluxdb_core::Result<SyncResume> {
+        let storage = self
+            .sync_run_storage
+            .as_ref()
+            .ok_or_else(|| Error::new(ErrorKind::Internal, "未启用本地执行记录，无法续传"))?;
+        let run = storage
+            .load_sync_run(run_id)?
+            .ok_or_else(|| Error::new(ErrorKind::Internal, "执行记录不存在或已被清理"))?;
+        let tables = storage.load_sync_run_tables(run_id)?;
+        let chunks = storage.load_sync_run_chunks(run_id)?;
+        let mut plan = BTreeMap::new();
+        for chunk in chunks {
+            let entry = plan
+                .entry(chunk.table_key)
+                .or_insert_with(|| SyncResumeTable {
+                    completed: false,
+                    cursor: None,
+                });
+            match chunk.key_to_value {
+                // 收尾块没有上界：整表已经扫完。
+                None => entry.completed = true,
+                Some(value) => entry.cursor = Some(value),
+            }
+        }
+        for table in tables {
+            let entry = plan
+                .entry(table.table_key)
+                .or_insert_with(|| SyncResumeTable {
+                    completed: false,
+                    cursor: None,
+                });
+            if table.state == "synced" || table.state == "skipped" {
+                entry.completed = true;
+            }
+        }
+        Ok(SyncResume {
+            signature: run.signature,
+            tables: plan,
+        })
+    }
+
+    /// 最近一次执行记录 ID；取消后用它把「继续」按钮接到刚中断的任务上。
+    pub fn latest_sync_run_id(&self) -> Option<i64> {
+        self.load_sync_runs(1).first().map(|run| run.id)
+    }
+
     /// 最近的执行记录（新的在前）；未接存储或读取失败时返回空列表。
     pub fn load_sync_runs(&self, limit: usize) -> Vec<SyncRunRecord> {
         let Some(storage) = self.sync_run_storage.as_ref() else {
@@ -215,6 +303,7 @@ impl AppController {
             tables: storage.load_sync_run_tables(run_id)?,
             chunks: storage.load_sync_run_chunks(run_id)?,
             samples: storage.load_sync_run_samples(run_id)?,
+            failures: storage.load_sync_run_failures(run_id)?,
         })
     }
 }

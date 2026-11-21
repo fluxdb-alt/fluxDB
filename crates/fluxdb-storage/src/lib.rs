@@ -47,7 +47,8 @@ pub use history_store::{
 };
 pub use instance_profile::{PROFILE_ENV, instance_profile};
 pub use sync_run_store::{
-    SyncRunChunkRecord, SyncRunRecord, SyncRunSampleRecord, SyncRunTableRecord,
+    SyncRunChunkRecord, SyncRunFailureRecord, SyncRunRecord, SyncRunSampleRecord,
+    SyncRunTableRecord,
 };
 
 use fluxdb_core::{
@@ -594,10 +595,16 @@ impl FileStorage {
 
     // ---- 数据同步执行账本（回看用，写失败由调用方降级为日志，不中断同步）----
 
-    /// 开始一次同步记录，返回 run ID。
-    pub fn begin_sync_run(&self, source: &str, target: &str, started_unix_ms: u64) -> Result<i64> {
+    /// 开始一次同步记录，返回 run ID；`signature` 用于断点续传时校验参数一致。
+    pub fn begin_sync_run(
+        &self,
+        source: &str,
+        target: &str,
+        signature: &str,
+        started_unix_ms: u64,
+    ) -> Result<i64> {
         let conn = self.open_sqlite()?;
-        sync_run_store::begin(&conn, source, target, started_unix_ms)
+        sync_run_store::begin(&conn, source, target, signature, started_unix_ms)
     }
 
     /// 收尾：写状态与总计数，并裁剪过老记录。
@@ -670,6 +677,18 @@ impl FileStorage {
     pub fn load_sync_run_samples(&self, run_id: i64) -> Result<Vec<SyncRunSampleRecord>> {
         let conn = self.open_sqlite()?;
         sync_run_store::load_samples(&conn, run_id)
+    }
+
+    /// 追加一条失败行；执行期逐条调用，单条失败由调用方降级为日志。
+    pub fn save_sync_run_failure(&self, run_id: i64, failure: &SyncRunFailureRecord) -> Result<()> {
+        let conn = self.open_sqlite()?;
+        sync_run_store::insert_failure(&conn, run_id, failure)
+    }
+
+    /// 某次任务被跳过的失败行，按写入顺序。
+    pub fn load_sync_run_failures(&self, run_id: i64) -> Result<Vec<SyncRunFailureRecord>> {
+        let conn = self.open_sqlite()?;
+        sync_run_store::load_failures(&conn, run_id)
     }
 }
 
