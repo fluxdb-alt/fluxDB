@@ -178,6 +178,9 @@ fn localize_backend_connector_error_text(text: &str) -> Option<String> {
         "SQLite 外键读取需要连接配置上下文" => "app.backend_error.conn_error_162",
         "SQLite 触发器读取需要连接配置上下文" => "app.backend_error.conn_error_163",
         "SQLite DDL 读取需要连接配置上下文" => "app.backend_error.conn_error_164",
+        "服务端未安装 RedisJSON 模块，无法创建 JSON 类型 Key" => {
+            "app.backend_error.conn_error_165"
+        }
         "模拟查询错误" => "app.backend_error.conn_plain_001",
         "numeric 载荷过短" => "app.backend_error.conn_plain_002",
         "numeric 头部非法" => "app.backend_error.conn_plain_003",
