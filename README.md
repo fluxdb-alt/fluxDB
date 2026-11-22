@@ -19,6 +19,13 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 
 ## Latest changes
 
+### v0.1.21
+
+- **Redis JSON display fixes**: key types no longer change with value content — plain STRING values containing JSON text stay STRING, and only real ReJSON keys show JSON. Long JSON values scroll in the read-only view, parse failures fall back to the current value instead of a stale one, and choosing JSON on a server without RedisJSON now reports a clear error instead of silently storing a string.
+- **String formatting and input focus**: switching a String value to JSON renders syntax-highlighted read-only content; new-key and edit inputs focus when clicking anywhere inside the box.
+
+[Full release notes](./release-notes/v0.1.21/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.20
 
 - **Structure and data sync**: sync orchestration with chunked previews and streaming execution, cross-dialect table creation and type mapping. Structure sync covers CHECK constraints, foreign-key actions, index types / predicates and generated columns; SQLite can create and drop native indexes. The task center records sync jobs, and the wizard requires an explicit table selection before preview or execution.

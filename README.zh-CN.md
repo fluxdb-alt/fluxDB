@@ -17,6 +17,13 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 
 ## 最近更新
 
+### v0.1.21
+
+- **Redis JSON 展示修复**：键类型不再随值内容变化，普通 STRING 即使存 JSON 文本也仍显示 STRING，只有真实 ReJSON 键显示 JSON；长 JSON 在查看态可滚动看全，解析失败回退展示当前值而不是上一个键的值；服务端未安装 RedisJSON 时选择 JSON 创建会明确报错，不再静默存成 string。
+- **String 格式化与输入聚焦**：String 值切换 JSON 格式后使用带语法高亮的只读视图；新增 Key 与编辑值的输入框点击框内任意位置即可聚焦。
+
+[完整更新说明](./release-notes/v0.1.21/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
+
 ### v0.1.20
 
 - **结构同步与数据同步**：新增同步编排、分块预览与流式执行，支持跨类型建表与类型映射；结构同步覆盖 CHECK 约束、外键引用动作、索引类型 / predicate 与生成列，SQLite 支持原生索引建删。任务中心记录同步任务，向导在预览或执行前必须显式选择表。
