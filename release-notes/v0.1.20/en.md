@@ -21,6 +21,9 @@
 - **MySQL 9.x backup failure**: `mysqldump` rejects `--connect-timeout`; the option is now passed only to the `mysql` client used for restore imports.
 - **Read-only could not be disabled when editing a connection**: saving now removes the old `read_only` option before merging the draft.
 - **Stale MySQL table sizes in the sidebar**: object listing now disables the 24-hour `information_schema` statistics cache. Values still depend on InnoDB's own statistics refresh; run `ANALYZE TABLE` if needed.
+- **Redis key types changed with value content**: a plain STRING containing JSON text now stays STRING, and only real ReJSON keys show JSON. Long JSON values scroll in the read-only view, and parse failures fall back to the current value.
+- **Choosing JSON on a server without the RedisJSON module silently stored a plain string**: creation now fails with a clear error instead of producing a key that shows STRING.
+- **New-key and value-edit inputs only focused on the text area**: clicking anywhere inside the box now focuses the input. Switching a String value to JSON renders a syntax-highlighted read-only view.
 
 ## Known limits
 

@@ -17,13 +17,6 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 
 ## 最近更新
 
-### v0.1.21
-
-- **Redis JSON 展示修复**：键类型不再随值内容变化，普通 STRING 即使存 JSON 文本也仍显示 STRING，只有真实 ReJSON 键显示 JSON；长 JSON 在查看态可滚动看全，解析失败回退展示当前值而不是上一个键的值；服务端未安装 RedisJSON 时选择 JSON 创建会明确报错，不再静默存成 string。
-- **String 格式化与输入聚焦**：String 值切换 JSON 格式后使用带语法高亮的只读视图；新增 Key 与编辑值的输入框点击框内任意位置即可聚焦。
-
-[完整更新说明](./release-notes/v0.1.21/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
-
 ### v0.1.20
 
 - **结构同步与数据同步**：新增同步编排、分块预览与流式执行，支持跨类型建表与类型映射；结构同步覆盖 CHECK 约束、外键引用动作、索引类型 / predicate 与生成列，SQLite 支持原生索引建删。任务中心记录同步任务，向导在预览或执行前必须显式选择表。
@@ -31,7 +24,7 @@ FluxDB 使用 Rust + GPUI 构建，不依赖 Electron 或 WebView。它把 MySQL
 - **备份与恢复**：新增 MongoDB 原生归档备份 / 恢复（`mongodump` / `mongorestore`），凭据经临时 0600 配置文件传递；新增 PostgreSQL 逻辑备份；MySQL / PostgreSQL 逻辑备份改为一致性快照、keyset 分页与多行 `INSERT` 批量写入。恢复弹框支持 MongoDB，备份列表路径可点击复制。
 - **表注释与复制列名**：侧边栏表行悬停显示表注释，对象搜索、快速打开（`⌘P`）与命令面板均可按注释匹配；`⌘⇧C` / `Ctrl+Shift+C` 支持复制选区并附带列名。
 - **同步完成状态与界面打磨**：新增成功 / 部分失败 / 已取消状态条与表数、行数统计；统一跟随主题的数据库品牌图标底板；结构对比增加加载态；库即 Schema 的数据库隐藏 Schema 字段。
-- **修复**：SQL Server 展开对象树报 207、MySQL 9.x `mysqldump` 拒绝 `--connect-timeout`、编辑连接无法关闭只读、MySQL 侧边栏表体积显示旧值。
+- **修复**：SQL Server 展开对象树报 207、MySQL 9.x `mysqldump` 拒绝 `--connect-timeout`、编辑连接无法关闭只读、MySQL 侧边栏表体积显示旧值；Redis 键类型随值内容变化、JSON 查看态长值被截断、服务端无 RedisJSON 时选 JSON 创建被静默存成 string。
 
 [完整更新说明](./release-notes/v0.1.20/zh-CN.md) · [历史版本](https://github.com/fluxdb-alt/fluxDB/releases)
 

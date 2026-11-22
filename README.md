@@ -19,13 +19,6 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 
 ## Latest changes
 
-### v0.1.21
-
-- **Redis JSON display fixes**: key types no longer change with value content — plain STRING values containing JSON text stay STRING, and only real ReJSON keys show JSON. Long JSON values scroll in the read-only view, parse failures fall back to the current value instead of a stale one, and choosing JSON on a server without RedisJSON now reports a clear error instead of silently storing a string.
-- **String formatting and input focus**: switching a String value to JSON renders syntax-highlighted read-only content; new-key and edit inputs focus when clicking anywhere inside the box.
-
-[Full release notes](./release-notes/v0.1.21/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
-
 ### v0.1.20
 
 - **Structure and data sync**: sync orchestration with chunked previews and streaming execution, cross-dialect table creation and type mapping. Structure sync covers CHECK constraints, foreign-key actions, index types / predicates and generated columns; SQLite can create and drop native indexes. The task center records sync jobs, and the wizard requires an explicit table selection before preview or execution.
@@ -33,7 +26,7 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 - **Backup and restore**: MongoDB native archive backup / restore (`mongodump` / `mongorestore`) with credentials passed through a temporary 0600 config file; PostgreSQL logical backup; MySQL / PostgreSQL logical backups now use consistent snapshots, keyset pagination and multi-row `INSERT` batches. Restore accepts MongoDB, and backup-list paths can be clicked to copy.
 - **Table comments and copy headers**: sidebar table rows show comments on hover, and object search, quick open (`⌘P`) and the command palette match comments. `⌘⇧C` / `Ctrl+Shift+C` copies a selection with column names.
 - **Sync completion and UI polish**: dedicated success / partial-failure / cancelled status bars with table and row totals; unified theme-aware database brand tiles; a loading state for structure comparison; the Schema field is hidden for databases where the database is the schema.
-- **Fixes**: SQL Server object-tree error 207, MySQL 9.x `mysqldump` rejecting `--connect-timeout`, read-only connections that could not be disabled when edited, and stale MySQL table sizes in the sidebar.
+- **Fixes**: SQL Server object-tree error 207, MySQL 9.x `mysqldump` rejecting `--connect-timeout`, read-only connections that could not be disabled when edited, stale MySQL table sizes in the sidebar, and Redis JSON display issues (key types changing with value content, long values cut off in the read-only view, and JSON keys silently stored as strings when the RedisJSON module is missing).
 
 [Full release notes](./release-notes/v0.1.20/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
 
