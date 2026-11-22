@@ -21,6 +21,9 @@
 - 修复 MySQL 9.x `mysqldump` 不接受 `--connect-timeout` 导致备份在参数解析阶段失败的问题；该参数只传给恢复导入的 `mysql` 客户端。
 - 修复编辑连接时无法关闭只读：保存前先移除旧的 `read_only` 选项再合并草稿。
 - 修复 MySQL 侧边栏表体积显示旧值：列对象前关闭 `information_schema` 的 24 小时统计缓存；统计仍取决于 InnoDB 自身刷新，必要时可执行 `ANALYZE TABLE`。
+- 修复 Redis 键类型随值内容变化：普通 STRING 即使存 JSON 文本也仍显示 STRING，只有真实 ReJSON 键显示 JSON；JSON 查看态长值可纵向滚动看全，解析失败回退展示当前值。
+- 修复服务端未安装 RedisJSON 模块时选择 JSON 创建会静默存成普通 string 的问题，现在明确报错并提示安装模块。
+- 修复新增 Key 与编辑值的输入框只有点击文本区域才能聚焦，点击框内任意位置即可输入；String 值切换 JSON 格式后使用带语法高亮的只读视图。
 
 ## 已知限制
 
