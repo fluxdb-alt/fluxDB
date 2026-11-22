@@ -47,10 +47,11 @@ fn redis_key_preview_from(raw_type: &str, values: Vec<RedisValue>) -> (String, S
     let mut values = values.into_iter().map(Some).collect::<Vec<_>>();
     let mut next = |index: usize| values.get_mut(index).and_then(Option::take);
     match raw_type.to_ascii_lowercase().as_str() {
+        // 类型只认服务端 `TYPE`，不按值内容改标：普通 string 里存了 JSON 文本也仍显示 STRING，
+        // 否则用户改值后键类型会“动态变化”，并误入 JSON 面板（非法 JSON 文本会被截断展示）。
         "string" => {
             let value = redis_bulk_text_opt(next(0)).unwrap_or_default();
-            let type_name = if redis_looks_like_json(&value) { "json" } else { raw_type };
-            (type_name.to_string(), redis_preview(value))
+            (raw_type.to_string(), redis_preview(value))
         }
         "hash" => (raw_type.to_string(), redis_preview_pairs(next(0))),
         "list" => (raw_type.to_string(), redis_preview_items(next(0))),
@@ -103,12 +104,6 @@ fn redis_array_text(value: Option<RedisValue>) -> Vec<String> {
     }
 }
 
-fn redis_looks_like_json(value: &str) -> bool {
-    let value = value.trim();
-    (value.starts_with('{') && value.ends_with('}'))
-        || (value.starts_with('[') && value.ends_with(']'))
-}
-
 fn redis_preview(mut value: String) -> String {
     const LIMIT: usize = 200;
     if value.chars().count() <= LIMIT {
@@ -117,4 +112,32 @@ fn redis_preview(mut value: String) -> String {
     value = value.chars().take(LIMIT).collect();
     value.push_str("...");
     value
+}
+
+#[cfg(test)]
+mod redis_preview_tests {
+    use super::*;
+
+    fn bulk(text: &str) -> RedisValue {
+        RedisValue::Bulk(Some(text.as_bytes().to_vec()))
+    }
+
+    #[test]
+    fn string_type_is_not_relabelled_by_json_content() {
+        // 普通 string 即使内容是 JSON 文本，类型也必须保持 STRING：
+        // 按内容改标会让类型“动态变化”，并把非法 JSON 文本送进 JSON 面板。
+        let (kind, preview) = redis_key_preview_from("string", vec![bulk("{\"a\": 1}")]);
+        assert_eq!(kind, "string");
+        assert_eq!(preview, "{\"a\": 1}");
+
+        let (kind, _) = redis_key_preview_from("string", vec![bulk("{a=1}")]);
+        assert_eq!(kind, "string");
+    }
+
+    #[test]
+    fn rejson_type_still_reported_as_json() {
+        let (kind, preview) = redis_key_preview_from("rejson-rl", vec![bulk("{\"a\": 1}")]);
+        assert_eq!(kind, "json");
+        assert_eq!(preview, "{\"a\": 1}");
+    }
 }

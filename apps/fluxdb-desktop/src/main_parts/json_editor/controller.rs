@@ -102,6 +102,9 @@ impl NavicatMain {
                 state.source = source;
                 state.diagnostic = Some(dia);
                 state.nodes = Vec::new();
+                // 必须清空展示文本：否则 `display` 残留上一个 key 的 pretty 结果，
+                // 查看态会把别的键值当成当前值渲染。清空后回退到 `source` 原文。
+                state.display = String::new();
             }
         }
         cx.notify();

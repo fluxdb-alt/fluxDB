@@ -38,6 +38,10 @@ fn redis_string_value_panel(
             redis_pretty_json(&raw_value).unwrap_or_else(|_| raw_value.clone())
         }
     };
+    // JSON 格式下用与 JSON 键详情相同的只读高亮视图渲染；非法 JSON 退回普通文本。
+    let json_view = (format == RedisStringFormat::Json)
+        .then(|| redis_string_json_view(&raw_value, tab_id, colors))
+        .flatten();
 
     // gating：格式转换 / 复制 / 编辑只在「完整加载 + 非二进制」后可用；复制不限制长度（完整加载后
     // 即可复制，大 key 超长也可复制到剪贴板），未完整加载时格式转换禁用，避免对截断预览做格式化。
@@ -109,6 +113,7 @@ fn redis_string_value_panel(
             applying,
             loading,
             display_value,
+            json_view,
             colors,
             cx,
         ))
@@ -125,6 +130,7 @@ fn redis_string_value_body(
     applying: bool,
     loading: bool,
     display_value: String,
+    json_view: Option<Div>,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -144,6 +150,7 @@ fn redis_string_value_body(
         // 编辑态：共享多行输入展示完整原文，底部提供 取消/保存。
         let detail_for_cancel = detail.clone();
         let detail_for_save = detail.clone();
+        let input_for_focus = input.clone();
         return body.child(
             div()
                 .h_full()
@@ -168,6 +175,15 @@ fn redis_string_value_body(
                                 .border_color(colors.border)
                                 .bg(colors.input_bg)
                                 .overflow_hidden()
+                                // 多行 Input 只有文本内容区域可点击聚焦，点击框内下方空白不生效；
+                                // 在容器上兜底聚焦，保证点框内任意位置都能直接输入。
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |_this, _, window, cx| {
+                                        input_for_focus
+                                            .update(cx, |input, cx| input.focus(window, cx));
+                                    }),
+                                )
                                 .child(
                                     Input::new(&input)
                                         .appearance(false)
@@ -283,6 +299,19 @@ fn redis_string_value_body(
                                 })),
                         ),
                 ),
+        );
+    }
+
+    // 完整加载且选了 JSON 格式：复用 JSON 只读视图（语法高亮 + 层级缩进），非法 JSON 退回文本。
+    if let Some(json_view) = json_view {
+        return body.child(
+            div()
+                .id(("redis-string-value-json-scroll", tab_id.0))
+                .size_full()
+                .bg(colors.input_bg)
+                .overflow_x_scroll()
+                .overflow_y_scrollbar()
+                .child(json_view),
         );
     }
 
@@ -546,6 +575,17 @@ fn redis_string_format_menu_item(
             },
         )
         .child(label)
+}
+
+/// String 值「JSON」格式下的只读高亮视图：复用 JSON 键详情的行渲染与语法高亮。
+/// 非法 JSON 返回 `None`，由调用方回退到普通文本展示。
+fn redis_string_json_view(value: &str, tab_id: TabId, colors: UiColors) -> Option<Div> {
+    let pretty = build_pretty(value, 2, &BTreeSet::new()).ok()?;
+    let mut view = JsonFoldView::panel(&pretty.text, &pretty.nodes, true);
+    // String 面板没有折叠状态存储，关闭折叠避免出现点了无反应的箭头。
+    view.folding = false;
+    view.id_salt = SharedString::from(format!("redis-string-json-panel-{}", tab_id.0));
+    Some(json_fold_view(&view, colors, |_, _, _| {}))
 }
 
 fn redis_string_value_hint(

@@ -6007,6 +6007,7 @@
     "conn_error_162": "SQLite foreign key reads require connection configuration context",
     "conn_error_163": "SQLite trigger reads require connection configuration context",
     "conn_error_164": "SQLite DDL reads require connection configuration context",
+    "conn_error_165": "The server has no RedisJSON module, so JSON keys cannot be created",
     "storage_error_001": "session/profile ID cannot be empty",
     "storage_error_002": "clientInfo is not valid JSON",
     "storage_error_003": "clientInfo must be an object",

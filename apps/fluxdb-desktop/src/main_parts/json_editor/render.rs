@@ -468,8 +468,16 @@ fn redis_json_value_body(
         );
     }
 
-    // 完整加载查看态：结构化行（折叠 / 层级线 / 错误高亮）。
-    body.child(redis_json_view_rows(tab_id, this, colors, cx))
+    // 完整加载查看态：结构化行（折叠 / 层级线 / 错误高亮）。内容高于面板时纵向滚动，
+    // 否则长 JSON 会被外层 overflow_hidden 截断，只能进编辑态才能看全。
+    body.child(
+        div()
+            .id(("redis-json-value-scroll", tab_id.0))
+            .size_full()
+            .bg(colors.input_bg)
+            .overflow_y_scrollbar()
+            .child(redis_json_view_rows(tab_id, this, colors, cx)),
+    )
 }
 
 /// 编辑态主体：复用 `JsonComponent` 的 Edit 模式（多行编辑框；单行 `InputState`
@@ -605,7 +613,9 @@ fn redis_json_view_rows(
         });
     })
     .id(("redis-json-value-view", tab_id.0))
-    .size_full()
+    // 只铺满宽度，高度随行数自然增长，交给外层滚动容器；`size_full` 会把高度锁成
+    // 视口高度，行数超出时依旧无法滚动。
+    .w_full()
 }
 
 /// 只读 JSON 视图（带行号 / 折叠箭头 / 语法高亮）的可配置样式。

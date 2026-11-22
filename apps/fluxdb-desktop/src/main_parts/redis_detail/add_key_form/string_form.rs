@@ -4,7 +4,9 @@
 fn redis_add_key_string_form(
     string_input: &Entity<InputState>,
     colors: UiColors,
+    cx: &mut Context<NavicatMain>,
 ) -> Div {
+    let input_for_focus = string_input.clone();
     div()
         .w_full()
         .flex()
@@ -21,6 +23,14 @@ fn redis_add_key_string_form(
                 .border_color(colors.border)
                 .bg(colors.input_bg)
                 .overflow_hidden()
+                // 多行 Input 的文本命中区只有内容高度，点击框内下方空白不会聚焦；
+                // 在整块容器上兜底聚焦，点击任意位置都能直接输入。
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |_this, _, window, cx| {
+                        input_for_focus.update(cx, |input, cx| input.focus(window, cx));
+                    }),
+                )
                 .child(
                     Input::new(string_input)
                         .appearance(false)

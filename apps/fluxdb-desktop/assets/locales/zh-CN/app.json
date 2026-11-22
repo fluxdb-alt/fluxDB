@@ -6007,6 +6007,7 @@
     "conn_error_162": "SQLite 外键读取需要连接配置上下文",
     "conn_error_163": "SQLite 触发器读取需要连接配置上下文",
     "conn_error_164": "SQLite DDL 读取需要连接配置上下文",
+    "conn_error_165": "服务端未安装 RedisJSON 模块，无法创建 JSON 类型 Key",
     "storage_error_001": "session/profile ID 不能为空",
     "storage_error_002": "clientInfo 不是合法 JSON",
     "storage_error_003": "clientInfo 必须是对象",

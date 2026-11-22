@@ -1015,7 +1015,7 @@ fn data_editor_content(
             let kind = this.redis_add_key_kind(cx);
             let active_form = match kind {
                 RedisAddKeyKind::String => {
-                    redis_add_key_string_form(&this.redis_add_key_string_input, colors)
+                    redis_add_key_string_form(&this.redis_add_key_string_input, colors, cx)
                 }
                 RedisAddKeyKind::Json => {
                     redis_add_key_json_form(

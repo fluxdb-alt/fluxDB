@@ -64,7 +64,8 @@ fn redis_create_key(
 }
 
 /// 服务器是否加载了 RedisJSON：`COMMAND INFO JSON.SET` 未注册命令时返回 nil 元素。
-/// 托管实例可能禁用 COMMAND，探测失败一律按不可用处理，回退到普通字符串存储。
+/// 托管实例可能禁用 COMMAND，探测失败一律按不可用处理；不可用时拒绝创建 JSON 类型 Key，
+/// 不静默降级成普通 string。
 fn redis_json_module_available(connection: &mut RedisConnection) -> bool {
     match connection.command(&["COMMAND", "INFO", "JSON.SET"]) {
         Ok(RedisValue::Array(items)) => items
@@ -116,13 +117,15 @@ fn redis_emit_key_create(
     match type_name {
         "string" => redis_expect_ok(connection.command(&["SET", key, request.value.as_str()])?)?,
         "json" | "rejson-rl" => {
-            // 没装 RedisJSON 时 JSON.SET 会报 unknown command：退回普通字符串存 JSON 文本，
-            // 键列表仍按内容把它显示成 json，功能上等价于「JSON 文本键」。
-            if redis_json_module_available(connection) {
-                redis_expect_ok(connection.command(&["JSON.SET", key, ".", request.value.as_str()])?)?
-            } else {
-                redis_expect_ok(connection.command(&["SET", key, request.value.as_str()])?)?
+            // 不要静默降级成普通 string：否则用户选 JSON 创建出来的键真实类型是 string，
+            // 列表按真实 TYPE 显示 STRING，和创建时的选择自相矛盾。
+            if !redis_json_module_available(connection) {
+                return Err(Error::new(
+                    ErrorKind::Unsupported,
+                    "服务端未安装 RedisJSON 模块，无法创建 JSON 类型 Key",
+                ));
             }
+            redis_expect_ok(connection.command(&["JSON.SET", key, ".", request.value.as_str()])?)?
         }
         "list" => {
             let items = require_lines("List")?;
