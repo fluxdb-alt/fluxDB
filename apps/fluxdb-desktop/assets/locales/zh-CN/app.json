@@ -1658,7 +1658,11 @@
     "mcp": {
       "control_title": "MCP 控制",
       "enable_server": "启用 MCP Server",
-      "enable_server_detail": "在本机回环地址提供 MCP HTTP 端点（默认 127.0.0.1:47821），供外部客户端接入",
+      "enable_server_detail": "在本机回环地址提供 MCP HTTP 端点，供外部客户端接入；左侧可修改端口（1-65535），保存后立即生效",
+      "port_placeholder": "端口",
+      "port_save": "保存端口",
+      "port_saved": "MCP 端口已保存，端点已按新端口重启",
+      "port_invalid": "端口无效，请输入 1-65535 的数字",
       "default_policy": "全局默认策略",
       "default_policy_detail": "只读 / 允许读写。数据源可选“默认”跟随此策略；不增加连接授权",
       "datasources": "数据源",

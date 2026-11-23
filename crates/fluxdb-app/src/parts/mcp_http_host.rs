@@ -70,12 +70,18 @@ impl std::fmt::Debug for McpHttpEndpoint {
 /// 运行中的端点句柄：`stop` 后不再接受新会话，已有会话被取消。
 pub struct McpHttpHandle {
     endpoint: McpHttpEndpoint,
+    port: u16,
     shutdown: CancellationToken,
 }
 
 impl McpHttpHandle {
     pub fn endpoint(&self) -> &McpHttpEndpoint {
         &self.endpoint
+    }
+
+    /// 当前监听端口：用于检测配置端口变化后是否需要重启端点。
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     /// 停止端点（幂等）。
@@ -173,6 +179,7 @@ pub fn start(
             url: format!("http://127.0.0.1:{port}/mcp"),
             token,
         },
+        port,
         shutdown,
     })
 }

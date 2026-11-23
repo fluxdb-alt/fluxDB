@@ -1,13 +1,34 @@
 fn ai_mcp_control_panel(
     state: &AppState,
+    panel: &AiSettingsPanelState,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> GroupBox {
     // 只有默认 Profile 一个对象，页面没有可编辑草稿：开关直接落到已存配置上。
     let enabled = default_mcp_profile(state).is_some_and(|profile| profile.enabled);
-    let enabled_control = Switch::new("ai-mcp-profile-enabled")
-        .checked(enabled)
-        .on_click(cx.listener(|this, checked, _, cx| this.set_mcp_profile_enabled(*checked, cx)))
+    let port_input = panel.mcp_port_input.clone();
+    let enabled_control = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .w(px(96.))
+                .child(Input::new(&port_input).text_size(ui_text_size(13.))),
+        )
+        .child(
+            Button::new("ai-mcp-port-save")
+                .small()
+                .ghost()
+                .cursor_pointer()
+                .child(tr("app.ai.mcp.port_save"))
+                .on_click(cx.listener(|this, _, _, cx| this.save_mcp_http_port(cx))),
+        )
+        .child(
+            Switch::new("ai-mcp-profile-enabled")
+                .checked(enabled)
+                .on_click(cx.listener(|this, checked, _, cx| this.set_mcp_profile_enabled(*checked, cx))),
+        )
         .into_any_element();
     settings_panel_group(tr("app.ai.mcp.control_title"), colors)
         .child(ai_policy_row(
@@ -242,7 +263,7 @@ fn ai_mcp_panel(
         .flex()
         .flex_col()
         .gap_3()
-        .child(ai_mcp_control_panel(state, colors, cx))
+        .child(ai_mcp_control_panel(state, panel, colors, cx))
         .child(ai_mcp_datasources_panel(state, colors, cx))
         .child(ai_mcp_clients_panel(panel, colors, cx))
 }

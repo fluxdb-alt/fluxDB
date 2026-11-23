@@ -21,6 +21,31 @@ impl NavicatMain {
             .cloned()
     }
 
+    /// 保存 MCP HTTP 端口：写入全局 Settings（config.toml），端点按新端口重启。
+    ///
+    /// 端口非法时只提示、不保存，避免把端点切到不可用端口。
+    fn save_mcp_http_port(&mut self, cx: &mut Context<Self>) {
+        let raw = self.mcp_port_input.read(cx).value().trim().to_string();
+        let Ok(port) = raw.parse::<u16>() else {
+            self.show_message(tr("app.ai.mcp.port_invalid").as_ref(), AppMessageKind::Error, cx);
+            return;
+        };
+        if port == 0 {
+            self.show_message(tr("app.ai.mcp.port_invalid").as_ref(), AppMessageKind::Error, cx);
+            return;
+        }
+        let mut settings = self.controller.state().settings.clone();
+        if settings.mcp_http_port == port {
+            return;
+        }
+        settings.mcp_http_port = port;
+        // 控制器侧更新 state 并重启端点；随后立即持久化到 config.toml。
+        let _ = self.controller.dispatch(AppCommand::SaveSettings(settings));
+        let _ = self.storage.save_settings(&self.controller.state().settings);
+        self.show_message(tr("app.ai.mcp.port_saved").as_ref(), AppMessageKind::Success, cx);
+        cx.notify();
+    }
+
     /// 切换默认 Profile 的对外服务开关：名称与 revision 沿用已存值，只提交 enabled。
     fn set_mcp_profile_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         let Some(profile) = self.ensure_mcp_profile(cx) else {

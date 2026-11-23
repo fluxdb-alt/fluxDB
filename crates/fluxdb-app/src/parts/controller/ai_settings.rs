@@ -50,14 +50,21 @@ impl AppController {
             }
             return;
         }
-        if slot.is_some() {
-            return;
+        // 端口取自全局设置（缺省回退默认值）；配置端口变化时先停旧端点再按新端口重启。
+        let port = if self.state.settings.mcp_http_port == 0 {
+            crate::mcp_http_host::DEFAULT_MCP_HTTP_PORT
+        } else {
+            self.state.settings.mcp_http_port
+        };
+        if let Some(handle) = slot.as_ref() {
+            if handle.port() == port {
+                return;
+            }
+            // 端口变化：释放旧监听后再用新端口启动。
+            handle.stop();
+            slot.take();
         }
-        match crate::mcp_http_host::start(
-            storage,
-            crate::DEFAULT_MCP_PROFILE_ID,
-            crate::mcp_http_host::DEFAULT_MCP_HTTP_PORT,
-        ) {
+        match crate::mcp_http_host::start(storage, crate::DEFAULT_MCP_PROFILE_ID, port) {
             Ok(handle) => {
                 *slot = Some(handle);
                 if let Ok(mut error) = self.mcp_http_error.lock() {
