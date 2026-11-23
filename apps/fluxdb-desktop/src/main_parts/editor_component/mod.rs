@@ -25,7 +25,7 @@ use fluxdb_editor_core::{
     inline_hints_to_snapshot, InputEdit, InsertTextFormat, LanguageDefinition, LanguageRegistry,
     Point, Range as CoreRange, Selection,
     SignatureInfo, SignatureProvider, SoftWrap, SyntaxLayerTree, SyntaxProvider, SyntaxSnapshot,
-    TaskOutcome, TextChange, TriggerDecision,
+    TaskOutcome, TextChange, TriggerDecision, display_width_prefix, text_display_width,
 };
 
 // 事件协议统一由内核提供；这里把 `EditorEvent` 作为本模块公共路径再导出，
@@ -2185,10 +2185,11 @@ impl Editor {
         } else {
             0.0
         };
-        // 用 UTF-16 列估算光标 x（与布局列宽口径一致）。
-        let column_utf16 = self.buffer.utf16_column_at(point);
+        // 用展示列估算光标 x（与布局列宽口径一致：CJK/emoji 按 2 列计）。
+        let line_text = self.buffer.line_text(point.row);
+        let display_column = display_width_prefix(&line_text, point.column, self.tab_width);
         let cursor_local_x =
-            EDITOR_PADDING_X + gutter_width + EDITOR_CONTENT_GAP + column_utf16 as f32 * char_width;
+            EDITOR_PADDING_X + gutter_width + EDITOR_CONTENT_GAP + display_column as f32 * char_width;
         let margin = char_width;
         let target_x = if cursor_local_x < margin {
             cursor_local_x - margin
@@ -3562,6 +3563,11 @@ impl Editor {
         gpui::px(width)
     }
 
+    /// 编辑后维护「最长行」提示。
+    ///
+    /// 受影响行的展示列数达到/超过已测上界，或插入了非 ASCII 字符时，旧像素宽
+    /// 都可能偏小（CJK/emoji 比同列数 ASCII 更宽），直接丢弃提示让
+    /// `content_width` 按新内容重新测量；否则只抬高列数上界，复用旧测量值。
     fn update_line_width_hint(&self, start: usize, inserted: &str) {
         let Some((mut max_columns, width)) = *self.line_width_hint.borrow() else {
             return;
@@ -3569,16 +3575,26 @@ impl Editor {
         let start_row = self.buffer.offset_to_point(start).row;
         let rows_to_check = inserted.bytes().filter(|byte| *byte == b'\n').count() + 2;
         let end_row = (start_row + rows_to_check).min(self.buffer.line_count());
+        // 插入非 ASCII 字符（CJK/全角/emoji）时，即使列数没超过上界，像素宽也可能
+        // 比同列数的 ASCII 更宽，直接重测，避免比例字体下的低估。
+        let mut needs_remeasure = !inserted.is_ascii();
         for row in start_row..end_row {
-            max_columns = max_columns.max(Self::line_columns(&self.buffer.line_text(row), self.tab_width));
+            let columns = Self::line_columns(&self.buffer.line_text(row), self.tab_width);
+            if columns >= max_columns {
+                needs_remeasure = true;
+            }
+            max_columns = max_columns.max(columns);
         }
-        *self.line_width_hint.borrow_mut() = Some((max_columns, width));
+        if needs_remeasure {
+            self.line_width_hint.borrow_mut().take();
+        } else {
+            *self.line_width_hint.borrow_mut() = Some((max_columns, width));
+        }
     }
 
+    /// 展示列数统计：CJK/全角/emoji 计 2 列，与内核 wrap/布局口径一致。
     fn line_columns(text: &str, tab_width: usize) -> usize {
-        text.chars()
-            .map(|character| if character == '\t' { tab_width } else { 1 })
-            .sum()
+        text_display_width(text, tab_width)
     }
 
     fn longest_line_width(&self, window: &Window) -> gpui::Pixels {

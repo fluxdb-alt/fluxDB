@@ -106,7 +106,7 @@ impl TabSnapshot {
                 let width = if line.is_placeholder {
                     0
                 } else {
-                    display_width(&line.text, tab_size)
+                    text_display_width(&line.text, tab_size)
                 };
                 TabLineItem { line, width }
             })
@@ -179,7 +179,7 @@ impl TabSnapshot {
                 let width = if line.is_placeholder {
                     0
                 } else {
-                    display_width(&line.text, self.tab_size)
+                    text_display_width(&line.text, self.tab_size)
                 };
                 TabLineItem { line, width }
             })
@@ -234,9 +234,9 @@ impl LayerSnapshot for TabSnapshot {
         }
         let text = line.line.text.as_ref();
         // `column` 是字节列：取该字节列之前文本的显示宽度（tab 展开）。
-        // `display_column_at_byte` 用 `index >= byte` 在字符边界打断，字节列在
+        // `display_width_prefix` 用 `index >= byte` 在字符边界打断，字节列在
         // UTF-8 中间字节（宽字符内部）时也安全（在该字符起点拦截）。
-        let base = display_column_at_byte(text, column, self.tab_size);
+        let base = display_width_prefix(text, column, self.tab_size);
         // 字节列是否正落在某个制表符上（列恰为某字符起点且该字符是 \t）：
         // 是则偏置到 tab 前后（base ↔ 下一个 tab stop）。
         let at_tab = text
@@ -299,22 +299,34 @@ fn compute_revision(input_version: u64, tab_size: usize) -> u64 {
     h
 }
 
-/// 一行文本（已含 tab）展开后的总显示列宽（DM-210，从 display_map 迁移，算法不变）。
-fn display_width(text: &str, tab_size: usize) -> usize {
+/// 单个字符占用的展示列数。
+///
+/// 与等宽字体/终端口径一致：CJK、全角字符与 emoji 占 2 列，组合符占 0 列，
+/// 其余占 1 列。`\t` 的展开依赖当前位置，由调用方按 tab stop 单独处理；
+/// 控制字符宽度未知，沿用历史口径按 1 列计。
+pub fn char_display_width(character: char) -> usize {
+    match character {
+        '\t' => 1,
+        _ => unicode_width::UnicodeWidthChar::width(character).unwrap_or(1),
+    }
+}
+
+/// 一行文本（已含 tab）展开后的总显示列宽（DM-210，从 display_map 迁移）。
+pub fn text_display_width(text: &str, tab_size: usize) -> usize {
     let tab_size = tab_size.max(1);
     let mut column = 0usize;
     for character in text.chars() {
         if character == '\t' {
             column = (column / tab_size + 1) * tab_size;
         } else {
-            column += character.len_utf16();
+            column += char_display_width(character);
         }
     }
     column
 }
 
 /// 取文本 `[..byte]` 前缀的显示列宽（tab 展开）。
-fn display_column_at_byte(text: &str, byte: usize, tab_size: usize) -> usize {
+pub fn display_width_prefix(text: &str, byte: usize, tab_size: usize) -> usize {
     let tab_size = tab_size.max(1);
     let mut column = 0usize;
     for (index, character) in text.char_indices() {
@@ -324,7 +336,7 @@ fn display_column_at_byte(text: &str, byte: usize, tab_size: usize) -> usize {
         if character == '\t' {
             column = (column / tab_size + 1) * tab_size;
         } else {
-            column += character.len_utf16();
+            column += char_display_width(character);
         }
     }
     column
@@ -353,7 +365,7 @@ fn byte_for_display_column(text: &str, target: usize, tab_size: usize) -> Option
         let next = if character == '\t' {
             (column / tab_size + 1) * tab_size
         } else {
-            column + character.len_utf16()
+            column + char_display_width(character)
         };
         if next > target {
             // 目标列落在此字符展开区间内部 → 只有 tab 才有非零宽展开区间。

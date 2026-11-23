@@ -1136,16 +1136,7 @@ fn line_range(snapshot: &BufferSnapshot, row: usize) -> Range {
 
 fn display_width_for_line(snapshot: &BufferSnapshot, row: usize, tab_size: usize) -> usize {
     let text = snapshot.text_in_range(line_range(snapshot, row));
-    let tab_size = tab_size.max(1);
-    let mut column = 0usize;
-    for ch in text.chars() {
-        column = if ch == '\t' {
-            (column / tab_size + 1) * tab_size
-        } else {
-            column + ch.len_utf16()
-        };
-    }
-    column
+    crate::tab_map::text_display_width(&text, tab_size)
 }
 
 /// buffer 行内容字节数（去掉末尾 `\n`/`\r\n`）。
@@ -1176,7 +1167,7 @@ fn display_column_to_byte(text: &str, target: usize, tab_size: usize) -> usize {
         let next = if character == '\t' {
             (column / tab_size + 1) * tab_size
         } else {
-            column + character.len_utf16()
+            column + crate::tab_map::char_display_width(character)
         };
         if next > target {
             return byte;
@@ -1219,5 +1210,31 @@ mod line_edit_tests {
             }
             assert_eq!(lines, ["xaa", "ybb", "cc", "dd", ""]);
         }
+    }
+
+    #[test]
+    fn cjk_chars_count_as_two_display_columns() {
+        assert_eq!(crate::tab_map::text_display_width("中文abc", 4), 7);
+        assert_eq!(crate::tab_map::display_width_prefix("中文abc", 6, 4), 4);
+        // tab 仍展开到下一个 tab stop（CJK 之后列已为 2，tab_size 4 → 列 4）。
+        assert_eq!(crate::tab_map::text_display_width("中\tb", 4), 5);
+    }
+
+    #[test]
+    fn soft_wrap_splits_wide_chars_on_display_columns() {
+        let buffer = EditorBuffer::new_from("中文中文中文");
+        let display =
+            DisplayMap::new_with_tab_size(buffer.snapshot(), SoftWrap::EditorWidth, 4, vec![], 4);
+        let texts = display
+            .visual_lines(0, display.visual_row_count())
+            .map(|visual| {
+                let start = buffer.line_start(visual.buffer_row);
+                buffer.text_in_range(Range::new(
+                    start + visual.column_start,
+                    start + visual.column_end,
+                ))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(texts, ["中文", "中文", "中文"]);
     }
 }

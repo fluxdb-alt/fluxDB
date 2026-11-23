@@ -2573,6 +2573,9 @@ dependencies = [
 [[package]]
 name = "fluxdb-editor-core"
 version = "0.1.0"
+dependencies = [
+ "unicode-width",
+]
 
 [[package]]
 name = "fluxdb-i18n"

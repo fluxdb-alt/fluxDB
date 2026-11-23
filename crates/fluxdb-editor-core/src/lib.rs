@@ -66,7 +66,9 @@ pub use syntax::{
     AsyncWork, Highlight, HighlightStore, IndentRequest, InputEdit, LanguageDefinition,
     SyntaxProvider, SyntaxResult, SyntaxSnapshot, build_range_line_index,
 };
-pub use tab_map::{TabLine, TabSnapshot};
+pub use tab_map::{
+    TabLine, TabSnapshot, char_display_width, display_width_prefix, text_display_width,
+};
 pub use task::{CancellationToken, TaskKey, TaskKind, TaskOutcome, TaskPhase};
 pub use wrap_map::{
     LineBreaker, RowWrap, WrapCacheKey, WrapConfig, WrapLine, WrapMap, WrapSnapshot,

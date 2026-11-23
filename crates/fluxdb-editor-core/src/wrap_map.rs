@@ -640,7 +640,7 @@ impl WrapMap {
 
 /// 把字节断点换算成相邻展示列区间（DM-223）。
 ///
-/// 从行首累计每个字符展示列宽（`len_utf16`，与 TabPoint 展示列语义一致），
+/// 从行首累计每个字符展示列宽（含 CJK 宽字符，与 TabPoint 展示列语义一致），
 /// 在每个断点处闭合上一片段区间并新开下一片段；末片段截断到行尾。
 pub fn breaks_to_ranges(text: &str, breaks: &[usize]) -> Vec<(usize, usize)> {
     let mut ranges = Vec::with_capacity(breaks.len().saturating_add(1));
@@ -653,7 +653,7 @@ pub fn breaks_to_ranges(text: &str, breaks: &[usize]) -> Vec<(usize, usize)> {
             start = col;
             bi.next();
         }
-        col += ch.len_utf16();
+        col += crate::tab_map::char_display_width(ch);
     }
     ranges.push((start, col));
     ranges
