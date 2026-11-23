@@ -20,6 +20,61 @@ PLATFORM_ASSETS = {
     "linux-x86_64": (".deb", "linux_deb"),
 }
 
+MAX_RELEASE_HISTORY = 5
+MAX_RELEASE_NOTES_BYTES = 48 * 1024
+
+
+def semver_sort_key(version: str) -> tuple[int, ...]:
+    numbers: list[int] = []
+    for part in version.split(".")[:3]:
+        match = re.fullmatch(r"(\d+)(?:[-+].*)?", part)
+        if match is None:
+            raise RuntimeError(f"invalid semantic version: {version!r}")
+        numbers.append(int(match.group(1)))
+    while len(numbers) < 3:
+        numbers.append(0)
+    return tuple(numbers)
+
+
+def notes_size(release: dict[str, object]) -> int:
+    notes = release.get("notes")
+    if not isinstance(notes, dict):
+        return 0
+    return sum(
+        len(value.encode("utf-8"))
+        for value in notes.values()
+        if isinstance(value, str)
+    )
+
+
+def trim_release_history(
+    release_rows: list[dict[str, object]], current_version: str
+) -> list[dict[str, object]]:
+    current_key = semver_sort_key(current_version)
+    eligible: list[tuple[tuple[int, ...], int, dict[str, object]]] = []
+    for index, release in enumerate(release_rows):
+        version = str(release.get("version", ""))
+        try:
+            key = semver_sort_key(version)
+        except RuntimeError:
+            continue
+        if key <= current_key:
+            eligible.append((key, index, release))
+
+    eligible.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    kept: list[dict[str, object]] = []
+    total_bytes = 0
+    for key, _, release in eligible:
+        size = notes_size(release)
+        if kept and (
+            len(kept) >= MAX_RELEASE_HISTORY
+            or total_bytes + size > MAX_RELEASE_NOTES_BYTES
+        ):
+            break
+        kept.append(release)
+        total_bytes += size
+    return kept
+
 
 def api_get(url: str, token: str) -> object:
     request = urllib.request.Request(
@@ -147,6 +202,8 @@ def main() -> int:
                 "notes": notes,
             }
         )
+
+    release_rows = trim_release_history(release_rows, version)
 
     current_notes = note_files(notes_dir, args.tag) or parse_notes(
         str(release.get("body") or "")
