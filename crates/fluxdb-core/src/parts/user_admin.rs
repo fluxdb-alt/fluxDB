@@ -516,6 +516,40 @@ pub fn supports_database_user_admin(kind: DatabaseKind) -> bool {
     ) || database_user_admin_provider(kind).is_some()
 }
 
+/// 结合服务端版本判断是否提供 MySQL 用户与权限入口。
+///
+/// MySQL 8.0 才引入角色管理，5.7 及更早版本的 `GRANT ... TO` / `SET DEFAULT ROLE`
+/// 会直接报语法错误，因此低版本不展示该入口。TiDB 与 MariaDB 的 `VERSION()`
+/// 可能伪装成 5.x（如 `5.7.25-TiDB-v7.1.0`、`5.5.5-10.11.6-MariaDB`），
+/// 按产品标识放行，避免误伤。版本未知时按支持处理，避免探测失败隐藏可用入口。
+pub fn database_user_admin_supported_for_version(
+    kind: DatabaseKind,
+    server_version: Option<&str>,
+) -> bool {
+    if kind != DatabaseKind::MySql {
+        return supports_database_user_admin(kind);
+    }
+    let Some(version) = server_version.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    if version.contains("TiDB") || version.contains("MariaDB") {
+        return true;
+    }
+    mysql_major_version(version).is_none_or(|major| major >= 8)
+}
+
+/// 取版本号首个数字段（`8.0.36-...` -> 8）；无法解析时返回 None。
+fn mysql_major_version(version: &str) -> Option<u32> {
+    let digits = version
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
 pub fn grants_from_query_result(result: &QueryExecutionResult) -> Vec<String> {
     result
         .results
@@ -940,7 +974,7 @@ fn same_database_account(left: &DatabaseUserIdentity, right: &DatabaseUserIdenti
 mod mariadb_user_admin_tests {
     use super::{
         CreatePrincipalInput, DatabaseKind, DatabaseUserAdminProvider, DatabaseUserIdentity,
-        UserAdminDialect, database_user_admin_provider,
+        UserAdminDialect, database_user_admin_provider, database_user_admin_supported_for_version,
     };
 
     fn provider_for(kind: DatabaseKind) -> DatabaseUserAdminProvider {
@@ -953,6 +987,23 @@ mod mariadb_user_admin_tests {
             host: "%".to_string(),
             plugin: None,
         }
+    }
+
+    #[test]
+    fn mysql_user_admin_requires_eight_or_newer() {
+        let supported = |version: Option<&str>| {
+            database_user_admin_supported_for_version(DatabaseKind::MySql, version)
+        };
+        assert!(!supported(Some("5.7.44")));
+        assert!(!supported(Some("5.6.51-log")));
+        assert!(supported(Some("8.0.36")));
+        assert!(supported(Some("8.4.0")));
+        // 未知版本不隐藏入口，避免探测失败误伤可用实例。
+        assert!(supported(None));
+        assert!(supported(Some("")));
+        // 沿用 MySQL 协议的产品虽然报告 5.x，但支持角色管理。
+        assert!(supported(Some("5.7.25-TiDB-v7.1.0")));
+        assert!(supported(Some("5.5.5-10.11.6-MariaDB")));
     }
 
     #[test]

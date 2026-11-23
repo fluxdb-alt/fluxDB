@@ -64,8 +64,9 @@ use fluxdb_core::{
     SortDirection, SortSpec, SqlDialect as _, SqlServerPrincipalKind, TableShortcutGroup,
     TableShortcutTarget, Theme as AppTheme, TriggerInfo, UserResourceLimits, WorkbenchHistoryItem,
     WorkbenchHistoryScope, WorkbenchHistoryStore, data_table_page_size_max,
-    database_user_admin_provider, role_memberships_from_grants, sql_dialect,
-    sqlite_attached_database_path, supports_database_user_admin,
+    database_user_admin_provider, database_user_admin_supported_for_version,
+    role_memberships_from_grants, sql_dialect, sqlite_attached_database_path,
+    supports_database_user_admin,
 };
 use fluxdb_storage::{
     FileStorage, QueryHistoryRecord, RedisKeySearchHistoryRecord, RedisWorkbenchHistoryRecord,

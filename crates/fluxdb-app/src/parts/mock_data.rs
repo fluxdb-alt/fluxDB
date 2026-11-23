@@ -63,6 +63,11 @@ fn list_objects_for_connection(
     connector_for(config)?.list_objects(path)
 }
 
+/// 读取连接级服务端版本，仅 MySQL 协议连接需要（用于低版本功能裁剪）。
+fn server_version_for_connection(config: &ConnectionConfig) -> Option<String> {
+    fluxdb_connectors::mysql_server_version(config)
+}
+
 fn create_database_for_connection(
     config: &ConnectionConfig,
     request: &CreateDatabaseRequest,

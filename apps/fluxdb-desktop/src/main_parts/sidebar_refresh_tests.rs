@@ -37,6 +37,7 @@ mod sidebar_refresh_tests {
                 comment: None,
                 stable: None,
             }],
+            server_version: None,
             redis_overview: Default::default(),
         }
     }
@@ -219,6 +220,7 @@ mod sidebar_refresh_tests {
             connected: true,
             expanded: true,
             objects,
+            server_version: None,
             redis_overview: Default::default(),
         };
         let layout = SidebarLayout::for_connections(std::slice::from_ref(&config));

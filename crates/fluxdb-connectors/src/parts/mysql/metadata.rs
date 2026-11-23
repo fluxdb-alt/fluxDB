@@ -16,7 +16,8 @@ fn mysql_indexes(config: &ConnectionConfig, path: &ObjectPath) -> fluxdb_core::R
 
     runtime.block_on(async {
         let mut connection = plan.connect().await?;
-        let rows = sqlx::query(mysql_indexes_query())
+        let has_expression = mysql_statistics_has_expression(&mut connection).await;
+        let rows = sqlx::query(mysql_indexes_query(has_expression))
             .bind(&database)
             .bind(&path.name)
             .fetch_all(&mut connection)
@@ -74,8 +75,34 @@ fn mysql_indexes_from_rows(
     Ok((indexes.into_values().collect(), attributes))
 }
 
-fn mysql_indexes_query() -> &'static str {
-    r#"
+/// MySQL 8.0 才在 `information_schema.statistics` 提供 `EXPRESSION` 列（函数索引）。
+/// 检测失败按旧版处理，避免把不支持的列写进查询。
+async fn mysql_statistics_has_expression(connection: &mut MySqlConnection) -> bool {
+    let result = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM information_schema.columns \
+         WHERE table_schema = 'information_schema' \
+           AND table_name = 'STATISTICS' AND column_name = 'EXPRESSION'",
+    )
+    .fetch_one(&mut *connection)
+    .await;
+    match result {
+        Ok(count) => count > 0,
+        Err(error) => {
+            tracing::debug!(
+                target: "fluxdb_connectors",
+                op = "mysql_statistics_has_expression",
+                error = %error,
+                "无法检测 statistics.expression，按 MySQL 5.7 兼容模式读取索引"
+            );
+            false
+        }
+    }
+}
+
+/// 旧版用 `NULL AS expression` 占位，保持 `mysql_indexes_from_rows` 的行结构不变。
+fn mysql_indexes_query(has_expression: bool) -> &'static str {
+    if has_expression {
+        r#"
     SELECT
         CAST(index_name AS CHAR) AS index_name,
         CAST(column_name AS CHAR) AS column_name,
@@ -87,6 +114,20 @@ fn mysql_indexes_query() -> &'static str {
     WHERE table_schema = ? AND table_name = ?
     ORDER BY index_name, seq_in_index
     "#
+    } else {
+        r#"
+    SELECT
+        CAST(index_name AS CHAR) AS index_name,
+        CAST(column_name AS CHAR) AS column_name,
+        CAST(NULL AS CHAR) AS expression,
+        CAST(non_unique AS SIGNED) AS non_unique,
+        CAST(index_type AS CHAR) AS index_type,
+        CAST(index_comment AS CHAR) AS index_comment
+    FROM information_schema.statistics
+    WHERE table_schema = ? AND table_name = ?
+    ORDER BY index_name, seq_in_index
+    "#
+    }
 }
 
 fn mysql_foreign_keys(
@@ -344,7 +385,8 @@ fn mysql_load_table_design_metadata(
     runtime.block_on(async {
         let mut connection = plan.connect().await?;
         let columns = mysql_columns(&mut connection, &database, &path.name).await?;
-        let index_rows = sqlx::query(mysql_indexes_query())
+        let has_expression = mysql_statistics_has_expression(&mut connection).await;
+        let index_rows = sqlx::query(mysql_indexes_query(has_expression))
             .bind(&database)
             .bind(&path.name)
             .fetch_all(&mut connection)
