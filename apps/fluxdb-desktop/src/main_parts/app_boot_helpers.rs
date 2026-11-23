@@ -510,6 +510,16 @@ fn register_shortcuts(cx: &mut App, settings: &Settings) {
             DeleteConnectionShortcut,
             Some("DeleteConnectionModal"),
         ),
+        KeyBinding::new(
+            "enter",
+            DeleteConnectionShortcut,
+            Some("SaveQueryRenameModal"),
+        ),
+        KeyBinding::new(
+            "enter",
+            DeleteConnectionShortcut,
+            Some("DeleteSavedQueryModal"),
+        ),
         KeyBinding::new("up", TableShortcutPickerPrevious, Some("TableShortcutPicker")),
         KeyBinding::new("down", TableShortcutPickerNext, Some("TableShortcutPicker")),
         KeyBinding::new(

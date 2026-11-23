@@ -517,6 +517,8 @@ fn navicat_main_new(
         cx.new(|cx| InputState::new(window, cx).placeholder(tr("app.placeholder.choice_label")));
     let query_save_name_input =
         cx.new(|cx| InputState::new(window, cx).placeholder(tr("app.placeholder.query_name")));
+    let saved_query_rename_input =
+        cx.new(|cx| InputState::new(window, cx).placeholder(tr("app.placeholder.query_name")));
     let sidebar_search_input =
         cx.new(|cx| InputState::new(window, cx).placeholder(tr("app.placeholder.search_table")));
     let sidebar_search_subscription = cx.subscribe(
@@ -3368,6 +3370,7 @@ fn navicat_main_new(
         column_choice_value_input,
         column_choice_label_input,
         query_save_name_input,
+        saved_query_rename_input,
         _file_picker_task: None,
         query_files: QueryFilesUi::default(),
         _connection_tasks: BTreeMap::new(),
@@ -3461,10 +3464,13 @@ fn navicat_main_new(
         data_cell_context_menu: None,
         data_row_context_menu: None,
         group_context_menu: None,
+        saved_query_context_menu: None,
         pending_query_save: None,
         pending_connection_query_save: None,
         pending_rename_group: None,
         pending_rename_table_folder: None,
+        pending_save_query_rename: None,
+        pending_delete_saved_query: None,
         pending_delete_connection: None,
         server_kill_confirm: None,
         server_maintenance_confirm: None,

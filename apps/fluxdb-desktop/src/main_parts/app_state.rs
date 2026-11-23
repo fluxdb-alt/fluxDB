@@ -1122,6 +1122,13 @@ impl SqlFileEncoding {
     }
 }
 
+/// 侧边栏「查询」节点右键菜单：仅承载已保存查询的身份与弹出位置。
+#[derive(Clone, Copy, Debug)]
+struct SavedQueryContextMenu {
+    query_id: u64,
+    position: Point<Pixels>,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ConnectionContextMenu {
     connection_id: ConnectionId,
@@ -1187,6 +1194,19 @@ struct PendingRenameTableFolder {
     parent_key: String,
     original_name: String,
     name: String,
+}
+
+/// 保存查询重命名弹框：按 id 定位，名称取输入框当前值，不改变查询文本与作用域。
+#[derive(Clone, Debug)]
+struct PendingSaveQueryRename {
+    query_id: u64,
+    error: Option<String>,
+}
+
+/// 保存查询删除确认弹框：只记 id，删除前从列表读取名称展示，避免状态副本过期。
+#[derive(Clone, Copy, Debug)]
+struct PendingDeleteSavedQuery {
+    query_id: u64,
 }
 
 /// MongoDB「重命名集合」弹框。

@@ -843,6 +843,14 @@ fn saved_query_tree(
             cx.stop_propagation();
         }),
     )
+    .on_mouse_down(
+        MouseButton::Right,
+        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+            this.show_saved_query_context_menu(query_id, event.position, window, cx);
+            cx.stop_propagation();
+        }),
+    )
+    .debug_selector(move || format!("saved-query-row:{query_id}"))
 }
 
 fn group_tree(

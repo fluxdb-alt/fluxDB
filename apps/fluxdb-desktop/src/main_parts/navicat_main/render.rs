@@ -449,7 +449,8 @@ impl Render for NavicatMain {
                     || self.tab_context_menu.is_some()
                     || self.data_cell_context_menu.is_some()
                     || self.data_row_context_menu.is_some()
-                    || self.group_context_menu.is_some(),
+                    || self.group_context_menu.is_some()
+                    || self.saved_query_context_menu.is_some(),
                 |this| this.child(context_menu_backdrop(cx)),
             )
             .when_some(self.schema_context_menu.clone(), |this, menu| {
@@ -547,10 +548,31 @@ impl Render for NavicatMain {
             .when_some(self.group_context_menu, |this, menu| {
                 this.child(group_context_menu(menu, &state, colors, cx))
             })
+            .when_some(self.saved_query_context_menu, |this, menu| {
+                this.child(saved_query_context_menu(menu, colors, cx))
+            })
             .when_some(self.pending_delete_connection, |this, connection_id| {
                 this.child(delete_connection_modal(
                     connection_id,
                     &state,
+                    self.focus_handle.clone(),
+                    colors,
+                    cx,
+                ))
+            })
+            .when_some(self.pending_save_query_rename.clone(), |this, pending| {
+                this.child(save_query_rename_modal(
+                    pending,
+                    self.saved_query_rename_input.clone(),
+                    self.focus_handle.clone(),
+                    colors,
+                    cx,
+                ))
+            })
+            .when_some(self.pending_delete_saved_query, |this, pending| {
+                this.child(delete_saved_query_modal(
+                    pending,
+                    &self.saved_queries,
                     self.focus_handle.clone(),
                     colors,
                     cx,

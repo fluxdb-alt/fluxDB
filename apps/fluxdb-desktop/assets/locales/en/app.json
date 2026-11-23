@@ -3003,11 +3003,17 @@
       "submit": "Submit failed",
       "file_picker": "File selection failed"
     },
+    "delete": {
+      "title": "Delete saved query",
+      "message": "Delete query \"%{name}\"? This cannot be undone."
+    },
     "toast": {
       "stop_requested": "Stop requested",
       "saved_local": "SQL saved locally",
       "saved_to_connection": "SQL saved to the connection",
       "saved": "SQL saved",
+      "renamed": "Query renamed",
+      "deleted": "Query deleted",
       "sql_copied": "SQL copied",
       "opened_new_tab": "SQL opened in a new tab; not executed yet"
     },

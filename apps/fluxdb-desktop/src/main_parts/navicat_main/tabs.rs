@@ -18,6 +18,7 @@ impl NavicatMain {
             || self.data_row_context_menu.take().is_some()
             || self.tab_switcher.take().is_some()
             || self.group_context_menu.take().is_some()
+            || self.saved_query_context_menu.take().is_some()
             || std::mem::take(&mut self.query_history_open)
             || std::mem::take(&mut self.query_history_quick_open)
             || std::mem::take(&mut self.quick_open_table_open)
