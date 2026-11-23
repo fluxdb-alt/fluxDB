@@ -18,6 +18,7 @@ impl AppController {
                         connected: false,
                         expanded: false,
                         objects: Vec::new(),
+                        server_version: None,
                         redis_overview: RedisConnectionOverview::default(),
                     })
                     .collect();
@@ -39,6 +40,7 @@ impl AppController {
                         connected: false,
                         expanded: false,
                         objects: Vec::new(),
+                        server_version: None,
                         redis_overview: RedisConnectionOverview::default(),
                     })
                     .collect();
@@ -67,6 +69,7 @@ impl AppController {
                     connected: false,
                     expanded: false,
                     objects: Vec::new(),
+                    server_version: None,
                     redis_overview: RedisConnectionOverview::default(),
                 });
                 self.state
@@ -97,6 +100,8 @@ impl AppController {
                         connection.connected = false;
                         connection.expanded = false;
                         connection.objects.clear();
+                        // 目标实例可能换了版本，旧版本信息不能继续用于功能裁剪。
+                        connection.server_version = None;
                     }
                     endpoint_changed
                 };
@@ -261,6 +266,9 @@ impl AppController {
                 match list_objects_for_connection(&config, None) {
                     Ok(objects) => {
                         self.state.last_error = None;
+                        // 显式打开连接时刷新服务端版本：菜单按版本裁剪入口，
+                        // 也兼容重连到同 ID 但已升级/降级的实例。
+                        connection.server_version = server_version_for_connection(&config);
                         connection.connected = true;
                         connection.expanded = true;
                         connection.objects = objects.clone();
@@ -459,6 +467,9 @@ impl AppController {
                 match list_objects_for_connection(&config, None) {
                     Ok(objects) => {
                         self.state.last_error = None;
+                        if connection.server_version.is_none() {
+                            connection.server_version = server_version_for_connection(&config);
+                        }
                         connection.connected = true;
                         connection.expanded = true;
                         connection.objects = objects.clone();
@@ -538,6 +549,9 @@ impl AppController {
                             self.state.active_tab = self.state.tabs.last().map(|tab| tab.id);
                         }
                         self.state.last_error = None;
+                        if connection.server_version.is_none() {
+                            connection.server_version = server_version_for_connection(&config);
+                        }
                         connection.connected = true;
                         connection.expanded = true;
                         // 删除库后重拉连接第一层：只替换库/schema 层并保留仍存活库下已加载的表/视图，

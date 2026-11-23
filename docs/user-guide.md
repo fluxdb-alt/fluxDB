@@ -396,7 +396,7 @@ DM8 当前不提供触发器设计页签，新建表时只能配置表、列、�
 | --- | --- |
 | 打开连接 / 关闭连接 | 建立或释放当前连接会话；关闭时如果该连接下还有标签页，会先弹出确认。 |
 | 新建查询 | 打开查询编辑器，先选择连接和数据库作用域；MongoDB 连接不提供。 |
-| 用户与权限 | 打开该连接的用户和权限管理页；MySQL、MariaDB、TiDB、PostgreSQL、KingbaseES、SQL Server、Oracle、DM8 可用（KingbaseES 沿用 PostgreSQL 实现，尚未单独回归），SQLite 显示为不可用。 |
+| 用户与权限 | 打开该连接的用户和权限管理页；MySQL 8.0+、MariaDB、TiDB、PostgreSQL、KingbaseES、SQL Server、Oracle、DM8 可用（KingbaseES 沿用 PostgreSQL 实现，尚未单独回归）。MySQL 5.7 及更早没有角色管理，不显示该入口；SQLite 显示为不可用。 |
 | 服务器 | 打开该连接对应的服务器面板，查看会话、锁等待、客户端和运行状态；SQL、Redis、MongoDB 连接各有对应视图，详见 [3.6 服务器面板](#36-服务器面板)。 |
 | 执行 SQL 文件 | 选择本地 SQL 文件并在该连接上执行，仅 SQL 类型连接提供。 |
 | 新建数据库 | 在服务端创建数据库；Redis 不提供。 |
@@ -1299,13 +1299,13 @@ FluxDB 把账号、成员关系和授权收在同一个页签里，打开连接�
 
 | 数据库 | 页面标题 | 管理对象 |
 | --- | --- | --- |
-| MySQL / MariaDB / TiDB | 用户与权限 | 用户、角色与库级权限 |
+| MySQL 8.0+ / MariaDB / TiDB | 用户与权限 | 用户、角色与库级权限 |
 | PostgreSQL | 用户与角色 | 集群级角色、成员关系与对象权限 |
 | KingbaseES | 用户与角色 | 沿用 PostgreSQL 页面与 `pg_catalog` 查询，尚未在 Kingbase 上单独回归 |
 | SQL Server | 用户与角色 | 登录名、数据库用户、服务器/数据库角色与显式权限 |
 | Oracle / 达梦 DM8 | 用户与权限 | 账号（即 Schema）、角色、系统权限与对象权限 |
 
-SQLite、MongoDB、Redis 不显示该入口：它们没有同类的账号授权模型。
+SQLite、MongoDB、Redis 不显示该入口：它们没有同类的账号授权模型。MySQL 5.7 及更早版本也没有角色管理，连接成功后同样不显示该入口；版本在打开连接时读取，读取失败时按支持处理，避免误伤可用实例。
 
 入口：
 

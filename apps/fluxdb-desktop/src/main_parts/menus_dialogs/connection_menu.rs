@@ -12,8 +12,17 @@ fn connection_context_menu(
     let grouped = state
         .sidebar_layout
         .is_connection_grouped(menu.connection_id);
+    // MySQL 5.7 及更早没有角色管理，直接隐藏该入口；其他不支持的库保持原有置灰项。
+    let user_admin_hidden = connection.is_some_and(|connection| {
+        connection.config.kind == DatabaseKind::MySql
+            && !database_user_admin_supported_for_version(
+                connection.config.kind,
+                connection.server_version.as_deref(),
+            )
+    });
     let user_admin_action = connection
         .filter(|connection| supports_database_user_admin(connection.config.kind))
+        .filter(|_| !user_admin_hidden)
         .map(|_| ConnectionMenuAction::UserAdmin);
     // 服务器面板覆盖有实例会话模型的数据库；其余库仍显示入口但置灰。
     let server_panel_action = connection
@@ -90,7 +99,7 @@ fn connection_context_menu(
                 cx,
             ))
         })
-        .when(!is_redis && !is_mongo, |this| {
+        .when(!is_redis && !is_mongo && !user_admin_hidden, |this| {
             this.child(connection_menu_item(
                 tr("app.connection_menu.user_admin").to_string(),
                 "users",

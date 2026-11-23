@@ -45,6 +45,29 @@ fn mysql_server_activity(config: &ConnectionConfig) -> fluxdb_core::Result<Serve
     })
 }
 
+/// 轻量读取服务端版本，供连接级能力判断（如 MySQL 5.7 隐藏角色管理入口）。
+///
+/// 复用连接计划建立一条短连接，只执行 `SELECT VERSION()`；任何失败都返回
+/// `None`，由调用方按“未知版本”处理，不影响连接本身是否可用。
+pub fn mysql_server_version(config: &ConnectionConfig) -> Option<String> {
+    if !is_mysql_protocol_kind(config.kind) {
+        return None;
+    }
+    let plan = mysql_connection_plan(config).ok()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .ok()?;
+    runtime.block_on(async {
+        let mut connection = plan.connect().await.ok()?;
+        let version = mysql_query_scalar_string(&mut connection, "SELECT VERSION()")
+            .await
+            .ok();
+        let _ = connection.close().await;
+        version
+    })
+}
+
 async fn mysql_query_scalar_string(
     connection: &mut MySqlConnection,
     sql: &str,

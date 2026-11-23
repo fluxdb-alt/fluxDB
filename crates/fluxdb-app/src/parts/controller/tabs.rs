@@ -178,6 +178,16 @@ impl AppController {
         else {
             return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
         };
+        // MySQL 5.7 及更早没有角色，菜单已隐藏；命令层再兜底一次，避免其他入口绕过。
+        if !fluxdb_core::database_user_admin_supported_for_version(
+            connection.config.kind,
+            connection.server_version.as_deref(),
+        ) {
+            return self.fail(Error::new(
+                ErrorKind::Unsupported,
+                "MySQL 5.7 及更早版本不支持用户与权限管理",
+            ));
+        }
         // 用户与权限：MySQL/TiDB 走既有 provider；PostgreSQL 走 PG 角色管理（角色经连接器读取）。
         let scope = match connection.config.kind {
             DatabaseKind::MySql | DatabaseKind::TiDb | DatabaseKind::MariaDb => match database_user_admin_provider(connection.config.kind) {

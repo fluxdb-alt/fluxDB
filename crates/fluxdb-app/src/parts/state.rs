@@ -624,6 +624,9 @@ pub struct ConnectionState {
     pub connected: bool,
     pub expanded: bool,
     pub objects: Vec<ObjectSummary>,
+    /// MySQL 协议连接的服务端版本，连接成功后读取；用于按版本裁剪不兼容功能
+    /// （如 MySQL 5.7 没有角色管理）。其他数据库或读取失败时为 None。
+    pub server_version: Option<String>,
     /// Redis 连接级运行概览（版本 / 内存 / CPU），只在连接为 Redis 时有意义。
     pub redis_overview: RedisConnectionOverview,
 }
