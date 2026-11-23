@@ -21,8 +21,12 @@ impl NavicatMain {
     }
 
     fn cancel_query_save_modal(&mut self, cx: &mut Context<Self>) {
+        // 共用的保存弹框头部 X 按钮走这里；同时清掉查询侧栏的重命名/删除弹框，
+        // 避免复用头部时点 X 关不掉当前弹层。
         if self.pending_query_save.take().is_some()
             || self.pending_connection_query_save.take().is_some()
+            || self.pending_save_query_rename.take().is_some()
+            || self.pending_delete_saved_query.take().is_some()
         {
             cx.notify();
         }
@@ -364,6 +368,171 @@ impl NavicatMain {
             },
             cx,
         );
+    }
+
+    /// 侧边栏右键重命名：按 id 定位查询，输入框带原名称，保存前校验空值与重名。
+    fn start_rename_saved_query(
+        &mut self,
+        query_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(query) = self.saved_queries.iter().find(|q| q.id == query_id) else {
+            return;
+        };
+        let name = query.name.clone();
+        self.saved_query_rename_input.update(cx, |input, cx| {
+            input.set_value(&name, window, cx);
+        });
+        self.pending_save_query_rename = Some(PendingSaveQueryRename {
+            query_id,
+            error: None,
+        });
+        cx.notify();
+    }
+
+    fn cancel_rename_saved_query(&mut self, cx: &mut Context<Self>) {
+        self.pending_save_query_rename = None;
+        cx.notify();
+    }
+
+    fn confirm_rename_saved_query(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_save_query_rename.take() else {
+            return;
+        };
+        // 名称来自输入框而非 pending 快照：弹框渲染后用户改的是 InputState，
+        // 用快照会让确认按钮永远保存旧名称。
+        let name = self
+            .saved_query_rename_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            self.pending_save_query_rename = Some(PendingSaveQueryRename {
+                error: Some(tr("app.query.error.name_required").to_string()),
+                ..pending
+            });
+            cx.notify();
+            return;
+        }
+        if self
+            .saved_queries
+            .iter()
+            .any(|q| q.id != pending.query_id && q.name == name)
+        {
+            self.pending_save_query_rename = Some(PendingSaveQueryRename {
+                error: Some(tr("app.group.error.duplicate").to_string()),
+                ..pending
+            });
+            cx.notify();
+            return;
+        }
+        let Some(index) = self
+            .saved_queries
+            .iter()
+            .position(|q| q.id == pending.query_id)
+        else {
+            cx.notify();
+            return;
+        };
+        let old_name = self.saved_queries[index].name.clone();
+        self.saved_queries[index].name = name.clone();
+        if let Err(error) = self.storage.save_saved_queries(&self.saved_queries) {
+            self.saved_queries[index].name = old_name;
+            self.pending_save_query_rename = Some(PendingSaveQueryRename {
+                error: Some(
+                    tr("app.query.error.save_failed")
+                        .replace("%{error}", &error.to_string()),
+                ),
+                ..pending
+            });
+            cx.notify();
+            return;
+        }
+        // 已打开的查询标签标题同步为新名称，避免侧栏与标签显示不一致。
+        if let Some(tab_id) = saved_query_tab_id(self.controller.state(), pending.query_id) {
+            self.dispatch(
+                AppCommand::MarkQuerySaved {
+                    tab_id,
+                    title: name,
+                    origin: QueryOrigin::Connection {
+                        query_id: pending.query_id,
+                    },
+                },
+                cx,
+            );
+        }
+        self.pending_save_query_rename = None;
+        self.show_message(
+            tr("app.query.toast.renamed").as_ref(),
+            AppMessageKind::Success,
+            cx,
+        );
+        cx.notify();
+    }
+
+    fn request_delete_saved_query(
+        &mut self,
+        query_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.saved_queries.iter().any(|q| q.id == query_id) {
+            return;
+        }
+        self.pending_delete_saved_query = Some(PendingDeleteSavedQuery { query_id });
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    fn cancel_delete_saved_query(&mut self, cx: &mut Context<Self>) {
+        self.pending_delete_saved_query = None;
+        cx.notify();
+    }
+
+    fn confirm_delete_saved_query(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_delete_saved_query.take() else {
+            return;
+        };
+        let Some(query) = self
+            .saved_queries
+            .iter()
+            .find(|q| q.id == pending.query_id)
+            .cloned()
+        else {
+            cx.notify();
+            return;
+        };
+        // 已打开的查询标签先关闭，再删除持久化记录；脏标签走标准未保存确认流程，
+        // 不在这里绕过用户已有草稿。
+        let tab_id = saved_query_tab_id(self.controller.state(), pending.query_id);
+        self.saved_queries.retain(|q| q.id != pending.query_id);
+        if let Err(error) = self.storage.save_saved_queries(&self.saved_queries) {
+            // 落盘失败则回滚内存列表，不允许 UI 显示与磁盘状态分叉。
+            self.saved_queries.push(query);
+            self.saved_queries.sort_by_key(|q| q.id);
+            self.pending_delete_saved_query = Some(pending);
+            self.show_message(
+                &tr("app.query.error.save_failed").replace("%{error}", &error.to_string()),
+                AppMessageKind::Error,
+                cx,
+            );
+            cx.notify();
+            return;
+        }
+        self.query_save_targets.retain(|_, target| {
+            !matches!(target, QuerySaveTarget::Connection(id) if *id == pending.query_id)
+        });
+        if let Some(tab_id) = tab_id {
+            self.dispatch(AppCommand::CloseTab(tab_id), cx);
+        }
+        self.show_message(
+            tr("app.query.toast.deleted").as_ref(),
+            AppMessageKind::Success,
+            cx,
+        );
+        cx.notify();
     }
 }
 

@@ -807,6 +807,8 @@ struct NavicatMain {
     column_choice_value_input: Entity<InputState>,
     column_choice_label_input: Entity<InputState>,
     query_save_name_input: Entity<InputState>,
+    /// 侧边栏保存查询的重命名输入框，与「另存为」输入框分开，避免互相覆盖草稿。
+    saved_query_rename_input: Entity<InputState>,
     _file_picker_task: Option<Task<()>>,
     _connection_tasks: BTreeMap<u64, Task<()>>,
     /// 侧边栏「刷新连接树」的后台任务。只保留最近一次：连点刷新时旧任务被丢弃即取消，
@@ -949,10 +951,13 @@ struct NavicatMain {
     data_cell_context_menu: Option<DataCellContextMenu>,
     data_row_context_menu: Option<DataRowContextMenu>,
     group_context_menu: Option<GroupContextMenu>,
+    saved_query_context_menu: Option<SavedQueryContextMenu>,
     pending_query_save: Option<TabId>,
     pending_connection_query_save: Option<TabId>,
     pending_rename_group: Option<PendingRenameGroup>,
     pending_rename_table_folder: Option<PendingRenameTableFolder>,
+    pending_save_query_rename: Option<PendingSaveQueryRename>,
+    pending_delete_saved_query: Option<PendingDeleteSavedQuery>,
     pending_delete_connection: Option<ConnectionId>,
     /// 服务器面板终止查询/会话的二次确认。
     server_kill_confirm: Option<ServerKillConfirm>,
@@ -1127,7 +1132,7 @@ struct NavicatMain {
     /// 仅用于失败修复定位，不能用于执行或刷新 SQL。
     query_execution_sources: BTreeMap<QueryPaneKey, Vec<SqlStatementRun>>,
     query_save_targets: BTreeMap<TabId, QuerySaveTarget>,
-    saved_queries: Vec<SavedQuery>,
+    pub(crate) saved_queries: Vec<SavedQuery>,
     /// 启动后是否已完成持久化历史/保存查询的一次性异步恢复（防重复触发）。
     persisted_history_loaded: bool,
     _query_editor_subscriptions: BTreeMap<QueryPaneKey, Subscription>,

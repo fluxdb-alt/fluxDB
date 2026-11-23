@@ -1404,3 +1404,84 @@ fn data_row_context_menu(
             |this| this.child(data_row_export_submenu(export_menu, window, colors, cx)),
         )
 }
+
+/// 侧边栏「查询」节点右键菜单：重命名当前保存查询 / 删除（需二次确认）。
+fn saved_query_context_menu(
+    menu: SavedQueryContextMenu,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let rename_item = saved_query_menu_item(
+        tr("app.context.rename").to_string(),
+        AppIcon::Edit,
+        false,
+        menu,
+        false,
+        colors,
+        cx,
+    );
+    let delete_item = saved_query_menu_item(
+        tr("app.common.delete").to_string(),
+        AppIcon::Trash,
+        true,
+        menu,
+        true,
+        colors,
+        cx,
+    );
+    div()
+        .absolute()
+        .top(menu.position.y)
+        .left(menu.position.x)
+        .w(px(168.))
+        .rounded(colors.radius_lg)
+        .border_1()
+        .border_color(colors.border)
+        .bg(menu_surface_bg(colors))
+        .occlude()
+        .shadow(vec![box_shadow(
+            px(0.),
+            px(14.),
+            px(30.),
+            px(0.),
+            hsla(0., 0., 0., 0.18),
+        )])
+        .p_1()
+        .text_size(ui_text_size(13.))
+        .font_weight(gpui::FontWeight::BOLD)
+        .text_color(colors.text)
+        .key_context("SavedQueryContextMenu")
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+        .debug_selector(|| "saved-query-context-menu".into())
+        .child(rename_item)
+        .child(delete_item)
+}
+
+fn saved_query_menu_item(
+    label: impl Into<String>,
+    icon: AppIcon,
+    destructive: bool,
+    menu: SavedQueryContextMenu,
+    delete: bool,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Stateful<Div> {
+    let label = label.into();
+    let selector = format!("saved-query-menu-item:{label}");
+    table_inert_menu_item(label, icon, destructive, colors)
+        .debug_selector(move || selector)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, window, cx| {
+                this.saved_query_context_menu = None;
+                if delete {
+                    this.request_delete_saved_query(menu.query_id, window, cx);
+                } else {
+                    this.start_rename_saved_query(menu.query_id, window, cx);
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+}

@@ -1,4 +1,19 @@
 impl NavicatMain {
+    /// 侧边栏「查询」节点右键：与其他右键菜单互斥，统一走视口收敛。
+    fn show_saved_query_context_menu(
+        &mut self,
+        query_id: u64,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let position = clamp_context_menu_position(position, 168., context_menu_height(2., 0.), window);
+        self.close_context_menus(cx);
+        self.saved_query_context_menu = Some(SavedQueryContextMenu { query_id, position });
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
     fn show_connection_context_menu(
         &mut self,
         connection_id: ConnectionId,
@@ -54,6 +69,7 @@ impl NavicatMain {
         self.data_row_context_menu = None;
         self.tab_switcher = None;
         self.group_context_menu = None;
+        self.saved_query_context_menu = None;
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -80,6 +96,7 @@ impl NavicatMain {
         self.data_row_context_menu = None;
         self.tab_switcher = None;
         self.group_context_menu = None;
+        self.saved_query_context_menu = None;
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -106,6 +123,7 @@ impl NavicatMain {
         self.data_row_context_menu = None;
         self.tab_switcher = None;
         self.group_context_menu = None;
+        self.saved_query_context_menu = None;
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -131,6 +149,7 @@ impl NavicatMain {
         self.data_row_context_menu = None;
         self.tab_switcher = None;
         self.group_context_menu = None;
+        self.saved_query_context_menu = None;
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -160,6 +179,7 @@ impl NavicatMain {
         self.data_row_context_menu = None;
         self.tab_switcher = None;
         self.group_context_menu = None;
+        self.saved_query_context_menu = None;
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -186,6 +206,7 @@ impl NavicatMain {
         self.data_row_context_menu = None;
         self.tab_switcher = None;
         self.group_context_menu = None;
+        self.saved_query_context_menu = None;
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -212,6 +233,7 @@ impl NavicatMain {
         self.data_row_context_menu = None;
         self.tab_switcher = None;
         self.group_context_menu = None;
+        self.saved_query_context_menu = None;
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -238,6 +260,7 @@ impl NavicatMain {
         self.data_row_context_menu = None;
         self.tab_switcher = None;
         self.group_context_menu = None;
+        self.saved_query_context_menu = None;
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -292,6 +315,7 @@ impl NavicatMain {
         self.tab_context_menu = None;
         self.data_row_context_menu = None;
         self.group_context_menu = None;
+        self.saved_query_context_menu = None;
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -317,6 +341,7 @@ impl NavicatMain {
         self.tab_context_menu = None;
         self.data_cell_context_menu = None;
         self.group_context_menu = None;
+        self.saved_query_context_menu = None;
         self.focus_handle.focus(window, cx);
         cx.notify();
     }

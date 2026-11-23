@@ -1254,7 +1254,11 @@ impl NavicatMain {
             return;
         }
 
-        if self.pending_query_save.is_some() || self.pending_connection_query_save.is_some() {
+        if self.pending_query_save.is_some()
+            || self.pending_connection_query_save.is_some()
+            || self.pending_save_query_rename.is_some()
+            || self.pending_delete_saved_query.is_some()
+        {
             self.cancel_query_save_modal(cx);
             return;
         }

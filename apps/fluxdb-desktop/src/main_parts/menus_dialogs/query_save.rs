@@ -207,3 +207,245 @@ fn query_save_modal_header(
                 ),
         )
 }
+
+/// 保存查询重命名弹框：输入新名称，Esc / 遮罩 / 关闭按钮取消。
+fn save_query_rename_modal(
+    pending: PendingSaveQueryRename,
+    input: Entity<InputState>,
+    focus_handle: FocusHandle,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> impl IntoElement {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .occlude()
+        .bg(if colors.is_dark {
+            hsla(220. / 360., 0.12, 0.08, 0.54)
+        } else {
+            hsla(210. / 360., 0.20, 0.20, 0.16)
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.cancel_rename_saved_query(cx);
+                cx.stop_propagation();
+            }),
+        )
+        .child(
+            div()
+                .w(px(420.))
+                .rounded(colors.radius_lg)
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.panel_bg)
+                .shadow(vec![box_shadow(
+                    px(0.),
+                    px(18.),
+                    px(42.),
+                    px(0.),
+                    hsla(0., 0., 0., if colors.is_dark { 0.42 } else { 0.18 }),
+                )])
+                .overflow_hidden()
+                .text_color(colors.text)
+                .track_focus(&focus_handle)
+                .key_context("SaveQueryRenameModal")
+                .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
+                    this.cancel_rename_saved_query(cx);
+                    cx.stop_propagation();
+                }))
+                .on_action(cx.listener(|this, _: &DeleteConnectionShortcut, _, cx| {
+                    this.confirm_rename_saved_query(cx);
+                    cx.stop_propagation();
+                }))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(query_save_modal_header(
+                    tr("app.context.rename"),
+                    colors,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .px_5()
+                        .pb_5()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(ui_text_size(13.))
+                                .text_color(colors.muted)
+                                .child(tr("app.query.save.name")),
+                        )
+                        .child(
+                            div()
+                                .h(px(36.))
+                                .rounded(colors.radius)
+                                .border_1()
+                                .border_color(colors.border)
+                                .bg(colors.input_bg)
+                                .px_3()
+                                .child(
+                                    Input::new(&input)
+                                        .appearance(false)
+                                        .focus_bordered(false)
+                                        .w_full()
+                                        .h_full()
+                                        .text_size(ui_text_size(14.)),
+                                ),
+                        )
+                        .when_some(pending.error, |this, error| {
+                            this.child(
+                                div()
+                                    .text_size(ui_text_size(12.))
+                                    .text_color(rgb(0xe5484d))
+                                    .child(error),
+                            )
+                        }),
+                )
+                .child(div().h(px(1.)).bg(colors.border_soft))
+                .child(
+                    div()
+                        .h(px(58.))
+                        .px_5()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("save-query-rename-cancel")
+                                .debug_selector(|| "save-query-rename-cancel".into())
+                                .label(tr("app.common.cancel"))
+                                .w(px(78.))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.cancel_rename_saved_query(cx);
+                                    cx.stop_propagation();
+                                })),
+                        )
+                        .child(
+                            Button::new("save-query-rename-confirm")
+                                .debug_selector(|| "save-query-rename-confirm".into())
+                                .label(tr("app.common.save"))
+                                .primary()
+                                .w(px(78.))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.confirm_rename_saved_query(cx);
+                                    cx.stop_propagation();
+                                })),
+                        ),
+                ),
+        )
+}
+
+/// 保存查询删除确认弹框：展示名称，提示不可恢复，取消 / 删除。
+fn delete_saved_query_modal(
+    pending: PendingDeleteSavedQuery,
+    saved_queries: &[SavedQuery],
+    focus_handle: FocusHandle,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> impl IntoElement {
+    let name = saved_queries
+        .iter()
+        .find(|q| q.id == pending.query_id)
+        .map(|q| q.name.clone())
+        .unwrap_or_default();
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .occlude()
+        .bg(if colors.is_dark {
+            hsla(220. / 360., 0.12, 0.08, 0.54)
+        } else {
+            hsla(210. / 360., 0.20, 0.20, 0.16)
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.cancel_delete_saved_query(cx);
+                cx.stop_propagation();
+            }),
+        )
+        .child(
+            div()
+                .w(px(420.))
+                .rounded(colors.radius_lg)
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.panel_bg)
+                .shadow(vec![box_shadow(
+                    px(0.),
+                    px(18.),
+                    px(42.),
+                    px(0.),
+                    hsla(0., 0., 0., if colors.is_dark { 0.42 } else { 0.18 }),
+                )])
+                .overflow_hidden()
+                .text_color(colors.text)
+                .track_focus(&focus_handle)
+                .key_context("DeleteSavedQueryModal")
+                .on_action(cx.listener(|this, _: &CancelDialog, _, cx| {
+                    this.cancel_delete_saved_query(cx);
+                    cx.stop_propagation();
+                }))
+                .on_action(cx.listener(|this, _: &DeleteConnectionShortcut, _, cx| {
+                    this.confirm_delete_saved_query(cx);
+                    cx.stop_propagation();
+                }))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(query_save_modal_header(
+                    tr("app.query.delete.title"),
+                    colors,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .px_5()
+                        .pb_4()
+                        .text_size(ui_text_size(13.))
+                        .text_color(colors.muted)
+                        .child(tr("app.query.delete.message").replace("%{name}", &name)),
+                )
+                .child(div().h(px(1.)).bg(colors.border_soft))
+                .child(
+                    div()
+                        .h(px(58.))
+                        .px_5()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("delete-saved-query-cancel")
+                                .debug_selector(|| "delete-saved-query-cancel".into())
+                                .label(tr("app.common.cancel"))
+                                .w(px(78.))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.cancel_delete_saved_query(cx);
+                                    cx.stop_propagation();
+                                })),
+                        )
+                        .child(
+                            Button::new("delete-saved-query-confirm")
+                                .debug_selector(|| "delete-saved-query-confirm".into())
+                                .label(tr("app.common.delete"))
+                                .danger()
+                                .w(px(78.))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.confirm_delete_saved_query(cx);
+                                    cx.stop_propagation();
+                                })),
+                        ),
+                ),
+        )
+}
