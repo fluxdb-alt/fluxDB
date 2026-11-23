@@ -5,4 +5,6 @@ edition = "2024"
 description = "独立、与业务解耦的通用编辑器内核"
 
 [dependencies]
+# 仅用于东亚宽字符（CJK/全角/emoji）的展示列宽计算；无运行时依赖的业务逻辑。
+unicode-width = "0.2.2"
 

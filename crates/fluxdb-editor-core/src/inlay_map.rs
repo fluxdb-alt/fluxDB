@@ -365,9 +365,9 @@ fn compute_revision(input_version: u64, provider_revision: u64, rows: &[Vec<RowI
     h
 }
 
-/// 估算 inlay 文本的显示列宽（纯文本，UTF-16 近似；不含 tab 展开）。
+/// 估算 inlay 文本的显示列宽（纯文本，按字符展示宽度；不含 tab 展开）。
 pub fn inlay_text_width(text: &str) -> usize {
-    text.encode_utf16().count()
+    text.chars().map(crate::tab_map::char_display_width).sum()
 }
 
 /// 消费 `InlineHintProvider`，把其产出转为 `InlaySnapshot`（DM-302）。
