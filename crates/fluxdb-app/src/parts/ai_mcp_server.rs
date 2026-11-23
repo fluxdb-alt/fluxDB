@@ -96,6 +96,8 @@ pub struct McpDatasourceHandle {
     pub target: String,
     pub label: String,
     pub kind: McpResourceKind,
+    /// 具体数据库类型（mysql/tidb/postgres/...），供外部模型选择正确 SQL 方言。
+    pub database_kind: String,
     /// 有效只读：为 true 时写工具不列出也拒绝。
     pub read_only: bool,
     /// 库名提示：来自用户「选择展示数据库」设置，回落连接自带默认库；空表示无从得知。
@@ -134,11 +136,22 @@ pub fn datasource_handle(
 ) -> McpDatasourceHandle {
     let kind = resource_kind_for_config(config);
     let connection_read_only = config.is_some_and(connection_is_read_only);
+    // 具体库类型由 DatabaseKind 的 serde 名转小写得到（MySql→mysql、TiDb→tidb、
+    // SqlServer→sqlserver），供外部模型按方言写 SQL；无配置时留空。
+    let database_kind = config
+        .map(|config| {
+            serde_json::to_value(config.kind)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_ascii_lowercase))
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
     McpDatasourceHandle {
         connection_id: fluxdb_core::ConnectionId(connection_id),
         target: format!("conn:{connection_id}"),
         label,
         kind,
+        database_kind,
         read_only: !allows_write || connection_read_only,
         databases: config.map(configured_databases).unwrap_or_default(),
     }
@@ -409,7 +422,8 @@ pub fn connections_list_view() -> fluxdb_core::Result<McpToolView> {
         name: "fluxdb_connections_list".into(),
         internal_id: None,
         version: 1,
-        description: "列出已加入对外服务的数据源、读写策略、库名提示（databases）与 target 前缀；\
+        description: "列出已加入对外服务的数据源、数据库类型（database_kind，用于决定 SQL 方言）、\
+读写策略、库名提示（databases）与 target 前缀；\
 后续检索/执行请把 target 写成 conn:<id>[/db:<database>][/schema:<schema>]（不返回 endpoint 或凭据）"
             .into(),
         input_schema: serde_json::json!({
@@ -544,6 +558,7 @@ impl McpExecutionService {
                         McpResourceKind::Relational => "relational",
                         McpResourceKind::Redis => "redis",
                     },
+                    "database_kind": &handle.database_kind,
                     "write_policy": if handle.read_only { "read_only" } else { "read_write" },
                     // 静态库提示；真正可检索的库仍以连接器为准。
                     "databases": &handle.databases,
