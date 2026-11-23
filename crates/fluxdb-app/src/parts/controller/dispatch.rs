@@ -2262,6 +2262,8 @@ impl AppController {
             }
             AppCommand::SaveSettings(settings) => {
                 self.state.settings = settings;
+                // MCP 端口可配置：若端点已启用，按新端口重启监听。
+                self.sync_mcp_http_endpoint();
                 AppEvent::SettingsSaved
             }
             AppCommand::ClearCompletionIndexCache => {

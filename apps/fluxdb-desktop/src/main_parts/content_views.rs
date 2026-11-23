@@ -242,6 +242,7 @@ fn content(
                     mcp_connection_details: this.ai_mcp_connection_details.clone(),
                     mcp_connection_error: this.ai_mcp_connection_error.clone(),
                     mcp_details_open: this.ai_mcp_details_open,
+                    mcp_port_input: this.mcp_port_input.clone(),
                     audit_filter: this.ai_audit_filter,
                     audit_filter_input: this.ai_audit_filter_input.clone(),
                     audit_filter_text: this.ai_audit_filter_text.clone(),

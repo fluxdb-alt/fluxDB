@@ -40,6 +40,8 @@ struct AiSettingsPanelState {
     mcp_connection_details: Option<fluxdb_app::McpConnectionDetails>,
     mcp_connection_error: Option<String>,
     mcp_details_open: bool,
+    /// MCP HTTP 端口输入框：渲染期由 NavicatMain 注入，避免渲染时回读实体。
+    mcp_port_input: Entity<InputState>,
     /// 「安全审计」页签：判定筛选（`None` = 全部）、搜索文本、展开的审计行 id。
     audit_filter: Option<fluxdb_app::AiAuditDecision>,
     audit_filter_input: Entity<InputState>,

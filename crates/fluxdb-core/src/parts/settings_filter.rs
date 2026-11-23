@@ -261,6 +261,9 @@ pub struct Settings {
     /// 支持占位符 `{version}`（如 `17.6-1`）与 `{platform}`（`windows-x64` / `osx`）。
     #[serde(default)]
     pub pg_client_download_source: String,
+    /// 应用内 MCP HTTP 端点监听端口；默认 47821。修改后需重启端点生效（保存设置时自动重启）。
+    #[serde(default = "default_mcp_http_port")]
+    pub mcp_http_port: u16,
 }
 
 /// 表级快捷组。
@@ -345,6 +348,7 @@ impl Default for Settings {
             pg_dump_path: String::new(),
             pg_client_dir: String::new(),
             pg_client_download_source: String::new(),
+            mcp_http_port: default_mcp_http_port(),
         }
     }
 }
@@ -499,6 +503,11 @@ fn default_backup_dir() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+/// 应用内 MCP HTTP 端点默认端口，与 mcp_http_host::DEFAULT_MCP_HTTP_PORT 保持一致。
+fn default_mcp_http_port() -> u16 {
+    47821
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

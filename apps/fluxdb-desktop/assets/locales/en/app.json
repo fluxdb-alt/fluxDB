@@ -1658,7 +1658,11 @@
     "mcp": {
       "control_title": "MCP control",
       "enable_server": "Enable MCP Server",
-      "enable_server_detail": "Serve an MCP HTTP endpoint on the loopback address (default 127.0.0.1:47821) for external clients",
+      "enable_server_detail": "Serve an MCP HTTP endpoint on the loopback address for external clients; change the port on the left (1-65535), effective immediately",
+      "port_placeholder": "Port",
+      "port_save": "Save port",
+      "port_saved": "MCP port saved, endpoint restarted on the new port",
+      "port_invalid": "Invalid port, enter a number from 1 to 65535",
       "default_policy": "Global default policy",
       "default_policy_detail": "Read-only / read-write. Datasources can follow this default; this does not grant connection authorization",
       "datasources": "Datasources",

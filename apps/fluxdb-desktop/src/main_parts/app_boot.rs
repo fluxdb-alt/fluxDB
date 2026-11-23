@@ -550,6 +550,17 @@ fn navicat_main_new(
             }
         },
     );
+    // MCP HTTP 端口输入框：初始值来自当前全局设置（启动已加载 config.toml），缺省回退默认端口。
+    let initial_mcp_port = controller.state().settings.mcp_http_port;
+    let mcp_port_input = cx.new(|cx| {
+        InputState::new(window, cx)
+            .default_value(initial_mcp_port.to_string())
+            .placeholder(tr("app.ai.mcp.port_placeholder"))
+            .validate(|value, _| {
+                value.trim().is_empty()
+                    || value.trim().parse::<u16>().is_ok_and(|port| port > 0)
+            })
+    });
     let field_filter_search_input =
         cx.new(|cx| InputState::new(window, cx).placeholder(tr("app.placeholder.search_field")));
     let field_filter_search_subscription = cx.subscribe(
@@ -3631,6 +3642,7 @@ fn navicat_main_new(
         ai_mcp_connection_details: None,
         ai_mcp_connection_error: None,
         ai_mcp_details_open: false,
+        mcp_port_input,
         ai_agent_editor: None,
         ai_agent_editor_debug_pending: debug_ai_agent_draft_requested(),
         ai_agent_delete_just_removed: String::new(),

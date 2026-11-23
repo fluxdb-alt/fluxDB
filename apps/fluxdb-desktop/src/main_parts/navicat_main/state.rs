@@ -127,6 +127,8 @@ struct NavicatMain {
     ai_mcp_connection_details: Option<fluxdb_app::McpConnectionDetails>,
     ai_mcp_connection_error: Option<String>,
     ai_mcp_details_open: bool,
+    /// MCP HTTP 端点端口输入框：初值来自全局 Settings，保存时写回并重启端点。
+    mcp_port_input: Entity<InputState>,
     /// 「Agent 配置」编辑草稿；`None` 表示未选中任何 Agent。
     ai_agent_editor: Option<AiAgentEditorState>,
     /// 调试用：首帧后自动打开 Agent 新建草稿（仅 debug 构建读取）。
