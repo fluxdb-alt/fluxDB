@@ -393,7 +393,39 @@ where
             .unwrap_or(CellValue::Null);
     }
 
-    CellValue::Null
+    mysql_raw_cell_value_by(row, index)
+}
+
+/// 类型兼容表之外的兜底解码。
+///
+/// sqlx 的 MySQL 解码先做类型兼容检查：`ColumnType::Json` 不在 `str`/`[u8]` 的
+/// compatible 列表里，`try_get` 必然失败，真实值会静默退化成 NULL（表浏览因为
+/// `CAST(... AS CHAR)` 投影成字符串才没暴露，查询编辑器直接 `SELECT *` 就丢值）。
+/// JSON 的线上表示就是 UTF-8 文本，这里跳过兼容检查读原始字节；`SET`/`GEOMETRY`
+/// 这类同样未被解码器覆盖的类型也走同一兜底，避免再伪装成 NULL。
+fn mysql_raw_cell_value_by<I>(row: &MySqlRow, index: I) -> CellValue
+where
+    I: ColumnIndex<MySqlRow> + Copy,
+{
+    let Ok(Some(bytes)) = row.try_get_unchecked::<Option<Vec<u8>>, _>(index) else {
+        return CellValue::Null;
+    };
+    let is_json = index
+        .index(row)
+        .ok()
+        .and_then(|index| row.columns().get(index))
+        .is_some_and(|column| column.type_info().name().eq_ignore_ascii_case("json"));
+    mysql_raw_cell_value(bytes, is_json)
+}
+
+fn mysql_raw_cell_value(bytes: Vec<u8>, is_json: bool) -> CellValue {
+    if !is_json {
+        return mysql_query_bytes_cell_value(bytes);
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => CellValue::Json(text),
+        Err(error) => CellValue::Bytes(error.into_bytes()),
+    }
 }
 
 /// MySQL 无符号整型投影：类型化数值让下游能区分真实数值与文本（产物数值列判定、
@@ -525,7 +557,7 @@ fn binary_summary(
 
 #[cfg(test)]
 mod page_collection_tests {
-    use super::{rows_with_large_cells, spill_large_cells};
+    use super::{mysql_raw_cell_value, rows_with_large_cells, spill_large_cells};
     use fluxdb_core::{
         CellContentMeta, CellContentStore, CellValue, Column, LargeValueKind, Pagination,
     };
@@ -598,6 +630,21 @@ mod page_collection_tests {
             };
             assert!((large.preview.len() as u64) < original_len as u64);
         }
+    }
+
+    /// JSON 列必须保留原文，不能被当成 NULL 或提前截成二进制。
+    #[test]
+    fn mysql_json_bytes_stay_json_text() {
+        let json = r#"[{"kbId":"7fe9a8a5","name":"文档中心"}]"#;
+        assert_eq!(
+            mysql_raw_cell_value(json.as_bytes().to_vec(), true),
+            CellValue::Json(json.to_string())
+        );
+        // 非 JSON 的未覆盖类型仍按原来的文本/二进制判定兜底。
+        assert_eq!(
+            mysql_raw_cell_value(b"hello".to_vec(), false),
+            CellValue::Text("hello".to_string())
+        );
     }
 
     /// 普通小字段保持原值，不因字段数量触发外置。
