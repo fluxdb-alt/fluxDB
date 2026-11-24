@@ -18,12 +18,6 @@ FluxDB 把 MySQL、PostgreSQL、SQL Server、Oracle、TiDB、MariaDB、人大金
   <img src="docs/screenshots/readme-data-grid-light.png" alt="FluxDB 数据网格" width="100%">
 </picture>
 
-<p align="center">
-  <img src="docs/screenshots/readme-data-grid-light.png" alt="浅色主题" width="32%">
-  <img src="docs/screenshots/readme-split-panes-dark.png" alt="查询分屏" width="32%">
-  <img src="docs/screenshots/readme-form-view-dark.png" alt="表单视图" width="32%">
-</p>
-
 ## 为什么选择 FluxDB
 
 大多数数据库客户端要么很重（Electron、JVM），要么收费。FluxDB 两样都不是。它是一个单体的原生二进制，启动快、常驻小，并且覆盖你真正要做的事：写 SQL、改数据、迁移结构、在干出后悔的事之前先备份。
