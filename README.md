@@ -1,8 +1,8 @@
-# FluxDB
+# <img src="apps/fluxdb-desktop/assets/app-icon.png" alt="" width="28" align="absmiddle"> FluxDB
 
-**A native, cross-platform database client and SQL editor designed for high performance and low overhead: query, edit data, manage schemas and debug Redis in one window.**
+**A fast, native database client for people who live in SQL. Rust + GPUI, no Electron, no JVM, no WebView — it opens in about a second, idles at roughly 135 MB, and keeps scrolling a million rows.**
 
-FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MySQL, MariaDB, PostgreSQL, KingbaseES, SQL Server, SQLite, TiDB, Dameng DM8, MongoDB and Redis into one desktop workflow, with a permission-aware AI Agent.
+FluxDB puts MySQL, PostgreSQL, SQL Server, Oracle, TiDB, MariaDB, KingbaseES, Dameng DM8, SQLite, MongoDB and Redis in one window: query, edit data, design schemas, compare and sync structures, back up, and debug Redis — with an AI Agent that has explicit, auditable permission boundaries.
 
 **English | [简体中文](./README.zh-CN.md)**
 
@@ -11,11 +11,98 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue)](./LICENSE)
 ![Platforms](https://img.shields.io/badge/Platforms-macOS%20%7C%20Windows%20%7C%20Linux-blue)
 
-[Download the latest release](https://github.com/fluxdb-alt/fluxDB/releases/latest) · [Latest changes](#latest-changes) · [Features](#core-capabilities) · [Database support](#database-support) · [User guide](./docs/user-guide.md) · [Report an issue](https://github.com/fluxdb-alt/fluxDB/issues)
+[Download](#install) · [Benchmarks](#benchmarks) · [Features](#what-it-does) · [Database support](#database-support) · [User guide](./docs/user-guide.md) · [Report an issue](https://github.com/fluxdb-alt/fluxDB/issues)
 
-![FluxDB SQL editor with schema completion](docs/screenshots/sql_editor_adapter.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-data-grid-dark.png">
+  <img src="docs/screenshots/readme-data-grid-light.png" alt="FluxDB data grid" width="100%">
+</picture>
 
+<p align="center">
+  <img src="docs/screenshots/readme-data-grid-light.png" alt="Light theme" width="32%">
+  <img src="docs/screenshots/readme-split-panes-dark.png" alt="Split query panes" width="32%">
+  <img src="docs/screenshots/readme-form-view-dark.png" alt="Form view" width="32%">
+</p>
 
+## Why FluxDB
+
+Most database clients are either heavy (Electron, JVM) or paid. FluxDB is neither. It is a single native binary that starts fast, stays small, and covers the work you actually do: write SQL, edit rows, migrate a schema, take a backup before you do something regrettable.
+
+**It is small.** Idle memory is a third of DBeaver's. Scrolling a large table takes less than half the memory of either DBeaver or dbx.
+
+**It is complete.** Structure and data sync across engines, backup/restore, visual table design, ER diagrams, a test-data generator, a MongoDB workbench, a Redis workbench with CLI and Pub/Sub, and an AI Agent that cannot run a destructive statement without your approval.
+
+**It is honest about coverage.** The [database support table](#database-support) lists, per engine, what works, what is partial and what is missing. No marketing asterisks.
+
+## Benchmarks
+
+Measured on the same machine, same PostgreSQL table, same operation. Memory is the median footprint across the phase, sampled roughly every second; scroll is a 25-second continuous scroll over a large result set.
+
+| | FluxDB | dbx | DBeaver |
+| --- | --- | --- | --- |
+| Idle memory | **135 MB** | 206 MB | 413 MB |
+| Query, peak median | **220 MB** | 395 MB | 569 MB |
+| Scrolling, median | **271 MB** | 650 MB | 625 MB |
+| Scroll frame rate (60 fps target) | **52.6 fps** | 50.5 fps | 43.5 fps |
+| Frames dropped while scrolling | **12.3 %** | 15.9 % | 27.5 % |
+
+Raw samples, scripts and the measurement notes are in [`bench-results/`](./bench-results). Your numbers will differ; these are here so you can check them, not so you will believe them.
+
+## What it does
+
+- **Write SQL with an editor that knows your schema.** Completion for keywords, tables, columns and functions, folding, formatting, history, split panes, and a command palette that reaches connections, tables and history.
+- **Edit data without writing `UPDATE` by hand.** Paginated browsing, filters, sorting, form view, editable result sets that write back — with confirmation on anything destructive. Follow foreign keys into the related row, and see the ER mini-map.
+- **Design and migrate schemas.** Visual table design that emits the target dialect's DDL, structure comparison with chunked previews, and data sync across engines with resumable runs and per-row failure policies.
+- **Back up before you break it.** Native `mysqldump` / `pg_dump` / `mongodump` / `VACUUM INTO` paths, plus a built-in consistent-snapshot logical backup with SHA-256 verification when the tools are not installed.
+- **Generate test data.** 40+ generators per column, foreign keys drawn from the real parent table, up to 200,000 rows, previewable as data, SQL or a task log.
+- **Work with MongoDB and Redis like first-class citizens.** A MongoDB collection workspace (filter, projection, aggregation, indexes) and a Redis workbench with key editing, CLI and Pub/Sub — not a grid bolted onto a SQL client.
+- **Let AI help without handing it the keys.** The Agent reads only bounded slices of your schema, edits only the editor range you authorize, and needs approval before `db.run` or `redis.execute`.
+- **Stay in your language.** English and Simplified Chinese, switchable at runtime.
+
+### Fewer clicks, less typing
+
+**Two queries, one tab.** Split the editor any number of times; each pane keeps its own text and its own results, so you can compare a detail query against an aggregate without losing your place.
+
+![Two query panes side by side, each with its own result grid](docs/screenshots/readme-split-panes-dark.png)
+
+**Read a wide row without scrolling sideways.** Switch to form view to see one record in full, field by field — and follow a foreign key with one click instead of writing a `WHERE`.
+
+![Form view of a row, with foreign-key fields offering one-click jumps to the parent table](docs/screenshots/readme-form-view-dark.png)
+
+**Fill a table without writing INSERTs.** Pick a generator per column, draw foreign keys from the parent table, set the row count, and preview the rows, the SQL or the task log before anything runs.
+
+![Test data generation with per-column generators and foreign keys drawn from parent tables](docs/screenshots/readme-data-generation-dark.png)
+
+### Stay on the keyboard
+
+**Open a table without leaving the keyboard.** `⌘P` searches the tables in the current database, highlights the matching characters, and opens the one you pick.
+
+<img width="1100" height="688" alt="Quick open table with the command palette" src="https://github.com/user-attachments/assets/24258317-5ec3-4379-b02f-55c7aa5549bd" />
+
+**Completion that knows your schema.** Tables in `JOIN` position, and columns after an alias — typing `o.` lists the real columns of `orders`, with a documentation panel beside the list.
+
+<img width="1100" height="688" alt="Schema-aware SQL completion after a JOIN alias" src="https://github.com/user-attachments/assets/34c2c50a-a0de-407a-95b9-7323084b8226" />
+
+## Install
+
+Pick the package for your platform from the [latest release](https://github.com/fluxdb-alt/fluxDB/releases/latest).
+
+| Platform | Architecture | Package |
+| --- | --- | --- |
+| macOS | Apple Silicon (ARM64) | `FluxDB-<version>-macos-arm64.dmg` |
+| macOS | Intel (x64) | `FluxDB-<version>-macos-x64.dmg` |
+| Windows | x64 | `FluxDB-<version>-windows-x64-setup.exe` |
+| Linux | x64 | `fluxdb_<version>_amd64.deb` |
+
+- **macOS**: open the DMG and drag FluxDB into Applications. The app is currently ad-hoc signed and not notarized. If macOS blocks the first launch, verify the download source and allow it in System Settings → Privacy & Security.
+- **Windows**: run the installer and optionally create a desktop shortcut.
+- **Linux**: targets Debian-based distributions such as Ubuntu 22.04/24.04 with X11 or Wayland. Run `sudo apt install ./fluxdb_<version>_amd64.deb`.
+
+Release packages include `.sha256` checksums. Windows ARM64, Linux ARM64, AppImage, Flatpak and Snap are not currently available.
+
+Native backup/restore for MySQL, MariaDB, TiDB, PostgreSQL and MongoDB depends on the local `mysqldump` / `mariadb-dump`, `mysql` / `mariadb`, `pg_dump` / `psql`, `mongodump` / `mongorestore` and `mongosh` clients. The built-in logical SQL backup still works without `mysqldump` / `pg_dump`, and basic queries and editing do not require these tools.
+
+After installation, choose "Add connection", select a database type, enter the connection details and test the connection. See the [user guide](./docs/user-guide.md); it currently uses Chinese screenshots and macOS shortcuts.
 
 ## Latest changes
 
@@ -30,6 +117,9 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 
 [Full release notes](./release-notes/v0.1.20/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
 
+<details>
+<summary>Older releases</summary>
+
 ### v0.1.19
 
 - **Query result export and select-all**: data pages and query results select every cell with `⌘A` / `Ctrl+A` and copy it as TSV. The query result toolbar gains an export that reuses the SQL actually executed and lets you edit it, with field selection and TXT / CSV / JSON / XML output, reading the full SQL in batches with cancellation.
@@ -40,68 +130,9 @@ FluxDB is built with Rust and GPUI, without Electron or a WebView. It brings MyS
 - **Table sizes in the sidebar**: MySQL / MariaDB / TiDB, PostgreSQL / KingbaseES and SQL Server show table sizes, hidden when the sidebar is narrower than 220 px.
 - **Improvements and fixes**: the built-in Flux Amber theme; fixed SQL history loss at startup, history skipping digit-prefixed table names, and history quick search leaking across databases.
 
-[Full release notes](./release-notes/v0.1.19/en.md) · [All releases](https://github.com/fluxdb-alt/fluxDB/releases)
+[Full release notes](./release-notes/v0.1.19/en.md)
 
-## Why FluxDB
-
-- **One workspace for multiple data sources**: manage relational databases, MongoDB and Redis side by side.
-- **From query to write**: SQL editing, editable result sets, table design, import/export, backup/restore and ER diagrams.
-- **Native architecture, performance first**: built with Rust + GPUI, without Electron or a WebView, with low overhead and responsive interaction as design goals.
-- **AI with explicit boundaries**: bounded reads, authorized editor edits and approval for write or high-risk tools.
-
-## Core capabilities
-
-### SQL and data
-
-- Syntax highlighting, code folding, keyword/table/column/function completion, SQL formatting and query history.
-- Paginated browsing, filters, sorting, row details and cell details.
-- Editable result sets with writes back to the database and safeguards for dangerous actions.
-- Import TXT, CSV, JSON and XML.
-- Export SQL, TXT, CSV, JSON and XML.
-- Execute existing `.sql` files.
-
-### Schema and ER diagrams
-
-- Inspect columns, indexes, foreign keys, triggers and DDL.
-- Create and modify tables visually, with DDL generated for the target database dialect.
-- Layout ER diagrams from real foreign keys, with optional local logical relationships.
-- Local logical relationships never create or modify database foreign keys.
-- Export ER diagrams as JSON, DBML, Mermaid or SVG.
-
-### Backup and restore
-
-- Native tool paths for MySQL / MariaDB / TiDB (`mysqldump`), PostgreSQL (`pg_dump`), MongoDB (`mongodump`) and SQLite (`VACUUM INTO`), plus a built-in logical SQL fallback when dump tools are missing.
-- Logical backups use consistent snapshots where supported, keyset pagination and batched `INSERT`s; restores can target another database and verify the data-part SHA-256 and row counts when the manifest provides them.
-- The backup list keeps table manifests, restore history and notes, and paths can be copied with one click.
-
-### MongoDB workbench
-
-- Connection-string import with SRV discovery, browsing by database / collection / view, and connection info with topology.
-- The documents tab supports filter, projection, sort, collation, paging and index hint, with card, table and JSON display modes.
-- The condition builder and completion cover filter, projection, sort and aggregation pipelines; aggregation, indexes and collection info each have their own tab.
-- Create, edit, duplicate and delete documents; import JSON / JSONL / CSV and export JSON / JSONL / CSV.
-- Collection context menu covers pin, copy name, refresh, export, rename, import and drop; databases can create collections and be dropped.
-
-### Redis workbench
-
-- Browse the keyspace and inspect or edit common value types, TTL and key details.
-- Run commands with command history in the Workbench.
-- Use the embedded Redis CLI terminal.
-- Observe channel messages with Pub/Sub subscriptions.
-- Connect with TLS, SSH tunnels, Sentinel, Cluster, URI or Cloud configuration.
-
-### Operations, security and updates
-
-- Connection passwords and model API keys use controlled storage and stay out of ordinary exports, logs, event snapshots and AI context.
-- In-app updates verify the signed manifest and package checksum.
-- Release packages include SHA-256 checksums.
-- The UI supports English and Simplified Chinese with runtime switching.
-
-## Demo
-
-**Full demo** · 2 min 46 sec · MP4, about 8.6 MB
-
-https://github.com/user-attachments/assets/f6075999-a87f-4644-9d14-dbda49a7981d
+</details>
 
 ## Database support
 
@@ -134,26 +165,15 @@ FluxDB includes an optional AI Agent for understanding schemas, writing SQL, inv
 - **MCP and plugins**: configure MCP Client/Server, model bindings, plugins, tool permissions and usage diagnostics.
 - **User-provided models**: configure your own model service and API key. Secrets use controlled storage and do not enter ordinary logs, exports or AI context.
 
-## Download and install
+**Writes wait for you.** A write tool stops at the approval card: target, the exact statement, risk level and estimated rows. Approve it and the statement runs; deny it and nothing happens. The grid above refreshes with the result.
 
-Open the [latest release](https://github.com/fluxdb-alt/fluxDB/releases/latest) and choose the package for your platform.
+<img width="1400" height="737" alt="AI approval card, then the data grid refreshes with the updated rows" src="https://github.com/user-attachments/assets/4e0ee16c-118f-4f52-9810-e1d9fd1db756" />
 
-| Platform | Architecture | Package |
-| --- | --- | --- |
-| macOS | Apple Silicon (ARM64) | `FluxDB-<version>-macos-arm64.dmg` |
-| macOS | Intel (x64) | `FluxDB-<version>-macos-x64.dmg` |
-| Windows | x64 | `FluxDB-<version>-windows-x64-setup.exe` |
-| Linux | x64 | `fluxdb_<version>_amd64.deb` |
+## Demo
 
-- **macOS**: open the DMG and drag FluxDB into Applications. The app is currently ad-hoc signed and not notarized. If macOS blocks the first launch, verify the download source and allow it in System Settings → Privacy & Security.
-- **Windows**: run the installer and optionally create a desktop shortcut.
-- **Linux**: targets Debian-based distributions such as Ubuntu 22.04/24.04 with X11 or Wayland. Run `sudo apt install ./fluxdb_<version>_amd64.deb`.
+**Full demo** · 2 min 46 sec · MP4, about 8.6 MB
 
-Release packages include `.sha256` checksums. Windows ARM64, Linux ARM64, AppImage, Flatpak and Snap are not currently available.
-
-Native backup/restore for MySQL, MariaDB, TiDB, PostgreSQL and MongoDB depends on the local `mysqldump` / `mariadb-dump`, `mysql` / `mariadb`, `pg_dump` / `psql`, `mongodump` / `mongorestore` and `mongosh` clients. The built-in logical SQL backup still works without `mysqldump` / `pg_dump`, and basic queries and editing do not require these tools.
-
-After installation, choose “Add connection”, select a database type, enter the connection details and test the connection. See the [user guide](./docs/user-guide.md); it currently uses Chinese screenshots and macOS shortcuts.
+https://github.com/user-attachments/assets/f6075999-a87f-4644-9d14-dbda49a7981d
 
 ## Run from source
 
