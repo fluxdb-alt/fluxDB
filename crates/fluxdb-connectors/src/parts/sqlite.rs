@@ -1010,8 +1010,11 @@ async fn sqlite_columns(
     database: &str,
     table: &str,
 ) -> fluxdb_core::Result<Vec<Column>> {
+    // `table_info` 不返回生成列；`table_xinfo` 用 hidden 标记：
+    // 0=普通列，1=虚拟表隐藏列，2/3=生成列（VIRTUAL/STORED）。
+    // 生成列可查询、应展示；虚拟表隐藏列不可查询，跳过。
     let rows = sqlx::query(&format!(
-        "PRAGMA {}.table_info({})",
+        "PRAGMA {}.table_xinfo({})",
         fluxdb_core::SqliteDialect.quote_identifier(database),
         sqlite_quote_string(table)
     ))
@@ -1021,6 +1024,7 @@ async fn sqlite_columns(
 
     Ok(rows
         .into_iter()
+        .filter(|row| row.try_get::<i64, _>("hidden").map(|h| h != 1).unwrap_or(true))
         .map(|row| {
             let name: String = row.try_get("name").map_err(sqlite_error)?;
             let type_name: String = row.try_get("type").map_err(sqlite_error)?;
@@ -1035,6 +1039,45 @@ async fn sqlite_columns(
             })
         })
         .collect::<fluxdb_core::Result<Vec<_>>>()?)
+}
+
+/// 从建表 DDL 解析生成列：`table_xinfo.hidden` 只标记是否生成列，表达式只在 DDL 里。
+/// 复用工作区已有的 sqlparser，避免手写括号/引号切分漏掉表达式里的逗号或引号。
+/// DDL 解析失败时返回空表：生成列仍会被列出，只是没有表达式。
+fn sqlite_parse_generated_columns(ddl: &str) -> BTreeMap<String, fluxdb_core::GeneratedColumn> {
+    use sqlparser::ast::{ColumnOption, GeneratedExpressionMode, Statement};
+    use sqlparser::dialect::SQLiteDialect;
+    use sqlparser::parser::Parser;
+
+    let Ok(statements) = Parser::parse_sql(&SQLiteDialect {}, ddl) else {
+        return BTreeMap::new();
+    };
+    let [Statement::CreateTable(created)] = statements.as_slice() else {
+        return BTreeMap::new();
+    };
+    created
+        .columns
+        .iter()
+        .filter_map(|definition| {
+            let (expression, mode) = definition.options.iter().find_map(|option| {
+                match &option.option {
+                    ColumnOption::Generated {
+                        generation_expr: Some(expr),
+                        generation_expr_mode,
+                        ..
+                    } => Some((expr, generation_expr_mode)),
+                    _ => None,
+                }
+            })?;
+            Some((
+                definition.name.value.clone(),
+                fluxdb_core::GeneratedColumn {
+                    expression: expression.to_string(),
+                    stored: Some(matches!(mode, Some(GeneratedExpressionMode::Stored))),
+                },
+            ))
+        })
+        .collect()
 }
 
 /// 读取列默认表达式（`PRAGMA table_info.dflt_value`）；无默认值的列不出现在结果里。
@@ -1359,8 +1402,8 @@ fn sqlite_load_table_design_metadata(
             column_defaults,
             // SQLite 的自增由 INTEGER PRIMARY KEY 隐式承担，没有独立属性可读。
             auto_increment_columns: Default::default(),
-            // 生成列表达式没有稳定的目录来源（PRAGMA table_xinfo 只给 hidden 标记）。
-            generated_columns: Default::default(),
+            // 生成列表达式只存在于建表 DDL，从 DDL 解析。
+            generated_columns: sqlite_parse_generated_columns(&ddl),
             index_attributes,
             foreign_key_actions,
             checks: Vec::new(),
@@ -1377,4 +1420,92 @@ fn sqlite_trigger_body(sql: &str) -> Option<String> {
     let upper = sql.to_ascii_uppercase();
     let begin = upper.find("BEGIN")?;
     Some(sql[begin..].trim().trim_end_matches(';').to_string())
+}
+
+#[cfg(test)]
+mod sqlite_generated_column_tests {
+    use super::*;
+
+    #[test]
+    fn generated_columns_are_listed_with_expressions_and_modes() {
+        let ddl = "CREATE TABLE test (id INTEGER PRIMARY KEY NOT NULL, \
+                   doubled INTEGER AS (id * 2) STORED, \
+                   label TEXT GENERATED ALWAYS AS ('#' || id), body TEXT)";
+        let generated = sqlite_parse_generated_columns(ddl);
+        assert_eq!(
+            generated["doubled"],
+            fluxdb_core::GeneratedColumn {
+                expression: "id * 2".into(),
+                stored: Some(true),
+            }
+        );
+        assert_eq!(
+            generated["label"],
+            fluxdb_core::GeneratedColumn {
+                expression: "'#' || id".into(),
+                stored: Some(false),
+            }
+        );
+        assert!(!generated.contains_key("id"));
+        assert!(!generated.contains_key("body"));
+    }
+
+    #[test]
+    fn unparseable_ddl_returns_empty_generated_map() {
+        assert!(sqlite_parse_generated_columns("not sql").is_empty());
+    }
+
+    #[test]
+    fn table_xinfo_lists_generated_columns_but_skips_virtual_table_hidden() {
+        let dir = std::env::temp_dir().join(format!(
+            "fluxdb-sqlite-generated-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.db");
+        let output = std::process::Command::new("sqlite3")
+            .arg(&path)
+            .arg("CREATE TABLE test(id INTEGER PRIMARY KEY, price REAL, total REAL AS (price*1.13) STORED);")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+        let config = ConnectionConfig {
+            id: ConnectionId(1),
+            name: "test".into(),
+            kind: DatabaseKind::Sqlite,
+            endpoint: Endpoint::SqliteFile { path: path.clone(), read_only: false },
+            options: BTreeMap::new(),
+            redis_profile: None,
+            mysql_profile: None,
+            postgres_profile: None,
+            dameng_profile: None,
+            sqlserver_profile: None,
+            mongo_profile: None,
+            oracle_profile: None,
+        };
+        let connector = SqliteConnector::with_config(config);
+        let object = ObjectPath {
+            connection_id: ConnectionId(1),
+            database: Some("main".into()),
+            schema: None,
+            name: "test".into(),
+            kind: ObjectKind::Table,
+        };
+        let metadata = connector.load_table_design_metadata(&object).unwrap();
+        let names: Vec<_> = metadata.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["id", "price", "total"]);
+        assert_eq!(
+            metadata.generated_columns["total"],
+            fluxdb_core::GeneratedColumn {
+                expression: "price * 1.13".into(),
+                stored: Some(true),
+            }
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
