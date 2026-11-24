@@ -18,12 +18,6 @@ FluxDB puts MySQL, PostgreSQL, SQL Server, Oracle, TiDB, MariaDB, KingbaseES, Da
   <img src="docs/screenshots/readme-data-grid-light.png" alt="FluxDB data grid" width="100%">
 </picture>
 
-<p align="center">
-  <img src="docs/screenshots/readme-data-grid-light.png" alt="Light theme" width="32%">
-  <img src="docs/screenshots/readme-split-panes-dark.png" alt="Split query panes" width="32%">
-  <img src="docs/screenshots/readme-form-view-dark.png" alt="Form view" width="32%">
-</p>
-
 ## Why FluxDB
 
 Most database clients are either heavy (Electron, JVM) or paid. FluxDB is neither. It is a single native binary that starts fast, stays small, and covers the work you actually do: write SQL, edit rows, migrate a schema, take a backup before you do something regrettable.
