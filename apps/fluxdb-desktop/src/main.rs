@@ -178,6 +178,7 @@ include!("main_parts/server_panel_widgets.rs");
 include!("main_parts/redis_server_panel.rs");
 include!("main_parts/mongo_server_panel.rs");
 include!("main_parts/content_views.rs");
+include!("main_parts/object_list.rs");
 include!("main_parts/query_plan_view.rs");
 include!("main_parts/mongo_collection.rs");
 include!("main_parts/mongo_query_completion.rs");
@@ -251,6 +252,8 @@ include!("main_parts/table_shortcut_tests.rs");
 include!("main_parts/sidebar_refresh_tests.rs");
 #[cfg(test)]
 include!("main_parts/mongo_sidebar_tests.rs");
+#[cfg(test)]
+include!("main_parts/object_list_tests.rs");
 #[cfg(test)]
 include!("main_parts/theme_tests.rs");
 #[cfg(test)]

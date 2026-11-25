@@ -480,7 +480,7 @@ fn object_group_tree(
     })
     .on_mouse_down(
         MouseButton::Left,
-        cx.listener(move |this, _, _, cx| {
+        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
             this.close_context_menus(cx);
             // 备份节点单击：打开该库的备份列表 tab（不再展开子行）。
             // 新建备份入口保留在右键菜单；运行中任务在备份 tab 内展示。
@@ -503,6 +503,21 @@ fn object_group_tree(
                     group,
                     cx,
                 );
+                // 双击「表」分组：展开态已由两次单击恢复原状，再打开表概览。
+                if group == ObjectGroup::Tables && event.click_count >= 2 {
+                    let parent = match &schema_for_toggle {
+                        // PG 的表按 schema 分桶；概览父对象必须是 schema 路径。
+                        Some(schema) => ObjectPath {
+                            connection_id,
+                            database: Some(database.clone()),
+                            schema: Some(schema.clone()),
+                            name: schema.clone(),
+                            kind: ObjectKind::Schema,
+                        },
+                        None => database_path_for_open.clone(),
+                    };
+                    this.open_object_list(parent, cx);
+                }
             }
             cx.stop_propagation();
         }),
@@ -1532,52 +1547,6 @@ fn schema_tree_key(connection_id: ConnectionId, database: &str, schema: &str) ->
     format!("{}:{database}:{schema}", connection_id.0)
 }
 
-fn table_header(colors: UiColors) -> impl IntoElement {
-    div()
-        .h(px(28.))
-        .border_b_1()
-        .border_color(colors.border)
-        .bg(colors.panel_alt)
-        .flex()
-        .items_center()
-        .text_size(ui_text_size(15.))
-        .text_color(colors.muted)
-        .child(cell(tr("app.tree.header.name").to_string(), 210., colors))
-        .child(cell(tr("app.tree.header.rows").to_string(), 55., colors))
-        .child(cell(
-            tr("app.tree.header.modified").to_string(),
-            150.,
-            colors,
-        ))
-        .child(cell_flex(tr("app.tree.header.comment").to_string(), colors))
-}
-
-fn object_row(
-    object: &ObjectSummary,
-    colors: UiColors,
-    cx: &mut Context<NavicatMain>,
-) -> impl IntoElement {
-    let path = object.path.clone();
-
-    table_row(
-        object.path.name.clone(),
-        object.rows.map(|rows| rows.to_string()).unwrap_or_default(),
-        object.modified_at.clone().unwrap_or_default(),
-        object.comment.clone().unwrap_or_default(),
-        object.path.name == "Product",
-        colors,
-    )
-    .on_mouse_down(
-        MouseButton::Left,
-        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-            if event.click_count >= 2 {
-                this.dispatch(AppCommand::OpenDataEditor(path.clone()), cx);
-                cx.stop_propagation();
-            }
-        }),
-    )
-}
-
 fn visible_objects(state: &AppState) -> Vec<&ObjectSummary> {
     state
         .connections
@@ -1634,77 +1603,6 @@ fn database_kind_name(kind: DatabaseKind) -> &'static str {
         DatabaseKind::SqlServer => "SQL Server",
         DatabaseKind::Oracle => "Oracle",
     }
-}
-
-fn table_row(
-    name: String,
-    rows: String,
-    changed: String,
-    note: String,
-    selected: bool,
-    colors: UiColors,
-) -> Div {
-    let bg = if selected {
-        rgb(0x1f73db)
-    } else {
-        colors.panel_bg
-    };
-    let fg = if selected {
-        rgb(0xffffff)
-    } else {
-        rgb(0x202124)
-    };
-    div()
-        .h(px(24.))
-        .bg(bg)
-        .text_color(fg)
-        .flex()
-        .items_center()
-        .text_size(ui_text_size(16.))
-        .child(cell_with_icon(name, 210., colors))
-        .child(cell(rows, 55., colors))
-        .child(cell(changed, 150., colors))
-        .child(cell_flex(note, colors))
-}
-
-fn cell(text: impl Into<String>, width: f32, colors: UiColors) -> impl IntoElement {
-    div()
-        .w(px(width))
-        .h_full()
-        .px_4()
-        .flex()
-        .items_center()
-        .overflow_hidden()
-        .border_r_1()
-        .border_color(colors.border_soft)
-        .child(text.into())
-}
-
-fn cell_flex(text: impl Into<String>, colors: UiColors) -> impl IntoElement {
-    div()
-        .flex_1()
-        .h_full()
-        .px_4()
-        .flex()
-        .items_center()
-        .overflow_hidden()
-        .text_color(colors.text)
-        .child(text.into())
-}
-
-fn cell_with_icon(text: impl Into<String>, width: f32, colors: UiColors) -> impl IntoElement {
-    div()
-        .w(px(width))
-        .h_full()
-        .px_4()
-        .flex()
-        .items_center()
-        .gap_2()
-        .overflow_hidden()
-        .border_r_1()
-        .border_color(colors.border_soft)
-        .child(table_icon(18., colors))
-        .child(text.into())
 }
 
 #[cfg(target_os = "macos")]

@@ -554,6 +554,18 @@ fn localized_tab_title(tab: &TabState) -> String {
             Some(table) => tr("app.tabs.er_related").replace("%{table}", &table.display()),
             None => tr("app.tabs.er").replace("%{database}", &er.database),
         },
+        TabKind::ObjectList(list) => list
+            .parent
+            .as_ref()
+            .map(|path| {
+                let database = path.database.as_deref().unwrap_or(&path.name);
+                let scope = match path.schema.as_deref() {
+                    Some(schema) => format!("{database}.{schema}"),
+                    None => database.to_string(),
+                };
+                tr("app.tabs.object_list").replace("%{scope}", &scope)
+            })
+            .unwrap_or_else(|| tab.title.clone()),
         // 集合页标题是「库/集合」，跨库同名集合不至于看起来重复。
         TabKind::MongoCollection(collection) => format!(
             "{}",

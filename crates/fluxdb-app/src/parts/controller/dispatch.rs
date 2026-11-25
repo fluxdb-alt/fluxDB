@@ -2087,6 +2087,10 @@ impl AppController {
                 }
                 AppEvent::TabActivated(tab_id)
             }
+            AppCommand::StartObjectListLoad(..)
+            | AppCommand::LoadObjectList(..)
+            | AppCommand::FinishObjectListLoad { .. }
+            | AppCommand::SetObjectListSearch { .. } => self.dispatch_object_list_command(command),
             AppCommand::LoadServerPanel(..)
             | AppCommand::StartServerPanelLoad(..)
             | AppCommand::FinishServerPanelLoad { .. }

@@ -535,19 +535,6 @@ fn connection_statusbar_context(
     Some(parts.join(" / "))
 }
 
-fn table_icon(size: f32, colors: UiColors) -> impl IntoElement {
-    div()
-        .size(px(size))
-        .rounded(colors.radius_lg)
-        .bg(rgb(0xa8ddfb))
-        .border_t_8()
-        .border_color(rgb(0x118ee9))
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(app_icon(AppIcon::Table, size * 0.58, rgb(0xeaf7ff)))
-}
-
 #[cfg(test)]
 mod cell_value_length_tests {
     use super::*;

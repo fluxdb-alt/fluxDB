@@ -663,4 +663,103 @@ mod controller_dispatch_tests {
         assert!(pools[0].1.is_err(), "连接不存在时应返回该列的错误");
     }
 
+    fn object_summary(name: &str, kind: ObjectKind) -> ObjectSummary {
+        ObjectSummary {
+            path: ObjectPath {
+                connection_id: ConnectionId(7),
+                database: Some("ihs".into()),
+                schema: None,
+                name: name.into(),
+                kind,
+            },
+            rows: Some(1),
+            size_bytes: Some(1024),
+            modified_at: None,
+            comment: Some("note".into()),
+            stable: None,
+        }
+    }
+
+    /// 表概览：同一父对象只开一个页签；加载态、只保留表、名称排序与本地搜索都要成立。
+    #[test]
+    fn object_list_tab_dedupes_filters_and_tracks_search() {
+        let mut controller = AppController::new();
+        let parent = ObjectPath {
+            connection_id: ConnectionId(7),
+            database: Some("ihs".into()),
+            schema: None,
+            name: "ihs".into(),
+            kind: ObjectKind::Database,
+        };
+
+        let AppEvent::TabOpened(tab_id) =
+            controller.dispatch(AppCommand::OpenObjectList(Some(parent.clone())))
+        else {
+            panic!("first open must create a tab");
+        };
+        let list = controller.object_list_state(tab_id).expect("list tab");
+        assert!(list.loading);
+        assert!(list.objects.is_empty());
+
+        assert_eq!(
+            controller.dispatch(AppCommand::OpenObjectList(Some(parent))),
+            AppEvent::TabActivated(tab_id)
+        );
+        assert_eq!(
+            controller
+                .state()
+                .tabs
+                .iter()
+                .filter(|tab| matches!(tab.kind, TabKind::ObjectList(_)))
+                .count(),
+            1
+        );
+
+        controller.dispatch(AppCommand::StartObjectListLoad(tab_id));
+        controller.dispatch(AppCommand::FinishObjectListLoad {
+            tab_id,
+            result: Ok(vec![
+                object_summary("zeta", ObjectKind::Table),
+                object_summary("a_view", ObjectKind::View),
+                object_summary("alpha", ObjectKind::Table),
+            ]),
+        });
+        let list = controller.object_list_state(tab_id).expect("list tab");
+        assert!(!list.loading);
+        assert!(list.error.is_none());
+        assert_eq!(
+            list.objects
+                .iter()
+                .map(|object| object.path.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "zeta"]
+        );
+
+        controller.dispatch(AppCommand::SetObjectListSearch {
+            tab_id,
+            search: "alp".into(),
+        });
+        assert_eq!(
+            controller.object_list_state(tab_id).map(|list| list.search.as_str()),
+            Some("alp")
+        );
+
+        controller.dispatch(AppCommand::StartObjectListLoad(tab_id));
+        controller.dispatch(AppCommand::FinishObjectListLoad {
+            tab_id,
+            result: Err(fluxdb_core::UserFacingError {
+                title: "load failed".into(),
+                message: "timeout".into(),
+                detail: None,
+                retryable: true,
+            }),
+        });
+        let list = controller.object_list_state(tab_id).expect("list tab");
+        assert!(!list.loading);
+        assert_eq!(
+            list.error.as_ref().map(|error| error.message.as_str()),
+            Some("timeout")
+        );
+        assert_eq!(list.objects.len(), 2, "失败时保留上次成功的数据");
+    }
 }

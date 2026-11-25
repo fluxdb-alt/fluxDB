@@ -13,6 +13,8 @@ pub enum PageContextKind {
     ErDiagram,
     /// MongoDB 集合页：只提供定位、查询参数与状态；文档值经 `mongo.read_documents` 按需读取。
     MongoCollection,
+    /// 表概览：只提供定位、表数量与本地搜索词；表清单与注释经工具按需查询。
+    ObjectList,
     Other,
 }
 
@@ -28,6 +30,7 @@ impl PageContextKind {
             Self::Settings => "settings",
             Self::ErDiagram => "er_diagram",
             Self::MongoCollection => "mongo_collection",
+            Self::ObjectList => "object_list",
             Self::Other => "unsupported_page",
         }
     }

@@ -1992,6 +1992,8 @@ fn normalized_user_admin_privilege_rows(
 pub struct ObjectListState {
     pub parent: Option<ObjectPath>,
     pub objects: Vec<ObjectSummary>,
+    /// 表概览的本地过滤词（表名 / 注释）；只影响展示，不重新查询。
+    pub search: String,
     pub loading: bool,
     pub error: Option<UserFacingError>,
 }
