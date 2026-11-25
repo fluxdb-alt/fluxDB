@@ -2804,7 +2804,9 @@
       "submit_changes": "Submit changes",
       "discard_changes": "Discard changes",
       "refresh": "Refresh",
-      "stop": "Stop"
+      "stop": "Stop",
+      "auto_commit": "Auto-commit",
+      "auto_commit_tooltip": "Commit each edit immediately; off by default and enabled per tab"
     },
     "placeholder": {
       "find": "Find",

@@ -91,7 +91,7 @@ impl NavicatMain {
                     AppCommand::FinishApplyDataChanges { tab_id, result },
                     cx,
                 );
-                this.finish_apply_data_changes(tab_id, event, query_refresh, window, cx);
+                this.finish_apply_data_changes(tab_id, event, query_refresh, Some(window), cx);
                 cx.notify();
             });
         });
@@ -104,13 +104,14 @@ impl NavicatMain {
         tab_id: TabId,
         event: AppEvent,
         query_refresh: Option<QueryResultRefreshRequest>,
-        window: &mut Window,
+        window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
         self.apply_app_event(&event, cx);
         self.refresh_active_data_table(tab_id, cx);
         // 提交失败用 Alert 弹框而不是轻量 toast：写入失败意味着改动仍留在编辑器里，
         // 需要用户明确知晓并处理，不能像轻量反馈一样几秒后自动消失。
+        // 自动提交路径没有确认框窗口可挂 Alert，退回轻量提示（改动同样保留）。
         if let AppEvent::Failed(error) = &event {
             let title = if error.title.is_empty() {
                 tr("app.query.error.submit").to_string()
@@ -124,15 +125,20 @@ impl NavicatMain {
                 _ => error.message.clone(),
             };
             let description = localize_backend_error_text(&description);
-            window.open_alert_dialog(cx, move |alert, _, _| {
-                alert
-                    .title(title.clone())
-                    .description(description.clone())
-                    .ok_text(tr("app.data.action.acknowledge"))
-                    .show_cancel(false)
-                    .close_button(true)
-                    .keyboard(true)
-            });
+            match window {
+                Some(window) => {
+                    window.open_alert_dialog(cx, move |alert, _, _| {
+                        alert
+                            .title(title.clone())
+                            .description(description.clone())
+                            .ok_text(tr("app.data.action.acknowledge"))
+                            .show_cancel(false)
+                            .close_button(true)
+                            .keyboard(true)
+                    });
+                }
+                None => self.show_message(description, AppMessageKind::Error, cx),
+            }
         }
         if !matches!(event, AppEvent::Failed(_))
             && let Some(request) = query_refresh
@@ -144,6 +150,56 @@ impl NavicatMain {
     /// 该标签是否有改动正在提交（用于提交按钮 loading/disabled 与重复提交拦截）。
     fn data_change_apply_in_flight(&self, tab_id: TabId) -> bool {
         self.data_change_apply_tasks.contains_key(&tab_id.0)
+    }
+
+    /// 设置「编辑即提交」：只影响该标签，默认关闭，关标签即丢弃。
+    fn set_data_auto_commit(&mut self, tab_id: TabId, enabled: bool, cx: &mut Context<Self>) {
+        if enabled {
+            self.auto_commit_data_tabs.insert(tab_id);
+        } else {
+            self.auto_commit_data_tabs.remove(&tab_id);
+        }
+        cx.notify();
+    }
+
+    /// 编辑落定后立即提交：复用与手动提交相同的 apply 路径，只是不弹确认框。
+    fn auto_apply_data_changes(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        if self.data_change_apply_tasks.contains_key(&tab_id.0)
+            || self.data_change_preview_for_tab(tab_id).is_none()
+        {
+            return;
+        }
+        let query_refresh = self.active_query_result_refresh_request(tab_id);
+        self.dispatch(AppCommand::StartApplyDataChanges(tab_id), cx);
+        let sort = self.data_sort_specs_for_tab(tab_id);
+        let filters = self.data_filter_specs_for_tab(tab_id);
+        let mut controller = self.controller.clone();
+        let task = cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    controller.run_apply_data_changes_command(tab_id, sort, filters)
+                })
+                .await;
+            let Some(view) = view.upgrade() else {
+                return;
+            };
+            view.update(cx, |this, cx| {
+                this.data_change_apply_tasks.remove(&tab_id.0);
+                let event =
+                    this.dispatch(AppCommand::FinishApplyDataChanges { tab_id, result }, cx);
+                let succeeded = !matches!(&event, AppEvent::Failed(_));
+                this.finish_apply_data_changes(tab_id, event, query_refresh, None, cx);
+                // 提交期间开关仍开着且又攒下改动时继续提交；失败不自动重试。
+                if succeeded
+                    && this.auto_commit_data_tabs.contains(&tab_id)
+                    && this.data_change_preview_for_tab(tab_id).is_some()
+                {
+                    this.auto_apply_data_changes(tab_id, cx);
+                }
+                cx.notify();
+            });
+        });
+        self.data_change_apply_tasks.insert(tab_id.0, task);
     }
 
     fn active_query_result_refresh_request(

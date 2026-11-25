@@ -3491,6 +3491,7 @@ fn navicat_main_new(
         data_row_viewer: None,
         pending_dirty_data_action: None,
         pending_apply_data_changes: None,
+        auto_commit_data_tabs: BTreeSet::new(),
         data_change_apply_tasks: BTreeMap::new(),
         pending_query_parameters: None,
         pending_dangerous_query: None,

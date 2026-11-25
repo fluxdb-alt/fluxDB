@@ -19,6 +19,8 @@ mod i18n_e2e_tests {
     include!("i18n_tests/config_proposal.rs");
     include!("i18n_tests/sql_editor_edit.rs");
     include!("i18n_tests/table_page_query.rs");
+    // 数据页「编辑即提交」：真实 SQLite 写库，验证默认关闭与提交后清空暂存。
+    include!("i18n_tests/data_auto_commit.rs");
     include!("i18n_tests/dameng_connection.rs");
     // 生产视图里的 Redis 拓扑显式选择 + 节点列表完整落库。
     include!("i18n_tests/redis_topology.rs");

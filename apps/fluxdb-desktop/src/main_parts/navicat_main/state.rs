@@ -985,6 +985,9 @@ struct NavicatMain {
     data_row_viewer: Option<DataRowViewer>,
     pending_dirty_data_action: Option<PendingDirtyDataAction>,
     pending_apply_data_changes: Option<TabId>,
+    /// 开启了「编辑即提交」的数据标签：每次编辑落定后立即提交，不弹确认框。
+    /// 标签打开时默认不在集合里，关闭标签时移除。
+    auto_commit_data_tabs: BTreeSet<TabId>,
     /// 正在后台提交改动的标签（`TabId.0` → 任务）；键存在即表示该标签提交中，
     /// 用于提交按钮 loading/disabled 与重复提交拦截。
     data_change_apply_tasks: BTreeMap<u64, Task<()>>,
