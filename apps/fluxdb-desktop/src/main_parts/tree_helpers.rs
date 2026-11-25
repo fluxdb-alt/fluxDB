@@ -19,6 +19,7 @@ fn tree(
         None,
         None,
         None,
+        None,
         colors,
     )
 }
@@ -34,6 +35,8 @@ fn tree_with_highlight(
     accent_color: Option<gpui::Rgba>,
     selected_bg: Option<gpui::Rgba>,
     highlight_query: Option<&str>,
+    // 次级说明文本（表注释）：显示在主文本之后，弱化色、单行截断。
+    subtitle: Option<String>,
     trailing: Option<String>,
     colors: UiColors,
 ) -> Div {
@@ -97,16 +100,46 @@ fn tree_with_highlight(
         .when_some(accent_color, |this, color| {
             this.child(div().size(px(7.)).rounded_full().bg(color))
         })
-        .child(
+        .child({
+            let has_subtitle = subtitle.is_some();
+            let subtitle_selector = text.clone();
             div()
                 .flex_1()
+                .min_w(px(0.))
                 .h_full()
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .flex()
                 .items_center()
-                .child(highlighted_tree_label(&text, highlight_query, colors)),
-        )
+                .child(
+                    div()
+                        .when(has_subtitle, |this| {
+                            // 名称给注释让出固定比例，避免长表名把注释整段挤掉。
+                            this.flex_none()
+                                .max_w(gpui::relative(0.62))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                        })
+                        .child(highlighted_tree_label(&text, highlight_query, colors)),
+                )
+                .when_some(subtitle, |this, subtitle| {
+                    this.child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .ml_2()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_size(ui_text_size(11.))
+                            .text_color(colors.muted)
+                            .debug_selector(move || {
+                                format!("tree-row-subtitle:{subtitle_selector}")
+                            })
+                            .child(subtitle),
+                    )
+                })
+        })
         .when_some(trailing, |this, trailing| {
             // 表名先截断，大小列保持完整；弱化色避免和表名抢注意力。
             this.child(
@@ -316,6 +349,7 @@ fn database_tree(
         Some(connection_color_row_bg(connection_color_hex, colors)),
         None,
         None,
+        None,
         colors,
     )
     .debug_selector(move || {
@@ -404,7 +438,18 @@ fn schema_tree(
     };
     let schema_selector = schema.clone();
     tree_with_highlight(
-        arrow, "schema", schema, indent, selected, false, None, None, None, None, colors,
+        arrow,
+        "schema",
+        schema,
+        indent,
+        selected,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        colors,
     )
     .debug_selector(move || format!("schema-row:{schema_selector}"))
     .on_mouse_down(
@@ -716,18 +761,48 @@ fn table_size_label(object: &ObjectSummary, show: bool) -> Option<String> {
         .map(fluxdb_core::format_byte_length)
 }
 
-/// 表行悬停提示：完整表名 + 表注释（无注释时只显示表名）。
-/// 表名在窄侧边栏会被截断，注释不占用行高，用悬停补充最合适。
-fn table_row_tooltip(object: &ObjectSummary) -> String {
-    match object
+/// 表行的内联注释：空白注释视为没有。
+fn table_row_comment(object: &ObjectSummary) -> Option<String> {
+    object
         .comment
         .as_deref()
         .map(str::trim)
         .filter(|comment| !comment.is_empty())
-    {
-        Some(comment) => format!("{} — {comment}", object.path.name),
-        None => object.path.name.clone(),
+        .map(str::to_string)
+}
+
+/// 表行悬停卡片：第一行表名，第二行（可选）注释。
+///
+/// 与字段列头 tooltip 使用同一套信息行样式；表名/注释各占一行，避免单行拼接
+/// 在长注释时难以扫读。注释显示关闭时只保留表名行。
+fn table_row_tooltip(object: &ObjectSummary, show_comment: bool, colors: UiColors) -> Tooltip {
+    let rows = table_row_tooltip_rows(object, show_comment);
+    Tooltip::element(move |_, _| {
+        div()
+            .w(px(220.))
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .children(rows.iter().map(|(label, value)| {
+                data_table_header_tooltip_row(tr(label), value.clone(), colors.text)
+            }))
+    })
+}
+
+/// 悬停卡片展示的行：表名 +（设置开启时）非空注释。
+fn table_row_tooltip_rows(
+    object: &ObjectSummary,
+    show_comment: bool,
+) -> Vec<(&'static str, String)> {
+    let mut rows = vec![(
+        "app.sidebar.table_tooltip.name",
+        object.path.name.clone(),
+    )];
+    if show_comment && let Some(comment) = table_row_comment(object) {
+        rows.push(("app.sidebar.table_tooltip.comment", comment));
     }
+    rows
 }
 
 /// `is_mongo` 由调用方按连接类型给出：Mongo 集合走集合工作台，其余走数据编辑器。
@@ -741,6 +816,7 @@ fn table_tree(
     search_query: Option<&str>,
     is_mongo: bool,
     show_size: bool,
+    show_comments: bool,
     colors: UiColors,
     cx: &mut Context<NavicatMain>,
 ) -> Div {
@@ -764,6 +840,9 @@ fn table_tree(
         selected.then_some(connection_color_rgba(connection_color_hex)),
         Some(connection_color_row_bg(connection_color_hex, colors)),
         search_query,
+        show_comments
+            .then(|| table_row_comment(object))
+            .flatten(),
         size_label,
         colors,
     )
@@ -847,6 +926,7 @@ fn saved_query_tree(
         None,
         None,
         search_query,
+        None,
         None,
         colors,
     )

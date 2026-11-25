@@ -1845,6 +1845,8 @@ struct DataPageTableDelegate {
     temporal_part_editing: Option<TemporalPartEditState>,
     cells_editable: bool,
     header_actions: bool,
+    /// 是否在列头展示字段注释；设置页切换后通过 `NavicatMain` 同步到已打开的表。
+    show_metadata_comments: bool,
     show_row_index: bool,
     redis_page: bool,
     on_sort: DataTableSortHandler,

@@ -278,7 +278,7 @@ fn table_import_failure_log_shows_reason_once(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn long_column_comment_wraps_inside_header_tooltip(cx: &mut TestAppContext) {
+fn column_comment_renders_below_type_and_wraps_in_tooltip(cx: &mut TestAppContext) {
     use crate::{DataPageTableDelegate, NavicatMain, TabId};
     use fluxdb_core::{CellValue, Column, DataPage, Row};
     use gpui_component::table::{DataTable, TableState};
@@ -359,6 +359,7 @@ fn long_column_comment_wraps_inside_header_tooltip(cx: &mut TestAppContext) {
             edit_input,
             None,
             true,
+            true,
             None,
             std::sync::Arc::new(|_, _, _, _| {}),
         );
@@ -374,6 +375,15 @@ fn long_column_comment_wraps_inside_header_tooltip(cx: &mut TestAppContext) {
             table,
         }
     });
+    let table = cx.update(|window, cx| {
+        window
+            .root::<TooltipHarness>()
+            .expect("root")
+            .expect("typed root")
+            .read(cx)
+            .table
+            .clone()
+    });
     cx.simulate_resize(gpui::size(gpui::px(500.), gpui::px(300.)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
     cx.run_until_parked();
@@ -381,6 +391,26 @@ fn long_column_comment_wraps_inside_header_tooltip(cx: &mut TestAppContext) {
     let header = cx
         .debug_bounds("data-table-header-text:mom_kwh")
         .expect("column header");
+    let type_line = cx
+        .debug_bounds("data-table-header-type:mom_kwh")
+        .expect("column type line");
+    let comment = cx
+        .debug_bounds("data-table-header-comment:mom_kwh")
+        .expect("column comment line");
+    assert!(
+        comment.size.height > gpui::px(5.),
+        "comment line must be visible: {comment:?}"
+    );
+    assert!(
+        comment.origin.y >= type_line.origin.y + type_line.size.height - gpui::px(0.5),
+        "comment must render below the type line: type={type_line:?} comment={comment:?}"
+    );
+    assert!(
+        comment.origin.y >= header.origin.y - gpui::px(0.5)
+            && comment.origin.y + comment.size.height <= header.origin.y + header.size.height
+                + gpui::px(0.5),
+        "comment must fit inside the 32px header: header={header:?} comment={comment:?}"
+    );
     cx.simulate_mouse_move(header.center(), None, gpui::Modifiers::none());
     cx.background_executor
         .advance_clock(std::time::Duration::from_millis(600));
@@ -392,5 +422,16 @@ fn long_column_comment_wraps_inside_header_tooltip(cx: &mut TestAppContext) {
     assert!(
         value.size.width <= gpui::px(150.) && value.size.height > gpui::px(20.),
         "long comment must wrap inside the tooltip card: {value:?}"
+    );
+
+    // 关闭「显示表与字段注释」后，同一张表重绘不再出现第三行。
+    table.update(cx, |table, cx| {
+        table.delegate_mut().show_metadata_comments = false;
+        table.refresh(cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("data-table-header-comment:mom_kwh").is_none(),
+        "comment line must be hidden when metadata comments are disabled"
     );
 }

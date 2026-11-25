@@ -115,6 +115,7 @@ impl NavicatMain {
             self.temporal_part_input.clone(),
             self.temporal_part_editing,
             true,
+            self.controller.state().settings.show_metadata_comments,
             self.redis_data_table_width(tab_id, window),
             self.data_table_sort_handler(cx),
         );
@@ -183,6 +184,7 @@ impl NavicatMain {
                 )
             }),
             cells_editable,
+            self.controller.state().settings.show_metadata_comments,
             None,
             self.query_result_sort_handler(cx),
         );
@@ -294,6 +296,7 @@ impl NavicatMain {
                 )
             }),
             cells_editable,
+            self.controller.state().settings.show_metadata_comments,
             None,
             self.query_result_sort_handler(cx),
         );

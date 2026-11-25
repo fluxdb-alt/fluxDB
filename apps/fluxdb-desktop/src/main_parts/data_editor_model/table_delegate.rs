@@ -258,6 +258,11 @@ impl TableDelegate for DataPageTableDelegate {
             });
         let type_color =
             data_type_color(type_name.as_str()).unwrap_or(cx.theme().muted_foreground.into());
+        let comment = if self.show_metadata_comments {
+            data_table_column_comment_text(&meta).map(str::to_string)
+        } else {
+            None
+        };
         let sort = self
             .sorts
             .iter()
@@ -272,6 +277,8 @@ impl TableDelegate for DataPageTableDelegate {
         // 如主键会带 “  PK” 后缀），否则传给 connector 的 SortSpec.field 会匹配不到列。
         let column_name = column.key.to_string();
         let tooltip_header_name = column_name.clone();
+        let type_selector_name = column_name.clone();
+        let comment_selector_name = column_name.clone();
         let copy_column_name = column_name.clone();
         let action_column_name = column_name.clone();
         let tooltip_meta = meta.clone();
@@ -305,6 +312,9 @@ impl TableDelegate for DataPageTableDelegate {
                 div()
                     .flex_1()
                     .min_w(px(0.))
+                    // 表头内容区只有 22px（32px 行高减上下 padding），三行信息需要
+                    // 占满单元格；单元格自身按 32px 裁剪，容器撑到同高即可。
+                    .h(px(DATA_TABLE_HEADER_HEIGHT))
                     .overflow_hidden()
                     .flex()
                     .flex_col()
@@ -320,6 +330,7 @@ impl TableDelegate for DataPageTableDelegate {
                     .child(
                         div()
                             .text_size(ui_text_size(11.))
+                            .line_height(ui_text_size(12.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(cx.theme().foreground)
                             .whitespace_nowrap()
@@ -330,10 +341,30 @@ impl TableDelegate for DataPageTableDelegate {
                         this.child(
                             div()
                                 .text_size(ui_text_size(9.))
+                                .line_height(ui_text_size(10.))
                                 .text_color(type_color)
                                 .whitespace_nowrap()
                                 .text_ellipsis()
+                                .debug_selector({
+                                    let name = type_selector_name.clone();
+                                    move || format!("data-table-header-type:{name}")
+                                })
                                 .child(type_name.clone()),
+                        )
+                    })
+                    .when_some(comment, |this, comment| {
+                        this.child(
+                            div()
+                                .text_size(ui_text_size(9.))
+                                .line_height(ui_text_size(10.))
+                                .text_color(cx.theme().muted_foreground)
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .debug_selector({
+                                    let name = comment_selector_name.clone();
+                                    move || format!("data-table-header-comment:{name}")
+                                })
+                                .child(comment),
                         )
                     }),
             )

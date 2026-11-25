@@ -139,14 +139,37 @@ mod sidebar_refresh_tests {
         assert!(has_table_group_and_row(&visible_rows(true, true)));
     }
 
-    /// 表行悬停提示：无注释只显示表名，有注释追加完整注释。
+    /// 悬停卡片：设置开启且有注释时表名/注释分两行；关闭或空白注释只保留表名行。
     #[test]
-    fn table_row_tooltip_includes_comment() {
+    fn table_row_tooltip_rows_follow_comment_visibility() {
         let mut connection = connection_with_table();
         let object = &mut connection.objects[0];
-        assert_eq!(table_row_tooltip(object), "SALES_REGION");
+        let name_row = ("app.sidebar.table_tooltip.name", "SALES_REGION".to_string());
+        assert_eq!(table_row_tooltip_rows(object, true), vec![name_row.clone()]);
         object.comment = Some("  客户订单明细  ".into());
-        assert_eq!(table_row_tooltip(object), "SALES_REGION — 客户订单明细");
+        assert_eq!(
+            table_row_tooltip_rows(object, true),
+            vec![
+                name_row.clone(),
+                (
+                    "app.sidebar.table_tooltip.comment",
+                    "客户订单明细".to_string()
+                ),
+            ]
+        );
+        assert_eq!(table_row_tooltip_rows(object, false), vec![name_row]);
+    }
+
+    /// 侧边栏行内注释：空白注释不占位，正常注释去掉首尾空白后展示。
+    #[test]
+    fn table_row_comment_ignores_blank_comment() {
+        let mut connection = connection_with_table();
+        let object = &mut connection.objects[0];
+        assert_eq!(table_row_comment(object), None);
+        object.comment = Some("   ".into());
+        assert_eq!(table_row_comment(object), None);
+        object.comment = Some("  客户订单明细  ".into());
+        assert_eq!(table_row_comment(object).as_deref(), Some("客户订单明细"));
     }
 
     /// 侧边栏搜索必须命中表注释，而不只是表名。

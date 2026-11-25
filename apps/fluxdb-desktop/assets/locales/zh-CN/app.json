@@ -2489,7 +2489,11 @@
     "copy_table_name": "复制表名",
     "table_name_copied": "已复制表名",
     "new_mysql_connection": "新建 MySQL 连接",
-    "read_only": "只读"
+    "read_only": "只读",
+    "table_tooltip": {
+      "name": "表名",
+      "comment": "注释"
+    }
   },
   "pagination": {
     "first": "第一页",
@@ -4043,6 +4047,8 @@
       },
       "page_size": "默认分页行数",
       "page_size_detail": "新打开数据表时默认每页加载的行数",
+      "show_comments": "显示表与字段注释",
+      "show_comments_detail": "在对象树中显示表注释，并在数据表/查询结果列头显示字段注释；关闭后仅隐藏这些展示",
       "backup_dir": "备份目录",
       "backup_dir_detail": "数据库备份文件默认保存目录，保存后生效",
       "sqlite3_path": "sqlite3 路径",

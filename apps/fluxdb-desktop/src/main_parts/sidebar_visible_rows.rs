@@ -675,6 +675,34 @@ fn active_sidebar_object_path(state: &AppState) -> Option<&ObjectPath> {
     })
 }
 
+impl NavicatMain {
+    /// 设置页切换「显示表与字段注释」后，已打开的数据表与查询结果要立即重绘表头。
+    ///
+    /// 侧边栏每帧从 `AppState` 读取设置，天然即时；表格委托持有构造时的快照，
+    /// 需要在保存设置后显式同步，否则要等表格重建才生效。
+    fn sync_metadata_comment_visibility(&mut self, cx: &mut Context<Self>) {
+        let show = self.controller.state().settings.show_metadata_comments;
+        let mut changed = false;
+        for table in self
+            .data_table_states
+            .values()
+            .chain(self.query_result_table_states.values())
+        {
+            changed |= table.update(cx, |table, cx| {
+                if table.delegate().show_metadata_comments == show {
+                    return false;
+                }
+                table.delegate_mut().show_metadata_comments = show;
+                cx.notify();
+                true
+            });
+        }
+        if changed {
+            cx.notify();
+        }
+    }
+}
+
 /// 把拉平后的一行还原为对应 `*_tree` 构建函数的渲染结果（`AnyElement`）。
 ///
 /// 行数据结构（`SidebarVisibleRow`）只存「结构标识」；expanded/pinned/selected/loading/
@@ -881,7 +909,8 @@ fn build_sidebar_row(
             let is_mongo = connection
                 .is_some_and(|connection| connection.config.kind == DatabaseKind::MongoDb);
             let show_size = sidebar_table_size_visible(this.connection_browser_width);
-            let tooltip = table_row_tooltip(&object);
+            let show_comments = state.settings.show_metadata_comments;
+            let tooltip_object = object.clone();
             table_tree(
                 &object,
                 row.indent,
@@ -891,11 +920,14 @@ fn build_sidebar_row(
                 search_opt,
                 is_mongo,
                 show_size,
+                show_comments,
                 colors,
                 cx,
             )
             .id(row_id)
-            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .tooltip(move |window, cx| {
+                table_row_tooltip(&tooltip_object, show_comments, colors).build(window, cx)
+            })
             .cursor_pointer()
             .into_any_element()
         }

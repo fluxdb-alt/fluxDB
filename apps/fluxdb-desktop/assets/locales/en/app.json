@@ -2489,7 +2489,11 @@
     "copy_table_name": "Copy table name",
     "table_name_copied": "Table name copied",
     "new_mysql_connection": "New MySQL connection",
-    "read_only": "Read-only"
+    "read_only": "Read-only",
+    "table_tooltip": {
+      "name": "Table",
+      "comment": "Comment"
+    }
   },
   "pagination": {
     "first": "First page",
@@ -4043,6 +4047,8 @@
       },
       "page_size": "Default page size",
       "page_size_detail": "Rows loaded per page when opening a data table",
+      "show_comments": "Show table and column comments",
+      "show_comments_detail": "Show table comments in the object tree and column comments under data table and query result headers. Turn off to hide these displays.",
       "backup_dir": "Backup directory",
       "backup_dir_detail": "Default folder for database backup files",
       "sqlite3_path": "sqlite3 path",

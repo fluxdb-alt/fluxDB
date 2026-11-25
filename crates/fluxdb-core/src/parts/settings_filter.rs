@@ -210,6 +210,12 @@ pub struct Settings {
     pub dangerous_sql_actions: BTreeSet<String>,
     #[serde(default = "default_completion_index_enabled")]
     pub enable_completion_index: bool,
+    /// 是否在对象树与数据表/查询结果列头展示数据库注释。
+    ///
+    /// 仅影响展示：表/列注释仍随元数据一起加载，关闭后不渲染内联注释、列头第三行
+    /// 和悬停卡片里的注释行。
+    #[serde(default = "default_show_metadata_comments")]
+    pub show_metadata_comments: bool,
     /// Redis Workbench 编辑器区（上方）相对分栏可用高度的占比（0-100），用于记住并恢复分栏大小。
     /// 用整数百分比而非 f32，保持 `Settings` 结构体可派生 `Eq`。
     #[serde(default = "default_redis_workbench_editor_ratio")]
@@ -334,6 +340,7 @@ impl Default for Settings {
             confirm_dangerous_redis: default_dangerous_sql_confirmation(),
             dangerous_sql_actions: default_dangerous_sql_actions(),
             enable_completion_index: default_completion_index_enabled(),
+            show_metadata_comments: default_show_metadata_comments(),
             redis_workbench_editor_ratio: default_redis_workbench_editor_ratio(),
             mongo_workbench_editor_ratio: default_mongo_workbench_editor_ratio(),
             results_placement: ResultsPlacement::default(),
@@ -452,6 +459,10 @@ fn default_dangerous_sql_actions() -> BTreeSet<String> {
 }
 
 fn default_completion_index_enabled() -> bool {
+    true
+}
+
+fn default_show_metadata_comments() -> bool {
     true
 }
 

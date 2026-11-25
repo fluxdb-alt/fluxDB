@@ -501,6 +501,11 @@ mod i18n_e2e_tests {
                 "src/main_parts/settings/ai_plugin_text.rs",
                 "app.ai.plugins.text.",
             ),
+            // 表悬停卡片的行标签按数据表动态选择（表名/注释），key 以字符串表存在。
+            (
+                "src/main_parts/tree_helpers.rs",
+                "app.sidebar.table_tooltip.",
+            ),
         ];
         let key_re = regex::Regex::new(r#""(app\.[a-z0-9_.]+)""#).expect("dynamic key regex");
         let mut used = Vec::new();
@@ -1725,6 +1730,97 @@ mod i18n_e2e_tests {
         assert_eq!(
             cx.update(|_, cx| view.read(cx).update_ui.status),
             crate::UpdateUiStatus::Available
+        );
+    }
+
+    #[gpui::test]
+    fn data_settings_comment_visibility_toggles_and_persists(cx: &mut TestAppContext) {
+        let _guard = locale_guard();
+        let temp = tempfile::tempdir().expect("temp profile");
+        let storage = FileStorage::new(temp.path().join("profile"));
+        let settings = Settings {
+            locale: "en".to_string(),
+            ..Settings::default()
+        };
+        storage.save_settings(&settings).expect("save settings");
+        init_i18n(
+            &app_assets_base_path().join("locales"),
+            &storage.root_dir().join("locales"),
+            &settings.locale,
+        );
+        cx.update(|cx| {
+            extend_component_i18n();
+            gpui_component::init(cx);
+        });
+
+        let mut controller = AppController::new();
+        let _ = controller.dispatch(fluxdb_app::AppCommand::SaveSettings(settings));
+        assert!(matches!(
+            controller.dispatch(fluxdb_app::AppCommand::OpenSettings),
+            fluxdb_app::AppEvent::TabOpened(_)
+        ));
+        let storage_for_view = storage.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| {
+                navicat_main_new(
+                    window,
+                    cx,
+                    controller,
+                    storage_for_view,
+                    gpui_component::ThemeMode::Light,
+                )
+            });
+            Root::new(view, window, cx)
+        });
+        let view = cx.update(|window, cx| {
+            window
+                .root::<Root>()
+                .expect("base window root")
+                .expect("typed window root")
+                .read(cx)
+                .view()
+                .clone()
+                .downcast::<NavicatMain>()
+                .expect("production NavicatMain root view")
+        });
+        cx.update(|_, cx| {
+            view.update(cx, |this, _| {
+                this.settings_panel_section = SettingsPanelSection::Data;
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let row = cx
+            .debug_bounds("settings-show-comments")
+            .expect("comment visibility row");
+        cx.simulate_click(row.center(), Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            !cx.update(|_, cx| view.read(cx).settings_editor_draft.show_metadata_comments),
+            "clicking the row must update the settings draft"
+        );
+
+        let save = cx
+            .debug_bounds("settings-Data-save")
+            .expect("data save button");
+        cx.simulate_click(save.center(), Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            !cx.update(|_, cx| {
+                view.read(cx)
+                    .controller
+                    .state()
+                    .settings
+                    .show_metadata_comments
+            }),
+            "saving must apply the setting to app state"
+        );
+        assert!(
+            !storage
+                .load_settings()
+                .expect("reload settings")
+                .show_metadata_comments,
+            "saving must persist the setting"
         );
     }
 

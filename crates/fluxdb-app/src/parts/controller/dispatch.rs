@@ -1834,11 +1834,18 @@ impl AppController {
                 let cancel_flag = self.query_cancel_flag(key);
                 let result = self
                     .execute_query_with_cancel(&request, &|| query_cancel_requested(&cancel_flag));
-                // 取消标志只属于本次执行。执行器已经返回后立即回收，不能等 UI 的异步
-                // Finish 命令，否则直接调用 App 层的入口会遗留已置位标志。
-                self.clear_query_cancel_flag(key);
                 match result {
-                    Ok(execution) => {
+                    Ok(mut execution) => {
+                        // 注释补全仍在本次执行的取消范围内：用户点「停止」可中止剩余元数据读取，
+                        // 已完成的结果照常发布。执行器返回后及时回收标志，避免直接调用
+                        // App 层入口时遗留已置位标志。
+                        enrich_query_result_column_comments(
+                            self,
+                            &request,
+                            &mut execution,
+                            &|| query_cancel_requested(&cancel_flag),
+                        );
+                        self.clear_query_cancel_flag(key);
                         let result_editors = query_result_editors(self, &request, &execution);
                         let active_result_editor = result_editors.keys().next().copied();
                         if let Some(tab) = self.find_tab_mut(tab_id)
@@ -1857,6 +1864,7 @@ impl AppController {
                         AppEvent::QueryFinished(tab_id, pane_id, execution)
                     }
                     Err(error) => {
+                        self.clear_query_cancel_flag(key);
                         self.record_failed_query_history(&request);
                         let user_error = UserFacingError::from(error);
                         if let Some(tab) = self.find_tab_mut(tab_id)

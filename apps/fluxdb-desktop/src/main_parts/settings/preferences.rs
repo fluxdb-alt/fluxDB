@@ -44,7 +44,8 @@ fn settings_section_changed(
         }
         SettingsPanelSection::Data => {
             saved.data_table_page_size != draft.data_table_page_size
-        || saved.backup_dir != draft.backup_dir
+                || saved.show_metadata_comments != draft.show_metadata_comments
+                || saved.backup_dir != draft.backup_dir
         || saved.mysqldump_path != draft.mysqldump_path
         || saved.mysql_client_dir != draft.mysql_client_dir
         || saved.mysql_client_download_source != draft.mysql_client_download_source
@@ -105,6 +106,7 @@ fn settings_apply_section_fields(
 
 fn settings_apply_backup_fields(settings: &mut Settings, draft: &Settings) {
     settings.data_table_page_size = draft.data_table_page_size;
+    settings.show_metadata_comments = draft.show_metadata_comments;
     settings.backup_dir = draft.backup_dir.clone();
     settings.mysqldump_path = draft.mysqldump_path.clone();
     settings.mysql_client_dir = draft.mysql_client_dir.clone();
@@ -155,6 +157,7 @@ fn reset_settings_section(
         SettingsPanelSection::Data => {
             let defaults = Settings::default();
             this.settings_editor_draft.data_table_page_size = defaults.data_table_page_size;
+            this.settings_editor_draft.show_metadata_comments = defaults.show_metadata_comments;
             this.settings_editor_draft.backup_dir = defaults.backup_dir;
             this.settings_editor_draft.mysqldump_path = defaults.mysqldump_path;
             this.settings_editor_draft.mysql_client_dir = defaults.mysql_client_dir;
@@ -200,6 +203,10 @@ fn save_settings_section_from_ui(
 
     let _ = this.controller.dispatch(AppCommand::SaveSettings(settings));
     let _ = this.storage.save_settings(&this.controller.state().settings);
+    if section == SettingsPanelSection::Data {
+        // 已打开的表/查询结果持有注释显示开关的快照，保存后立即同步并重绘表头。
+        this.sync_metadata_comment_visibility(cx);
+    }
     let locale = fluxdb_i18n::effective_locale(&this.controller.state().settings.locale);
     apply_ui_locale(&locale, cx);
     // 保存后按已落盘的草稿重新应用主题、界面字体与代码字体/字号/行高，
@@ -288,6 +295,7 @@ fn save_settings_from_ui(
     let _ = this.controller.dispatch(AppCommand::SaveSettings(settings));
     let _ = this.storage.save_settings(&this.controller.state().settings);
     this.settings_editor_draft = this.controller.state().settings.clone();
+    this.sync_metadata_comment_visibility(cx);
     this.apply_saved_settings_runtime(&settings_before, cx);
     this.show_message(message, AppMessageKind::Success, cx);
 }

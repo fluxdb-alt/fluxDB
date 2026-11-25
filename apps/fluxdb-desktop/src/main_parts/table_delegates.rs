@@ -18,6 +18,7 @@ impl DataPageTableDelegate {
         temporal_part_input: Entity<InputState>,
         temporal_part_editing: Option<TemporalPartEditState>,
         cells_editable: bool,
+        show_metadata_comments: bool,
         redis_table_width: Option<Pixels>,
         on_sort: DataTableSortHandler,
     ) -> Self {
@@ -202,6 +203,7 @@ impl DataPageTableDelegate {
             temporal_part_editing,
             cells_editable,
             header_actions,
+            show_metadata_comments,
             show_row_index,
             redis_page,
             on_sort,

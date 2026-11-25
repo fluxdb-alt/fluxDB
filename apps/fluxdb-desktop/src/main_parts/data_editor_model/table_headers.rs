@@ -62,13 +62,18 @@ fn data_table_header_tooltip_row(
         )
 }
 
-fn data_table_column_comment_label(meta: &DataTableColumnMeta) -> String {
+/// 列注释的展示文本：首尾空白会去掉，空白注释视为没有。
+fn data_table_column_comment_text(meta: &DataTableColumnMeta) -> Option<&str> {
     meta.comment
         .as_deref()
         .map(str::trim)
         .filter(|comment| !comment.is_empty())
-        .map(str::to_string).unwrap_or_else(|| tr("app.data.column.none").to_string())
-        .to_string()
+}
+
+fn data_table_column_comment_label(meta: &DataTableColumnMeta) -> String {
+    data_table_column_comment_text(meta)
+        .map(str::to_string)
+        .unwrap_or_else(|| tr("app.data.column.none").to_string())
 }
 
 fn data_table_column_attr_label(meta: &DataTableColumnMeta) -> String {
@@ -392,6 +397,14 @@ fn table_column_from_data_column(column: &GdbColumn) -> TableColumn {
         .paddings(data_table_cell_padding())
         .movable(false)
 }
+
+/// 数据表表头行高：与 gpui-component `Size::Medium::table_row_height()` 一致。
+///
+/// 表头单元格上下各有 5px padding，内容区只有 22px；字段名/类型/注释三行的
+/// 行高合计 32px，需要占满整个单元格。单元格自身的 `overflow_hidden` 按 32px
+/// 边界裁剪，因此表头文本容器按这个高度显式撑开即可，不用改共享 cell padding
+/// （改 padding 会裁掉数据单元格里 ±4px 的搜索/脏数据高亮覆盖层）。
+const DATA_TABLE_HEADER_HEIGHT: f32 = 32.;
 
 fn data_table_cell_padding() -> gpui::Edges<Pixels> {
     gpui::Edges {
