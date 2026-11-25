@@ -8,6 +8,7 @@ fn data_editor_footer(
     change_sql_preview_open: bool,
     selected_source_row: Option<usize>,
     submitting: bool,
+    auto_commit: bool,
     colors: UiColors,
     window: &mut Window,
     cx: &mut Context<NavicatMain>,
@@ -133,6 +134,13 @@ fn data_editor_footer(
                     tr("app.data.action.stop"),
                     false,
                     colors,
+                ))
+                .child(data_editor_auto_commit_switch(
+                    tab_id,
+                    auto_commit,
+                    can_edit,
+                    colors,
+                    cx,
                 )),
         )
         .child(if let Some(count) = change_count {
@@ -857,6 +865,46 @@ fn data_editor_footer_icon_button(
         .when(enabled, |this| this.cursor_pointer())
         .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
         .child(app_icon(icon, 15., icon_color))
+}
+
+/// 「编辑即提交」开关：默认关闭，每个数据标签独立，关闭标签即复位。
+fn data_editor_auto_commit_switch(
+    tab_id: TabId,
+    checked: bool,
+    interactive: bool,
+    colors: UiColors,
+    cx: &mut Context<NavicatMain>,
+) -> Div {
+    let view = cx.entity();
+    div()
+        .flex_none()
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .gap_1()
+        .opacity(if interactive { 1.0 } else { 0.48 })
+        .child(
+            Switch::new(SharedString::from(format!(
+                "data-auto-commit:{}",
+                tab_id.0
+            )))
+            .checked(checked)
+            .disabled(!interactive)
+            .tooltip(tr("app.data.action.auto_commit_tooltip"))
+            .on_click(move |checked, _, cx| {
+                let checked = *checked;
+                view.update(cx, |this, cx| {
+                    this.set_data_auto_commit(tab_id, checked, cx);
+                });
+            }),
+        )
+        .child(
+            div()
+                .whitespace_nowrap()
+                .text_size(ui_text_size(11.))
+                .text_color(if checked { colors.text } else { colors.muted })
+                .child(tr("app.data.action.auto_commit")),
+        )
 }
 
 fn data_editor_page_button(label: &'static str, enabled: bool, colors: UiColors) -> Div {

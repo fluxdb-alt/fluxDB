@@ -2804,7 +2804,9 @@
       "submit_changes": "提交更改",
       "discard_changes": "取消更改",
       "refresh": "刷新",
-      "stop": "停止"
+      "stop": "停止",
+      "auto_commit": "自动提交",
+      "auto_commit_tooltip": "编辑后立即提交；默认关闭，每个标签单独开启"
     },
     "placeholder": {
       "find": "查找",

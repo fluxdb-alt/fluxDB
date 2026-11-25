@@ -1125,6 +1125,7 @@ fn data_editor_content(
             change_sql_preview_open,
             selected_source_row,
             editor.submitting,
+            this.auto_commit_data_tabs.contains(&tab_id),
             colors,
             window,
             cx,

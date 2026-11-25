@@ -14,9 +14,16 @@ impl NavicatMain {
             .iter()
             .map(|tab| tab.id)
             .collect::<Vec<_>>();
+        let auto_commit_tab = self.auto_commit_edit_tab(&command);
         let event = self.controller.dispatch(command);
         self.apply_app_event(&event, cx);
         self.apply_closed_tabs(previous_tabs, cx);
+        // 编辑落定后立刻提交；只在命令成功时触发，失败不改动仍是内存态。
+        if let Some(tab_id) = auto_commit_tab
+            && matches!(&event, AppEvent::TabActivated(_))
+        {
+            self.auto_apply_data_changes(tab_id, cx);
+        }
         if self.controller.state().query_history != previous_query_history {
             let _ = self.storage.save_query_history(
                 &self
@@ -211,8 +218,24 @@ impl NavicatMain {
             if self.controller.state().tabs.iter().any(|tab| tab.id == tab_id) {
                 continue;
             }
+            // 每个标签的自动提交开关只属于该标签的生命周期。
+            self.auto_commit_data_tabs.remove(&tab_id);
             self.apply_app_event(&AppEvent::TabClosed(tab_id), cx);
         }
+    }
+
+    /// 本次命令是否是一次数据编辑，且该标签开了「编辑即提交」。
+    fn auto_commit_edit_tab(&self, command: &AppCommand) -> Option<TabId> {
+        let tab_id = match command {
+            AppCommand::EditDataCell { tab_id, .. }
+            | AppCommand::InsertDataRow { tab_id, .. }
+            | AppCommand::CloneDataRow { tab_id, .. }
+            | AppCommand::DeleteDataRow { tab_id, .. } => *tab_id,
+            _ => return None,
+        };
+        self.auto_commit_data_tabs
+            .contains(&tab_id)
+            .then_some(tab_id)
     }
 
     fn active_cell_detail_edit_value(&self, cx: &App) -> Option<String> {
