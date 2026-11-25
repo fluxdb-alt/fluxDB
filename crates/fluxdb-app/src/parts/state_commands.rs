@@ -107,6 +107,18 @@ pub enum AppCommand {
     /// 不写 `connected` / `expanded`，也不触碰已加载的表 / 视图行（详见 `replace_connection_level0`）。
     RefreshConnectionTree,
     OpenObjectList(Option<ObjectPath>),
+    /// 表概览：开始/完成一次后台读取，以及本地搜索过滤。
+    StartObjectListLoad(TabId),
+    /// 后台读取父对象下的表；只读连接器，不改 AppState。
+    LoadObjectList(TabId),
+    FinishObjectListLoad {
+        tab_id: TabId,
+        result: std::result::Result<Vec<ObjectSummary>, UserFacingError>,
+    },
+    SetObjectListSearch {
+        tab_id: TabId,
+        search: String,
+    },
     OpenDataEditor(ObjectPath),
     /// 打开某数据库的备份列表 tab（传入数据库 ObjectPath）。
     OpenBackupList(ObjectPath),

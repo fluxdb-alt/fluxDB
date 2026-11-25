@@ -44,14 +44,6 @@ fn demo_connection_options() -> BTreeMap<String, String> {
     options
 }
 
-fn mock_child_objects(parent: Option<&ObjectPath>) -> Vec<ObjectSummary> {
-    fluxdb_connectors::demo_objects(
-        parent
-            .map(|path| path.connection_id)
-            .unwrap_or(ConnectionId(1)),
-    )
-}
-
 fn test_connection(config: &ConnectionConfig) -> fluxdb_core::Result<()> {
     connector_for(config)?.test_connection(config)
 }

@@ -6,6 +6,7 @@ include!("controller/ai_settings_dispatch.rs");
 include!("controller/dispatch.rs");
 include!("controller/dispatch_connection.rs");
 include!("controller/dispatch_tabs.rs");
+include!("controller/dispatch_object_list.rs");
 include!("controller/dispatch_user_admin.rs");
 include!("controller/dispatch_server_panel.rs");
 include!("controller/dispatch_redis_server_panel.rs");

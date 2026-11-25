@@ -407,6 +407,11 @@ pub enum AppEvent {
     TabCloseRequested(TabId),
     TabCloseCancelled(TabId),
     TabActivated(TabId),
+    /// 表概览后台读取完成；由 UI 发 Finish 命令落状态。
+    ObjectListLoaded {
+        tab_id: TabId,
+        result: std::result::Result<Vec<ObjectSummary>, UserFacingError>,
+    },
     /// 服务器面板后台读取完成；由 UI 发 Finish 命令落状态。
     ServerPanelLoaded {
         tab_id: TabId,

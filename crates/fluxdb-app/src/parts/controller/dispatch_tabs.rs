@@ -3,18 +3,38 @@ impl AppController {
     fn dispatch_tab_command(&mut self, command: AppCommand) -> AppEvent {
         match command {
             AppCommand::OpenObjectList(parent) => {
+                // 按父对象（连接 + 库 + schema）去重：双击同一个 Tables 分组只激活既有页签。
+                if let Some(existing_tab_id) = self.state.tabs.iter().find_map(|tab| {
+                    if let TabKind::ObjectList(list) = &tab.kind
+                        && list.parent == parent
+                    {
+                        return Some(tab.id);
+                    }
+                    None
+                }) {
+                    self.state.active_tab = Some(existing_tab_id);
+                    return AppEvent::TabActivated(existing_tab_id);
+                }
+
+                let title = parent
+                    .as_ref()
+                    .map(|path| {
+                        let database = path.database.as_deref().unwrap_or(&path.name);
+                        match path.schema.as_deref() {
+                            Some(schema) => format!("{database}.{schema} · 表"),
+                            None => format!("{database} · 表"),
+                        }
+                    })
+                    .unwrap_or_else(|| "对象".to_string());
                 let tab_id = self.next_tab_id();
-                let objects = mock_child_objects(parent.as_ref());
                 self.push_tab(TabState {
                     id: tab_id,
-                    title: parent
-                        .as_ref()
-                        .map(|path| path.name.clone())
-                        .unwrap_or_else(|| "对象".to_string()),
+                    title,
                     kind: TabKind::ObjectList(ObjectListState {
                         parent,
-                        objects,
-                        loading: false,
+                        objects: Vec::new(),
+                        search: String::new(),
+                        loading: true,
                         error: None,
                     }),
                     dirty: false,

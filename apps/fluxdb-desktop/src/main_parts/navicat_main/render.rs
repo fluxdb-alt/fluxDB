@@ -1170,6 +1170,7 @@ fn render_tab_kind_snapshot(kind: &TabKind) -> TabKind {
         TabKind::ObjectList(editor) => TabKind::ObjectList(ObjectListState {
             parent: editor.parent.clone(),
             objects: Vec::new(),
+            search: editor.search.clone(),
             loading: editor.loading,
             error: editor.error.clone(),
         }),

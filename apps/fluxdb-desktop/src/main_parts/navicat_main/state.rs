@@ -647,6 +647,11 @@ struct NavicatMain {
     pending_delete_backup: Option<PathBuf>,
     /// Windows 关闭确认弹框：点击自绘关闭按钮后先确认再退出（true = 弹框打开）。
     pending_exit_confirm: bool,
+    /// 表概览：搜索框在所有概览页签间共用，切页签时按当前页状态回填。
+    object_list_search_input: Entity<InputState>,
+    _object_list_search_subscription: Subscription,
+    /// 表概览读取任务；同一页签同时只允许一次读取。
+    _object_list_load_tasks: BTreeMap<TabId, Task<()>>,
     user_admin_search_input: Entity<InputState>,
     _user_admin_search_subscription: Subscription,
     user_admin_create_user_input: Entity<InputState>,

@@ -169,7 +169,10 @@ fn content(
         }
 
         Some(tab) if matches!(tab.kind, TabKind::ObjectList(_)) => {
-            object_list_content(state, colors, cx)
+            let TabKind::ObjectList(list) = &tab.kind else {
+                unreachable!();
+            };
+            object_list_content(tab.id, list, this, window, colors, cx)
         }
         Some(tab) if matches!(tab.kind, TabKind::BackupList(_)) => {
             let TabKind::BackupList(list) = &tab.kind else {
@@ -659,24 +662,6 @@ fn database_kind_badge(kind: DatabaseKind, colors: UiColors) -> impl IntoElement
         .items_center()
         .justify_center()
         .child(img(database_kind_icon_path(kind)).size(px(20.)))
-}
-
-fn object_list_content(state: &AppState, colors: UiColors, cx: &mut Context<NavicatMain>) -> Div {
-    let mut content = div()
-        .flex_1()
-        .bg(colors.panel_bg)
-        .border_r_1()
-        .border_color(colors.border)
-        .flex()
-        .flex_col()
-        .child(object_toolbar(colors))
-        .child(table_header(colors));
-
-    for object in visible_objects(state) {
-        content = content.child(object_row(object, colors, cx));
-    }
-
-    content
 }
 
 fn data_editor_content(
@@ -5765,57 +5750,6 @@ fn single_line_summary_text(text: String) -> String {
 }
 
 include!("query_toolbar.rs");
-
-fn object_toolbar(colors: UiColors) -> impl IntoElement {
-    div()
-        .h(px(36.))
-        .border_b_1()
-        .border_color(colors.border)
-        .flex()
-        .items_center()
-        .justify_between()
-        .px_3()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_size(ui_text_size(17.))
-                .text_color(rgb(0x1687ff))
-                .child(app_icon_box(AppIcon::Square, 22., 17., rgb(0x1687ff)))
-                .child(app_icon_box(AppIcon::Edit, 22., 17., rgb(0x1687ff)))
-                .child(app_icon_box(AppIcon::Plus, 22., 17., rgb(0x1687ff)))
-                .child(app_icon_box(AppIcon::Minus, 22., 17., rgb(0x1687ff)))
-                .child(app_icon_box(AppIcon::Undo, 22., 17., rgb(0x1687ff)))
-                .child(app_icon_box(AppIcon::Redo, 22., 17., rgb(0x1687ff)))
-                .child(app_icon_box(AppIcon::Refresh, 22., 17., rgb(0x1687ff))),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(app_icon_box(AppIcon::List, 22., 18., rgb(0x1687ff)))
-                .child(app_icon_box(AppIcon::Table, 22., 18., colors.muted))
-                .child(
-                    div()
-                        .w(px(180.))
-                        .h(px(28.))
-                        .rounded(colors.radius_lg)
-                        .border_1()
-                        .border_color(colors.border)
-                        .bg(colors.input_bg)
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_3()
-                        .text_size(ui_text_size(13.))
-                        .text_color(colors.muted)
-                        .child(app_icon(AppIcon::Search, 13., colors.muted))
-                        .child(tr("app.placeholder.search")),
-                ),
-        )
-}
 
 /// 展示模式双态 segmented control（平铺 / Folder）：位于左侧列表顶部状态栏最左侧，纯图标无文字。
 /// 未选中段使用普通底 + hover；选中段填充高亮色（亮/暗主题均取 UiColors 适配色）。

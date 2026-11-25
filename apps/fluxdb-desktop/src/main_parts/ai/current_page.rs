@@ -465,6 +465,29 @@ impl NavicatMain {
                     "execution_count":workbench.executions.len(),
                     "note":"只发送定位与状态，不发送语句草稿与结果区内容"});
             }
+            TabKind::ObjectList(list) => {
+                // 只发定位与数量：表清单/注释可能很多，需要时由 AI 走有界只读工具获取。
+                page.kind = PageContextKind::ObjectList;
+                page.snapshot.target = TargetRef {
+                    connection_id: list
+                        .parent
+                        .as_ref()
+                        .map(|parent| parent.connection_id.0 as i64),
+                    database: list
+                        .parent
+                        .as_ref()
+                        .and_then(|parent| parent.database.clone()),
+                    schema: list.parent.as_ref().and_then(|parent| parent.schema.clone()),
+                    ..Default::default()
+                };
+                page.details = serde_json::json!({
+                    "table_count": list.objects.len(),
+                    "search": list.search,
+                    "loading": list.loading,
+                    "error": list.error.as_ref().map(|error| &error.message),
+                    "note": "只发送定位、表数量与搜索词；表清单与注释经只读工具按需查询"
+                });
+            }
             TabKind::Settings(_) => {
                 page.kind = PageContextKind::Settings;
                 let revision =

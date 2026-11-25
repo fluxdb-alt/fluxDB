@@ -606,7 +606,7 @@ impl AppController {
                         if let TabKind::ObjectList(list) = &mut tab.kind
                             && list.parent.is_none()
                         {
-                            list.objects = all_objects.clone();
+                            list.objects = table_overview_objects(all_objects.clone());
                             list.loading = false;
                             list.error = None;
                         }
@@ -614,27 +614,27 @@ impl AppController {
                     return AppEvent::ObjectsLoaded(None, all_objects);
                 }
 
-                let objects = if let Some(path) = path.as_ref() {
-                    let Some(connection) = self
-                        .state
-                        .connections
-                        .iter()
-                        .find(|connection| connection.config.id == path.connection_id)
-                    else {
-                        return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
-                    };
-                    match list_objects_for_connection(&connection.config, Some(path)) {
-                        Ok(objects) => objects,
-                        Err(error) => return self.fail(error),
-                    }
-                } else {
-                    mock_child_objects(path.as_ref())
+                let Some(path_value) = path.as_ref() else {
+                    unreachable!("None 分支已在上面提前返回");
+                };
+                let Some(connection) = self
+                    .state
+                    .connections
+                    .iter()
+                    .find(|connection| connection.config.id == path_value.connection_id)
+                else {
+                    return self.fail(Error::new(ErrorKind::Connection, "连接不存在"));
+                };
+                let objects = match list_objects_for_connection(&connection.config, Some(path_value))
+                {
+                    Ok(objects) => objects,
+                    Err(error) => return self.fail(error),
                 };
                 for tab in &mut self.state.tabs {
                     if let TabKind::ObjectList(list) = &mut tab.kind
                         && list.parent == path
                     {
-                        list.objects = objects.clone();
+                        list.objects = table_overview_objects(objects.clone());
                         list.loading = false;
                         list.error = None;
                     }

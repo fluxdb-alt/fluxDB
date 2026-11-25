@@ -5019,7 +5019,23 @@
     "mongo_workbench": "MongoDB Workbench - %{database}",
     "server_panel": "Server · %{name}",
     "redis_server_panel": "Server · %{name}",
-    "mongo_server_panel": "Server · %{name}"
+    "mongo_server_panel": "Server · %{name}",
+    "object_list": "%{scope} · Tables"
+  },
+  "object_list": {
+    "columns": {
+      "name": "Name",
+      "comment": "Comment",
+      "rows": "Rows",
+      "size": "Size",
+      "modified": "Modified"
+    },
+    "loading": "Loading tables…",
+    "empty": "No tables in this database",
+    "empty_search": "No matching tables",
+    "load_failed": "Failed to load tables",
+    "status_count": "%{count} tables",
+    "status_hint": "Double-click a table to open its data"
   },
   "backend_error": {
     "sqlserver_connection_task_failed": "SQL Server connection task terminated unexpectedly",

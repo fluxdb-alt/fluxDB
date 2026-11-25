@@ -1146,6 +1146,8 @@ fn navicat_main_new(
     // 备份 tab：备注编辑弹框输入。
     let backup_note_edit_input =
         cx.new(|cx| InputState::new(window, cx).placeholder(tr("app.placeholder.note_clear")));
+    let object_list_search_input = cx
+        .new(|cx| InputState::new(window, cx).placeholder(tr("app.placeholder.search_table")));
     let user_admin_search_input = cx
         .new(|cx| InputState::new(window, cx).placeholder(tr("app.placeholder.search_user_host")));
     let user_admin_create_user_input =
@@ -1862,6 +1864,22 @@ fn navicat_main_new(
             {
                 form.note = input.read(cx).value().to_string();
                 cx.notify();
+            }
+        },
+    );
+    let object_list_search_subscription = cx.subscribe(
+        &object_list_search_input,
+        |this: &mut NavicatMain, input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change)
+                && let Some(tab_id) = this.active_object_list_tab_id()
+            {
+                this.dispatch(
+                    AppCommand::SetObjectListSearch {
+                        tab_id,
+                        search: input.read(cx).value().to_string(),
+                    },
+                    cx,
+                );
             }
         },
     );
@@ -3207,6 +3225,9 @@ fn navicat_main_new(
         backup_pending_metas: BTreeMap::new(),
         pending_delete_backup: None,
         pending_exit_confirm: false,
+        object_list_search_input,
+        _object_list_search_subscription: object_list_search_subscription,
+        _object_list_load_tasks: BTreeMap::new(),
         user_admin_search_input,
         _user_admin_search_subscription: user_admin_search_subscription,
         user_admin_create_user_input,

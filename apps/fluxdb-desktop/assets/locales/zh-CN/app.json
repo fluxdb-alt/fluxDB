@@ -5019,7 +5019,23 @@
     "mongo_workbench": "MongoDB 命令工作台 - %{database}",
     "server_panel": "服务器 · %{name}",
     "redis_server_panel": "服务器 · %{name}",
-    "mongo_server_panel": "服务器 · %{name}"
+    "mongo_server_panel": "服务器 · %{name}",
+    "object_list": "%{scope} · 表"
+  },
+  "object_list": {
+    "columns": {
+      "name": "名称",
+      "comment": "注释",
+      "rows": "数据量",
+      "size": "占用空间",
+      "modified": "修改时间"
+    },
+    "loading": "正在加载数据表…",
+    "empty": "当前数据库暂无数据表",
+    "empty_search": "没有匹配的表",
+    "load_failed": "数据表加载失败",
+    "status_count": "共 %{count} 张表",
+    "status_hint": "双击表打开数据页"
   },
   "backend_error": {
     "sqlserver_connection_task_failed": "SQL Server 连接任务异常结束",
